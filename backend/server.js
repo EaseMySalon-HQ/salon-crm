@@ -5592,44 +5592,8 @@ app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, a
 // Get all commission profiles
 app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
-    // For now, return mock data. In production, this would come from a database
-    const commissionProfiles = [
-      {
-        id: "cp1",
-        name: "Product Incentive",
-        type: "target_based",
-        description: "Commission based on product sales targets",
-        calculationInterval: "monthly",
-        qualifyingItems: ["Product"],
-        includeTax: false,
-        cascadingCommission: true,
-        targetTiers: [
-          { from: 0, to: 5000, calculateBy: "percent", value: 5 },
-          { from: 5000, to: 10000, calculateBy: "percent", value: 8 }
-        ],
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        createdBy: "system"
-      },
-      {
-        id: "cp2",
-        name: "Service Incentive",
-        type: "target_based",
-        description: "Commission based on service sales targets",
-        calculationInterval: "monthly",
-        qualifyingItems: ["Service"],
-        includeTax: true,
-        cascadingCommission: false,
-        targetTiers: [
-          { from: 0, to: 8000, calculateBy: "percent", value: 7 }
-        ],
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        createdBy: "system"
-      }
-    ];
+    const { CommissionProfile } = req.businessModels;
+    const commissionProfiles = await CommissionProfile.find().sort({ createdAt: -1 });
 
     res.json({
       success: true,
@@ -5647,18 +5611,15 @@ app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, re
 // Create commission profile
 app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
   try {
-    const profileData = {
-      id: Date.now().toString(),
+    const { CommissionProfile } = req.businessModels;
+    const profile = await CommissionProfile.create({
       ...req.body,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      createdBy: req.user.id
-    };
+      createdBy: req.user?._id
+    });
 
-    // In production, save to database
     res.status(201).json({
       success: true,
-      data: profileData
+      data: profile
     });
   } catch (error) {
     console.error('Error creating commission profile:', error);
@@ -5672,16 +5633,29 @@ app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, r
 // Update commission profile
 app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
   try {
+    const { CommissionProfile } = req.businessModels;
     const { id } = req.params;
-    const updateData = {
-      ...req.body,
-      updatedAt: new Date().toISOString()
-    };
 
-    // In production, update in database
+    const updatedProfile = await CommissionProfile.findByIdAndUpdate(
+      id,
+      {
+        ...req.body,
+        updatedBy: req.user?._id,
+        updatedAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!updatedProfile) {
+      return res.status(404).json({
+        success: false,
+        error: 'Commission profile not found'
+      });
+    }
+
     res.json({
       success: true,
-      data: { id, ...updateData }
+      data: updatedProfile
     });
   } catch (error) {
     console.error('Error updating commission profile:', error);
@@ -5695,9 +5669,18 @@ app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase
 // Delete commission profile
 app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
   try {
+    const { CommissionProfile } = req.businessModels;
     const { id } = req.params;
 
-    // In production, delete from database
+    const deletedProfile = await CommissionProfile.findByIdAndDelete(id);
+
+    if (!deletedProfile) {
+      return res.status(404).json({
+        success: false,
+        error: 'Commission profile not found'
+      });
+    }
+
     res.json({
       success: true,
       message: 'Commission profile deleted successfully'

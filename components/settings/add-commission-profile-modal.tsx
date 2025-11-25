@@ -10,16 +10,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { CommissionProfileFormData, CALCULATION_INTERVALS, QUALIFYING_ITEMS } from "@/lib/commission-profile-types"
-import { useToast } from "@/components/ui/use-toast"
 
 interface AddCommissionProfileModalProps {
   isOpen: boolean
   onClose: () => void
-  onSave: (profile: CommissionProfileFormData) => void
+  onSave: (profile: CommissionProfileFormData) => Promise<void>
 }
 
 export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommissionProfileModalProps) {
-  const { toast } = useToast()
   const [formData, setFormData] = useState<CommissionProfileFormData>({
     name: "",
     type: "target_based",
@@ -39,6 +37,7 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
   })
 
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [isSaving, setIsSaving] = useState(false)
 
   const handleInputChange = (field: keyof CommissionProfileFormData, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }))
@@ -119,14 +118,19 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSave = () => {
-    if (validateForm()) {
-      onSave(formData)
-      toast({
-        title: "Success",
-        description: "Commission profile created successfully"
-      })
-      onClose()
+  const handleSave = async () => {
+    if (!validateForm()) {
+      return
+    }
+
+    try {
+      setIsSaving(true)
+      await onSave(formData)
+      handleClose()
+    } catch (error) {
+      console.error("Failed to save commission profile", error)
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -392,8 +396,8 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
           <Button variant="outline" onClick={handleClose}>
             Cancel
           </Button>
-          <Button onClick={handleSave} className="bg-blue-600 hover:bg-blue-700">
-            Save
+          <Button onClick={handleSave} className="bg-blue-600 hover:bg-blue-700" disabled={isSaving}>
+            {isSaving ? "Saving..." : "Save"}
           </Button>
         </DialogFooter>
       </DialogContent>

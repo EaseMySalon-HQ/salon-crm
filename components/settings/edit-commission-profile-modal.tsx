@@ -10,17 +10,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { CommissionProfile, CommissionProfileFormData, CALCULATION_INTERVALS, QUALIFYING_ITEMS } from "@/lib/commission-profile-types"
-import { useToast } from "@/components/ui/use-toast"
 
 interface EditCommissionProfileModalProps {
   isOpen: boolean
   onClose: () => void
-  onSave: (profile: CommissionProfile) => void
+  onSave: (profileId: string, profile: CommissionProfileFormData) => Promise<void>
   profile: CommissionProfile | null
 }
 
 export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }: EditCommissionProfileModalProps) {
-  const { toast } = useToast()
   const [formData, setFormData] = useState<CommissionProfileFormData>({
     name: "",
     type: "target_based",
@@ -40,6 +38,7 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
   })
 
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [isSaving, setIsSaving] = useState(false)
 
   // Populate form data when profile changes
   useEffect(() => {
@@ -143,19 +142,20 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
     return Object.keys(newErrors).length === 0
   }
 
-  const handleSave = () => {
-    if (validateForm() && profile) {
-      const updatedProfile: CommissionProfile = {
-        ...profile,
-        ...formData,
-        updatedAt: new Date().toISOString()
-      }
-      onSave(updatedProfile)
-      toast({
-        title: "Success",
-        description: "Commission profile updated successfully"
-      })
-      onClose()
+  const handleSave = async () => {
+    if (!validateForm() || !profile) {
+      return
+    }
+
+    try {
+      setIsSaving(true)
+      const profileId = profile.id || profile._id || ""
+      await onSave(profileId, formData)
+      handleClose()
+    } catch (error) {
+      console.error("Failed to update commission profile", error)
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -406,8 +406,8 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
           <Button variant="outline" onClick={handleClose}>
             Cancel
           </Button>
-          <Button onClick={handleSave} className="bg-blue-600 hover:bg-blue-700">
-            Save Changes
+          <Button onClick={handleSave} className="bg-blue-600 hover:bg-blue-700" disabled={isSaving}>
+            {isSaving ? "Saving..." : "Save Changes"}
           </Button>
         </DialogFooter>
       </DialogContent>
