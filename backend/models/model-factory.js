@@ -71,7 +71,10 @@ class ModelFactory {
       Supplier: this.getModel('Supplier', require('./Supplier').schema, connection),
       
       // Category model
-      Category: this.getModel('Category', require('./Category').schema, connection)
+      Category: this.getModel('Category', require('./Category').schema, connection),
+      
+      // Commission Profile model
+      CommissionProfile: this.getModel('CommissionProfile', require('./CommissionProfile').schema, connection)
     };
   }
 

@@ -8,18 +8,60 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { CommissionProfile, COMMISSION_PROFILE_TYPES, DEFAULT_COMMISSION_PROFILES, CommissionProfileFormData } from "@/lib/commission-profile-types"
+import { CommissionProfile, CommissionProfileFormData } from "@/lib/commission-profile-types"
 import { useToast } from "@/components/ui/use-toast"
 import { AddCommissionProfileModal } from "./add-commission-profile-modal"
 import { EditCommissionProfileModal } from "./edit-commission-profile-modal"
+import { CommissionProfileAPI } from "@/lib/api"
 
 export function CommissionProfileList() {
   const { toast } = useToast()
-  const [profiles, setProfiles] = useState<CommissionProfile[]>(DEFAULT_COMMISSION_PROFILES)
+  const [profiles, setProfiles] = useState<CommissionProfile[]>([])
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [selectedProfile, setSelectedProfile] = useState<CommissionProfile | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isDeleteLoading, setIsDeleteLoading] = useState(false)
+
+  const normalizeProfile = (profile: CommissionProfile): CommissionProfile => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const backendId = profile.id || profile._id || (profile as any)?._id
+    return {
+      ...profile,
+      id: backendId || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    }
+  }
+
+  const fetchProfiles = async () => {
+    setIsLoading(true)
+    try {
+      const response = await CommissionProfileAPI.getProfiles()
+      if (response?.success) {
+        const normalized = (response.data || []).map((profile: CommissionProfile) => normalizeProfile(profile))
+        setProfiles(normalized)
+      } else {
+        toast({
+          title: "Unable to load commission profiles",
+          description: response?.error || "Please try again.",
+          variant: "destructive"
+        })
+      }
+    } catch (error) {
+      console.error("Error fetching commission profiles:", error)
+      toast({
+        title: "Unable to load commission profiles",
+        description: "Something went wrong. Please try again.",
+        variant: "destructive"
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchProfiles()
+  }, [])
 
   const handleAddProfile = () => {
     setSelectedProfile(null)
@@ -31,41 +73,91 @@ export function CommissionProfileList() {
     setIsEditModalOpen(true)
   }
 
-  const handleSaveEditedProfile = (updatedProfile: CommissionProfile) => {
-    setProfiles(prev => prev.map(p => p.id === updatedProfile.id ? updatedProfile : p))
-    setIsEditModalOpen(false)
-    setSelectedProfile(null)
-  }
-
   const handleDeleteProfile = (profile: CommissionProfile) => {
     setSelectedProfile(profile)
     setIsDeleteModalOpen(true)
   }
 
-  const handleSaveProfile = (profileData: CommissionProfileFormData) => {
-    const newProfile: CommissionProfile = {
-      id: Date.now().toString(),
-      ...profileData,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      createdBy: "current_user" // In real app, get from auth context
+  const handleSaveProfile = async (profileData: CommissionProfileFormData) => {
+    try {
+      const response = await CommissionProfileAPI.createProfile(profileData)
+      if (response?.success && response.data) {
+        const newProfile = normalizeProfile(response.data as CommissionProfile)
+        setProfiles(prev => [newProfile, ...prev])
+        toast({
+          title: "Commission profile created",
+          description: `"${newProfile.name}" is now available for assignment.`
+        })
+        setIsAddModalOpen(false)
+      } else {
+        throw new Error(response?.error || "Failed to create profile")
+      }
+    } catch (error) {
+      console.error("Error creating commission profile:", error)
+      toast({
+        title: "Failed to create profile",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive"
+      })
+      throw error
     }
-    
-    setProfiles(prev => [...prev, newProfile])
-    setIsAddModalOpen(false)
   }
 
-  const confirmDelete = () => {
-    if (selectedProfile) {
-      setProfiles(prev => prev.filter(p => p.id !== selectedProfile.id))
+  const handleSaveEditedProfile = async (profileId: string, profileData: CommissionProfileFormData) => {
+    try {
+      const response = await CommissionProfileAPI.updateProfile(profileId, profileData)
+      if (response?.success && response.data) {
+        const updatedProfile = normalizeProfile(response.data as CommissionProfile)
+        setProfiles(prev => prev.map(p => p.id === profileId ? updatedProfile : p))
+        toast({
+          title: "Commission profile updated",
+          description: `"${updatedProfile.name}" has been updated.`
+        })
+        setIsEditModalOpen(false)
+        setSelectedProfile(null)
+      } else {
+        throw new Error(response?.error || "Failed to update profile")
+      }
+    } catch (error) {
+      console.error("Error updating commission profile:", error)
       toast({
-        title: "Success",
-        description: "Commission profile deleted successfully"
+        title: "Failed to update profile",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive"
       })
+      throw error
     }
-    setIsDeleteModalOpen(false)
-    setSelectedProfile(null)
+  }
+
+  const confirmDelete = async () => {
+    if (!selectedProfile) return
+    const profileId = selectedProfile.id || selectedProfile._id || ""
+    if (!profileId) return
+
+    try {
+      setIsDeleteLoading(true)
+      const response = await CommissionProfileAPI.deleteProfile(profileId)
+      if (response?.success) {
+        setProfiles(prev => prev.filter(p => p.id !== profileId))
+        toast({
+          title: "Commission profile deleted",
+          description: `"${selectedProfile.name}" has been removed.`
+        })
+      } else {
+        throw new Error(response?.error || "Failed to delete profile")
+      }
+    } catch (error) {
+      console.error("Error deleting commission profile:", error)
+      toast({
+        title: "Failed to delete profile",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive"
+      })
+    } finally {
+      setIsDeleteLoading(false)
+      setIsDeleteModalOpen(false)
+      setSelectedProfile(null)
+    }
   }
 
   const getProfileTypeIcon = (type: string) => {
@@ -130,49 +222,63 @@ export function CommissionProfileList() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {profiles.map((profile) => (
-                  <TableRow key={profile.id}>
-                    <TableCell className="font-medium">{profile.name}</TableCell>
-                    <TableCell>
-                      {getProfileTypeBadge(profile.type)}
-                    </TableCell>
-                    <TableCell className="text-gray-600">
-                      {profile.description || "No description"}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={profile.isActive ? "default" : "secondary"}>
-                        {profile.isActive ? "Active" : "Inactive"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-gray-600">
-                      {new Date(profile.createdAt).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" className="h-8 w-8 p-0">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                          <DropdownMenuItem onClick={() => handleEditProfile(profile)}>
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Profile
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem 
-                            onClick={() => handleDeleteProfile(profile)}
-                            className="text-red-600"
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete Profile
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-gray-500 py-10">
+                      Loading commission profiles...
                     </TableCell>
                   </TableRow>
-                ))}
+                ) : profiles.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-gray-500 py-10">
+                      No commission profiles yet. Create one to start tracking commissions.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  profiles.map((profile) => (
+                    <TableRow key={profile.id}>
+                      <TableCell className="font-medium">{profile.name}</TableCell>
+                      <TableCell>
+                        {getProfileTypeBadge(profile.type)}
+                      </TableCell>
+                      <TableCell className="text-gray-600">
+                        {profile.description || "No description"}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={profile.isActive ? "default" : "secondary"}>
+                          {profile.isActive ? "Active" : "Inactive"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-gray-600">
+                        {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : "—"}
+                      </TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" className="h-8 w-8 p-0">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                            <DropdownMenuItem onClick={() => handleEditProfile(profile)}>
+                              <Edit className="h-4 w-4 mr-2" />
+                              Edit Profile
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem 
+                              onClick={() => handleDeleteProfile(profile)}
+                              className="text-red-600"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete Profile
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>
@@ -192,8 +298,8 @@ export function CommissionProfileList() {
             <Button variant="outline" onClick={() => setIsDeleteModalOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={confirmDelete}>
-              Delete Profile
+            <Button variant="destructive" onClick={confirmDelete} disabled={isDeleteLoading}>
+              {isDeleteLoading ? "Deleting..." : "Delete Profile"}
             </Button>
           </DialogFooter>
         </DialogContent>
