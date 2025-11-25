@@ -161,160 +161,187 @@ export function SettingsPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
       {/* Elegant Header Section */}
       <div className="mb-8">
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          {/* Header Background */}
-          <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 px-8 py-6">
+        <div className="rounded-3xl border border-slate-100 bg-white/80 shadow-sm backdrop-blur">
+          <div className="grid gap-6 p-6 lg:grid-cols-[auto_minmax(0,1fr)]">
             <div className="flex items-center gap-4">
-              <div className="p-3 bg-white rounded-xl shadow-sm">
-                <Settings className="h-7 w-7 text-blue-600" />
+              <div className="rounded-2xl border border-blue-100 bg-blue-50/80 p-3 text-blue-700">
+                <Settings className="h-8 w-8" />
               </div>
               <div>
-                <h1 className="text-3xl font-bold text-slate-800 mb-1">
-                  Settings & Configuration
-                </h1>
-                <p className="text-slate-600 text-base">
-                  Manage your salon CRM configuration, preferences, and system settings
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Control center</p>
+                <h1 className="text-3xl font-semibold text-slate-900">Settings & Configuration</h1>
+                <p className="text-slate-500">
+                  Personalize every touchpoint—from branding to billing—without leaving this space.
                 </p>
-              </div>
-            </div>
-          </div>
-          
-          {/* Feature Highlights */}
-          <div className="px-8 py-4 bg-white border-t border-slate-100">
-            <div className="flex items-center gap-8 text-sm text-slate-600">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                <span>System preferences & localization</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-indigo-500 rounded-full"></div>
-                <span>Business & payment configuration</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                <span>Staff management & permissions</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                <span>Commission profiles & incentives</span>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-4">
-        {/* Settings Navigation */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-            <div className="p-6">
-              <h2 className="text-xl font-semibold text-slate-800 mb-6 flex items-center gap-2">
+      {!activeSection ? (
+        /* Initial State: Categories as Cards in Grid */
+        <div className="rounded-3xl border border-slate-100 bg-white/90 p-6 shadow-sm backdrop-blur">
+          <div className="p-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <h2 className="text-xl font-semibold text-slate-800 flex items-center gap-2">
                 <Settings className="h-5 w-5 text-blue-600" />
                 Settings Categories
               </h2>
-              <div className="space-y-3">
+              <p className="text-sm text-slate-500">Switch between modules effortlessly</p>
+            </div>
+            <div className="mt-6 grid gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {settingsCategories.map((category) => {
+                const Icon = category.icon
+                const hasAccess = canAccessSetting(category.requiredRole)
+
+                return (
+                  <button
+                    key={category.id}
+                    onClick={() => setActiveSection(category.id)}
+                    className={`group w-full rounded-2xl border text-left transition-all duration-300 ${
+                      activeSection === category.id
+                        ? "border-blue-200 bg-gradient-to-br from-blue-50 to-white shadow-md ring-2 ring-blue-100"
+                        : hasAccess
+                        ? "border-slate-200 bg-slate-50/60 hover:border-blue-200 hover:bg-blue-50/40 hover:shadow-md"
+                        : "border-slate-100 bg-slate-100/60 text-slate-400 cursor-not-allowed"
+                    }`}
+                    disabled={!hasAccess}
+                  >
+                    <div className="flex flex-col gap-4 p-5">
+                      <div className="flex items-center justify-between">
+                        <div
+                          className={`rounded-2xl p-2.5 shadow-sm ${
+                            activeSection === category.id
+                              ? "bg-white text-blue-600"
+                              : "bg-white text-blue-500"
+                          }`}
+                        >
+                          <Icon className="h-5 w-5" />
+                        </div>
+                        <ChevronRight
+                          className={`h-4 w-4 transition-transform ${
+                            activeSection === category.id
+                              ? "text-blue-600 rotate-90"
+                              : "text-slate-400"
+                          }`}
+                        />
+                      </div>
+                      <div>
+                        <div className="font-semibold text-sm text-slate-900">
+                          {category.title}
+                        </div>
+                        <div className="text-xs text-slate-500 leading-relaxed">
+                          {category.description}
+                        </div>
+                      </div>
+                      {!hasAccess && (
+                        <Badge
+                          variant="secondary"
+                          className="self-start text-xs bg-white text-slate-600"
+                        >
+                          {category.requiredRole}
+                        </Badge>
+                      )}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* After Selection: Sidebar + Content Layout */
+        <div className="grid gap-6 lg:grid-cols-4">
+          {/* Settings Navigation - Left Sidebar */}
+          <div className="lg:col-span-1">
+            <Card className="border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center gap-2 text-lg text-slate-900">
+                  <Settings className="h-5 w-5 text-blue-600" />
+                  Settings Categories
+                </CardTitle>
+                <CardDescription>Pick a category to configure</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
                 {settingsCategories.map((category) => {
                   const Icon = category.icon
                   const hasAccess = canAccessSetting(category.requiredRole)
-                  
+
                   return (
                     <button
                       key={category.id}
                       onClick={() => setActiveSection(category.id)}
                       className={`w-full flex items-center justify-between p-4 rounded-xl text-left transition-all duration-200 ${
                         activeSection === category.id
-                          ? "bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg transform scale-[1.02]"
+                          ? "bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg"
                           : hasAccess
-                          ? "hover:bg-slate-50 hover:shadow-md border border-transparent hover:border-slate-200 hover:transform hover:scale-[1.01]"
+                          ? "hover:bg-slate-50 hover:shadow-md border border-transparent hover:border-slate-200"
                           : "opacity-50 cursor-not-allowed bg-slate-50"
                       }`}
                       disabled={!hasAccess}
                     >
                       <div className="flex items-center gap-3">
-                        <div className={`p-2.5 rounded-lg transition-all duration-200 ${
-                          activeSection === category.id 
-                            ? "bg-white/20" 
-                            : "bg-blue-50"
-                        }`}>
-                          <Icon className={`h-5 w-5 ${
-                            activeSection === category.id 
-                              ? "text-white" 
-                              : "text-blue-600"
-                          }`} />
+                        <div
+                          className={`p-2.5 rounded-lg transition-all duration-200 ${
+                            activeSection === category.id ? "bg-white/20" : "bg-blue-50"
+                          }`}
+                        >
+                          <Icon
+                            className={`h-5 w-5 ${
+                              activeSection === category.id ? "text-white" : "text-blue-600"
+                            }`}
+                          />
                         </div>
                         <div>
-                          <div className="font-semibold text-sm">{category.title}</div>
-                          <div className={`text-xs ${
-                            activeSection === category.id 
-                              ? "text-white/90" 
-                              : "text-slate-500"
-                          }`}>
+                          <div
+                            className={`font-semibold text-sm ${
+                              activeSection === category.id ? "text-white" : "text-slate-900"
+                            }`}
+                          >
+                            {category.title}
+                          </div>
+                          <div
+                            className={`text-xs ${
+                              activeSection === category.id ? "text-white/90" : "text-slate-500"
+                            }`}
+                          >
                             {category.description}
                           </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
                         {!hasAccess && (
-                          <Badge variant="secondary" className="text-xs bg-slate-200 text-slate-600 px-2 py-1">
+                          <Badge
+                            variant="secondary"
+                            className="text-xs bg-slate-200 text-slate-600 px-2 py-1"
+                          >
                             {category.requiredRole}
                           </Badge>
                         )}
-                        <ChevronRight className={`h-4 w-4 transition-transform duration-200 ${
-                          activeSection === category.id 
-                            ? "text-white transform rotate-90" 
-                            : "text-slate-400"
-                        }`} />
+                        <ChevronRight
+                          className={`h-4 w-4 transition-transform duration-200 ${
+                            activeSection === category.id
+                              ? "text-white transform rotate-90"
+                              : "text-slate-400"
+                          }`}
+                        />
                       </div>
                     </button>
                   )
                 })}
-              </div>
-            </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Settings Content - Right Panel */}
+          <div className="lg:col-span-3">
+            <Card className="border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
+              <CardContent className="p-6">{renderSettingComponent()}</CardContent>
+            </Card>
           </div>
         </div>
-
-        {/* Settings Content */}
-        <div className="lg:col-span-3">
-          {activeSection ? (
-            renderSettingComponent()
-          ) : (
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="p-10">
-                <div className="text-center">
-                  <div className="w-24 h-24 bg-gradient-to-r from-blue-100 to-indigo-100 rounded-full flex items-center justify-center mx-auto mb-8">
-                    <Settings className="h-12 w-12 text-blue-600" />
-                  </div>
-                  <h2 className="text-3xl font-bold text-slate-800 mb-4">Welcome to Settings</h2>
-                  <p className="text-slate-600 mb-10 max-w-lg mx-auto text-lg">
-                    Select a category from the sidebar to configure your salon CRM settings and preferences.
-                  </p>
-                  
-                  <div className="grid gap-8 md:grid-cols-2 max-w-3xl mx-auto">
-                    <div className="p-8 border border-slate-200 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 hover:shadow-lg transition-all duration-300 hover:transform hover:scale-[1.02]">
-                      <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                        <Settings className="h-8 w-8 text-blue-600" />
-                      </div>
-                      <h3 className="text-xl font-bold text-slate-800 mb-3">Quick Access</h3>
-                      <p className="text-slate-600 leading-relaxed">
-                        Start with General Settings to configure basic preferences and localization for your salon.
-                      </p>
-                    </div>
-                    <div className="p-8 border border-slate-200 rounded-2xl bg-gradient-to-br from-indigo-50 to-purple-50 hover:shadow-lg transition-all duration-300 hover:transform hover:scale-[1.02]">
-                      <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                        <Users className="h-8 w-8 text-indigo-600" />
-                      </div>
-                      <h3 className="text-xl font-bold text-slate-800 mb-3">Staff Management</h3>
-                      <p className="text-slate-600 leading-relaxed">
-                        Access Staff Directory to manage user permissions and access levels for your team.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   )
 }

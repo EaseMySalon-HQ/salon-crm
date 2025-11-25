@@ -1,4 +1,6 @@
-import type { Metadata } from "next"
+"use client"
+
+import { useState } from "react"
 import Link from "next/link"
 import { CheckCircle2, ArrowRight, Sparkles, Zap, Shield, TrendingUp, ChevronDown } from "lucide-react"
 
@@ -13,37 +15,35 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion"
 
-export const metadata: Metadata = {
-  title: "Pricing | Ease My Salon",
-  description: "Simple, transparent pricing with free trial. Choose Starter, Professional or Enterprise plans for your salon.",
-}
-
 const planCards = [
   {
     title: "Starter",
-    price: "₹999",
-    per: "per month",
+    monthlyPrice: 999,
+    yearlyPrice: 9590, // 20% discount: 999 * 12 * 0.8 = 9590.4, rounded to 9590 (₹799/month)
     description: "Perfect for small salons just getting started.",
     includes: [
-      "Up to 3 staff members",
+      "Unlimited staff",
       "POS & Billing",
       "Appointment Management",
+      "Client Management",
+      "Service & Product Management",
+      "Incentive Management",
+      "Inventory Management",
       "Basic Reports",
       "WhatsApp Receipts",
-      "100 SMS/month",
-      "Email Support",
-      "Mobile App Access",
+      "Staff Login and access management",
+      "Cash Register Management",
+      "Email and Phone Support",
     ],
   },
   {
     title: "Professional",
-    price: "₹2,499",
-    per: "per month",
+    monthlyPrice: 2499,
+    yearlyPrice: 23990, // 20% discount: 2499 * 12 * 0.8 = 23990.4, rounded to 23990 (₹1999/month)
     description: "For growing salons with multiple staff.",
     includes: [
-      "Up to 10 staff members",
       "Everything in Starter",
-      "Inventory Management",
+      "Advanced Inventory Management",
       "Customer CRM with History",
       "Advanced Analytics & Reports",
       "Staff Commission Tracking",
@@ -51,13 +51,13 @@ const planCards = [
       "Priority Email & Phone Support",
       "Custom Receipt Templates",
       "Data Export (Excel/PDF)",
+      "More features On the way",
     ],
-    popular: true,
+    comingSoon: true,
   },
   {
     title: "Enterprise",
     price: "Custom",
-    per: "contact us",
     description: "For salon chains and large businesses.",
     includes: [
       "Unlimited staff members",
@@ -83,6 +83,20 @@ const pricingFaq = [
 ]
 
 export default function PricingPage() {
+  const [billingPeriod, setBillingPeriod] = useState<"monthly" | "yearly">("monthly")
+
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(price)
+  }
+
+  const getMonthlyEquivalent = (yearlyPrice: number) => {
+    return Math.round(yearlyPrice / 12)
+  }
+
   return (
     <PublicShell>
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
@@ -126,67 +140,162 @@ export default function PricingPage() {
 
       <section className="py-20 bg-white">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid gap-8 lg:grid-cols-3">
-            {planCards.map((plan) => (
-              <Card 
-                key={plan.title} 
-                className={`relative border-2 transition-all hover:shadow-2xl ${
-                  plan.popular 
-                    ? "border-[#7C3AED] shadow-2xl scale-[1.02] lg:-mt-4 lg:mb-4" 
-                    : "border-slate-200 hover:border-[#7C3AED]/50 shadow-lg"
+          {/* Billing Period Toggle */}
+          <div className="flex justify-center mb-12">
+            <div className="inline-flex items-center gap-4 p-1.5 bg-slate-100 rounded-full border border-slate-200">
+              <button
+                onClick={() => setBillingPeriod("monthly")}
+                className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-all duration-200 ${
+                  billingPeriod === "monthly"
+                    ? "bg-white text-slate-900 shadow-md"
+                    : "text-slate-600 hover:text-slate-900"
                 }`}
               >
-                {plan.popular && (
-                  <div className="absolute -top-4 left-1/2 -translate-x-1/2">
-                    <Badge className="bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] text-white px-4 py-1.5 text-sm font-semibold shadow-lg">
-                      Most Popular
-                    </Badge>
-                  </div>
-                )}
-                <CardHeader className="space-y-4 pt-8">
-                  <div>
-                    <CardTitle className="text-3xl font-bold text-slate-900">{plan.title}</CardTitle>
-                    <CardDescription className="text-base text-slate-600 mt-2">{plan.description}</CardDescription>
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-5xl font-bold text-slate-900">{plan.price}</span>
-                      {plan.per && <span className="text-lg text-slate-500 font-normal">/{plan.per}</span>}
-                    </div>
-                    {plan.price !== "Custom" && (
-                      <p className="text-sm text-slate-500">Billed monthly • Cancel anytime</p>
+                Monthly
+              </button>
+              <button
+                onClick={() => setBillingPeriod("yearly")}
+                className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-all duration-200 relative ${
+                  billingPeriod === "yearly"
+                    ? "bg-white text-slate-900 shadow-md"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Yearly
+                <span className="absolute -top-2 -right-2 bg-emerald-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                  Save 20%
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-8 lg:grid-cols-3">
+            {planCards.map((plan) => {
+              const isCustom = plan.price === "Custom"
+              const monthlyEquivalent = !isCustom && billingPeriod === "yearly"
+                ? getMonthlyEquivalent(plan.yearlyPrice!)
+                : null
+              
+              // For yearly: show monthly equivalent as main price, yearly total below
+              const displayPrice = isCustom
+                ? "Custom"
+                : billingPeriod === "monthly"
+                ? formatPrice(plan.monthlyPrice!)
+                : formatPrice(monthlyEquivalent!)
+              const displayPer = isCustom
+                ? "contact us"
+                : billingPeriod === "monthly"
+                ? "per month"
+                : "per month"
+              const yearlyTotal = !isCustom && billingPeriod === "yearly"
+                ? formatPrice(plan.yearlyPrice!)
+                : null
+
+              return (
+                <Card
+                  key={plan.title}
+                  className={`relative border-2 transition-all hover:shadow-2xl flex flex-col ${
+                    plan.popular
+                      ? "border-[#7C3AED] shadow-2xl scale-[1.02] lg:-mt-4 lg:mb-4"
+                      : "border-slate-200 hover:border-[#7C3AED]/50 shadow-lg"
+                  }`}
+                >
+                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 flex gap-2">
+                    {plan.popular && (
+                      <Badge className="bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] text-white px-4 py-1.5 text-sm font-semibold shadow-lg">
+                        Most Popular
+                      </Badge>
+                    )}
+                    {plan.comingSoon && (
+                      <Badge className="bg-amber-500 text-white px-4 py-1.5 text-sm font-semibold shadow-lg">
+                        Coming Soon
+                      </Badge>
                     )}
                   </div>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <ul className="space-y-3">
-                    {plan.includes.map((item, idx) => (
-                      <li key={idx} className="flex items-start gap-3">
-                        <CheckCircle2 className="h-5 w-5 text-emerald-500 flex-shrink-0 mt-0.5" />
-                        <span className="text-sm text-slate-700 font-medium">{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <Button 
-                    asChild 
-                    size="lg" 
-                    className={`w-full py-6 text-base font-semibold ${
-                      plan.popular 
-                        ? "bg-[#7C3AED] hover:bg-[#6D28D9] text-white shadow-lg shadow-purple-200" 
-                        : "bg-slate-900 hover:bg-slate-800 text-white"
-                    }`}
-                  >
-                    <Link href="/contact">
-                      {plan.price === "Custom" ? "Contact Sales" : "Start Free Trial"}
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Link>
-                  </Button>
-                  {plan.price !== "Custom" && (
-                    <p className="text-xs text-center text-slate-500">14-day free trial • No credit card required</p>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
+                  <CardHeader className="space-y-4 pt-8">
+                    <div>
+                      <CardTitle className="text-3xl font-bold text-slate-900">
+                        {plan.title}
+                      </CardTitle>
+                      <CardDescription className="text-base text-slate-600 mt-2">
+                        {plan.description}
+                      </CardDescription>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-5xl font-bold text-slate-900">{displayPrice}</span>
+                        <span className="text-lg text-slate-500 font-normal">/{displayPer}</span>
+                      </div>
+                      {yearlyTotal && (
+                        <p className="text-sm text-slate-600 font-medium">
+                          {yearlyTotal}/per Year
+                        </p>
+                      )}
+                      {!isCustom && (
+                        <p className="text-sm text-slate-500">
+                          {billingPeriod === "monthly"
+                            ? "Billed monthly • Cancel anytime"
+                            : "Billed annually • Save 20%"}
+                        </p>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="flex flex-col flex-grow space-y-6">
+                    <ul className="space-y-3 flex-grow">
+                      {plan.includes.map((item, idx) => (
+                        <li key={idx} className="flex items-start gap-3">
+                          <CheckCircle2 className="h-5 w-5 text-emerald-500 flex-shrink-0 mt-0.5" />
+                          <span className={`text-sm text-slate-700 ${item === "More features On the way" ? "font-bold" : "font-medium"}`}>
+                            {item}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-auto">
+                      {plan.comingSoon ? (
+                        <Button
+                          size="lg"
+                          disabled
+                          className="w-full py-6 text-base font-semibold bg-slate-400 cursor-not-allowed text-white"
+                        >
+                          Coming Soon
+                        </Button>
+                      ) : (
+                        <Button
+                          asChild
+                          size="lg"
+                          className={`w-full py-6 text-base font-semibold ${
+                            plan.popular
+                              ? "bg-[#7C3AED] hover:bg-[#6D28D9] text-white shadow-lg shadow-purple-200"
+                              : "bg-slate-900 hover:bg-slate-800 text-white"
+                          }`}
+                        >
+                          <Link href="/contact">
+                            {isCustom ? "Contact Sales" : "Start Free Trial"}
+                            <ArrowRight className="ml-2 h-4 w-4" />
+                          </Link>
+                        </Button>
+                      )}
+                      {!isCustom && !plan.comingSoon && (
+                        <p className="text-xs text-center text-slate-500 mt-2">
+                          14-day free trial • No credit card required
+                        </p>
+                      )}
+                      {isCustom && (
+                        <p className="text-xs text-center text-slate-500 mt-2">
+                          Custom pricing for your business needs
+                        </p>
+                      )}
+                      {plan.comingSoon && (
+                        <p className="text-xs text-center text-slate-500 mt-2">
+                          We're working on this plan. Stay tuned!
+                        </p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
           
           {/* Value Proposition */}
