@@ -47,9 +47,6 @@ const clientSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Add unique index for phone number
-clientSchema.index({ phone: 1 }, { unique: true });
-
 // Export both schema and model for flexibility
 module.exports = {
   schema: clientSchema,
