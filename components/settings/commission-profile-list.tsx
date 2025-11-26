@@ -155,8 +155,8 @@ export function CommissionProfileList() {
       })
     } finally {
       setIsDeleteLoading(false)
-      setIsDeleteModalOpen(false)
-      setSelectedProfile(null)
+    setIsDeleteModalOpen(false)
+    setSelectedProfile(null)
     }
   }
 
@@ -236,47 +236,47 @@ export function CommissionProfileList() {
                   </TableRow>
                 ) : (
                   profiles.map((profile) => (
-                    <TableRow key={profile.id}>
-                      <TableCell className="font-medium">{profile.name}</TableCell>
-                      <TableCell>
-                        {getProfileTypeBadge(profile.type)}
-                      </TableCell>
-                      <TableCell className="text-gray-600">
-                        {profile.description || "No description"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={profile.isActive ? "default" : "secondary"}>
-                          {profile.isActive ? "Active" : "Inactive"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-gray-600">
+                  <TableRow key={profile.id}>
+                    <TableCell className="font-medium">{profile.name}</TableCell>
+                    <TableCell>
+                      {getProfileTypeBadge(profile.type)}
+                    </TableCell>
+                    <TableCell className="text-gray-600">
+                      {profile.description || "No description"}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={profile.isActive ? "default" : "secondary"}>
+                        {profile.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-gray-600">
                         {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : "—"}
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" className="h-8 w-8 p-0">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                            <DropdownMenuItem onClick={() => handleEditProfile(profile)}>
-                              <Edit className="h-4 w-4 mr-2" />
-                              Edit Profile
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem 
-                              onClick={() => handleDeleteProfile(profile)}
-                              className="text-red-600"
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete Profile
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" className="h-8 w-8 p-0">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                          <DropdownMenuItem onClick={() => handleEditProfile(profile)}>
+                            <Edit className="h-4 w-4 mr-2" />
+                            Edit Profile
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem 
+                            onClick={() => handleDeleteProfile(profile)}
+                            className="text-red-600"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete Profile
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
                   ))
                 )}
               </TableBody>

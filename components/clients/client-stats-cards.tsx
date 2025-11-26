@@ -36,7 +36,7 @@ export function ClientStatsCards({ clients, activeFilter, onFilterChange }: Clie
       let isActive = false
       
       if (lastVisit) {
-        const lastVisitDate = new Date(lastVisit)
+      const lastVisitDate = new Date(lastVisit)
         if (!isNaN(lastVisitDate.getTime())) {
           lastVisitDate.setHours(0, 0, 0, 0)
           // Active if last visit is within 3 months from today

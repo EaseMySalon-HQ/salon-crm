@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { PlusCircle, CalendarDays } from "lucide-react"
 import { useRef } from "react"
+import { useSearchParams } from "next/navigation"
 
 import { Button } from "@/components/ui/button"
 import { AppointmentsCalendar } from "@/components/appointments/appointments-calendar"
@@ -11,6 +12,8 @@ import { ProtectedRoute } from "@/components/auth/protected-route"
 
 export default function AppointmentsPage() {
   const calendarRef = useRef<{ showCancelledModal: () => void }>(null)
+  const searchParams = useSearchParams()
+  const selectedAppointmentId = searchParams?.get("appointment") || undefined
 
   return (
     <ProtectedRoute>
@@ -42,7 +45,7 @@ export default function AppointmentsPage() {
                 </div>
               </div>
               <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-2xl border border-white/20 p-8">
-                <AppointmentsCalendar ref={calendarRef} />
+                <AppointmentsCalendar ref={calendarRef} initialAppointmentId={selectedAppointmentId} />
               </div>
             </div>
           </div>

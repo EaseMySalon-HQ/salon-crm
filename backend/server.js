@@ -3799,6 +3799,27 @@ app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAd
   }
 });
 
+const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
+  if (!AppointmentModel || !appointmentId) return;
+  try {
+    const appointment = await AppointmentModel.findById(appointmentId);
+    if (!appointment) {
+      console.warn('⚠️ Appointment not found for completion update:', appointmentId);
+      return;
+    }
+
+    if (appointment.status === 'completed' || appointment.status === 'cancelled') {
+      return;
+    }
+
+    appointment.status = 'completed';
+    await appointment.save();
+    console.log(`✅ Appointment ${appointmentId} marked as completed after sale.`);
+  } catch (error) {
+    console.error('❌ Failed to mark appointment as completed:', error);
+  }
+};
+
 // Appointments routes
 app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
@@ -4203,7 +4224,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     console.log('🌐 Request method:', req.method);
     console.log('🌐 Request url:', req.url);
     
-    const { Sale, Product, InventoryTransaction } = req.businessModels;
+    const { Sale, Product, InventoryTransaction, Appointment } = req.businessModels;
     const saleData = req.body;
     
     // Process items to handle staff contributions
@@ -4236,6 +4257,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     
     const sale = new Sale(saleData);
     await sale.save();
+
+    if (sale.appointmentId && String(sale.status).toLowerCase() === 'completed') {
+      await markAppointmentCompleted(Appointment, sale.appointmentId);
+    }
 
     // Create inventory transactions for product items
     if (saleData.items && Array.isArray(saleData.items)) {
@@ -4363,7 +4388,7 @@ app.post('/api/sales/:id/payment', authenticateToken, setupBusinessDatabase, req
   try {
     const { id } = req.params;
     const { amount, method, notes, collectedBy } = req.body;
-    const { Sale } = req.businessModels;
+    const { Sale, Appointment } = req.businessModels;
     
     if (!amount || !method) {
       return res.status(400).json({ 
@@ -4397,13 +4422,17 @@ app.post('/api/sales/:id/payment', authenticateToken, setupBusinessDatabase, req
       collectedBy: collectedBy || req.user.name || 'Staff'
     };
     
-    await sale.addPayment(paymentData);
+    const updatedSale = await sale.addPayment(paymentData);
+
+    if (updatedSale.appointmentId && String(updatedSale.status).toLowerCase() === 'completed') {
+      await markAppointmentCompleted(Appointment, updatedSale.appointmentId);
+    }
     
     res.json({ 
       success: true, 
-      data: sale,
+      data: updatedSale,
       message: `Payment of ₹${amount} collected successfully`,
-      paymentSummary: sale.getPaymentSummary()
+      paymentSummary: updatedSale.getPaymentSummary()
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -5639,7 +5668,7 @@ app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase
     const updatedProfile = await CommissionProfile.findByIdAndUpdate(
       id,
       {
-        ...req.body,
+      ...req.body,
         updatedBy: req.user?._id,
         updatedAt: new Date()
       },
