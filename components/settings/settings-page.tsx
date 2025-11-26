@@ -168,7 +168,6 @@ export function SettingsPage() {
                 <Settings className="h-8 w-8" />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Control center</p>
                 <h1 className="text-3xl font-semibold text-slate-900">Settings & Configuration</h1>
                 <p className="text-slate-500">
                   Personalize every touchpoint—from branding to billing—without leaving this space.
