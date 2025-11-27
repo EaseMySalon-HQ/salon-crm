@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label"
 import { CashRegistryAPI, ExpensesAPI, SalesAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
+import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
 import { CashRegistryModal } from "./cash-registry-modal"
 import { VerificationModal } from "./verification-modal"
@@ -60,6 +61,7 @@ interface CashRegistryReportProps {
 
 export function CashRegistryReport({ isVerificationModalOpen, onVerificationModalChange }: CashRegistryReportProps) {
   const { toast } = useToast()
+  const { hasAccess: canExport } = useFeature("data_export")
   const { user } = useAuth()
   const [searchTerm, setSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
@@ -1669,16 +1671,17 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             
             {/* Right Side - Actions */}
             <div className="flex items-center space-x-3">
+              {canExport ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                className="flex items-center space-x-2 bg-white border-slate-300 hover:bg-slate-50 hover:border-slate-400 hover:shadow-md transition-all duration-200 rounded-xl px-4 py-2"
-              >
-                <Download className="h-4 w-4 text-slate-600" />
-                <span className="font-medium">Export</span>
+                  <Button
+                    variant="outline"
+                    className="flex items-center space-x-2 bg-white border-slate-300 hover:bg-slate-50 hover:border-slate-400 hover:shadow-md transition-all duration-200 rounded-xl px-4 py-2"
+                  >
+                    <Download className="h-4 w-4 text-slate-600" />
+                    <span className="font-medium">Export</span>
                     <ChevronDown className="h-4 w-4 text-slate-600" />
-              </Button>
+                  </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
                   <DropdownMenuLabel>Export Format</DropdownMenuLabel>
@@ -1693,6 +1696,17 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+            ) : (
+              <Button
+                variant="outline"
+                className="flex items-center space-x-2 bg-gray-100 border-gray-300 cursor-not-allowed text-gray-500 rounded-xl px-4 py-2"
+                disabled
+                title="Data export requires Professional or Enterprise plan"
+              >
+                <Download className="h-4 w-4" />
+                <span className="font-medium">Export (Upgrade)</span>
+              </Button>
+            )}
               
               <Button
                 onClick={() => setIsAddModalOpen(true)}

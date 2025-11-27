@@ -5,7 +5,7 @@ import { useRouter, useParams } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { ArrowLeft, Building2, User, Loader2, Phone, MapPin } from "lucide-react"
+import { ArrowLeft, Building2, User, Loader2, Phone, MapPin, CreditCard } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -35,7 +35,9 @@ const createBusinessSchema = (isEditMode: boolean) => z.object({
   ownerPhone: isEditMode ? z.string().optional() : z.string().min(10, "Phone number is required"),
   ownerPassword: isEditMode ? z.string().optional() : z.string().min(6, "Password must be at least 6 characters"),
   
-  
+  // Plan Information
+  planId: isEditMode ? z.string().optional() : z.string().min(1, "Plan selection is required"),
+  billingPeriod: z.enum(["monthly", "yearly"]).default("monthly"),
 })
 
 type BusinessFormData = z.infer<ReturnType<typeof createBusinessSchema>>
@@ -48,6 +50,7 @@ interface BusinessFormProps {
 export function CreateBusinessForm({ mode = 'create', businessId }: BusinessFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [plans, setPlans] = useState<any[]>([])
   const { toast } = useToast()
   const router = useRouter()
   const params = useParams()
@@ -77,15 +80,37 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
       ownerEmail: "",
       ownerPhone: "",
       ownerPassword: "",
+      planId: "starter",
+      billingPeriod: "monthly",
     },
   })
 
-  // Load business data for edit mode
+  // Load plans and business data
   useEffect(() => {
+    fetchPlans()
     if (isEditMode && currentBusinessId) {
       loadBusinessData()
     }
   }, [isEditMode, currentBusinessId])
+
+  const fetchPlans = async () => {
+    try {
+      const response = await fetch(`${API_URL}/admin/plans/config`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+        },
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success) {
+          setPlans(data.data.plans)
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching plans:', error)
+    }
+  }
 
   const loadBusinessData = async () => {
     setIsLoading(true)
@@ -190,6 +215,22 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
           email: data.ownerEmail || '',
           phone: data.ownerPhone || '',
           password: data.ownerPassword || ''
+        },
+        plan: {
+          planId: data.planId || 'starter',
+          billingPeriod: data.billingPeriod || 'monthly',
+          renewalDate: null,
+          isTrial: false,
+          trialEndsAt: null,
+          overrides: {
+            features: [],
+            expiresAt: null,
+            notes: '',
+          },
+          addons: {
+            whatsapp: { enabled: false, quota: 0, used: 0, lastResetAt: null },
+            sms: { enabled: false, quota: 0, used: 0, lastResetAt: null },
+          },
         },
       }
 
@@ -479,6 +520,85 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
               </CardContent>
             </Card>
           </div>
+
+          {/* Plan Selection Section */}
+          {!isEditMode && (
+            <div className="space-y-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: '500ms' }}>
+              <Card className="transform hover:scale-[1.01] transition-all duration-300 shadow-lg hover:shadow-xl border-0 bg-white/80 backdrop-blur-sm">
+                <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-t-lg border-b border-purple-100">
+                  <CardTitle className="flex items-center gap-2 text-purple-800">
+                    <CreditCard className="h-5 w-5" />
+                    Pricing Plan
+                  </CardTitle>
+                  <CardDescription className="text-purple-600">
+                    Select a pricing plan for this business
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-6 space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <Label htmlFor="planId" className="text-sm font-medium text-gray-700">{getLabel("Plan")}</Label>
+                      <Select 
+                        value={form.watch("planId")} 
+                        onValueChange={(value) => form.setValue("planId", value)}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="Select a plan" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {plans.map((plan) => (
+                            <SelectItem key={plan.id} value={plan.id}>
+                              {plan.name} {plan.monthlyPrice && `- ₹${plan.monthlyPrice.toLocaleString()}/mo`}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {form.formState.errors.planId && (
+                        <p className="text-sm text-red-600">
+                          {form.formState.errors.planId.message}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="billingPeriod" className="text-sm font-medium text-gray-700">{getLabel("Billing Period")}</Label>
+                      <Select 
+                        value={form.watch("billingPeriod")} 
+                        onValueChange={(value) => form.setValue("billingPeriod", value as "monthly" | "yearly")}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                          <SelectItem value="yearly">Yearly (Save 20%)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {form.watch("planId") && (
+                    <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                      {(() => {
+                        const selectedPlan = plans.find(p => p.id === form.watch("planId"))
+                        if (!selectedPlan) return null
+                        return (
+                          <div>
+                            <div className="font-semibold text-sm text-gray-700 mb-2">
+                              {selectedPlan.name} - {selectedPlan.description}
+                            </div>
+                            <div className="text-xs text-gray-600">
+                              Includes {selectedPlan.features.length} features • {selectedPlan.limits.locations === Infinity ? 'Unlimited' : selectedPlan.limits.locations} location(s)
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
           {/* Owner Information Section */}
           <div className="space-y-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: '600ms' }}>

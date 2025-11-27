@@ -10,6 +10,7 @@ import { ClientStatsCards } from "@/components/clients/client-stats-cards"
 import { clientStore, type Client } from "@/lib/client-store"
 import { SalesAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
+import { useFeature } from "@/hooks/use-entitlements"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -18,6 +19,7 @@ import { format } from "date-fns"
 
 export function ClientsListPage() {
   const { toast } = useToast()
+  const { hasAccess: canExport } = useFeature("data_export")
   const [searchQuery, setSearchQuery] = useState("")
   const [clients, setClients] = useState<Client[]>([])
   const [filteredClients, setFilteredClients] = useState<Client[]>([])
@@ -320,30 +322,42 @@ export function ClientsListPage() {
                   </div>
                   
                   <div className="flex items-center gap-3">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className="bg-white hover:bg-slate-50 text-slate-700 px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-medium border-slate-200"
-                        >
-                          <Download className="mr-2 h-5 w-5" />
-                          Export
-                          <ChevronDown className="ml-2 h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-48">
-                        <DropdownMenuLabel>Export Format</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
-                          <FileText className="h-4 w-4 mr-2" />
-                          Export as PDF
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={handleExportXLS} className="cursor-pointer">
-                          <FileSpreadsheet className="h-4 w-4 mr-2" />
-                          Export as Excel
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {canExport ? (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            className="bg-white hover:bg-slate-50 text-slate-700 px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-medium border-slate-200"
+                          >
+                            <Download className="mr-2 h-5 w-5" />
+                            Export
+                            <ChevronDown className="ml-2 h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuLabel>Export Format</DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
+                            <FileText className="h-4 w-4 mr-2" />
+                            Export as PDF
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={handleExportXLS} className="cursor-pointer">
+                            <FileSpreadsheet className="h-4 w-4 mr-2" />
+                            Export as Excel
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        className="bg-gray-100 cursor-not-allowed text-gray-500 px-6 py-2.5 shadow-md rounded-xl font-medium border-gray-200"
+                        disabled
+                        title="Data export requires Professional or Enterprise plan"
+                      >
+                        <Download className="mr-2 h-5 w-5" />
+                        Export (Upgrade)
+                      </Button>
+                    )}
                     
                     <Button asChild className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-medium">
                       <Link href="/clients/new">

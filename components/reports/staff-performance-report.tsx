@@ -18,6 +18,7 @@ import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfile
 import { CommissionProfileCalculator, StaffCommissionResult } from "@/lib/commission-profile-calculator"
 import { CommissionProfile } from "@/lib/commission-profile-types"
 import { useToast } from "@/hooks/use-toast"
+import { useFeature } from "@/hooks/use-entitlements"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
@@ -108,6 +109,7 @@ const getPerformanceTrend = (currentScore: number, previousScore: number) => {
 
 export function StaffPerformanceReport() {
   const { toast } = useToast()
+  const { hasAccess: canExport } = useFeature("data_export")
   const [searchTerm, setSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("currentMonth")
@@ -864,25 +866,37 @@ export function StaffPerformanceReport() {
               )}
             </div>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full sm:w-auto h-11 border-gray-200 hover:border-green-500 hover:bg-green-50 hover:text-green-600 transition-all">
-                  <Download className="h-4 w-4 mr-2" />
-                  Export Data
-                  <ChevronDown className="h-4 w-4 ml-2" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-48">
-                <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
-                  <FileText className="h-4 w-4 mr-2" />
-                  Export as PDF
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleExportExcel} className="cursor-pointer">
-                  <FileSpreadsheet className="h-4 w-4 mr-2" />
-                  Export as Excel
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {canExport ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="w-full sm:w-auto h-11 border-gray-200 hover:border-green-500 hover:bg-green-50 hover:text-green-600 transition-all">
+                    <Download className="h-4 w-4 mr-2" />
+                    Export Data
+                    <ChevronDown className="h-4 w-4 ml-2" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-48">
+                  <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
+                    <FileText className="h-4 w-4 mr-2" />
+                    Export as PDF
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportExcel} className="cursor-pointer">
+                    <FileSpreadsheet className="h-4 w-4 mr-2" />
+                    Export as Excel
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Button 
+                variant="outline" 
+                className="w-full sm:w-auto h-11 border-gray-200 bg-gray-100 cursor-not-allowed" 
+                disabled
+                title="Data export requires Professional or Enterprise plan"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export (Upgrade Required)
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
