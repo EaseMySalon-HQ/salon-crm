@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Building2, Users, Settings, LogOut, Menu, X, Plus } from "lucide-react"
+import { Building2, Users, Settings, LogOut, Menu, X, Plus, CreditCard } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sidebar, SidebarContent, SidebarHeader, SidebarMenu, SidebarMenuItem } from "@/components/ui/sidebar"
 import { useAdminAuth } from "@/lib/admin-auth-context"
@@ -50,6 +50,11 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       title: "Businesses",
       href: "/admin/businesses",
       icon: Users
+    },
+    {
+      title: "Plans",
+      href: "/admin/plans",
+      icon: CreditCard
     },
     {
       title: "Settings",

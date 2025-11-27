@@ -94,6 +94,7 @@ app.options('*', cors());
 // Register Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/settings', require('./routes/admin-settings'));
+app.use('/api/admin/plans', require('./routes/admin-plans'));
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
@@ -519,6 +520,156 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Internal server error'
+    });
+  }
+});
+
+// Get business plan information
+app.get('/api/business/plan', authenticateToken, async (req, res) => {
+  try {
+    const businessId = req.user?.branchId;
+
+    if (!businessId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Business ID not found'
+      });
+    }
+
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+
+    const business = await Business.findById(businessId).select('plan status name code');
+
+    if (!business) {
+      return res.status(404).json({
+        success: false,
+        error: 'Business not found'
+      });
+    }
+
+    const { getPlanInfo } = require('./lib/entitlements');
+    const planInfo = getPlanInfo(business);
+
+    if (!planInfo) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to get plan information'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        plan: planInfo
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching business plan:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Get business information (for plan & billing page)
+app.get('/api/business/info', authenticateToken, async (req, res) => {
+  try {
+    const businessId = req.user?.branchId;
+
+    if (!businessId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Business ID not found'
+      });
+    }
+
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+
+    const business = await Business.findById(businessId).select('_id code name address contact createdAt');
+
+    if (!business) {
+      return res.status(404).json({
+        success: false,
+        error: 'Business not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        _id: business._id,
+        code: business.code,
+        name: business.name,
+        address: business.address,
+        contact: business.contact,
+        createdAt: business.createdAt,
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching business info:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// New endpoint for authenticated business users to get available plans
+app.get('/api/business/plans', authenticateToken, setupMainDatabase, async (req, res) => {
+  try {
+    const { PlanTemplate } = req.mainModels;
+    const { getAllPlans } = require('./config/plans');
+    
+    // Get plans from database (active templates) and merge with config file
+    const dbPlans = await PlanTemplate.find({ isActive: true }).sort({ createdAt: 1 });
+    const configPlans = getAllPlans();
+
+    // Merge database plans with config plans (database takes precedence)
+    const planMap = new Map();
+    
+    // First add config plans
+    configPlans.forEach(plan => {
+      planMap.set(plan.id, {
+        id: plan.id,
+        name: plan.name,
+        description: plan.description,
+        monthlyPrice: plan.monthlyPrice,
+        yearlyPrice: plan.yearlyPrice,
+        features: plan.features || [],
+        limits: plan.limits || {},
+      });
+    });
+    
+    // Then override/add database plans
+    dbPlans.forEach(dbPlan => {
+      planMap.set(dbPlan.id, {
+        id: dbPlan.id,
+        name: dbPlan.name,
+        description: dbPlan.description,
+        monthlyPrice: dbPlan.monthlyPrice,
+        yearlyPrice: dbPlan.yearlyPrice,
+        features: dbPlan.features || [],
+        limits: dbPlan.limits || {},
+      });
+    });
+
+    const plans = Array.from(planMap.values());
+
+    res.json({
+      success: true,
+      data: plans,
+    });
+  } catch (error) {
+    console.error('Error fetching available plans:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch available plans',
+      details: error.message,
     });
   }
 });
@@ -5618,8 +5769,10 @@ app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, a
 });
 
 // Commission Profiles API
+const { requireFeature } = require('./middleware/feature-gate');
+
 // Get all commission profiles
-app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireManager, requireFeature('staff_commissions'), async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const commissionProfiles = await CommissionProfile.find().sort({ createdAt: -1 });
@@ -5638,7 +5791,7 @@ app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, re
 });
 
 // Create commission profile
-app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireAdmin, requireFeature('staff_commissions'), async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const profile = await CommissionProfile.create({
@@ -5660,7 +5813,7 @@ app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, r
 });
 
 // Update commission profile
-app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, requireFeature('staff_commissions'), async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const { id } = req.params;
@@ -5696,7 +5849,7 @@ app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase
 });
 
 // Delete commission profile
-app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, requireFeature('staff_commissions'), async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const { id } = req.params;

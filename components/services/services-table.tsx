@@ -12,6 +12,7 @@ import { ServicesAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { useCurrency } from "@/hooks/use-currency"
 import { useToast } from "@/hooks/use-toast"
+import { useFeature } from "@/hooks/use-entitlements"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { ServiceImportModal } from "./service-import-modal"
 import jsPDF from "jspdf"
@@ -22,6 +23,7 @@ import { format } from "date-fns"
 export function ServicesTable() {
   const { formatAmount } = useCurrency()
   const { toast } = useToast()
+  const { hasAccess: canExport } = useFeature("data_export")
   const [searchTerm, setSearchTerm] = useState("")
   const [isAddServiceOpen, setIsAddServiceOpen] = useState(false)
   const [isEditServiceOpen, setIsEditServiceOpen] = useState(false)
@@ -231,30 +233,42 @@ export function ServicesTable() {
           )}
         </div>
         <div className="flex items-center gap-3">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                className="h-10 px-4 bg-white hover:bg-slate-50 text-slate-700 border-slate-200 shadow-md hover:shadow-lg transition-all duration-300"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Export
-                <ChevronDown className="ml-2 h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Export Format</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
-                <FileText className="h-4 w-4 mr-2" />
-                Export as PDF
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleExportXLS} className="cursor-pointer">
-                <FileSpreadsheet className="h-4 w-4 mr-2" />
-                Export as Excel
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {canExport ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="h-10 px-4 bg-white hover:bg-slate-50 text-slate-700 border-slate-200 shadow-md hover:shadow-lg transition-all duration-300"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                  <ChevronDown className="ml-2 h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>Export Format</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
+                  <FileText className="h-4 w-4 mr-2" />
+                  Export as PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleExportXLS} className="cursor-pointer">
+                  <FileSpreadsheet className="h-4 w-4 mr-2" />
+                  Export as Excel
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button
+              variant="outline"
+              className="h-10 px-4 bg-gray-100 cursor-not-allowed text-gray-500 border-gray-200"
+              disabled
+              title="Data export requires Professional or Enterprise plan"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Export (Upgrade)
+            </Button>
+          )}
           
           {canManageServices && (
             <>

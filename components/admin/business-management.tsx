@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Plus, Search, Filter, MoreHorizontal, Eye, Edit, Trash2, Building2, Users, Calendar, Shield, Ban } from "lucide-react"
+import { Plus, Search, Filter, MoreHorizontal, Eye, Edit, Trash2, Building2, Users, Calendar, Shield, Ban, CreditCard } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useToast } from "@/hooks/use-toast"
+import { PlanEditDialog } from "./plan-edit-dialog"
 
 interface Business {
   _id: string
@@ -22,6 +23,13 @@ interface Business {
   subscription: {
     plan: string
     status: string
+  }
+  plan?: {
+    planId: string
+    planName: string
+    billingPeriod: string
+    renewalDate: string | null
+    isTrial: boolean
   }
   owner: {
     name: string
@@ -46,6 +54,8 @@ export function BusinessManagement() {
   const [statusFilter, setStatusFilter] = useState("all")
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
+  const [selectedBusinessForPlan, setSelectedBusinessForPlan] = useState<Business | null>(null)
+  const [isPlanDialogOpen, setIsPlanDialogOpen] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
   
@@ -66,18 +76,37 @@ export function BusinessManagement() {
         ...(statusFilter !== "all" && { status: statusFilter }),
       })
 
-      const response = await fetch(`${API_URL}/admin/businesses?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-          'Content-Type': 'application/json'
-        }
-      })
+      // Fetch businesses with plan info
+      const [businessesResponse, plansResponse] = await Promise.all([
+        fetch(`${API_URL}/admin/businesses?${params}`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+            'Content-Type': 'application/json'
+          }
+        }),
+        fetch(`${API_URL}/admin/plans/businesses?${params}`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+          }
+        })
+      ])
 
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          setBusinesses(data.data)
-          setTotalPages(data.pagination?.totalPages || 1)
+      if (businessesResponse.ok && plansResponse.ok) {
+        const businessesData = await businessesResponse.json()
+        const plansData = await plansResponse.json()
+        
+        if (businessesData.success && plansData.success) {
+          // Merge plan info with businesses
+          const businessesWithPlans = businessesData.data.map((business: Business) => {
+            const planInfo = plansData.data.businesses.find((b: any) => b._id === business._id)
+            return {
+              ...business,
+              plan: planInfo?.plan || null,
+            }
+          })
+          
+          setBusinesses(businessesWithPlans)
+          setTotalPages(businessesData.pagination?.totalPages || 1)
         }
       }
     } catch (error) {
@@ -90,6 +119,11 @@ export function BusinessManagement() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleManagePlan = (business: Business) => {
+    setSelectedBusinessForPlan(business)
+    setIsPlanDialogOpen(true)
   }
 
   const handleStatusChange = async (businessId: string, newStatus: string) => {
@@ -365,6 +399,7 @@ export function BusinessManagement() {
                 <TableRow>
                   <TableHead>Business</TableHead>
                   <TableHead>Owner</TableHead>
+                  <TableHead>Plan</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -398,6 +433,25 @@ export function BusinessManagement() {
                           </>
                         )}
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      {business.plan ? (
+                        <div className="space-y-1">
+                          <Badge className={
+                            business.plan.planId === 'starter' ? 'bg-blue-100 text-blue-800' :
+                            business.plan.planId === 'professional' ? 'bg-purple-100 text-purple-800' :
+                            'bg-amber-100 text-amber-800'
+                          }>
+                            {business.plan.planName}
+                          </Badge>
+                          <div className="text-xs text-gray-500 capitalize">
+                            {business.plan.billingPeriod}
+                            {business.plan.isTrial && ' • Trial'}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-gray-400">No plan</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="space-y-1">
@@ -439,6 +493,12 @@ export function BusinessManagement() {
                           >
                             <Edit className="h-4 w-4 mr-2" />
                             Edit Business
+                          </DropdownMenuItem>
+                          <DropdownMenuItem 
+                            onClick={() => handleManagePlan(business)}
+                          >
+                            <CreditCard className="h-4 w-4 mr-2" />
+                            Manage Plan
                           </DropdownMenuItem>
                           {business.status === 'active' ? (
                             <DropdownMenuItem 
@@ -504,6 +564,20 @@ export function BusinessManagement() {
           )}
         </CardContent>
       </Card>
+
+      {/* Plan Edit Dialog */}
+      {selectedBusinessForPlan && (
+        <PlanEditDialog
+          businessId={selectedBusinessForPlan._id}
+          businessName={selectedBusinessForPlan.name}
+          open={isPlanDialogOpen}
+          onOpenChange={setIsPlanDialogOpen}
+          onSuccess={() => {
+            fetchBusinesses()
+            setSelectedBusinessForPlan(null)
+          }}
+        />
+      )}
     </div>
   )
 }
