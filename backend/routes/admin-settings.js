@@ -1,29 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const jwt = require('jsonwebtoken');
 const { setupMainDatabase } = require('../middleware/business-db');
-
-// Admin authentication middleware
-const authenticateAdmin = (req, res, next) => {
-  const token = req.header('Authorization')?.replace('Bearer ', '');
-  
-  if (!token) {
-    return res.status(401).json({ success: false, error: 'Access denied. No token provided.' });
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production');
-    
-    if (decoded.role !== 'admin') {
-      return res.status(403).json({ success: false, error: 'Access denied. Admin role required.' });
-    }
-    
-    req.admin = decoded;
-    next();
-  } catch (error) {
-    res.status(401).json({ success: false, error: 'Invalid token.' });
-  }
-};
+const { authenticateAdmin } = require('../middleware/admin-auth');
 
 // Admin Settings Schema (in-memory for now, can be moved to database later)
 let adminSettings = {

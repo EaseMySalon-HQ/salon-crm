@@ -4,63 +4,13 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateToken } = require('../middleware/auth');
+const { authenticateAdmin, checkAdminPermission } = require('../middleware/admin-auth');
 const Business = require('../models/Business').model;
 const User = require('../models/User').model;
 const databaseManager = require('../config/database-manager');
 const { modelFactory } = require('../models/model-factory');
 
 const router = express.Router();
-
-// Admin Authentication Middleware
-const authenticateAdmin = async (req, res, next) => {
-  try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return res.status(401).json({ success: false, error: 'Access token required' });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production');
-    
-    // Get main database connection
-    const databaseManager = require('../config/database-manager');
-    console.log('🔐 Admin authentication: Getting main connection...');
-    const mainConnection = await databaseManager.getMainConnection();
-    console.log('🔐 Admin authentication: Main connection established');
-    
-    const Admin = mainConnection.model('Admin', require('../models/Admin').schema);
-    console.log('🔐 Admin authentication: Looking up admin by ID:', decoded.id);
-    
-    const admin = await Admin.findById(decoded.id).select('-password');
-    
-    if (!admin || !admin.isActive) {
-      console.warn('🔐 Admin authentication failed: Admin not found or inactive');
-      return res.status(401).json({ success: false, error: 'Invalid admin token' });
-    }
-
-    console.log('🔐 Admin authentication successful:', admin.email);
-    req.admin = admin;
-    next();
-  } catch (error) {
-    console.error('❌ Admin auth error:', error);
-    console.error('❌ Error details:', {
-      message: error.message,
-      name: error.name,
-      stack: error.stack
-    });
-    
-    // Different error codes for different issues
-    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-      return res.status(401).json({ success: false, error: 'Invalid token' });
-    }
-    
-    // Database connection errors
-    res.status(500).json({ 
-      success: false, 
-      error: 'Authentication service error',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
 
 // Admin Login
 router.post('/login', setupMainDatabase, async (req, res) => {
@@ -135,6 +85,17 @@ router.post('/login', setupMainDatabase, async (req, res) => {
 // Get Admin Profile
 router.get('/profile', setupMainDatabase, authenticateAdmin, async (req, res) => {
   try {
+    const { AdminRole } = req.mainModels;
+    
+    // If admin has a roleId, populate permissions from the role
+    let permissions = req.admin.permissions || [];
+    if (req.admin.roleId) {
+      const role = await AdminRole.findById(req.admin.roleId).lean();
+      if (role && role.permissions) {
+        permissions = role.permissions;
+      }
+    }
+    
     // Get admin name (virtual or constructed)
     const adminName = req.admin.name || `${req.admin.firstName || ''} ${req.admin.lastName || ''}`.trim() || 'Admin User';
     
@@ -145,7 +106,7 @@ router.get('/profile', setupMainDatabase, authenticateAdmin, async (req, res) =>
         name: adminName,
         email: req.admin.email,
         role: req.admin.role,
-        permissions: req.admin.permissions || [],
+        permissions: permissions,
         lastLogin: req.admin.lastLogin
       }
     });
@@ -157,7 +118,7 @@ router.get('/profile', setupMainDatabase, authenticateAdmin, async (req, res) =>
 });
 
 // Get All Businesses
-router.get('/businesses', setupMainDatabase, authenticateAdmin, async (req, res) => {
+router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
   try {
     const { page = 1, limit = 10, search, status, plan, includeDeleted = true } = req.query;
     const { Business } = req.mainModels;
@@ -224,7 +185,7 @@ router.get('/businesses', setupMainDatabase, authenticateAdmin, async (req, res)
 });
 
 // Get Single Business
-router.get('/businesses/:id', authenticateAdmin, async (req, res) => {
+router.get('/businesses/:id', authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
   try {
     // Setup main database connection
     await new Promise((resolve, reject) => {
@@ -279,7 +240,7 @@ router.get('/businesses/:id', authenticateAdmin, async (req, res) => {
 });
 
 // Create New Business
-router.post('/businesses', setupMainDatabase, authenticateAdmin, async (req, res) => {
+router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'create'), async (req, res) => {
   try {
     
     const {
@@ -500,7 +461,7 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, async (req, res
 });
 
 // Update Business
-router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, async (req, res) => {
+router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'update'), async (req, res) => {
   try {
     console.log('Update business request:', req.params.id, req.body);
     const { Business } = req.mainModels;
@@ -583,7 +544,7 @@ router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, async (req, 
 });
 
 // Toggle Business Status
-router.patch('/businesses/:id/status', setupMainDatabase, authenticateAdmin, async (req, res) => {
+router.patch('/businesses/:id/status', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'update'), async (req, res) => {
   try {
     const { status } = req.body;
     const business = await req.mainModels.Business.findByIdAndUpdate(
@@ -609,7 +570,7 @@ router.patch('/businesses/:id/status', setupMainDatabase, authenticateAdmin, asy
 
 
 // Get Business Statistics
-router.get('/businesses/:id/stats', authenticateAdmin, async (req, res) => {
+router.get('/businesses/:id/stats', authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
   try {
     const businessId = req.params.id;
     
@@ -666,7 +627,7 @@ router.get('/businesses/:id/stats', authenticateAdmin, async (req, res) => {
 
 
 // Dashboard Statistics
-router.get('/dashboard/stats', setupMainDatabase, authenticateAdmin, async (req, res) => {
+router.get('/dashboard/stats', setupMainDatabase, authenticateAdmin, checkAdminPermission('dashboard', 'view'), async (req, res) => {
   try {
     const { Business, User } = req.mainModels;
     
@@ -715,7 +676,7 @@ router.get('/dashboard/stats', setupMainDatabase, authenticateAdmin, async (req,
 });
 
 // Get All Users with Business Associations
-router.get('/users', setupMainDatabase, authenticateAdmin, async (req, res) => {
+router.get('/users', setupMainDatabase, authenticateAdmin, checkAdminPermission('users', 'view'), async (req, res) => {
   try {
     console.log('🔍🔍🔍 ADMIN USERS ENDPOINT CALLED - NEW VERSION 🔍🔍🔍');
     const { User, Business } = req.mainModels;
@@ -809,7 +770,7 @@ router.get('/users', setupMainDatabase, authenticateAdmin, async (req, res) => {
 });
 
 // Delete Business (Soft Delete)
-router.delete('/businesses/:id', setupMainDatabase, authenticateAdmin, async (req, res) => {
+router.delete('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'delete'), async (req, res) => {
   try {
     const { id } = req.params;
 

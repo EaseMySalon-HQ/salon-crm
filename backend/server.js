@@ -9,6 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 const cron = require('node-cron');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
+const { ensureAdminAccessDefaults } = require('./utils/admin-access');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -43,8 +44,14 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Connect to MongoDB
-connectDB();
+// Connect to MongoDB and initialize admin access defaults
+const dbPromise = connectDB();
+dbPromise
+  .then(() => ensureAdminAccessDefaults())
+  .then(() => console.log('✅ Admin access defaults ensured'))
+  .catch((error) => {
+    console.error('Failed to initialize admin access defaults:', error);
+  });
 
 // Middleware
 app.use(helmet());
@@ -95,6 +102,7 @@ app.options('*', cors());
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/settings', require('./routes/admin-settings'));
 app.use('/api/admin/plans', require('./routes/admin-plans'));
+app.use('/api/admin/access', require('./routes/admin-access'));
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';

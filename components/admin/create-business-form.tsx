@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
+import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 
 // Create schema factory function
 const createBusinessSchema = (isEditMode: boolean) => z.object({
@@ -62,6 +63,14 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
   // Define API_URL at component level
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
+  const authHeaders = (extra: HeadersInit = {}) => {
+    const token = getAdminAuthToken()
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extra,
+    }
+  }
+
   const form = useForm<BusinessFormData>({
     resolver: zodResolver(createBusinessSchema(isEditMode)) as any,
     defaultValues: {
@@ -96,9 +105,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
   const fetchPlans = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/plans/config`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-        },
+        headers: authHeaders(),
       })
 
       if (response.ok) {
@@ -116,10 +123,9 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
     setIsLoading(true)
     try {
       const response = await fetch(`${API_URL}/admin/businesses/${currentBusinessId}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+        headers: authHeaders({
           'Content-Type': 'application/json'
-        }
+        })
       })
 
       if (response.ok) {
@@ -243,20 +249,18 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
         // Update existing business
         response = await fetch(`${API_URL}/admin/businesses/${currentBusinessId}`, {
           method: 'PUT',
-          headers: {
+          headers: authHeaders({
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`
-          },
+          }),
           body: JSON.stringify(filteredBusinessData)
         })
       } else {
         // Create new business
         response = await fetch(`${API_URL}/admin/businesses`, {
           method: 'POST',
-          headers: {
+          headers: authHeaders({
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`
-          },
+          }),
           body: JSON.stringify(businessData)
         })
       }

@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
+import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 
 interface Plan {
   id: string
@@ -86,6 +87,14 @@ export function PlanManagement() {
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
+  const authHeaders = (extra: HeadersInit = {}) => {
+    const token = getAdminAuthToken()
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extra,
+    }
+  }
+
   // Form state
   const [formData, setFormData] = useState({
     planId: 'starter',
@@ -112,9 +121,7 @@ export function PlanManagement() {
   const fetchConfig = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/plans/config`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-        },
+        headers: authHeaders(),
       })
 
       if (response.ok) {
@@ -140,9 +147,7 @@ export function PlanManagement() {
       })
 
       const response = await fetch(`${API_URL}/admin/plans/businesses?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-        },
+        headers: authHeaders(),
       })
 
       if (response.ok) {
@@ -194,9 +199,7 @@ export function PlanManagement() {
   const handleViewHistory = async (businessId: string) => {
     try {
       const response = await fetch(`${API_URL}/admin/plans/business/${businessId}/history`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-        },
+        headers: authHeaders(),
       })
 
       if (response.ok) {
@@ -222,10 +225,9 @@ export function PlanManagement() {
     try {
       const response = await fetch(`${API_URL}/admin/plans/business/${selectedBusiness._id}`, {
         method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+        headers: authHeaders({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify({
           ...formData,
           reason: formData.overrides.notes || 'Plan updated by admin',

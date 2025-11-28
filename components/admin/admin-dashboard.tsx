@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { useRouter } from "next/navigation"
 import { format } from "date-fns"
 import { useToast } from "@/hooks/use-toast"
+import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 
 interface DashboardStats {
   totalBusinesses: number
@@ -54,6 +55,14 @@ export function AdminDashboard() {
   
   // Define API_URL at component level
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+
+  const authHeaders = (extra: HeadersInit = {}) => {
+    const token = getAdminAuthToken()
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extra,
+    }
+  }
   const [users, setUsers] = useState<User[]>([])
   const [usersLoading, setUsersLoading] = useState(false)
   const [usersSearch, setUsersSearch] = useState("")
@@ -67,10 +76,9 @@ export function AdminDashboard() {
   const fetchDashboardStats = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/dashboard/stats`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+        headers: authHeaders({
           'Content-Type': 'application/json'
-        }
+        })
       })
 
       if (response.ok) {
@@ -89,14 +97,13 @@ export function AdminDashboard() {
   const fetchAllUsers = async () => {
     try {
       setUsersLoading(true)
-      const token = localStorage.getItem('admin-auth-token')
+      const token = getAdminAuthToken()
       console.log('Admin token:', token ? 'Present' : 'Missing')
       
       const response = await fetch(`${API_URL}/admin/users`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
+        headers: authHeaders({
           'Content-Type': 'application/json'
-        }
+        })
       })
 
       console.log('Users API response status:', response.status)
@@ -165,13 +172,12 @@ export function AdminDashboard() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/admin/businesses/${businessId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-          'Content-Type': 'application/json'
-        }
-      })
+        const response = await fetch(`${API_URL}/admin/businesses/${businessId}`, {
+          method: 'DELETE',
+          headers: authHeaders({
+            'Content-Type': 'application/json'
+          })
+        })
 
       if (response.ok) {
         toast({
