@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useToast } from "@/hooks/use-toast"
 import { PlanEditDialog } from "./plan-edit-dialog"
+import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 
 interface Business {
   _id: string
@@ -62,6 +63,14 @@ export function BusinessManagement() {
   // Define API_URL at component level
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
+  const authHeaders = (extra: HeadersInit = {}) => {
+    const token = getAdminAuthToken()
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extra,
+    }
+  }
+
   useEffect(() => {
     fetchBusinesses()
   }, [currentPage, searchTerm, statusFilter])
@@ -79,15 +88,12 @@ export function BusinessManagement() {
       // Fetch businesses with plan info
       const [businessesResponse, plansResponse] = await Promise.all([
         fetch(`${API_URL}/admin/businesses?${params}`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+          headers: authHeaders({
             'Content-Type': 'application/json'
-          }
+          })
         }),
         fetch(`${API_URL}/admin/plans/businesses?${params}`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-          }
+          headers: authHeaders(),
         })
       ])
 
@@ -130,10 +136,9 @@ export function BusinessManagement() {
     try {
       const response = await fetch(`${API_URL}/admin/businesses/${businessId}/status`, {
         method: 'PATCH',
-        headers: {
+        headers: authHeaders({
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`
-        },
+        }),
         body: JSON.stringify({ status: newStatus })
       })
 
@@ -179,10 +184,9 @@ export function BusinessManagement() {
     try {
       const response = await fetch(`${API_URL}/admin/businesses/${businessId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+        headers: authHeaders({
           'Content-Type': 'application/json'
-        }
+        })
       })
       
       if (response.ok) {

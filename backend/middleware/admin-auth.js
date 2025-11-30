@@ -1,0 +1,116 @@
+const jwt = require('jsonwebtoken');
+const databaseManager = require('../config/database-manager');
+const {
+  applyPermissionOverrides,
+  normalizePermissionOverrides
+} = require('../utils/permission-helpers');
+
+require('dotenv').config();
+
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
+
+const authenticateAdmin = async (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'Access token required' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const mainConnection = await databaseManager.getMainConnection();
+    const Admin = mainConnection.model('Admin', require('../models/Admin').schema);
+    const AdminRole = mainConnection.model('AdminRole', require('../models/AdminRole').schema);
+
+    const admin = await Admin.findById(decoded.id).select('-password');
+
+    if (!admin || !admin.isActive) {
+      return res.status(401).json({ success: false, error: 'Invalid admin token' });
+    }
+
+    let role = null;
+
+    if (admin.roleId) {
+      role = await AdminRole.findById(admin.roleId);
+    }
+
+    if (!role && admin.role) {
+      role = await AdminRole.findOne({ key: admin.role });
+      if (role && !admin.roleId) {
+        admin.roleId = role._id;
+        await admin.save();
+      }
+    }
+
+    if (role) {
+      admin.role = role.key;
+    }
+
+    const basePermissions = role?.permissions || admin.permissions || [];
+    const overrides = admin.permissionOverrides || { add: [], remove: [] };
+    const effectivePermissions = applyPermissionOverrides(basePermissions, overrides);
+    admin.permissions = effectivePermissions;
+
+    req.admin = admin;
+    next();
+  } catch (error) {
+    console.error('Admin authentication error:', error);
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      return res.status(401).json({ success: false, error: 'Invalid token' });
+    }
+
+    return res.status(500).json({ success: false, error: 'Authentication service error' });
+  }
+};
+
+const requireAdminRole = (...roles) => {
+  return (req, res, next) => {
+    if (!req.admin) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    if (!roles.includes(req.admin.role)) {
+      return res.status(403).json({ success: false, error: 'Insufficient admin permissions' });
+    }
+
+    next();
+  };
+};
+
+/**
+ * Check if admin has permission for a specific module and action
+ * Super admins have all permissions
+ */
+const checkAdminPermission = (module, action) => {
+  return async (req, res, next) => {
+    if (!req.admin) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    // Super admin has all permissions
+    if (req.admin.role === 'super_admin') {
+      return next();
+    }
+
+    // Check if admin has the required permission
+    const hasPermission = req.admin.permissions?.some(
+      (permission) => permission.module === module && permission.actions?.includes(action)
+    );
+
+    if (!hasPermission) {
+      return res.status(403).json({
+        success: false,
+        error: `Access denied. Required permission: ${module}.${action}`
+      });
+    }
+
+    next();
+  };
+};
+
+module.exports = {
+  authenticateAdmin,
+  requireAdminRole,
+  checkAdminPermission
+};
+

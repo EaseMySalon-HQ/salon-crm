@@ -2,6 +2,12 @@
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
+import {
+  getAdminAuthToken,
+  getAdminAuthUser,
+  setAdminAuthSession,
+  clearAdminAuthSession
+} from "@/lib/admin-auth-storage"
 
 export interface Admin {
   id: string
@@ -36,8 +42,8 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
           return
         }
         
-        const storedToken = localStorage.getItem("admin-auth-token")
-        const storedAdmin = localStorage.getItem("admin-auth-user")
+        const storedToken = getAdminAuthToken()
+        const storedAdmin = getAdminAuthUser()
         
         if (!storedToken || !storedAdmin) {
           setIsLoading(false)
@@ -61,15 +67,13 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
             } else {
               // Clear invalid session
               console.warn('Admin profile response invalid:', data)
-              localStorage.removeItem("admin-auth-token")
-              localStorage.removeItem("admin-auth-user")
+              clearAdminAuthSession()
             }
           } else {
             // Only clear on 401 (unauthorized), not on other errors
             if (response.status === 401) {
               console.warn('Admin token invalid (401), clearing session')
-              localStorage.removeItem("admin-auth-token")
-              localStorage.removeItem("admin-auth-user")
+              clearAdminAuthSession()
             } else {
               console.error('Admin profile fetch failed:', response.status, response.statusText)
               // Don't clear session on server errors, just log
@@ -82,8 +86,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
           if (error instanceof TypeError && error.message.includes('fetch')) {
             console.warn('Network error during admin auth check, keeping session')
           } else {
-            localStorage.removeItem("admin-auth-token")
-            localStorage.removeItem("admin-auth-user")
+            clearAdminAuthSession()
           }
         }
       } catch (error) {
@@ -116,8 +119,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
         setAdmin(adminData)
         
         if (typeof window !== 'undefined') {
-          localStorage.setItem("admin-auth-token", token)
-          localStorage.setItem("admin-auth-user", JSON.stringify(adminData))
+          setAdminAuthSession(token, adminData)
         }
         
         setIsLoading(false)
@@ -137,8 +139,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     setAdmin(null)
     
     if (typeof window !== 'undefined') {
-      localStorage.removeItem("admin-auth-token")
-      localStorage.removeItem("admin-auth-user")
+      clearAdminAuthSession()
     }
     
     router.push('/admin/login')

@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/hooks/use-toast"
+import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 
 interface BusinessDetails {
   _id: string
@@ -64,6 +65,14 @@ export function BusinessDetailsForm() {
   // Define API_URL at component level
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
+  const authHeaders = (extra: HeadersInit = {}) => {
+    const token = getAdminAuthToken()
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extra,
+    }
+  }
+
   useEffect(() => {
     if (params.id) {
       fetchBusinessDetails()
@@ -73,10 +82,9 @@ export function BusinessDetailsForm() {
   const fetchBusinessDetails = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/businesses/${params.id}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+        headers: authHeaders({
           'Content-Type': 'application/json'
-        }
+        })
       })
 
       if (response.ok) {
@@ -112,10 +120,9 @@ export function BusinessDetailsForm() {
     try {
       const response = await fetch(`${API_URL}/admin/businesses/${params.id}/status`, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+        headers: authHeaders({
           'Content-Type': 'application/json'
-        },
+        }),
         body: JSON.stringify({ status: newStatus })
       })
 

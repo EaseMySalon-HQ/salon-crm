@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
+import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 
 interface Plan {
   id: string
@@ -53,6 +54,14 @@ export function PlanTemplateManager() {
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
+  const authHeaders = (extra: HeadersInit = {}) => {
+    const token = getAdminAuthToken()
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extra,
+    }
+  }
+
   const [formData, setFormData] = useState({
     id: '',
     name: '',
@@ -81,9 +90,7 @@ export function PlanTemplateManager() {
     try {
       setLoading(true)
       const response = await fetch(`${API_URL}/admin/plans/config`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-        },
+        headers: authHeaders(),
       })
 
       if (response.ok) {
@@ -151,9 +158,7 @@ export function PlanTemplateManager() {
     try {
       const response = await fetch(`${API_URL}/admin/plans/templates/${planId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
-        },
+        headers: authHeaders(),
       })
 
       if (response.ok) {
@@ -209,10 +214,9 @@ export function PlanTemplateManager() {
       
       const response = await fetch(url, {
         method,
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`,
+        headers: authHeaders({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify({
           id: formData.id,
           name: formData.name,

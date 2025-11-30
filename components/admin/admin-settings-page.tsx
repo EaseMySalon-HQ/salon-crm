@@ -19,6 +19,7 @@ import {
   Upload
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 import { SystemSettings } from "./admin-settings/system-settings"
 import { BusinessSettings } from "./admin-settings/business-settings"
 import { UserSettings } from "./admin-settings/user-settings"
@@ -87,6 +88,14 @@ export function AdminSettingsPage() {
   // Define API_URL at component level
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
+  const authHeaders = (extra: HeadersInit = {}) => {
+    const token = getAdminAuthToken()
+    return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extra,
+    }
+  }
+
   // Load settings on component mount
   useEffect(() => {
     loadSettings()
@@ -95,9 +104,7 @@ export function AdminSettingsPage() {
   const loadSettings = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/settings`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`
-        }
+        headers: authHeaders(),
       })
 
       if (response.ok) {
@@ -124,10 +131,9 @@ export function AdminSettingsPage() {
     try {
       const response = await fetch(`${API_URL}/admin/settings/${activeCategory}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('admin-auth-token')}`
-        },
+        headers: authHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify(settings[activeCategory])
       })
 

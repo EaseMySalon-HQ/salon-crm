@@ -1,40 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const jwt = require('jsonwebtoken');
 const { setupMainDatabase } = require('../middleware/business-db');
 const { getPlanConfig, getAllPlans, getAllFeatures, getAllAddons } = require('../config/plans');
 const { getPlanInfo, getEffectiveFeatures, hasFeature } = require('../lib/entitlements');
-
-// Admin authentication middleware
-const authenticateAdmin = async (req, res, next) => {
-  try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return res.status(401).json({ success: false, error: 'Access token required' });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production');
-    
-    const databaseManager = require('../config/database-manager');
-    const mainConnection = await databaseManager.getMainConnection();
-    const Admin = mainConnection.model('Admin', require('../models/Admin').schema);
-    
-    const admin = await Admin.findById(decoded.id).select('-password');
-    
-    if (!admin || !admin.isActive) {
-      return res.status(401).json({ success: false, error: 'Invalid admin token' });
-    }
-
-    req.admin = admin;
-    next();
-  } catch (error) {
-    console.error('❌ Admin auth error:', error);
-    return res.status(401).json({ success: false, error: 'Invalid token' });
-  }
-};
+const { authenticateAdmin, checkAdminPermission } = require('../middleware/admin-auth');
 
 // GET /api/admin/plans/config - Get all plan configurations
-router.get('/config', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.get('/config', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'view'), async (req, res) => {
   try {
     const { PlanTemplate } = req.mainModels;
     
@@ -88,7 +60,7 @@ router.get('/config', authenticateAdmin, setupMainDatabase, async (req, res) => 
 });
 
 // GET /api/admin/plans/templates - Get all plan templates
-router.get('/templates', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.get('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'view'), async (req, res) => {
   try {
     const { PlanTemplate } = req.mainModels;
     const templates = await PlanTemplate.find().sort({ createdAt: 1 });
@@ -109,7 +81,7 @@ router.get('/templates', authenticateAdmin, setupMainDatabase, async (req, res) 
 });
 
 // POST /api/admin/plans/templates - Create new plan template
-router.post('/templates', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.post('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'create'), async (req, res) => {
   try {
     const { PlanTemplate } = req.mainModels;
     const {
@@ -186,7 +158,7 @@ router.post('/templates', authenticateAdmin, setupMainDatabase, async (req, res)
 });
 
 // PUT /api/admin/plans/templates/:planId - Update plan template
-router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'update'), async (req, res) => {
   try {
     const { PlanTemplate } = req.mainModels;
     const { planId } = req.params;
@@ -242,7 +214,7 @@ router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, async (re
 });
 
 // DELETE /api/admin/plans/templates/:planId - Delete plan template
-router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'delete'), async (req, res) => {
   try {
     const { PlanTemplate } = req.mainModels;
     const { planId } = req.params;
@@ -289,7 +261,7 @@ router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, async 
 });
 
 // GET /api/admin/plans/businesses - Get all businesses with their plan info
-router.get('/businesses', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.get('/businesses', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'view'), async (req, res) => {
   try {
     const { Business } = req.mainModels;
     const { search, planId, status, page = 1, limit = 20 } = req.query;
@@ -364,7 +336,7 @@ router.get('/businesses', authenticateAdmin, setupMainDatabase, async (req, res)
 });
 
 // GET /api/admin/plans/business/:businessId - Get specific business plan details
-router.get('/business/:businessId', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.get('/business/:businessId', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'view'), async (req, res) => {
   try {
     const { Business } = req.mainModels;
     const { businessId } = req.params;
@@ -416,7 +388,7 @@ router.get('/business/:businessId', authenticateAdmin, setupMainDatabase, async 
 });
 
 // PUT /api/admin/plans/business/:businessId - Update business plan
-router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'assign'), async (req, res) => {
   try {
     const { Business } = req.mainModels;
     const { PlanChangeLog } = req.mainModels;
@@ -551,7 +523,7 @@ router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, async 
 });
 
 // GET /api/admin/plans/business/:businessId/history - Get plan change history
-router.get('/business/:businessId/history', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.get('/business/:businessId/history', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'view'), async (req, res) => {
   try {
     const { PlanChangeLog } = req.mainModels;
     const { businessId } = req.params;

@@ -5,15 +5,31 @@ const adminSchema = new mongoose.Schema({
   lastName: { type: String, required: true },
   email: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true },
-  role: { 
-    type: String, 
-    enum: ['super_admin', 'admin', 'support'], 
-    default: 'admin' 
+  role: {
+    type: String,
+    default: 'admin'
+  },
+  roleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'AdminRole'
   },
   permissions: [{
     module: { type: String, required: true }, // 'businesses', 'users', 'billing', 'settings'
     actions: [{ type: String }] // ['create', 'read', 'update', 'delete']
   }],
+  permissionOverrides: {
+    type: {
+      add: [{
+        module: { type: String, required: true },
+        actions: [{ type: String }]
+      }],
+      remove: [{
+        module: { type: String, required: true },
+        actions: [{ type: String }]
+      }]
+    },
+    default: { add: [], remove: [] }
+  },
   isActive: { type: Boolean, default: true },
   lastLogin: { type: Date },
   createdAt: { type: Date, default: Date.now },
