@@ -13,6 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ExpensesAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
+import { useFeature } from "@/hooks/use-entitlements"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
@@ -32,6 +33,7 @@ type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentM
 
 export function ExpenseReport() {
   const { toast } = useToast()
+  const { hasAccess: canExport } = useFeature("data_export")
   const [searchTerm, setSearchTerm] = useState("")
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("today")
   const [categoryFilter, setCategoryFilter] = useState<string>("all")
@@ -471,29 +473,40 @@ export function ExpenseReport() {
             </div>
             
             <div className="flex items-center space-x-3">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Export Report
-                    <ChevronDown className="h-4 w-4 ml-2" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuLabel>Export Format</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
-                    <FileText className="h-4 w-4 mr-2" />
-                    Export as PDF
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleExportXLS} className="cursor-pointer">
-                    <FileSpreadsheet className="h-4 w-4 mr-2" />
-                    Export as Excel
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {canExport ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Export Report
+                      <ChevronDown className="h-4 w-4 ml-2" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>Export Format</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
+                      <FileText className="h-4 w-4 mr-2" />
+                      Export as PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleExportXLS} className="cursor-pointer">
+                      <FileSpreadsheet className="h-4 w-4 mr-2" />
+                      Export as Excel
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button
+                  className="bg-gray-400 cursor-not-allowed text-white px-6 py-2.5 shadow-md rounded-lg font-medium"
+                  disabled
+                  title="Data export requires Professional or Enterprise plan"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Export (Upgrade Required)
+                </Button>
+              )}
             </div>
           </div>
         </div>

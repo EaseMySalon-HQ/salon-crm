@@ -43,15 +43,21 @@ interface Appointment {
 
 interface AppointmentsCalendarProps {
   onShowCancelled?: () => void
+  initialAppointmentId?: string
 }
 
-export const AppointmentsCalendar = forwardRef<{ showCancelledModal: () => void }, AppointmentsCalendarProps>(({ onShowCancelled }, ref) => {
+export const AppointmentsCalendar = forwardRef<{ showCancelledModal: () => void }, AppointmentsCalendarProps>(({ onShowCancelled, initialAppointmentId }, ref) => {
   const router = useRouter()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null)
   const [showDetails, setShowDetails] = useState(false)
+  const [pendingAppointmentId, setPendingAppointmentId] = useState<string | null>(initialAppointmentId ?? null)
+
+  useEffect(() => {
+    setPendingAppointmentId(initialAppointmentId ?? null)
+  }, [initialAppointmentId])
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set())
   const [cancelling, setCancelling] = useState(false)
   const [showCancelledModal, setShowCancelledModal] = useState(false)
@@ -147,6 +153,21 @@ export const AppointmentsCalendar = forwardRef<{ showCancelledModal: () => void 
     }
   }
 
+  const getStatusBadgeClass = (status: string) => {
+    switch (status) {
+      case "completed":
+        return "bg-emerald-100 text-emerald-700 border border-emerald-200"
+      case "confirmed":
+        return "bg-blue-100 text-blue-700 border border-blue-200"
+      case "scheduled":
+        return "bg-amber-100 text-amber-700 border border-amber-200"
+      case "cancelled":
+        return "bg-red-100 text-red-700 border border-red-200"
+      default:
+        return "bg-slate-100 text-slate-700 border border-slate-200"
+    }
+  }
+
   const getStatusText = (status: string) => {
     switch (status) {
       case "confirmed":
@@ -197,6 +218,26 @@ export const AppointmentsCalendar = forwardRef<{ showCancelledModal: () => void 
         return timeA.localeCompare(timeB)
       })
   }
+
+  useEffect(() => {
+    if (!pendingAppointmentId || appointments.length === 0) return
+    const match = appointments.find((apt) => apt._id === pendingAppointmentId)
+    if (!match) return
+
+    setSelectedAppointment(match)
+    setShowDetails(true)
+
+    if (match.date) {
+      const matchDate = new Date(match.date)
+      const year = matchDate.getFullYear()
+      const month = String(matchDate.getMonth() + 1).padStart(2, '0')
+      const day = String(matchDate.getDate()).padStart(2, '0')
+      setSelectedDate(`${year}-${month}-${day}`)
+      setCurrentDate(matchDate)
+    }
+
+    setPendingAppointmentId(null)
+  }, [pendingAppointmentId, appointments])
 
   const getUpcomingAppointments = () => {
     const today = new Date()
@@ -381,14 +422,12 @@ export const AppointmentsCalendar = forwardRef<{ showCancelledModal: () => void 
                     >
                       <CardContent className="p-3">
                         <div className="flex items-center justify-between mb-2">
+                          <Badge className={`text-xs font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
+                            {getStatusText(appointment.status)}
+                          </Badge>
                           <Badge variant="outline" className="text-emerald-700 border-emerald-300 bg-emerald-50">
                             {appointment.time}
                           </Badge>
-                          {appointment.status === 'cancelled' ? (
-                            <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">Cancelled</span>
-                          ) : (
-                            <div className={`h-2 w-2 rounded-full ${getStatusColor(appointment.status)}`} />
-                          )}
                         </div>
                         
                         <div className="space-y-2">
@@ -465,14 +504,12 @@ export const AppointmentsCalendar = forwardRef<{ showCancelledModal: () => void 
                     >
                       <CardContent className="p-3">
                         <div className="flex items-center justify-between mb-2">
+                          <Badge className={`text-xs font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
+                            {getStatusText(appointment.status)}
+                          </Badge>
                           <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50">
                             {appointment.time}
                           </Badge>
-                          {appointment.status === 'cancelled' ? (
-                            <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">Cancelled</span>
-                          ) : (
-                            <div className={`h-2 w-2 rounded-full ${getStatusColor(appointment.status)}`} />
-                          )}
                         </div>
                         
                         <div className="space-y-2">

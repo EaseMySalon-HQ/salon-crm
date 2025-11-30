@@ -222,7 +222,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
     //   })
     //   return
     // }
-
+    
     setSelectedClient(client)
     setIsLoadingBills(true)
     setIsBillActivityOpen(true)

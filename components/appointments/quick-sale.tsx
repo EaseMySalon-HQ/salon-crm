@@ -57,7 +57,7 @@ import {
   type PaymentMethod,
   getAllReceipts,
 } from "@/lib/data"
-import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI } from "@/lib/api"
+import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
@@ -178,6 +178,7 @@ interface ProductItem {
 export function QuickSale() {
   const { toast } = useToast()
   const searchParams = useSearchParams()
+  const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
@@ -475,6 +476,10 @@ export function QuickSale() {
         // Decode the base64 appointment data
         const appointmentData = JSON.parse(atob(appointmentParam))
         console.log('Pre-filling from appointment:', appointmentData)
+
+        if (appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id) {
+          setLinkedAppointmentId(appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id)
+        }
 
         // Find and set the client
         if (appointmentData.clientId) {
@@ -2064,6 +2069,7 @@ export function QuickSale() {
           staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
           staffName: primaryStaff?.staffName || staff[0]?.name || "Unassigned Staff",
           notes: remarks || '',
+          appointmentId: linkedAppointmentId || undefined,
           date: selectedDate.toISOString(),
           time: format(new Date(), "HH:mm")
         }
@@ -2087,6 +2093,19 @@ export function QuickSale() {
           
           if (result.success) {
             console.log('✅ Sale created successfully in backend:', result)
+            
+            // Mark linked appointment as completed if fully paid
+            if (linkedAppointmentId && (totalPaid >= calculatedTotal || result.data?.status === 'completed')) {
+              try {
+                await AppointmentsAPI.update(linkedAppointmentId, { status: "completed" })
+                toast({
+                  title: "Appointment Completed",
+                  description: "Linked appointment has been marked as completed.",
+                })
+              } catch (error) {
+                console.error("Failed to update appointment status:", error)
+              }
+            }
             
             // Now that backend sale is successful, create and store the receipt locally
       const receipt: any = {
@@ -2201,6 +2220,7 @@ export function QuickSale() {
 
       // Reset form
       resetForm()
+      setLinkedAppointmentId(null)
     } catch (error: any) {
       console.error('❌ Checkout failed:', error)
       console.error('❌ Error details:', {

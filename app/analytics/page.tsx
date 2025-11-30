@@ -5,11 +5,16 @@ import { ClientRetention } from "@/components/reports/client-retention"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProtectedRoute } from "@/components/auth/protected-route"
+import { FeatureGate } from "@/components/ui/feature-gate"
 
 export default function AnalyticsPage() {
   return (
     <ProtectedRoute requiredRole="manager">
       <ProtectedLayout>
+        <FeatureGate 
+          featureId="analytics"
+          upgradeMessage="Analytics is available in Professional and Enterprise plans. Upgrade to access advanced business insights and analytics."
+        >
         <div className="flex flex-col space-y-6">
               <div>
                 <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
@@ -60,6 +65,7 @@ export default function AnalyticsPage() {
                 </TabsContent>
               </Tabs>
         </div>
+        </FeatureGate>
       </ProtectedLayout>
     </ProtectedRoute>
   )

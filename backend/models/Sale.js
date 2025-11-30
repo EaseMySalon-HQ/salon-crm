@@ -32,6 +32,7 @@ const saleSchema = new mongoose.Schema({
   billNo: { type: String, required: true, unique: true },
   customerName: { type: String, required: true },
   customerPhone: { type: String, default: '' },
+  appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
   date: { type: Date, required: true },
   time: { type: String, default: '' },
   

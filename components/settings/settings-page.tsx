@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Settings, Building2, Calendar, CreditCard, Bell, Users, ChevronRight, Receipt, Award, DollarSign, Calculator } from "lucide-react"
+import { Settings, Building2, Calendar, CreditCard, Bell, Users, ChevronRight, Receipt, Award, DollarSign, Calculator, Wallet } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { useRouter } from "next/navigation"
 import { GeneralSettings } from "./general-settings"
@@ -16,6 +16,8 @@ import { NotificationSettings } from "./notification-settings"
 import { StaffDirectory } from "./staff-directory"
 import { POSSettings } from "./pos-settings"
 import { CommissionProfileList } from "./commission-profile-list"
+import { PlanBilling } from "./plan-billing"
+import { FeatureGate } from "@/components/ui/feature-gate"
 
 const settingsCategories = [
   {
@@ -88,6 +90,13 @@ const settingsCategories = [
     icon: Award,
     requiredRole: "admin", // Only admin can access
   },
+  {
+    id: "plan-billing",
+    title: "Plan & Billing",
+    description: "View plan details, billing information, and manage subscription",
+    icon: Wallet,
+    requiredRole: "admin", // Only admin can access
+  },
 ]
 
 export function SettingsPage() {
@@ -151,7 +160,16 @@ export function SettingsPage() {
       case "staff":
         return <StaffDirectory />
       case "commission":
-        return <CommissionProfileList />
+        return (
+          <FeatureGate 
+            featureId="staff_commissions"
+            upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to configure commission profiles and track staff commissions."
+          >
+            <CommissionProfileList />
+          </FeatureGate>
+        )
+      case "plan-billing":
+        return <PlanBilling />
       default:
         return null
     }
@@ -168,7 +186,6 @@ export function SettingsPage() {
                 <Settings className="h-8 w-8" />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Control center</p>
                 <h1 className="text-3xl font-semibold text-slate-900">Settings & Configuration</h1>
                 <p className="text-slate-500">
                   Personalize every touchpoint—from branding to billing—without leaving this space.

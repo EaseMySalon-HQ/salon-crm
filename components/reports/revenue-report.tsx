@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useCurrency } from "@/hooks/use-currency"
+import { useFeature } from "@/hooks/use-entitlements"
 
 // Sample data
 const monthlyData = [
@@ -44,6 +45,7 @@ const weeklyData = [
 
 export function RevenueReport() {
   const { formatAmount } = useCurrency()
+  const { hasAccess: canExport } = useFeature("data_export")
   const [timeframe, setTimeframe] = useState("monthly")
   const [chartType, setChartType] = useState("bar")
 
@@ -75,12 +77,25 @@ export function RevenueReport() {
         </div>
 
         <div className="flex gap-2">
-          <Button variant="outline" size="sm">
-            Export PDF
-          </Button>
-          <Button variant="outline" size="sm">
-            Export CSV
-          </Button>
+          {canExport ? (
+            <>
+              <Button variant="outline" size="sm">
+                Export PDF
+              </Button>
+              <Button variant="outline" size="sm">
+                Export CSV
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" disabled title="Data export requires Professional or Enterprise plan">
+                Export PDF (Upgrade)
+              </Button>
+              <Button variant="outline" size="sm" disabled title="Data export requires Professional or Enterprise plan">
+                Export CSV (Upgrade)
+              </Button>
+            </>
+          )}
         </div>
       </div>
 

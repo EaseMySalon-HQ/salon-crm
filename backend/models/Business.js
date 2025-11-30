@@ -93,6 +93,44 @@ const businessSchema = new mongoose.Schema({
   // Multi-tenant support
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business' },
   
+  // Pricing Plan Management
+  plan: {
+    planId: { 
+      type: String, 
+      enum: ['starter', 'professional', 'enterprise'], 
+      default: 'starter' 
+    },
+    billingPeriod: { 
+      type: String, 
+      enum: ['monthly', 'yearly'], 
+      default: 'monthly' 
+    },
+    renewalDate: { type: Date },
+    isTrial: { type: Boolean, default: false },
+    trialEndsAt: { type: Date },
+    // Promotional feature overrides
+    overrides: {
+      features: [{ type: String }], // Array of feature IDs
+      expiresAt: { type: Date }, // Optional expiry for promo features
+      notes: { type: String }, // Reason for override
+    },
+    // Add-ons (e.g., WhatsApp, SMS)
+    addons: {
+      whatsapp: {
+        enabled: { type: Boolean, default: false },
+        quota: { type: Number, default: 0 }, // Monthly quota
+        used: { type: Number, default: 0 }, // Current month usage
+        lastResetAt: { type: Date }, // Last quota reset date
+      },
+      sms: {
+        enabled: { type: Boolean, default: false },
+        quota: { type: Number, default: 0 },
+        used: { type: Number, default: 0 },
+        lastResetAt: { type: Date },
+      },
+    },
+  },
+  
   // Timestamps
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }

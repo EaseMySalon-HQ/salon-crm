@@ -144,12 +144,12 @@ export function ProfilePage() {
           } else {
             // Staff model
             const nameParts = (userData.name || "").split(" ")
-            form.reset({
-              firstName: nameParts[0] || "",
-              lastName: nameParts.slice(1).join(" ") || "",
+          form.reset({
+            firstName: nameParts[0] || "",
+            lastName: nameParts.slice(1).join(" ") || "",
               email: userData.email || "",
               mobile: userData.phone || "",
-            })
+          })
           }
         }
       } catch (error) {
@@ -214,13 +214,13 @@ export function ProfilePage() {
           })
         } else {
           // Staff model
-          const nameParts = (staffData.name || "").split(" ")
-          form.reset({
-            firstName: nameParts[0] || "",
-            lastName: nameParts.slice(1).join(" ") || "",
-            email: staffData.email || "",
-            mobile: staffData.phone || "",
-          })
+        const nameParts = (staffData.name || "").split(" ")
+        form.reset({
+          firstName: nameParts[0] || "",
+          lastName: nameParts.slice(1).join(" ") || "",
+          email: staffData.email || "",
+          mobile: staffData.phone || "",
+        })
         }
         setProfilePhoto(null)
       }
@@ -257,23 +257,23 @@ export function ProfilePage() {
         }
       } else {
         // Staff model uses: name, email, phone
-        const updateData = {
-          name: `${values.firstName} ${values.lastName}`.trim(),
-          email: values.email,
-          phone: values.mobile,
-        }
+      const updateData = {
+        name: `${values.firstName} ${values.lastName}`.trim(),
+        email: values.email,
+        phone: values.mobile,
+      }
         response = await StaffAPI.update(user._id, updateData)
-        
-        if (response.success) {
-          setStaffData({ 
-            ...staffData, 
-            name: updateData.name,
-            email: updateData.email,
-            phone: updateData.phone
-          })
+      
+      if (response.success) {
+        setStaffData({ 
+          ...staffData, 
+          name: updateData.name,
+          email: updateData.email,
+          phone: updateData.phone
+        })
         }
       }
-      
+        
       if (response.success) {
         // Update auth context to sync with dropdown menu
         updateUser({
@@ -678,7 +678,7 @@ export function ProfilePage() {
 
             {/* Consent Management Section - Only for Admin */}
             {user?.role === 'admin' && (
-              <ConsentManagement />
+            <ConsentManagement />
             )}
           </div>
   )

@@ -2,6 +2,7 @@ import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProtectedRoute } from "@/components/auth/protected-route"
+import { FeatureGate } from "@/components/ui/feature-gate"
 import { SalesReport } from "@/components/reports/sales-report"
 import { ExpenseReport } from "@/components/reports/expense-report"
 import { StaffPerformanceReport } from "@/components/reports/staff-performance-report"
@@ -109,17 +110,22 @@ export default function ReportsPage() {
                 </TabsContent>
 
                 <TabsContent value="staff" className="space-y-6">
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardHeader className="pb-4">
-                      <CardTitle className="text-xl text-slate-800">Staff Performance</CardTitle>
-                      <CardDescription className="text-slate-600">
-                        Analyze staff performance, commissions, and sales analytics
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <StaffPerformanceReport />
-                    </CardContent>
-                  </Card>
+                  <FeatureGate 
+                    featureId="staff_commissions"
+                    upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to track staff commissions and performance analytics."
+                  >
+                    <Card className="border-0 shadow-sm bg-slate-50/50">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="text-xl text-slate-800">Staff Performance</CardTitle>
+                        <CardDescription className="text-slate-600">
+                          Analyze staff performance, commissions, and sales analytics
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <StaffPerformanceReport />
+                      </CardContent>
+                    </Card>
+                  </FeatureGate>
                 </TabsContent>
 
               </Tabs>
