@@ -18,9 +18,18 @@ async function ensureAdminAccessDefaults() {
       if (!existing) {
         await AdminRole.create(defaultRole);
       } else {
+        // Check if permissions need updating by comparing JSON strings
+        const existingPermsStr = JSON.stringify(existing.permissions.sort((a, b) => 
+          a.module.localeCompare(b.module) || a.actions.join(',').localeCompare(b.actions.join(','))
+        ));
+        const defaultPermsStr = JSON.stringify(defaultRole.permissions.sort((a, b) => 
+          a.module.localeCompare(b.module) || a.actions.join(',').localeCompare(b.actions.join(','))
+        ));
+        
         const needsUpdate =
           existing.description !== defaultRole.description ||
-          existing.permissions.length !== defaultRole.permissions.length;
+          existingPermsStr !== defaultPermsStr ||
+          existing.color !== (defaultRole.color || existing.color);
 
         if (needsUpdate) {
           existing.description = defaultRole.description;
@@ -28,6 +37,7 @@ async function ensureAdminAccessDefaults() {
           existing.isSystem = true;
           existing.color = defaultRole.color || existing.color;
           await existing.save();
+          console.log(`✅ Updated role: ${defaultRole.key}`);
         }
       }
     }

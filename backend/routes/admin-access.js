@@ -6,6 +6,7 @@ const { setupMainDatabase } = require('../middleware/business-db');
 
 const { ADMIN_ACCESS_MODULES, DEFAULT_CREATION_RULES } = require('../config/admin-access');
 const { authenticateAdmin, requireAdminRole, checkAdminPermission } = require('../middleware/admin-auth');
+const { logAdminActivity, getClientIp } = require('../utils/admin-logger');
 const { ensureAdminAccessDefaults } = require('../utils/admin-access');
 const {
   moduleActionMap,
@@ -212,6 +213,18 @@ router.post('/roles', requireAdminRole('super_admin'), async (req, res) => {
       updatedBy: req.admin._id
     });
 
+    // Log activity
+    logAdminActivity({
+      adminId: req.admin,
+      action: 'create',
+      module: 'roles',
+      resourceId: role._id.toString(),
+      resourceType: 'AdminRole',
+      details: { name: role.name, key: role.key, permissionsCount: permissions.length },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log activity:', err));
+
     res.status(201).json({ success: true, data: roleResponse(role, 0) });
   } catch (error) {
     console.error('Failed to create admin role:', error);
@@ -290,6 +303,23 @@ router.put('/roles/:roleId', requireAdminRole('super_admin'), async (req, res) =
 
     const assignmentCount = await Admin.countDocuments({ role: role.key });
 
+    // Log activity
+    const changes = [];
+    if (description !== undefined) changes.push('description');
+    if (color) changes.push('color');
+    if (permissions) changes.push('permissions');
+
+    logAdminActivity({
+      adminId: req.admin,
+      action: 'update',
+      module: 'roles',
+      resourceId: roleId,
+      resourceType: 'AdminRole',
+      details: { name: role.name, key: role.key, changes: changes, isSystem: role.isSystem },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log activity:', err));
+
     res.json({ success: true, data: roleResponse(role, assignmentCount) });
   } catch (error) {
     console.error('Failed to update admin role:', error);
@@ -317,6 +347,18 @@ router.delete('/roles/:roleId', requireAdminRole('super_admin'), async (req, res
     }
 
     await role.deleteOne();
+
+    // Log activity
+    logAdminActivity({
+      adminId: req.admin,
+      action: 'delete',
+      module: 'roles',
+      resourceId: roleId,
+      resourceType: 'AdminRole',
+      details: { name: role.name, key: role.key },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log activity:', err));
 
     res.json({ success: true, message: 'Role deleted successfully' });
   } catch (error) {
@@ -392,6 +434,18 @@ router.post('/users', authenticateAdmin, checkAdminPermission('users', 'create')
     });
 
     const payload = formatAdminResponse(admin.toObject(), new Map([[role._id.toString(), role], [role.key, role]]));
+
+    // Log activity
+    logAdminActivity({
+      adminId: req.admin,
+      action: 'create',
+      module: 'users',
+      resourceId: admin._id.toString(),
+      resourceType: 'Admin',
+      details: { email: admin.email, role: role.key, hasOverrides: normalizedOverrides.add.length > 0 || normalizedOverrides.remove.length > 0 },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log activity:', err));
 
     res.status(201).json({ success: true, data: payload });
   } catch (error) {
@@ -481,6 +535,29 @@ router.put('/users/:userId', authenticateAdmin, checkAdminPermission('users', 'u
 
     await admin.save();
 
+    // Log activity
+    const changes = [];
+    if (firstName) changes.push('firstName');
+    if (lastName) changes.push('lastName');
+    if (email) changes.push('email');
+    if (updatedRole) changes.push(`role: ${updatedRole.key}`);
+    if (permissionOverrides) changes.push('permissionOverrides');
+
+    logAdminActivity({
+      adminId: req.admin,
+      action: 'update',
+      module: 'users',
+      resourceId: userId,
+      resourceType: 'Admin',
+      details: { 
+        targetEmail: admin.email,
+        changes: changes,
+        isOwnAccount: isOwnAccount
+      },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log activity:', err));
+
     const roles = await AdminRole.find({}).lean();
     const roleLookup = new Map();
     roles.forEach((role) => {
@@ -521,6 +598,22 @@ router.patch('/users/:userId/permissions', authenticateAdmin, checkAdminPermissi
     admin.permissions = applyPermissionOverrides(basePermissions, normalizedOverrides);
 
     await admin.save();
+
+    // Log activity
+    logAdminActivity({
+      adminId: req.admin,
+      action: 'permission_change',
+      module: 'users',
+      resourceId: userId,
+      resourceType: 'Admin',
+      details: { 
+        targetEmail: admin.email,
+        overridesAdded: normalizedOverrides.add.length,
+        overridesRemoved: normalizedOverrides.remove.length
+      },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log activity:', err));
 
     const roles = await AdminRole.find({}).lean();
     const roleLookup = new Map();
@@ -566,6 +659,21 @@ router.patch('/users/:userId/status', requireAdminRole('super_admin'), async (re
     admin.isActive = isActive;
     await admin.save();
 
+    // Log activity
+    logAdminActivity({
+      adminId: req.admin,
+      action: 'status_change',
+      module: 'users',
+      resourceId: userId,
+      resourceType: 'Admin',
+      details: { 
+        targetEmail: admin.email,
+        newStatus: isActive ? 'active' : 'inactive'
+      },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log activity:', err));
+
     const roles = await AdminRole.find({}).lean();
     const roleLookup = new Map();
     roles.forEach((role) => {
@@ -607,6 +715,21 @@ router.patch('/users/:userId/password', authenticateAdmin, async (req, res) => {
     admin.password = hashedPassword;
     admin.passwordUpdatedAt = new Date();
     await admin.save();
+
+    // Log activity
+    logAdminActivity({
+      adminId: req.admin,
+      action: 'password_reset',
+      module: 'users',
+      resourceId: userId,
+      resourceType: 'Admin',
+      details: { 
+        targetEmail: admin.email,
+        isOwnPassword: isOwnPassword
+      },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log activity:', err));
 
     res.json({ success: true, message: 'Password reset successfully' });
   } catch (error) {

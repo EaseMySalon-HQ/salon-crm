@@ -40,6 +40,12 @@ const ADMIN_ACCESS_MODULES = [
     label: 'Support Tools',
     description: 'Read-only tools for support and success teams',
     actions: ['view', 'update']
+  },
+  {
+    id: 'logs',
+    label: 'Activity Logs',
+    description: 'View audit trail of all admin activities',
+    actions: ['view']
   }
 ];
 
@@ -63,7 +69,7 @@ const DEFAULT_ADMIN_ROLES = [
     permissions: ADMIN_ACCESS_MODULES.map((module) => ({
       module: module.id,
       actions: module.actions
-    }))
+    })).concat([{ module: 'logs', actions: ['view'] }])
   },
   {
     key: 'admin',

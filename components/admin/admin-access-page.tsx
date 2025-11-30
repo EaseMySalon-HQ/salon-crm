@@ -926,7 +926,7 @@ export function AdminAccessPage() {
               No roles configured yet.
             </div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-3">
               {roles.map((role) => (
                 <div key={role.id} className="rounded-lg border p-4">
                   <div className="flex items-start justify-between">

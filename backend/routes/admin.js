@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateToken } = require('../middleware/auth');
 const { authenticateAdmin, checkAdminPermission } = require('../middleware/admin-auth');
+const { logAdminActivity, getClientIp } = require('../utils/admin-logger');
 const Business = require('../models/Business').model;
 const User = require('../models/User').model;
 const databaseManager = require('../config/database-manager');
@@ -59,6 +60,16 @@ router.post('/login', setupMainDatabase, async (req, res) => {
     // Update last login
     admin.lastLogin = new Date();
     await admin.save();
+
+    // Log login activity
+    logAdminActivity({
+      adminId: admin,
+      action: 'login',
+      module: 'auth',
+      details: { email: admin.email, role: admin.role },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent']
+    }).catch(err => console.error('Failed to log login activity:', err));
 
     // Get admin name (virtual or constructed)
     const adminName = admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || 'Admin User';

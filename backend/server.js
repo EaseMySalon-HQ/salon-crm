@@ -103,6 +103,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/admin/settings', require('./routes/admin-settings'));
 app.use('/api/admin/plans', require('./routes/admin-plans'));
 app.use('/api/admin/access', require('./routes/admin-access'));
+app.use('/api/admin/logs', require('./routes/admin-logs'));
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
