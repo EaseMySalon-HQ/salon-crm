@@ -104,6 +104,7 @@ app.use('/api/admin/settings', require('./routes/admin-settings'));
 app.use('/api/admin/plans', require('./routes/admin-plans'));
 app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
+app.use('/api/email-notifications', require('./routes/email-notifications'));
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
@@ -4093,6 +4094,375 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       createdAppointments.push(populatedAppointment);
     }
 
+    // Send email notifications if enabled
+    try {
+      const emailService = require('./services/email-service');
+      
+      // Ensure email service is initialized
+      if (!emailService.initialized) {
+        console.log('📧 Initializing email service...');
+        await emailService.initialize();
+      }
+      
+      // Debug: Log email service status
+      console.log('📧 Email Service Status:', {
+        initialized: emailService.initialized,
+        enabled: emailService.enabled,
+        provider: emailService.provider,
+        hasConfig: !!emailService.config
+      });
+      
+      // Check if email service is enabled (from AdminSettings)
+      if (!emailService.enabled) {
+        console.log('❌ Email service is disabled, skipping appointment email');
+        console.log('💡 To enable: Check Admin Settings → Notifications → Email and ensure it\'s enabled with valid API key');
+      } else {
+        // Get Business from main database (not business database)
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        const business = await Business.findById(req.user.branchId);
+        
+        if (!business) {
+          console.error('❌ Business not found for branchId:', req.user.branchId);
+        } else {
+          console.log('✅ Business found:', business.name);
+        }
+        
+        const emailSettings = business?.settings?.emailNotificationSettings;
+        
+        // Debug: Log email settings
+        console.log('📧 Email Settings:', {
+          emailSettingsExists: !!emailSettings,
+          appointmentNotificationsEnabled: emailSettings?.appointmentNotifications?.enabled,
+          newAppointmentsEnabled: emailSettings?.appointmentNotifications?.newAppointments
+        });
+        
+        const { Staff, Client } = req.businessModels;
+
+        // Check if business has enabled appointment notifications
+        // Default to enabled if settings don't exist or if not explicitly disabled
+        // Note: Schema defaults to false, but we want to default to enabled for better UX
+        // Only disable if explicitly set to false AND recipient list exists (meaning it was configured)
+        const hasRecipientList = emailSettings?.appointmentNotifications?.recipientStaffIds?.length > 0;
+        const explicitlyDisabled = emailSettings?.appointmentNotifications?.enabled === false;
+        
+        // If settings don't exist, or if enabled is not explicitly false, or if there's no recipient list (meaning it wasn't configured)
+        // then default to enabled
+        const appointmentNotificationsEnabled = !emailSettings || 
+          !emailSettings?.appointmentNotifications ||
+          (!explicitlyDisabled || !hasRecipientList);
+        
+        console.log(`📧 Appointment notifications enabled: ${appointmentNotificationsEnabled}, emailSettings exists: ${!!emailSettings}`);
+        console.log(`📧 Appointment settings details:`, {
+          enabled: emailSettings?.appointmentNotifications?.enabled,
+          explicitlyDisabled,
+          hasRecipientList,
+          newAppointments: emailSettings?.appointmentNotifications?.newAppointments
+        });
+        
+        if (appointmentNotificationsEnabled) {
+        // Send confirmation to client if email exists
+        // Default to enabled unless explicitly disabled AND recipient list exists (meaning it was configured)
+        const explicitlyDisabledNewAppointments = emailSettings?.appointmentNotifications?.newAppointments === false;
+        const sendNewAppointments = !emailSettings || 
+          !emailSettings?.appointmentNotifications ||
+          (!explicitlyDisabledNewAppointments || !hasRecipientList);
+        console.log(`📧 Send new appointments to clients: ${sendNewAppointments}`);
+        console.log(`📧 Client notification settings:`, {
+          emailSettingsExists: !!emailSettings,
+          newAppointments: emailSettings?.appointmentNotifications?.newAppointments,
+          sendNewAppointments
+        });
+        
+        if (sendNewAppointments) {
+          console.log(`📧 Processing ${createdAppointments.length} appointment(s) for client emails`);
+          
+          for (const appointment of createdAppointments) {
+            // Debug: Log appointment structure
+            console.log('📧 Appointment Structure:', {
+              appointmentId: appointment._id,
+              clientIdType: typeof appointment.clientId,
+              clientIdIsObject: typeof appointment.clientId === 'object',
+              clientIdValue: appointment.clientId?._id || appointment.clientId,
+              clientIdEmail: appointment.clientId?.email,
+              clientIdName: appointment.clientId?.name
+            });
+            
+            // Check if clientId is already populated (from the populate call above)
+            let client = null;
+            let clientEmail = null;
+            let clientName = null;
+            
+            if (appointment.clientId && typeof appointment.clientId === 'object') {
+              // Client is populated
+              client = appointment.clientId;
+              clientEmail = client.email ? client.email.trim() : null;
+              clientName = client.name || 'Client';
+              
+              console.log('📧 Using populated client data:', {
+                name: clientName,
+                email: clientEmail,
+                hasEmail: !!clientEmail
+              });
+            } else {
+              // Client is not populated, fetch it
+              const clientId = appointment.clientId?._id || appointment.clientId;
+              console.log('📧 Client not populated, fetching from database. ClientId:', clientId);
+              
+              if (clientId) {
+                client = await Client.findById(clientId);
+                if (client) {
+                  clientEmail = client.email ? client.email.trim() : null;
+                  clientName = client.name || 'Client';
+                  console.log('📧 Fetched client from database:', {
+                    name: clientName,
+                    email: clientEmail,
+                    hasEmail: !!clientEmail
+                  });
+                } else {
+                  console.error('❌ Client not found in database with ID:', clientId);
+                }
+              } else {
+                console.error('❌ No clientId found in appointment');
+              }
+            }
+            
+            // Debug: Log client email check
+            console.log('📧 Client Email Check Summary:', {
+              appointmentId: appointment._id,
+              clientId: appointment.clientId?._id || appointment.clientId,
+              clientEmail: clientEmail,
+              clientName: clientName,
+              hasEmail: !!clientEmail,
+              emailLength: clientEmail?.length || 0
+            });
+            
+            if (clientEmail && clientEmail.length > 0) {
+              console.log(`📧 Attempting to send appointment confirmation to: ${clientEmail}`);
+              try {
+                // Get service name - check if populated or fetch
+                let serviceName = 'Service';
+                if (appointment.serviceId) {
+                  if (typeof appointment.serviceId === 'object' && appointment.serviceId.name) {
+                    serviceName = appointment.serviceId.name;
+                  } else {
+                    const Service = req.businessModels.Service;
+                    const service = await Service.findById(appointment.serviceId);
+                    serviceName = service?.name || 'Service';
+                  }
+                }
+                
+                // Get staff name - check if populated or fetch
+                let staffName = 'Not assigned';
+                if (appointment.staffId) {
+                  if (typeof appointment.staffId === 'object' && appointment.staffId.name) {
+                    staffName = appointment.staffId.name;
+                  } else {
+                    const staff = await Staff.findById(appointment.staffId);
+                    staffName = staff?.name || 'Not assigned';
+                  }
+                } else if (appointment.staffAssignments && appointment.staffAssignments.length > 0) {
+                  const firstAssignment = appointment.staffAssignments[0];
+                  if (firstAssignment.staffId && typeof firstAssignment.staffId === 'object' && firstAssignment.staffId.name) {
+                    staffName = firstAssignment.staffId.name;
+                  } else if (firstAssignment.staffId) {
+                    const staff = await Staff.findById(firstAssignment.staffId);
+                    staffName = staff?.name || 'Not assigned';
+                  }
+                }
+                
+                console.log(`📧 Preparing to send email to: ${clientEmail}`);
+                console.log(`📧 Email details:`, {
+                  to: clientEmail,
+                  clientName: clientName,
+                  serviceName: serviceName,
+                  date: appointment.date,
+                  time: appointment.time,
+                  staffName: staffName,
+                  businessName: business.name
+                });
+                
+                const emailResult = await emailService.sendAppointmentConfirmation({
+                  to: clientEmail,
+                  clientName: clientName,
+                  appointmentData: {
+                    serviceName: serviceName,
+                    date: appointment.date,
+                    time: appointment.time,
+                    staffName: staffName,
+                    businessName: business.name,
+                    businessPhone: business.contact?.phone,
+                    notes: appointment.notes || ''
+                  }
+                });
+                
+                console.log(`📧 Email result:`, {
+                  success: emailResult?.success,
+                  error: emailResult?.error,
+                  data: emailResult?.data
+                });
+                
+                if (emailResult && emailResult.success !== false) {
+                  console.log(`✅ Appointment confirmation sent to client: ${clientEmail}`);
+                } else {
+                  console.error(`❌ Failed to send appointment email to ${clientEmail}:`, emailResult?.error || 'Unknown error');
+                  console.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
+                }
+              } catch (clientEmailError) {
+                console.error('❌ Error sending appointment confirmation to client:', clientEmailError);
+                console.error('❌ Error details:', {
+                  message: clientEmailError.message,
+                  stack: clientEmailError.stack
+                });
+              }
+            } else {
+              console.log(`⚠️ Skipping email for appointment - client has no email address.`);
+              console.log(`   Appointment ID: ${appointment._id}`);
+              console.log(`   Client ID: ${appointment.clientId?._id || appointment.clientId}`);
+              console.log(`   Client Name: ${clientName || 'Unknown'}`);
+              console.log(`   💡 To fix: Add email address to client profile in Clients section`);
+            }
+          }
+        }
+        
+        // Send notification to staff if enabled
+        // Use same logic as client notifications - default to enabled unless explicitly disabled AND configured
+        const staffHasRecipientList = emailSettings?.appointmentNotifications?.recipientStaffIds?.length > 0;
+        const staffExplicitlyDisabled = emailSettings?.appointmentNotifications?.enabled === false;
+        const staffNotificationsEnabled = !emailSettings || 
+          !emailSettings?.appointmentNotifications ||
+          (!staffExplicitlyDisabled || !staffHasRecipientList);
+        
+        const recipientStaffIds = emailSettings?.appointmentNotifications?.recipientStaffIds || [];
+        
+        console.log('📧 Staff Notification Check:', {
+          staffNotificationsEnabled,
+          staffExplicitlyDisabled,
+          staffHasRecipientList,
+          recipientStaffIdsCount: recipientStaffIds.length,
+          recipientStaffIds: recipientStaffIds.map(id => id.toString())
+        });
+        
+        if (staffNotificationsEnabled) {
+          // If recipient list is empty, find all staff with appointment alerts enabled
+          let recipients = [];
+          
+          if (recipientStaffIds.length > 0) {
+            // Use configured recipient list
+            recipients = await Staff.find({
+              _id: { $in: recipientStaffIds },
+              'emailNotifications.enabled': true,
+              'emailNotifications.preferences.appointmentAlerts': true,
+              email: { $exists: true, $ne: '' }
+            }).lean();
+          } else {
+            // Fallback: Find all staff with appointment alerts enabled
+            console.log('⚠️ No recipient list configured, finding all staff with appointment alerts enabled');
+            recipients = await Staff.find({
+              branchId: req.user.branchId,
+              'emailNotifications.enabled': true,
+              'emailNotifications.preferences.appointmentAlerts': true,
+              email: { $exists: true, $ne: '' }
+            }).lean();
+          }
+          
+          // Also check for admin users (business owners) who should receive notifications
+          // Admin users are in the main database, not the business database
+          const User = mainConnection.model('User', require('./models/User').schema);
+          const adminUsers = await User.find({
+            branchId: req.user.branchId,
+            role: 'admin',
+            email: { $exists: true, $ne: '' }
+          }).lean();
+          
+          console.log(`📧 Found ${adminUsers.length} admin user(s) for business`);
+          
+          // Add admin users to recipients (they always have notifications enabled)
+          let adminCount = 0;
+          for (const admin of adminUsers) {
+            // Check if admin is already in recipients
+            const alreadyInList = recipients.some(r => r.email === admin.email);
+            if (!alreadyInList) {
+              recipients.push({
+                _id: admin._id,
+                name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
+                email: admin.email,
+                role: 'admin',
+                emailNotifications: {
+                  enabled: true,
+                  preferences: {
+                    appointmentAlerts: true // Admin users always have this enabled
+                  }
+                }
+              });
+              adminCount++;
+              console.log(`📧 Added admin user to recipients: ${admin.email} (${admin.name || admin.email})`);
+            } else {
+              console.log(`📧 Admin user already in recipients: ${admin.email}`);
+            }
+          }
+          
+          console.log(`📧 Found ${recipients.length} total recipients for appointment notifications (${recipients.length - adminCount} staff + ${adminCount} admin)`);
+          
+          if (recipients.length === 0) {
+            console.log('⚠️ No recipients found. Reasons:');
+            console.log('   - Check if staff have email notifications enabled');
+            console.log('   - Check if staff have appointment alerts preference enabled');
+            console.log('   - Check if staff have valid email addresses');
+            console.log('   - Check if recipient list is configured in business settings');
+            console.log('   - Check if admin users have email addresses');
+          }
+          
+          for (const recipient of recipients) {
+            try {
+              console.log(`📧 Sending appointment notification to: ${recipient.email} (${recipient.name || recipient.role})`);
+              
+              // Get appointment details for the first appointment (if available)
+              const firstAppointment = createdAppointments[0];
+              let appointmentDetails = {
+                date: firstAppointment?.date,
+                time: firstAppointment?.time,
+                clientName: null,
+                serviceName: null
+              };
+              
+              // Try to get client and service names
+              if (firstAppointment) {
+                if (firstAppointment.clientId && typeof firstAppointment.clientId === 'object') {
+                  appointmentDetails.clientName = firstAppointment.clientId.name;
+                }
+                if (firstAppointment.serviceId && typeof firstAppointment.serviceId === 'object') {
+                  appointmentDetails.serviceName = firstAppointment.serviceId.name;
+                }
+              }
+              
+              await emailService.sendAppointmentNotification({
+                to: recipient.email,
+                appointmentCount: createdAppointments.length,
+                businessName: business.name,
+                appointmentDetails: appointmentDetails
+              });
+              console.log(`✅ Appointment notification sent to: ${recipient.email}`);
+            } catch (emailError) {
+              console.error(`❌ Error sending appointment notification to ${recipient.email}:`, emailError);
+              console.error('❌ Error details:', {
+                message: emailError.message,
+                stack: emailError.stack
+              });
+            }
+          }
+        } else {
+          console.log('⚠️ Staff appointment notifications are disabled in business settings');
+        }
+      }
+      }
+    } catch (emailError) {
+      console.error('❌ Error sending appointment email:', emailError);
+      console.error('❌ Error stack:', emailError.stack);
+      // Don't fail appointment creation if email fails
+    }
+
     res.status(201).json({
       success: true,
       data: createdAppointments,
@@ -4204,6 +4574,192 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
 
     const savedReceipt = await newReceipt.save();
 
+    // Send email notifications if enabled
+    try {
+      const emailService = require('./services/email-service');
+      
+      // Ensure email service is initialized
+      if (!emailService.initialized) {
+        await emailService.initialize();
+      }
+      
+      // Check if email service is enabled (from AdminSettings)
+      if (!emailService.enabled) {
+        console.log('📧 Email service is disabled, skipping receipt email');
+      } else {
+        // Get Business from main database (not business database)
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        
+        const { Staff, Client } = req.businessModels;
+        const business = await Business.findById(req.user.branchId);
+        const emailSettings = business?.settings?.emailNotificationSettings;
+        
+        // Check if business has enabled receipt notifications (default to true if not set)
+        // If emailSettings doesn't exist, default to sending emails
+        const receiptNotificationsEnabled = !emailSettings || emailSettings?.receiptNotifications?.enabled !== false;
+        
+        console.log(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}, emailSettings exists: ${!!emailSettings}`);
+        
+        if (receiptNotificationsEnabled) {
+          // Send receipt to client if email exists (default to true if not set)
+          const sendToClients = !emailSettings || emailSettings?.receiptNotifications?.sendToClients !== false;
+          if (sendToClients) {
+            const client = await Client.findById(clientId);
+            if (client?.email) {
+            try {
+              console.log(`📧 Attempting to send receipt email to: ${client.email}`);
+              
+              // Generate PDF receipt using HTML (same as frontend)
+              let pdfBuffer = null;
+              try {
+                // Get BusinessSettings from business database for full settings
+                const { BusinessSettings } = req.businessModels;
+                const businessSettingsDoc = await BusinessSettings.findOne();
+                
+                // Format address properly (handle both object and string)
+                let formattedAddress = '';
+                if (business?.address) {
+                  if (typeof business.address === 'object') {
+                    const addr = business.address;
+                    const addressParts = [];
+                    if (addr.street) addressParts.push(addr.street);
+                    if (addr.city) addressParts.push(addr.city);
+                    if (addr.state) addressParts.push(addr.state);
+                    if (addr.zipCode) addressParts.push(addr.zipCode);
+                    if (addr.country) addressParts.push(addr.country);
+                    formattedAddress = addressParts.join(', ');
+                  } else {
+                    formattedAddress = business.address;
+                  }
+                }
+                
+                // Get phone and email from contact object or direct property
+                const businessPhone = business?.contact?.phone || business?.phone || '';
+                const businessEmail = business?.contact?.email || business?.email || '';
+                
+                // Combine business info with BusinessSettings
+                const businessSettings = {
+                  name: businessSettingsDoc?.name || business?.name || 'Business',
+                  address: businessSettingsDoc?.address || formattedAddress,
+                  city: businessSettingsDoc?.city || business?.address?.city || '',
+                  state: businessSettingsDoc?.state || business?.address?.state || '',
+                  zipCode: businessSettingsDoc?.zipCode || business?.address?.zipCode || '',
+                  phone: businessSettingsDoc?.phone || businessPhone,
+                  email: businessSettingsDoc?.email || businessEmail,
+                  logo: businessSettingsDoc?.logo || '',
+                  gstNumber: businessSettingsDoc?.gstNumber || '',
+                  socialMedia: businessSettingsDoc?.socialMedia || '',
+                  currency: businessSettingsDoc?.currency || 'INR',
+                  enableCurrency: businessSettingsDoc?.enableCurrency !== false,
+                  taxRate: businessSettingsDoc?.taxRate || 18
+                };
+                
+                // Format receipt data to match frontend ReceiptGenerator format
+                const receiptData = {
+                  receiptNumber: savedReceipt.receiptNumber,
+                  date: savedReceipt.date ? new Date(savedReceipt.date).toISOString() : new Date().toISOString(),
+                  time: savedReceipt.time || (savedReceipt.date ? new Date(savedReceipt.date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })),
+                  clientName: client.name,
+                  clientPhone: client.phone || '',
+                  items: (savedReceipt.items || []).map(item => ({
+                    name: item.name,
+                    type: item.type || 'service',
+                    price: item.price || 0,
+                    quantity: item.quantity || 1,
+                    total: item.total || (item.price || 0) * (item.quantity || 1),
+                    discount: item.discount || 0,
+                    discountType: item.discountType || 'percentage',
+                    staffName: item.staffName || ''
+                  })),
+                  subtotal: savedReceipt.subtotal || 0,
+                  tax: savedReceipt.tax || 0,
+                  discount: savedReceipt.discount || 0,
+                  tip: savedReceipt.tip || 0,
+                  roundOff: savedReceipt.roundOff || 0,
+                  total: savedReceipt.total || 0,
+                  payments: savedReceipt.payments?.length > 0 
+                    ? savedReceipt.payments.map(p => ({ type: (p.type?.toLowerCase() || 'cash'), amount: p.amount || 0 }))
+                    : [{ type: 'cash', amount: savedReceipt.total || 0 }],
+                  taxBreakdown: savedReceipt.taxBreakdown || null
+                };
+                
+                const { generateReceiptPDFFromHTML } = require('./utils/html-receipt-generator');
+                pdfBuffer = await generateReceiptPDFFromHTML(receiptData, businessSettings);
+                console.log(`✅ PDF receipt generated from HTML: ${pdfBuffer.length} bytes`);
+              } catch (pdfError) {
+                console.error('⚠️ Error generating PDF receipt from HTML:', pdfError);
+                console.error('⚠️ PDF Error details:', {
+                  message: pdfError.message,
+                  stack: pdfError.stack
+                });
+                // Continue without PDF attachment
+              }
+              
+              const emailResult = await emailService.sendReceipt({
+                to: client.email,
+                clientName: client.name,
+                receiptNumber: savedReceipt.receiptNumber,
+                receiptData: {
+                  businessName: business.name,
+                  date: savedReceipt.date,
+                  items: savedReceipt.items,
+                  subtotal: savedReceipt.subtotal,
+                  tax: savedReceipt.tax,
+                  discount: savedReceipt.discount,
+                  total: savedReceipt.total,
+                  paymentMethod: savedReceipt.payments?.[0]?.type || 'N/A'
+                },
+                pdfBuffer: pdfBuffer
+              });
+              if (emailResult && emailResult.success !== false) {
+                console.log(`✅ Receipt email sent to client: ${client.email}`);
+              } else {
+                console.error(`❌ Failed to send receipt email to ${client.email}:`, emailResult?.error || 'Unknown error');
+              }
+            } catch (clientEmailError) {
+              console.error('❌ Error sending receipt email to client:', clientEmailError);
+              console.error('❌ Error details:', {
+                message: clientEmailError.message,
+                stack: clientEmailError.stack
+              });
+            }
+          }
+        }
+        
+        // Send notification to staff if enabled
+        const sendToStaff = emailSettings?.receiptNotifications?.sendToStaff === true;
+        if (sendToStaff) {
+          const recipientStaffIds = emailSettings.receiptNotifications.recipientStaffIds || [];
+          const recipients = await Staff.find({
+            _id: { $in: recipientStaffIds },
+            'emailNotifications.enabled': true,
+            'emailNotifications.preferences.receiptAlerts': true,
+            email: { $exists: true, $ne: '' }
+          }).lean();
+          
+          for (const staff of recipients) {
+            try {
+              await emailService.sendSystemAlert({
+                to: staff.email,
+                alertType: 'Receipt Generated',
+                message: `A new receipt ${savedReceipt.receiptNumber} has been generated for ₹${savedReceipt.total}`,
+                businessName: business.name
+              });
+              console.log(`✅ Receipt notification sent to staff: ${staff.email}`);
+            } catch (staffEmailError) {
+              console.error('Error sending receipt notification to staff:', staffEmailError);
+            }
+          }
+        }
+      }
+      }
+    } catch (emailError) {
+      console.error('Error sending receipt email:', emailError);
+      // Don't fail receipt creation if email fails
+    }
+
     res.status(201).json({
       success: true,
       data: savedReceipt
@@ -4225,13 +4781,28 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     const { Appointment } = req.businessModels;
 
     // Find the appointment
-    const appointment = await Appointment.findById(id);
+    const appointment = await Appointment.findById(id)
+      .populate('clientId', 'name phone email')
+      .populate('serviceId', 'name price duration')
+      .populate('staffId', 'name role');
+    
     if (!appointment) {
       return res.status(404).json({
         success: false,
         error: 'Appointment not found'
       });
     }
+
+    // Check if status is being changed to cancelled
+    const previousStatus = appointment.status;
+    const isBeingCancelled = updateData.status === 'cancelled' && previousStatus !== 'cancelled';
+    
+    console.log('📧 Appointment Update Check:', {
+      appointmentId: id,
+      previousStatus: previousStatus,
+      newStatus: updateData.status,
+      isBeingCancelled: isBeingCancelled
+    });
 
     // Update the appointment
     const updatedAppointment = await Appointment.findByIdAndUpdate(
@@ -4242,6 +4813,228 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     .populate('clientId', 'name phone email')
     .populate('serviceId', 'name price duration')
     .populate('staffId', 'name role');
+
+    // Send cancellation emails if appointment was cancelled
+    if (isBeingCancelled) {
+      console.log('📧 Appointment is being cancelled, sending emails...');
+      try {
+        const emailService = require('./services/email-service');
+        
+        // Ensure email service is initialized
+        if (!emailService.initialized) {
+          console.log('📧 Initializing email service...');
+          await emailService.initialize();
+        }
+        
+        console.log('📧 Email Service Status:', {
+          initialized: emailService.initialized,
+          enabled: emailService.enabled
+        });
+        
+        if (emailService.enabled) {
+          // Get business info
+          const databaseManager = require('./config/database-manager');
+          const mainConnection = await databaseManager.getMainConnection();
+          const Business = mainConnection.model('Business', require('./models/Business').schema);
+          const business = await Business.findById(req.user.branchId);
+          
+          if (!business) {
+            console.error('❌ Business not found for branchId:', req.user.branchId);
+          } else {
+            console.log('✅ Business found:', business.name);
+          }
+          
+          const emailSettings = business?.settings?.emailNotificationSettings;
+          // Default to enabled unless explicitly disabled AND recipient list exists (meaning it was configured)
+          const hasRecipientList = emailSettings?.appointmentNotifications?.recipientStaffIds?.length > 0;
+          const explicitlyDisabledCancellations = emailSettings?.appointmentNotifications?.cancellations === false;
+          const cancellationEnabled = !emailSettings || 
+            !emailSettings?.appointmentNotifications ||
+            (!explicitlyDisabledCancellations || !hasRecipientList);
+          
+          console.log('📧 Cancellation Email Settings:', {
+            emailSettingsExists: !!emailSettings,
+            cancellations: emailSettings?.appointmentNotifications?.cancellations,
+            explicitlyDisabledCancellations: explicitlyDisabledCancellations,
+            hasRecipientList: hasRecipientList,
+            cancellationEnabled: cancellationEnabled
+          });
+          
+          if (cancellationEnabled && updatedAppointment.clientId) {
+            const client = updatedAppointment.clientId;
+            console.log('📧 Client Check:', {
+              clientId: client?._id || client,
+              clientName: client?.name,
+              clientEmail: client?.email,
+              clientIsObject: typeof client === 'object'
+            });
+            
+            const clientEmail = client?.email ? client.email.trim() : null;
+            
+            if (clientEmail) {
+              console.log(`📧 Sending cancellation email to client: ${clientEmail}`);
+              
+              // Get service name
+              let serviceName = 'Service';
+              if (updatedAppointment.serviceId) {
+                if (typeof updatedAppointment.serviceId === 'object' && updatedAppointment.serviceId.name) {
+                  serviceName = updatedAppointment.serviceId.name;
+                } else {
+                  const Service = req.businessModels.Service;
+                  const service = await Service.findById(updatedAppointment.serviceId);
+                  serviceName = service?.name || 'Service';
+                }
+              }
+              
+              console.log('📧 Cancellation Email Details:', {
+                to: clientEmail,
+                clientName: client.name || 'Client',
+                serviceName: serviceName,
+                date: updatedAppointment.date,
+                time: updatedAppointment.time,
+                businessName: business?.name || 'Business'
+              });
+              
+              const emailResult = await emailService.sendAppointmentCancellation({
+                to: clientEmail,
+                clientName: client.name || 'Client',
+                appointmentData: {
+                  serviceName: serviceName,
+                  date: updatedAppointment.date,
+                  time: updatedAppointment.time,
+                  businessName: business?.name || 'Business',
+                  businessPhone: business?.contact?.phone || ''
+                }
+              });
+              
+              console.log('📧 Cancellation Email Result:', {
+                success: emailResult?.success,
+                error: emailResult?.error
+              });
+              
+              if (emailResult && emailResult.success !== false) {
+                console.log(`✅ Cancellation email sent to client: ${clientEmail}`);
+              } else {
+                console.error(`❌ Failed to send cancellation email:`, emailResult?.error);
+                console.error(`❌ Full error:`, JSON.stringify(emailResult, null, 2));
+              }
+            } else {
+              console.log(`⚠️ Skipping cancellation email - client has no email address`);
+              console.log(`   Client ID: ${client?._id || client}`);
+              console.log(`   Client Name: ${client?.name || 'Unknown'}`);
+            }
+          } else {
+            if (!cancellationEnabled) {
+              console.log('⚠️ Client cancellation emails are disabled in business settings');
+            }
+            if (!updatedAppointment.clientId) {
+              console.log('⚠️ No client found for appointment');
+            }
+          }
+          
+          // Send notification to staff/admin about cancellation (use same logic - default to enabled)
+          const staffCancellationEnabled = !emailSettings || 
+            !emailSettings?.appointmentNotifications ||
+            (!explicitlyDisabledCancellations || !hasRecipientList);
+          
+          console.log('📧 Staff Cancellation Notification Check:', {
+            staffCancellationEnabled: staffCancellationEnabled,
+            explicitlyDisabledCancellations: explicitlyDisabledCancellations,
+            hasRecipientList: hasRecipientList
+          });
+          
+          if (staffCancellationEnabled) {
+            const { Staff } = req.businessModels;
+            const recipientStaffIds = emailSettings?.appointmentNotifications?.recipientStaffIds || [];
+            
+            let recipients = [];
+            if (recipientStaffIds.length > 0) {
+              recipients = await Staff.find({
+                _id: { $in: recipientStaffIds },
+                'emailNotifications.enabled': true,
+                'emailNotifications.preferences.appointmentAlerts': true,
+                email: { $exists: true, $ne: '' }
+              }).lean();
+            } else {
+              recipients = await Staff.find({
+                branchId: req.user.branchId,
+                'emailNotifications.enabled': true,
+                'emailNotifications.preferences.appointmentAlerts': true,
+                email: { $exists: true, $ne: '' }
+              }).lean();
+            }
+            
+            // Add admin users
+            const User = mainConnection.model('User', require('./models/User').schema);
+            const adminUsers = await User.find({
+              branchId: req.user.branchId,
+              role: 'admin',
+              email: { $exists: true, $ne: '' }
+            }).lean();
+            
+            console.log(`📧 Found ${adminUsers.length} admin user(s) for cancellation notification`);
+            
+            for (const admin of adminUsers) {
+              const alreadyInList = recipients.some(r => r.email === admin.email);
+              if (!alreadyInList) {
+                recipients.push({
+                  _id: admin._id,
+                  name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
+                  email: admin.email,
+                  role: 'admin'
+                });
+                console.log(`📧 Added admin user to cancellation recipients: ${admin.email}`);
+              }
+            }
+            
+            // Send cancellation notification to staff/admin
+            // Get service name for staff notifications
+            let serviceNameForStaff = 'Service';
+            if (updatedAppointment.serviceId) {
+              if (typeof updatedAppointment.serviceId === 'object' && updatedAppointment.serviceId.name) {
+                serviceNameForStaff = updatedAppointment.serviceId.name;
+              } else {
+                const Service = req.businessModels.Service;
+                const service = await Service.findById(updatedAppointment.serviceId);
+                serviceNameForStaff = service?.name || 'Service';
+              }
+            }
+            
+            console.log(`📧 Found ${recipients.length} total recipients for cancellation notification`);
+            
+            for (const recipient of recipients) {
+              try {
+                console.log(`📧 Sending cancellation notification to: ${recipient.email} (${recipient.name || recipient.role})`);
+                await emailService.sendAppointmentCancellationNotification({
+                  to: recipient.email,
+                  appointmentCount: 1,
+                  businessName: business?.name || 'Business',
+                  appointmentDetails: {
+                    date: updatedAppointment.date,
+                    time: updatedAppointment.time,
+                    clientName: updatedAppointment.clientId?.name,
+                    serviceName: serviceNameForStaff
+                  }
+                });
+                console.log(`✅ Cancellation notification sent to: ${recipient.email}`);
+              } catch (error) {
+                console.error(`❌ Error sending cancellation notification to ${recipient.email}:`, error);
+                console.error(`❌ Error details:`, {
+                  message: error.message,
+                  stack: error.stack
+                });
+              }
+            }
+          } else {
+            console.log('⚠️ Staff cancellation notifications are disabled in business settings');
+          }
+        }
+      } catch (emailError) {
+        console.error('❌ Error sending cancellation emails:', emailError);
+        console.error('❌ Error stack:', emailError.stack);
+        // Don't fail the update if email fails
+      }
+    }
 
     res.json({
       success: true,
@@ -4467,7 +5260,244 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     }
 
     console.log('✅ Sale created successfully:', sale._id);
-    res.status(201).json({ success: true, data: sale });
+    console.log('📧 Sale customer email check:', {
+      customerEmail: sale.customerEmail,
+      hasEmail: !!sale.customerEmail,
+      customerName: sale.customerName,
+      billNo: sale.billNo
+    });
+
+    // Track email sending status for response
+    let emailStatus = {
+      attempted: false,
+      sent: false,
+      error: null,
+      debug: {
+        emailServiceEnabled: null,
+        receiptNotificationsEnabled: null,
+        sendToClients: null,
+        hasCustomerEmail: null,
+        customerEmail: null
+      }
+    };
+
+    // Send email notifications if enabled
+    try {
+      const emailService = require('./services/email-service');
+      
+      // Ensure email service is initialized
+      if (!emailService.initialized) {
+        console.log('📧 Email service not initialized, initializing now...');
+        await emailService.initialize();
+      }
+      
+      console.log('📧 Email service status:', {
+        initialized: emailService.initialized,
+        enabled: emailService.enabled,
+        provider: emailService.provider
+      });
+      
+      emailStatus.debug.emailServiceEnabled = emailService.enabled;
+      
+      // Check if email service is enabled (from AdminSettings)
+      if (!emailService.enabled) {
+        console.log('📧 Email service is disabled, skipping receipt email');
+        emailStatus.error = 'Email service is disabled';
+      } else {
+        // Get Business from main database (not business database)
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        
+        const business = await Business.findById(req.user.branchId);
+        const emailSettings = business?.settings?.emailNotificationSettings;
+        
+        // Check if business has enabled receipt notifications
+        // Always default to true for receipt notifications (opt-out behavior)
+        // Receipt notifications are enabled by default unless explicitly disabled
+        // For now, we'll always enable receipt notifications to ensure emails are sent
+        const receiptNotificationsEnabled = true; // Always enable receipt notifications
+        
+        emailStatus.debug.receiptNotificationsEnabled = receiptNotificationsEnabled;
+        emailStatus.debug.hasCustomerEmail = !!sale.customerEmail;
+        emailStatus.debug.customerEmail = sale.customerEmail || null;
+        emailStatus.debug.emailSettingsExists = !!emailSettings;
+        emailStatus.debug.receiptNotificationsExists = !!emailSettings?.receiptNotifications;
+        emailStatus.debug.receiptNotificationsEnabledValue = emailSettings?.receiptNotifications?.enabled;
+        
+        console.log(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}, emailSettings exists: ${!!emailSettings}, receiptNotifications exists: ${!!emailSettings?.receiptNotifications}, enabled value: ${emailSettings?.receiptNotifications?.enabled}`);
+        
+        if (!receiptNotificationsEnabled) {
+          emailStatus.error = 'Receipt notifications disabled in business settings';
+          console.log('📧 Receipt notifications are disabled in business settings');
+        } else {
+          // Send receipt to client if email exists (default to true if not set)
+          const sendToClients = !emailSettings || emailSettings?.receiptNotifications?.sendToClients !== false;
+          emailStatus.debug.sendToClients = sendToClients;
+          
+          console.log(`📧 Email sending check:`, {
+            sendToClients,
+            hasCustomerEmail: !!sale.customerEmail,
+            customerEmail: sale.customerEmail
+          });
+          if (sendToClients && sale.customerEmail) {
+            emailStatus.attempted = true;
+            console.log(`📧 Attempting to send receipt email to: ${sale.customerEmail}`);
+            try {
+              // Calculate subtotal from items
+              const subtotal = sale.items?.reduce((sum, item) => sum + (item.total || 0), 0) || 0;
+              
+              // Generate PDF receipt using HTML (same as frontend)
+              let pdfBuffer = null;
+              try {
+                // Get BusinessSettings from business database for full settings
+                const databaseManager = require('./config/database-manager');
+                const businessConnection = await databaseManager.getConnection(req.user.branchId);
+                const modelFactory = require('./models/model-factory');
+                const businessModels = modelFactory.createBusinessModels(businessConnection);
+                const { BusinessSettings } = businessModels;
+                const businessSettingsDoc = await BusinessSettings.findOne();
+                
+                // Format address properly (handle both object and string)
+                let formattedAddress = '';
+                if (business?.address) {
+                  if (typeof business.address === 'object') {
+                    const addr = business.address;
+                    const addressParts = [];
+                    if (addr.street) addressParts.push(addr.street);
+                    if (addr.city) addressParts.push(addr.city);
+                    if (addr.state) addressParts.push(addr.state);
+                    if (addr.zipCode) addressParts.push(addr.zipCode);
+                    if (addr.country) addressParts.push(addr.country);
+                    formattedAddress = addressParts.join(', ');
+                  } else {
+                    formattedAddress = business.address;
+                  }
+                }
+                
+                // Get phone and email from contact object or direct property
+                const businessPhone = business?.contact?.phone || business?.phone || '';
+                const businessEmail = business?.contact?.email || business?.email || '';
+                
+                // Combine business info with BusinessSettings
+                const businessSettings = {
+                  name: businessSettingsDoc?.name || business?.name || 'Business',
+                  address: businessSettingsDoc?.address || formattedAddress,
+                  city: businessSettingsDoc?.city || business?.address?.city || '',
+                  state: businessSettingsDoc?.state || business?.address?.state || '',
+                  zipCode: businessSettingsDoc?.zipCode || business?.address?.zipCode || '',
+                  phone: businessSettingsDoc?.phone || businessPhone,
+                  email: businessSettingsDoc?.email || businessEmail,
+                  logo: businessSettingsDoc?.logo || '',
+                  gstNumber: businessSettingsDoc?.gstNumber || '',
+                  socialMedia: businessSettingsDoc?.socialMedia || '',
+                  currency: businessSettingsDoc?.currency || 'INR',
+                  enableCurrency: businessSettingsDoc?.enableCurrency !== false,
+                  taxRate: businessSettingsDoc?.taxRate || 18
+                };
+                
+                // Format receipt data to match frontend ReceiptGenerator format
+                const receiptData = {
+                  receiptNumber: sale.billNo,
+                  date: sale.date ? new Date(sale.date).toISOString() : new Date().toISOString(),
+                  time: sale.date ? new Date(sale.date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                  clientName: sale.customerName,
+                  clientPhone: sale.customerPhone || '',
+                  customerName: sale.customerName, // Alias for compatibility
+                  customerPhone: sale.customerPhone || '', // Alias for compatibility
+                  items: (sale.items || []).map(item => ({
+                    name: item.name,
+                    type: item.type || 'service',
+                    price: item.price || 0,
+                    quantity: item.quantity || 1,
+                    total: item.total || (item.price || 0) * (item.quantity || 1),
+                    discount: item.discount || 0,
+                    discountType: item.discountType || 'percentage',
+                    staffName: item.staffName || sale.staffName || ''
+                  })),
+                  subtotal: subtotal,
+                  tax: sale.taxAmount || 0,
+                  discount: sale.discount || 0,
+                  tip: sale.tip || 0,
+                  roundOff: sale.roundOff || 0,
+                  total: sale.netTotal || sale.grossTotal || 0,
+                  payments: sale.paymentHistory?.length > 0 
+                    ? sale.paymentHistory.map(p => ({ type: p.method?.toLowerCase() || 'cash', amount: p.amount || 0 }))
+                    : [{ type: (sale.paymentMode?.toLowerCase() || 'cash'), amount: sale.netTotal || sale.grossTotal || 0 }],
+                  taxBreakdown: sale.taxBreakdown || null
+                };
+                
+                const { generateReceiptPDFFromHTML } = require('./utils/html-receipt-generator');
+                pdfBuffer = await generateReceiptPDFFromHTML(receiptData, businessSettings);
+                console.log(`✅ PDF receipt generated from HTML: ${pdfBuffer.length} bytes`);
+              } catch (pdfError) {
+                console.error('⚠️ Error generating PDF receipt from HTML:', pdfError);
+                console.error('⚠️ PDF Error details:', {
+                  message: pdfError.message,
+                  stack: pdfError.stack
+                });
+                // Continue without PDF attachment
+              }
+              
+              console.log(`📧 Calling emailService.sendReceipt with:`, {
+                to: sale.customerEmail,
+                clientName: sale.customerName,
+                receiptNumber: sale.billNo,
+                businessName: business?.name,
+                hasPdf: !!pdfBuffer
+              });
+              
+              const emailResult = await emailService.sendReceipt({
+                to: sale.customerEmail,
+                clientName: sale.customerName,
+                receiptNumber: sale.billNo,
+                receiptData: {
+                  businessName: business?.name || 'Business',
+                  date: sale.date ? new Date(sale.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+                  items: sale.items || [],
+                  subtotal: subtotal,
+                  tax: sale.taxAmount || 0,
+                  discount: sale.discount || 0,
+                  total: sale.netTotal || sale.grossTotal || 0,
+                  paymentMethod: sale.paymentMode || sale.paymentHistory?.[0]?.method || 'N/A'
+                },
+                pdfBuffer: pdfBuffer
+              });
+              
+              console.log(`📧 Email result:`, emailResult);
+              
+              if (emailResult && emailResult.success !== false) {
+                console.log(`✅ Receipt email sent to client: ${sale.customerEmail}`);
+                emailStatus.sent = true;
+              } else {
+                console.error(`❌ Failed to send receipt email to ${sale.customerEmail}:`, emailResult?.error || 'Unknown error');
+                console.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
+                emailStatus.error = emailResult?.error || 'Unknown error';
+              }
+            } catch (clientEmailError) {
+              console.error('❌ Error sending receipt email to client:', clientEmailError);
+              console.error('❌ Error details:', {
+                message: clientEmailError.message,
+                stack: clientEmailError.stack
+              });
+              emailStatus.error = clientEmailError.message;
+            }
+          } else {
+            emailStatus.error = !sendToClients ? 'Send to clients disabled' : 'No customer email';
+          }
+        }
+      }
+    } catch (emailError) {
+      console.error('Error sending receipt email:', emailError);
+      emailStatus.error = emailError.message;
+      // Don't fail sale creation if email fails
+    }
+
+    res.status(201).json({ 
+      success: true, 
+      data: sale,
+      emailStatus: emailStatus // Include email sending status in response
+    });
   } catch (err) {
     console.error('❌ Sales creation error:', err);
     console.error('❌ Error details:', {
@@ -6210,6 +7240,33 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Email service status check
+app.get('/api/email-service/status', authenticateToken, async (req, res) => {
+  try {
+    const emailService = require('./services/email-service');
+    
+    // Ensure email service is initialized
+    if (!emailService.initialized) {
+      await emailService.initialize();
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        initialized: emailService.initialized,
+        enabled: emailService.enabled,
+        provider: emailService.provider,
+        hasConfig: !!emailService.config
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -6240,6 +7297,16 @@ app.listen(PORT, '0.0.0.0', async () => {
   
   // Setup cron job for inactivity checking
   setupInactivityChecker();
+  
+  // Setup email scheduler jobs
+  const { setupEmailScheduler } = require('./jobs/email-scheduler');
+  setupEmailScheduler();
+  
+  // Initialize email service on server start
+  const emailService = require('./services/email-service');
+  emailService.initialize().catch(err => {
+    console.error('⚠️  Failed to initialize email service:', err.message);
+  });
 });
 
 // Setup inactivity checker cron job

@@ -15,12 +15,15 @@ import {
   Eye,
   EyeOff,
   Search,
-  Shield
+  Shield,
+  CheckCircle2,
+  XCircle
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table,
@@ -45,10 +48,13 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
-import { StaffAPI, StaffDirectoryAPI, UsersAPI } from "@/lib/api"
+import { StaffAPI, StaffDirectoryAPI, UsersAPI, EmailNotificationsAPI } from "@/lib/api"
 import { StaffForm } from "./staff-form"
 import { StaffPermissionsModal } from "./staff-permissions-modal"
 import { PasswordChangeForm } from "./password-change-form"
+import { PasswordSetupForm } from "./password-setup-form"
+import { StaffEmailPreferencesModal } from "@/components/settings/staff-email-preferences-modal"
+import { useAuth } from "@/lib/auth-context"
 
 interface Staff {
   _id: string
@@ -83,9 +89,14 @@ export function StaffTable() {
   const [isPermissionsDialogOpen, setIsPermissionsDialogOpen] = useState(false)
   const [isAccessControlDialogOpen, setIsAccessControlDialogOpen] = useState(false)
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false)
+  const [isPasswordSetupDialogOpen, setIsPasswordSetupDialogOpen] = useState(false)
+  const [isEmailPreferencesDialogOpen, setIsEmailPreferencesDialogOpen] = useState(false)
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null)
   const { toast } = useToast()
+  const { user } = useAuth()
   const router = useRouter()
+  
+  const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager'
 
   useEffect(() => {
     fetchStaff()
@@ -111,6 +122,212 @@ export function StaffTable() {
   const handleSearch = (value: string) => {
     setSearchTerm(value)
     fetchStaff()
+  }
+
+  const handleToggleEmailNotifications = async (staff: Staff, enabled: boolean) => {
+    if (!isAdminOrManager) {
+      toast({
+        title: "Unauthorized",
+        description: "Only admin/manager can manage email notifications",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Admin users always have email notifications ON and cannot be changed
+    if (staff.role === 'admin') {
+      toast({
+        title: "Cannot Modify",
+        description: "Admin email notifications are always enabled and cannot be changed",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!staff.email) {
+      toast({
+        title: "Error",
+        description: "Staff member must have an email address to enable notifications",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!staff._id) {
+      toast({
+        title: "Error",
+        description: "Staff ID is missing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      console.log('Toggling email notifications for staff:', staff._id, 'enabled:', enabled)
+      const response = await EmailNotificationsAPI.updateStaffPreferences(staff._id, {
+        enabled,
+        preferences: staff.emailNotifications?.preferences || {
+          dailySummary: false,
+          weeklySummary: false,
+          appointmentAlerts: false,
+          receiptAlerts: false,
+          exportAlerts: false,
+          systemAlerts: false,
+          lowInventory: false
+        }
+      })
+
+      console.log('Email notification update response:', response)
+
+      if (response.success) {
+        toast({
+          title: "Success",
+          description: `Email notifications ${enabled ? 'enabled' : 'disabled'} for ${staff.name}`,
+        })
+        fetchStaff()
+      } else {
+        throw new Error(response.error || 'Failed to update email notifications')
+      }
+    } catch (error: any) {
+      console.error('Error toggling email notifications:', error)
+      const errorMessage = error.response?.data?.error || error.message || "Failed to update email notifications"
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      })
+      // Re-fetch staff to reset toggle state on error
+      fetchStaff()
+    }
+  }
+
+  const handleToggleAppointmentScheduling = async (staff: Staff, enabled: boolean) => {
+    if (!isAdminOrManager) {
+      toast({
+        title: "Unauthorized",
+        description: "Only admin/manager can manage appointment scheduling",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Allow admins to manage their own appointment scheduling
+    // Only protect owner accounts (if owner is not an admin)
+    if (staff.isOwner && staff.role !== 'admin') {
+      toast({
+        title: "Cannot Modify",
+        description: "Business owner permissions cannot be modified",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Backend requires name, email, phone, and role for updates
+      // So we need to send all existing staff data along with the updated field
+      const response = await StaffAPI.update(staff._id, {
+        name: staff.name,
+        email: staff.email,
+        phone: staff.phone || '',
+        role: staff.role,
+        hasLoginAccess: staff.hasLoginAccess,
+        allowAppointmentScheduling: enabled,
+        specialties: staff.specialties || [],
+        salary: staff.salary || 0,
+        commissionProfileIds: staff.commissionProfileIds || [],
+        notes: staff.notes || '',
+        isActive: staff.isActive !== undefined ? staff.isActive : true
+      })
+
+      if (response.success) {
+        toast({
+          title: "Success",
+          description: `Appointment scheduling ${enabled ? 'enabled' : 'disabled'} for ${staff.name}`,
+        })
+        fetchStaff()
+      } else {
+        throw new Error(response.error || 'Failed to update appointment scheduling')
+      }
+    } catch (error: any) {
+      console.error('Error toggling appointment scheduling:', error)
+      toast({
+        title: "Error",
+        description: error.response?.data?.error || error.message || "Failed to update appointment scheduling",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleToggleLoginAccess = async (staff: Staff, enabled: boolean) => {
+    if (!isAdminOrManager) {
+      toast({
+        title: "Unauthorized",
+        description: "Only admin/manager can manage login access",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Protect admin role users - their login access cannot be modified
+    if (staff.role === 'admin') {
+      toast({
+        title: "Cannot Modify",
+        description: "Admin login access cannot be modified",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // If enabling login access and staff doesn't currently have it, show password setup modal
+    if (enabled && !staff.hasLoginAccess) {
+      setSelectedStaff(staff)
+      setIsPasswordSetupDialogOpen(true)
+      return
+    }
+
+    // If disabling login access, proceed directly
+    try {
+      // Backend requires name, email, phone, and role for updates
+      // So we need to send all existing staff data along with the updated field
+      const response = await StaffAPI.update(staff._id, {
+        name: staff.name,
+        email: staff.email,
+        phone: staff.phone || '',
+        role: staff.role,
+        hasLoginAccess: enabled,
+        allowAppointmentScheduling: staff.allowAppointmentScheduling,
+        specialties: staff.specialties || [],
+        salary: staff.salary || 0,
+        commissionProfileIds: staff.commissionProfileIds || [],
+        notes: staff.notes || '',
+        isActive: staff.isActive !== undefined ? staff.isActive : true
+      })
+
+      if (response.success) {
+        toast({
+          title: "Success",
+          description: `Login access ${enabled ? 'enabled' : 'disabled'} for ${staff.name}`,
+        })
+        fetchStaff()
+      } else {
+        throw new Error(response.error || 'Failed to update login access')
+      }
+    } catch (error: any) {
+      console.error('Error toggling login access:', error)
+      const errorMessage = error.response?.data?.error || error.message || "Failed to update login access"
+      
+      // If error indicates password is required, show password setup modal
+      if (errorMessage.toLowerCase().includes('password') && errorMessage.toLowerCase().includes('required')) {
+        setSelectedStaff(staff)
+        setIsPasswordSetupDialogOpen(true)
+      } else {
+        toast({
+          title: "Error",
+          description: errorMessage,
+          variant: "destructive",
+        })
+      }
+    }
   }
 
   const handleAddStaff = () => {
@@ -264,6 +481,7 @@ export function StaffTable() {
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Email</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Appointment</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Login Access</TableHead>
+              <TableHead className="font-semibold text-slate-700 py-4 px-6">Email Notifications</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Access Control</TableHead>
               <TableHead className="text-right font-semibold text-slate-700 py-4 px-6">Actions</TableHead>
             </TableRow>
@@ -271,7 +489,7 @@ export function StaffTable() {
           <TableBody>
             {staff.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-12">
+                <TableCell colSpan={8} className="text-center py-12">
                   <div className="flex flex-col items-center gap-3">
                     <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center">
                       <Users className="h-8 w-8 text-slate-400" />
@@ -312,20 +530,83 @@ export function StaffTable() {
                   <TableCell className="py-4 px-6 text-slate-700 font-medium">{member.phone || "-"}</TableCell>
                   <TableCell className="py-4 px-6 text-slate-700">{member.email}</TableCell>
                   <TableCell className="py-4 px-6">
-                    <Badge 
-                      variant={member.allowAppointmentScheduling ? "default" : "secondary"} 
-                      className="text-xs px-3 py-1.5 font-medium"
-                    >
-                      {member.allowAppointmentScheduling ? "Enabled" : "Disabled"}
-                    </Badge>
+                    <div className="flex items-center gap-3">
+                      {isAdminOrManager ? (
+                        <Switch
+                          checked={member.allowAppointmentScheduling || false}
+                          onCheckedChange={(checked) => handleToggleAppointmentScheduling(member, checked)}
+                          disabled={member.isOwner && member.role !== 'admin'}
+                        />
+                      ) : (
+                        <Badge 
+                          variant={member.allowAppointmentScheduling ? "default" : "secondary"} 
+                          className="text-xs px-3 py-1.5 font-medium"
+                        >
+                          {member.allowAppointmentScheduling ? "Enabled" : "Disabled"}
+                        </Badge>
+                      )}
+                      {member.isOwner && member.role !== 'admin' && (
+                        <p className="text-xs text-slate-500">(Protected)</p>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="py-4 px-6">
-                    <Badge 
-                      variant={member.hasLoginAccess ? "default" : "secondary"} 
-                      className="text-xs px-3 py-1.5 font-medium"
-                    >
-                      {member.hasLoginAccess ? "Enabled" : "Disabled"}
-                    </Badge>
+                    <div className="flex items-center gap-3">
+                      {isAdminOrManager ? (
+                        <Switch
+                          checked={member.hasLoginAccess || false}
+                          onCheckedChange={(checked) => handleToggleLoginAccess(member, checked)}
+                          disabled={member.role === 'admin'}
+                        />
+                      ) : (
+                        <Badge 
+                          variant={member.hasLoginAccess ? "default" : "secondary"} 
+                          className="text-xs px-3 py-1.5 font-medium"
+                        >
+                          {member.hasLoginAccess ? "Enabled" : "Disabled"}
+                        </Badge>
+                      )}
+                      {member.role === 'admin' && (
+                        <p className="text-xs text-slate-500">(Protected)</p>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="py-4 px-6">
+                    <div className="flex items-center gap-3">
+                      {isAdminOrManager ? (
+                        <Switch
+                          checked={member.role === 'admin' ? true : (member.emailNotifications?.enabled || false)}
+                          onCheckedChange={(checked) => handleToggleEmailNotifications(member, checked)}
+                          disabled={member.role === 'admin' || !member.email}
+                        />
+                      ) : (
+                        <Badge 
+                          variant={member.emailNotifications?.enabled ? "default" : "secondary"} 
+                          className="text-xs px-3 py-1.5 font-medium"
+                        >
+                          {member.emailNotifications?.enabled ? (
+                            <span className="flex items-center gap-1">
+                              <CheckCircle2 className="h-3 w-3" />
+                              ON
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1">
+                              <XCircle className="h-3 w-3" />
+                              OFF
+                            </span>
+                          )}
+                        </Badge>
+                      )}
+                      <div className="flex flex-col">
+                        <p className="text-xs text-slate-500">(Admin Only)</p>
+                        {member.role === 'admin' && (
+                          <p className="text-xs text-blue-500 mt-0.5">Always ON</p>
+                        )}
+                        {!member.email && member.role !== 'admin' && (
+                          <p className="text-xs text-red-500 mt-0.5">No email</p>
+                        )}
+                      </div>
+                    </div>
                   </TableCell>
                   <TableCell className="py-4 px-6">
                     <Button
@@ -490,27 +771,78 @@ export function StaffTable() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-6">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">Login Access</label>
-                <Badge 
-                  variant={selectedStaff?.hasLoginAccess ? "default" : "secondary"} 
-                  className="text-xs px-3 py-1.5 font-medium"
-                >
-                  {selectedStaff?.hasLoginAccess ? "Enabled" : "Disabled"}
-                </Badge>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700">Appointment Scheduling</label>
-                <Badge 
-                  variant={selectedStaff?.allowAppointmentScheduling ? "default" : "secondary"} 
-                  className="text-xs px-3 py-1.5 font-medium"
-                >
-                  {selectedStaff?.allowAppointmentScheduling ? "Enabled" : "Disabled"}
-                </Badge>
+            {/* Access Controls Section */}
+            <div className="space-y-4">
+              <h4 className="text-lg font-medium text-slate-800">Access Controls</h4>
+              <div className="space-y-4 p-4 bg-slate-50 rounded-lg">
+                {/* Login Access */}
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <label className="text-sm font-medium text-slate-700 mb-1">Login Access</label>
+                    <p className="text-xs text-slate-500">
+                      {selectedStaff?.role === 'admin' 
+                        ? "Admin login access cannot be modified" 
+                        : "Allow this staff member to log in to the system"}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={selectedStaff?.hasLoginAccess || false}
+                    onCheckedChange={(checked) => {
+                      if (selectedStaff) {
+                        handleToggleLoginAccess(selectedStaff, checked)
+                      }
+                    }}
+                    disabled={selectedStaff?.role === 'admin' || selectedStaff?.isOwner}
+                  />
+                </div>
+
+                {/* Appointment Scheduling */}
+                <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+                  <div className="flex flex-col">
+                    <label className="text-sm font-medium text-slate-700 mb-1">Appointment Scheduling</label>
+                    <p className="text-xs text-slate-500">
+                      {selectedStaff?.isOwner && selectedStaff?.role !== 'admin'
+                        ? "Business owner appointment scheduling cannot be modified"
+                        : "Allow this staff member to schedule appointments"}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={selectedStaff?.allowAppointmentScheduling || false}
+                    onCheckedChange={(checked) => {
+                      if (selectedStaff) {
+                        handleToggleAppointmentScheduling(selectedStaff, checked)
+                      }
+                    }}
+                    disabled={(selectedStaff?.isOwner && selectedStaff?.role !== 'admin')}
+                  />
+                </div>
+
+                {/* Email Notifications */}
+                <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+                  <div className="flex flex-col">
+                    <label className="text-sm font-medium text-slate-700 mb-1">Email Notifications</label>
+                    <p className="text-xs text-slate-500">
+                      {selectedStaff?.role === 'admin'
+                        ? "Admin email notifications are always enabled"
+                        : !selectedStaff?.email
+                        ? "Email address required to enable notifications"
+                        : "Enable email notifications for this staff member"}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={selectedStaff?.role === 'admin' ? true : (selectedStaff?.emailNotifications?.enabled || false)}
+                    onCheckedChange={(checked) => {
+                      if (selectedStaff) {
+                        handleToggleEmailNotifications(selectedStaff, checked)
+                      }
+                    }}
+                    disabled={selectedStaff?.role === 'admin' || !selectedStaff?.email}
+                  />
+                </div>
               </div>
             </div>
             
+            {/* Permissions Section */}
             <div className="space-y-4">
               <h4 className="text-lg font-medium text-slate-800">Permissions</h4>
               <div className="grid grid-cols-1 gap-3">
@@ -546,11 +878,11 @@ export function StaffTable() {
               </Button>
               <Button 
                 onClick={() => {
-                  // TODO: Implement permission editing
-                  toast({
-                    title: "Feature Coming Soon",
-                    description: "Permission editing will be available in the next update",
-                  })
+                  if (selectedStaff) {
+                    setIsAccessControlDialogOpen(false)
+                    setSelectedStaff(selectedStaff)
+                    setIsPermissionsDialogOpen(true)
+                  }
                 }}
                 className="bg-blue-600 hover:bg-blue-700"
               >
@@ -591,6 +923,59 @@ export function StaffTable() {
           />
         </DialogContent>
       </Dialog>
+
+      {/* Password Setup Dialog */}
+      <Dialog open={isPasswordSetupDialogOpen} onOpenChange={setIsPasswordSetupDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Set Up Password</DialogTitle>
+            <DialogDescription>
+              Set up a password to enable login access for {selectedStaff?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <PasswordSetupForm 
+            staff={selectedStaff}
+            onSuccess={() => {
+              setIsPasswordSetupDialogOpen(false)
+              setSelectedStaff(null)
+              fetchStaff()
+            }}
+            onCancel={() => {
+              setIsPasswordSetupDialogOpen(false)
+              setSelectedStaff(null)
+              // Reset the toggle since password setup was cancelled
+              fetchStaff()
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      {/* Email Preferences Modal */}
+      {selectedStaff && (
+        <StaffEmailPreferencesModal
+          isOpen={isEmailPreferencesDialogOpen}
+          onClose={() => {
+            setIsEmailPreferencesDialogOpen(false)
+            setSelectedStaff(null)
+          }}
+          staff={{
+            _id: selectedStaff._id,
+            name: selectedStaff.name,
+            email: selectedStaff.email,
+            role: selectedStaff.role,
+            hasLoginAccess: selectedStaff.hasLoginAccess || false,
+            emailNotifications: selectedStaff.emailNotifications
+          }}
+          onUpdate={() => {
+            fetchStaff()
+            setIsEmailPreferencesDialogOpen(false)
+            toast({
+              title: "Success",
+              description: "Email notification preferences updated",
+            })
+          }}
+        />
+      )}
     </div>
   )
 }

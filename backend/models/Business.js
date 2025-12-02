@@ -62,6 +62,57 @@ const businessSchema = new mongoose.Schema({
       paymentConfirmations: { type: Boolean, default: true }
     },
     
+    // Email Notification Configuration
+    emailNotificationSettings: {
+      enabled: { type: Boolean, default: false },
+      // Staff members selected to receive notifications
+      recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }],
+      // Daily Summary Configuration
+      dailySummary: {
+        enabled: { type: Boolean, default: false },
+        time: { type: String, default: '21:00' }, // HH:mm format
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      // Weekly Summary Configuration
+      weeklySummary: {
+        enabled: { type: Boolean, default: false },
+        day: { type: String, enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'], default: 'sunday' },
+        time: { type: String, default: '20:00' }, // HH:mm format
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      // Appointment Notifications
+      appointmentNotifications: {
+        enabled: { type: Boolean, default: false },
+        newAppointments: { type: Boolean, default: false },
+        cancellations: { type: Boolean, default: false },
+        noShows: { type: Boolean, default: false },
+        reminders: { type: Boolean, default: false },
+        reminderHoursBefore: { type: Number, default: 24 },
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      // Receipt Notifications
+      receiptNotifications: {
+        enabled: { type: Boolean, default: false },
+        sendToClients: { type: Boolean, default: true },
+        sendToStaff: { type: Boolean, default: false },
+        highValueThreshold: { type: Number, default: 0 }, // Alert if receipt > this amount
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      // Export Notifications
+      exportNotifications: {
+        enabled: { type: Boolean, default: false },
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      // System Alerts
+      systemAlerts: {
+        enabled: { type: Boolean, default: false },
+        lowInventory: { type: Boolean, default: false },
+        paymentFailures: { type: Boolean, default: false },
+        systemErrors: { type: Boolean, default: false },
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      }
+    },
+    
     // Branding
     branding: {
       logo: { type: String },

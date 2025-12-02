@@ -197,8 +197,6 @@ export const AppointmentsCalendar = forwardRef<{ showCancelledModal: () => void 
   }
 
   const getSelectedDateAppointments = () => {
-    console.log('Filtering appointments for selected date:', selectedDate)
-    
     return appointments
       .filter(apt => {
         // Convert appointment date to YYYY-MM-DD format for comparison
@@ -208,7 +206,6 @@ export const AppointmentsCalendar = forwardRef<{ showCancelledModal: () => void 
         const date = String(aptDate.getDate()).padStart(2, '0')
         const aptDateString = `${year}-${month}-${date}`
         
-        console.log('Appointment date:', aptDateString, 'vs selected:', selectedDate, 'Match:', aptDateString === selectedDate)
         return aptDateString === selectedDate && apt.status !== 'cancelled'
       })
       .sort((a, b) => {

@@ -905,6 +905,66 @@ export class GDPRAPI {
   }
 }
 
+export class EmailNotificationsAPI {
+  // Get email notification settings
+  static async getSettings(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/email-notifications/settings')
+    return response.data
+  }
+
+  // Check email service status
+  static async getEmailServiceStatus(): Promise<ApiResponse<{
+    initialized: boolean;
+    enabled: boolean;
+    provider: string | null;
+    hasConfig: boolean;
+  }>> {
+    const response = await apiClient.get('/email-service/status')
+    return response.data
+  }
+
+  // Update email notification settings
+  static async updateSettings(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put('/email-notifications/settings', data)
+    return response.data
+  }
+
+  // Get all staff with email notification preferences
+  static async getStaff(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/email-notifications/staff')
+    return response.data
+  }
+
+  // Update staff email notification preferences
+  static async updateStaffPreferences(staffId: string, data: {
+    enabled?: boolean;
+    preferences?: {
+      dailySummary?: boolean;
+      weeklySummary?: boolean;
+      appointmentAlerts?: boolean;
+      receiptAlerts?: boolean;
+      exportAlerts?: boolean;
+      systemAlerts?: boolean;
+      lowInventory?: boolean;
+    };
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/email-notifications/staff/${staffId}`, data)
+    return response.data
+  }
+
+  // Send test email
+  static async sendTestEmail(email: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/email-notifications/test', { email })
+    return response.data
+  }
+
+  // Manually trigger daily summary
+  static async sendDailySummary(): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/email-notifications/send-daily-summary')
+    return response.data
+  }
+}
+
 // Export the main API client for direct use if needed
 export { apiClient }
 export default apiClient 
