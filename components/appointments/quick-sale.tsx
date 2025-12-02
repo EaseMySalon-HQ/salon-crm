@@ -2013,6 +2013,7 @@ export function QuickSale() {
           customerId: getCustomerId(customer),
           customerName: customer!.name,
           customerPhone: customer!.phone,
+          customerEmail: customer?.email || '',
           items: [
             ...validServiceItems.map((item: any) => {
               const service = services.find((s) => s._id === item.serviceId || s.id === item.serviceId)
@@ -2076,9 +2077,17 @@ export function QuickSale() {
 
         console.log('💾 Creating sale in backend:', saleData)
         console.log('💾 Sale data items:', saleData.items)
+        console.log('💾 Customer email check:', {
+          customer: customer?.name,
+          customerEmail: customer?.email,
+          saleDataCustomerEmail: saleData.customerEmail,
+          hasEmail: !!saleData.customerEmail
+        })
         console.log('💾 Sale data validation:', {
           hasBillNo: !!saleData.billNo,
           hasCustomerName: !!saleData.customerName,
+          hasCustomerEmail: !!saleData.customerEmail,
+          customerEmail: saleData.customerEmail || 'NO EMAIL',
           hasItems: !!saleData.items && saleData.items.length > 0,
           hasGrossTotal: !!saleData.grossTotal,
           itemsCount: saleData.items?.length || 0
@@ -2093,6 +2102,20 @@ export function QuickSale() {
           
           if (result.success) {
             console.log('✅ Sale created successfully in backend:', result)
+            
+            // Check email status if available
+            if (result.emailStatus) {
+              console.log('📧 Email Status from backend:', result.emailStatus)
+              if (result.emailStatus.sent) {
+                console.log('✅ Receipt email sent successfully!')
+              } else if (result.emailStatus.attempted) {
+                console.error('❌ Email sending attempted but failed:', result.emailStatus.error)
+              } else {
+                console.warn('⚠️ Email sending not attempted:', result.emailStatus.error)
+              }
+            } else {
+              console.warn('⚠️ No email status in response')
+            }
             
             // Mark linked appointment as completed if fully paid
             if (linkedAppointmentId && (totalPaid >= calculatedTotal || result.data?.status === 'completed')) {
