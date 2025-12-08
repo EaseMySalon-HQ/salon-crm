@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -18,6 +18,8 @@ import {
   TestTube,
   Send
 } from "lucide-react"
+import { useToast } from "@/components/ui/use-toast"
+import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 
 interface NotificationSettingsProps {
   settings?: any
@@ -25,6 +27,10 @@ interface NotificationSettingsProps {
 }
 
 export function NotificationSettings({ settings: propSettings, onSettingsChange }: NotificationSettingsProps) {
+  const { toast } = useToast()
+  const [testEmail, setTestEmail] = useState('')
+  const [isTestingEmail, setIsTestingEmail] = useState(false)
+  const isInitialMount = useRef(true)
   const [settings, setSettings] = useState(propSettings || {
     // Email Configuration
     email: {
@@ -128,8 +134,26 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
   useEffect(() => {
     if (propSettings) {
       setSettings(propSettings)
+      isInitialMount.current = true
     }
   }, [propSettings])
+
+  // Notify parent of settings changes (deferred to avoid render issues)
+  useEffect(() => {
+    // Skip the initial mount to avoid calling onSettingsChange on first render
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
+    }
+    
+    if (settings && Object.keys(settings).length > 0) {
+      // Use setTimeout to defer the update until after render
+      const timeoutId = setTimeout(() => {
+        onSettingsChange(settings)
+      }, 0)
+      return () => clearTimeout(timeoutId)
+    }
+  }, [settings])
 
   const handleSettingChange = (path: string, value: any) => {
     setSettings(prev => {
@@ -142,14 +166,56 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
       }
       
       current[keys[keys.length - 1]] = value
-      onSettingsChange(newSettings)
       return newSettings
     })
   }
 
-  const handleTestEmail = () => {
-    // Test email functionality
-    console.log("Testing email...")
+  const handleTestEmail = async () => {
+    if (!testEmail || !testEmail.includes('@')) {
+      toast({
+        title: "Error",
+        description: "Please enter a valid email address",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsTestingEmail(true)
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+      const token = getAdminAuthToken()
+      
+      const response = await fetch(`${API_URL}/admin/settings/test/email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          email: testEmail,
+          settings: settings.email // Send current email settings for testing
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        toast({
+          title: "Success",
+          description: `Test email sent to ${testEmail}`,
+        })
+      } else {
+        throw new Error(data.error || 'Failed to send test email')
+      }
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to send test email",
+        variant: "destructive",
+      })
+    } finally {
+      setIsTestingEmail(false)
+    }
   }
 
   const handleTestSMS = () => {
@@ -202,6 +268,7 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="resend">Resend</SelectItem>
                       <SelectItem value="smtp">SMTP</SelectItem>
                       <SelectItem value="sendgrid">SendGrid</SelectItem>
                       <SelectItem value="ses">AWS SES</SelectItem>
@@ -210,53 +277,155 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                   </Select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="smtpHost">SMTP Host</Label>
-                  <Input
-                    id="smtpHost"
-                    value={settings.email.smtpHost}
-                    onChange={(e) => handleSettingChange('email.smtpHost', e.target.value)}
-                    className="w-full"
-                    placeholder="smtp.gmail.com"
-                  />
-                </div>
+                {/* Resend Configuration */}
+                {settings.email.provider === 'resend' && (
+                  <div className="space-y-2">
+                    <Label htmlFor="resendApiKey">Resend API Key</Label>
+                    <Input
+                      id="resendApiKey"
+                      type="password"
+                      value={settings.email.resendApiKey || ''}
+                      onChange={(e) => handleSettingChange('email.resendApiKey', e.target.value)}
+                      className="w-full"
+                      placeholder="re_xxxxxxxxxxxxx"
+                    />
+                  </div>
+                )}
 
-                <div className="space-y-2">
-                  <Label htmlFor="smtpPort">SMTP Port</Label>
-                  <Input
-                    id="smtpPort"
-                    type="number"
-                    min="1"
-                    max="65535"
-                    value={settings.email.smtpPort}
-                    onChange={(e) => handleSettingChange('email.smtpPort', parseInt(e.target.value))}
-                    className="w-full"
-                  />
-                </div>
+                {/* SMTP Configuration */}
+                {settings.email.provider === 'smtp' && (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="smtpHost">SMTP Host</Label>
+                      <Input
+                        id="smtpHost"
+                        value={settings.email.smtpHost}
+                        onChange={(e) => handleSettingChange('email.smtpHost', e.target.value)}
+                        className="w-full"
+                        placeholder="smtp.gmail.com"
+                      />
+                    </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="smtpUser">SMTP Username</Label>
-                  <Input
-                    id="smtpUser"
-                    type="email"
-                    value={settings.email.smtpUser}
-                    onChange={(e) => handleSettingChange('email.smtpUser', e.target.value)}
-                    className="w-full"
-                    placeholder="your-email@gmail.com"
-                  />
-                </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="smtpPort">SMTP Port</Label>
+                      <Input
+                        id="smtpPort"
+                        type="number"
+                        min="1"
+                        max="65535"
+                        value={settings.email.smtpPort}
+                        onChange={(e) => handleSettingChange('email.smtpPort', parseInt(e.target.value))}
+                        className="w-full"
+                      />
+                    </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="smtpPassword">SMTP Password</Label>
-                  <Input
-                    id="smtpPassword"
-                    type="password"
-                    value={settings.email.smtpPassword}
-                    onChange={(e) => handleSettingChange('email.smtpPassword', e.target.value)}
-                    className="w-full"
-                    placeholder="App password or API key"
-                  />
-                </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="smtpUser">SMTP Username</Label>
+                      <Input
+                        id="smtpUser"
+                        type="email"
+                        value={settings.email.smtpUser}
+                        onChange={(e) => handleSettingChange('email.smtpUser', e.target.value)}
+                        className="w-full"
+                        placeholder="your-email@gmail.com"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="smtpPassword">SMTP Password</Label>
+                      <Input
+                        id="smtpPassword"
+                        type="password"
+                        value={settings.email.smtpPassword}
+                        onChange={(e) => handleSettingChange('email.smtpPassword', e.target.value)}
+                        className="w-full"
+                        placeholder="App password or API key"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* SendGrid Configuration */}
+                {settings.email.provider === 'sendgrid' && (
+                  <div className="space-y-2">
+                    <Label htmlFor="sendgridApiKey">SendGrid API Key</Label>
+                    <Input
+                      id="sendgridApiKey"
+                      type="password"
+                      value={settings.email.sendgridApiKey || ''}
+                      onChange={(e) => handleSettingChange('email.sendgridApiKey', e.target.value)}
+                      className="w-full"
+                      placeholder="SG.xxxxxxxxxxxxx"
+                    />
+                  </div>
+                )}
+
+                {/* AWS SES Configuration */}
+                {settings.email.provider === 'ses' && (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="sesAccessKeyId">AWS SES Access Key ID</Label>
+                      <Input
+                        id="sesAccessKeyId"
+                        value={settings.email.sesAccessKeyId || ''}
+                        onChange={(e) => handleSettingChange('email.sesAccessKeyId', e.target.value)}
+                        className="w-full"
+                        placeholder="AKIAIOSFODNN7EXAMPLE"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="sesSecretAccessKey">AWS SES Secret Access Key</Label>
+                      <Input
+                        id="sesSecretAccessKey"
+                        type="password"
+                        value={settings.email.sesSecretAccessKey || ''}
+                        onChange={(e) => handleSettingChange('email.sesSecretAccessKey', e.target.value)}
+                        className="w-full"
+                        placeholder="Your secret key"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="sesRegion">AWS SES Region</Label>
+                      <Input
+                        id="sesRegion"
+                        value={settings.email.sesRegion || 'us-east-1'}
+                        onChange={(e) => handleSettingChange('email.sesRegion', e.target.value)}
+                        className="w-full"
+                        placeholder="us-east-1"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Mailgun Configuration */}
+                {settings.email.provider === 'mailgun' && (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="mailgunApiKey">Mailgun API Key</Label>
+                      <Input
+                        id="mailgunApiKey"
+                        type="password"
+                        value={settings.email.mailgunApiKey || ''}
+                        onChange={(e) => handleSettingChange('email.mailgunApiKey', e.target.value)}
+                        className="w-full"
+                        placeholder="Your Mailgun API key"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="mailgunDomain">Mailgun Domain</Label>
+                      <Input
+                        id="mailgunDomain"
+                        value={settings.email.mailgunDomain || ''}
+                        onChange={(e) => handleSettingChange('email.mailgunDomain', e.target.value)}
+                        className="w-full"
+                        placeholder="mg.yourdomain.com"
+                      />
+                    </div>
+                  </>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="fromEmail">From Email</Label>
@@ -307,11 +476,27 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                 />
               </div>
 
-              <div className="flex space-x-2">
-                <Button onClick={handleTestEmail} variant="outline">
-                  <TestTube className="h-4 w-4 mr-2" />
-                  Test Email
-                </Button>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="email"
+                    placeholder="Enter email address to test"
+                    value={testEmail}
+                    onChange={(e) => setTestEmail(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button 
+                    onClick={handleTestEmail} 
+                    variant="outline"
+                    disabled={isTestingEmail || !testEmail}
+                  >
+                    <TestTube className="h-4 w-4 mr-2" />
+                    {isTestingEmail ? 'Sending...' : 'Test Email'}
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Enter an email address to test the current email configuration
+                </p>
               </div>
             </>
           )}
@@ -494,7 +679,7 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                       rows={3}
                     />
                     <p className="text-xs text-gray-500">
-                      Use variables like {`{businessCode}`, `{days}`, `{alertType}`, `{message}`} in your templates
+                      Use variables like {`{businessCode}`, `{days}`, `{alertType}`, `{message}`, `{clientName}`, `{receiptNumber}`, `{date}`, `{time}`, `{serviceName}`, `{staffName}`, `{businessName}`, `{businessPhone}`, `{items}`, `{subtotal}`, `{tax}`, `{discount}`, `{total}`, `{paymentMethod}`, `{notes}`} in your templates
                     </p>
                   </div>
                 </div>

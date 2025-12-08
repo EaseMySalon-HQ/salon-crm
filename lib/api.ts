@@ -86,6 +86,27 @@ apiClient.interceptors.response.use(
         errorInfo.statusText = String(error.response.statusText || '')
         errorInfo.data = error.response.data
         errorInfo.type = 'HTTP Error'
+        
+        // Extract error message from response data if available
+        if (error.response.data) {
+          if (typeof error.response.data === 'string') {
+            errorInfo.error = error.response.data
+            errorInfo.message = error.response.data
+          } else if (typeof error.response.data === 'object') {
+            // Try multiple possible error message fields
+            errorInfo.error = error.response.data.error || 
+                             error.response.data.message || 
+                             error.response.data.details ||
+                             JSON.stringify(error.response.data)
+            errorInfo.message = errorInfo.error
+          }
+        }
+        
+        // If still no error message, use status text
+        if (!errorInfo.error && errorInfo.statusText) {
+          errorInfo.error = errorInfo.statusText
+          errorInfo.message = errorInfo.statusText
+        }
       } else if (error?.request) {
         // Request was made but no response received (network error)
         errorInfo.type = 'Network Error'
@@ -103,12 +124,35 @@ apiClient.interceptors.response.use(
           console.warn(`⚠️ API 404: ${errorInfo.method} ${errorInfo.url} - ${errorInfo.message || 'Not Found'}`)
         }
       } else {
-        // For other errors, only log if there's meaningful information
-        if (errorInfo && Object.keys(errorInfo).length > 0) {
-          console.error('❌ API Response Interceptor: Error response:', errorInfo)
+        // Build error object with only defined, meaningful values
+        const errorDetails: Record<string, any> = {}
+        if (errorInfo.status !== undefined && errorInfo.status !== null) errorDetails.status = errorInfo.status
+        if (errorInfo.statusText && errorInfo.statusText.trim()) errorDetails.statusText = errorInfo.statusText
+        if (errorInfo.error && errorInfo.error.trim()) {
+          errorDetails.error = errorInfo.error
+        } else if (errorInfo.message && errorInfo.message !== 'Unknown error' && errorInfo.message.trim()) {
+          errorDetails.error = errorInfo.message
+        }
+        if (errorInfo.type && errorInfo.type !== 'Request Setup Error') errorDetails.type = errorInfo.type
+        if (errorInfo.url && errorInfo.url !== 'Unknown URL') errorDetails.url = errorInfo.url
+        if (errorInfo.method && errorInfo.method !== 'Unknown method') errorDetails.method = errorInfo.method
+        if (errorInfo.data !== undefined && errorInfo.data !== null) errorDetails.data = errorInfo.data
+        
+        // Only log if we have at least one meaningful property with a real value
+        const hasValidProperties = Object.keys(errorDetails).some(key => {
+          const value = errorDetails[key]
+          return value !== undefined && value !== null && value !== '' && 
+                 (typeof value !== 'string' || value.trim() !== '')
+        })
+        
+        if (hasValidProperties) {
+          console.error('❌ API Response Interceptor: Error response:', errorDetails)
         } else if (error?.response?.status) {
-          // Log at least the status if errorInfo is empty
+          // Fallback: log at least the status if errorInfo is empty
           console.error(`❌ API Response Interceptor: Error ${error.response.status}`, error.response.statusText || 'Unknown error')
+        } else if (error?.message) {
+          // Fallback: log the error message if available
+          console.error('❌ API Response Interceptor: Error:', error.message)
         }
       }
     } catch (logError) {
@@ -116,6 +160,12 @@ apiClient.interceptors.response.use(
       console.error('❌ API Response Interceptor: Failed to process error:', logError)
       console.error('❌ API Response Interceptor: Original error object:', error)
       console.error('❌ API Response Interceptor: Error keys:', error ? Object.keys(error) : 'null')
+    }
+    
+    // Ensure error response data is accessible
+    if (error?.response?.data) {
+      // Attach response data to error for easier access in catch blocks
+      error.responseData = error.response.data;
     }
     
     if (error.response?.status === 401) {
@@ -611,6 +661,54 @@ export class UsersAPI {
 }
 
 export class ReportsAPI {
+  static async exportProducts(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/products', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportSales(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/sales', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportServices(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/services', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportClients(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/clients', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportExpenses(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/expenses', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportCashRegistry(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/cash-registry', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
   static async getRevenueReport(params?: { startDate?: string; endDate?: string }): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/reports/revenue', { params })
     return response.data
@@ -901,6 +999,66 @@ export class GDPRAPI {
 
   static async updateConsent(userId: string, consent: any): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`/gdpr/consent/${userId}`, consent)
+    return response.data
+  }
+}
+
+export class EmailNotificationsAPI {
+  // Get email notification settings
+  static async getSettings(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/email-notifications/settings')
+    return response.data
+  }
+
+  // Check email service status
+  static async getEmailServiceStatus(): Promise<ApiResponse<{
+    initialized: boolean;
+    enabled: boolean;
+    provider: string | null;
+    hasConfig: boolean;
+  }>> {
+    const response = await apiClient.get('/email-service/status')
+    return response.data
+  }
+
+  // Update email notification settings
+  static async updateSettings(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put('/email-notifications/settings', data)
+    return response.data
+  }
+
+  // Get all staff with email notification preferences
+  static async getStaff(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/email-notifications/staff')
+    return response.data
+  }
+
+  // Update staff email notification preferences
+  static async updateStaffPreferences(staffId: string, data: {
+    enabled?: boolean;
+    preferences?: {
+      dailySummary?: boolean;
+      weeklySummary?: boolean;
+      appointmentAlerts?: boolean;
+      receiptAlerts?: boolean;
+      exportAlerts?: boolean;
+      systemAlerts?: boolean;
+      lowInventory?: boolean;
+    };
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/email-notifications/staff/${staffId}`, data)
+    return response.data
+  }
+
+  // Send test email
+  static async sendTestEmail(email: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/email-notifications/test', { email })
+    return response.data
+  }
+
+  // Manually trigger daily summary
+  static async sendDailySummary(): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/email-notifications/send-daily-summary')
     return response.data
   }
 }

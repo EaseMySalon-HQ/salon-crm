@@ -137,126 +137,61 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
     }
   )
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     try {
-      const doc = new jsPDF()
+      const { ReportsAPI } = await import('@/lib/api');
       
-      // Add title
-      doc.setFontSize(20)
-      doc.text("Products Inventory Report", 14, 22)
+      await ReportsAPI.exportProducts('pdf', {
+        productType: productTypeFilter !== 'all' ? productTypeFilter : undefined,
+        search: searchTerm || undefined
+      });
       
-      // Add generation date
-      doc.setFontSize(12)
-      doc.text(`Generated: ${format(new Date(), "MMM dd, yyyy 'at' h:mm a")}`, 14, 32)
-      
-      // Add summary stats
-      doc.setFontSize(14)
-      doc.text("Summary", 14, 50)
-      doc.setFontSize(10)
-      doc.text(`Total Products: ${products.length}`, 14, 60)
-      doc.text(`Filtered Products: ${filteredProducts.length}`, 14, 70)
-      doc.text(`Search Query: ${searchTerm || "All products"}`, 14, 80)
-      
-      let yPosition = 100
-      
-      if (filteredProducts.length === 0) {
-        doc.setFontSize(14)
-        doc.text("No product data available", 14, yPosition)
-      } else {
-        // Product table headers
-        const headers = [
-          "Product Name",
-          "Category",
-          "Product Type",
-          "Price",
-          "Stock",
-          "Supplier",
-          "Description",
-          "Status"
-        ]
-        
-        const data = filteredProducts.map(product => [
-          product.name,
-          product.category,
-          product.productType || "retail",
-          `₹${product.price.toFixed(2)}`,
-          product.stock || 0,
-          product.supplier || "N/A",
-          product.description ? (product.description.length > 30 ? product.description.substring(0, 30) + "..." : product.description) : "N/A",
-          product.status || "active"
-        ])
-        
-        autoTable(doc, {
-          head: [headers],
-          body: data,
-          startY: yPosition,
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [16, 185, 129] }
-        })
-      }
-      
-      // Save the PDF
-      const fileName = `products-report-${format(new Date(), "yyyy-MM-dd")}.pdf`
-      doc.save(fileName)
-      
-      toast({
-        title: "Export Successful",
-        description: `PDF exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("PDF export error:", error)
-      toast({
-        title: "Export Failed",
-        description: "Failed to export PDF. Please try again.",
-        variant: "destructive"
-      })
+      // Force toast to show by using requestAnimationFrame
+      requestAnimationFrame(() => {
+        toast({
+          title: "Export Successful",
+          description: "Products report has been generated and sent to admin email(s)",
+        });
+      });
+    } catch (error: any) {
+      console.error("PDF export error:", error);
+      const errorMessage = error?.response?.data?.error || error?.message || "Failed to export PDF. Please try again.";
+      requestAnimationFrame(() => {
+        toast({
+          title: "Export Failed",
+          description: errorMessage,
+          variant: "destructive"
+        });
+      });
     }
   }
 
-  const handleExportXLS = () => {
+  const handleExportXLS = async () => {
     try {
-      const data = filteredProducts.map(product => ({
-        "Product Name": product.name,
-        "Category": product.category,
-        "Product Type": product.productType || "retail",
-        "Price": product.price,
-        "Stock": product.stock || 0,
-        "Supplier": product.supplier || "",
-        "Description": product.description || "",
-        "Status": product.status || "active"
-      }))
+      const { ReportsAPI } = await import('@/lib/api');
       
-      // Create workbook and worksheet
-      const ws = XLSX.utils.json_to_sheet(data)
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, "Products Report")
+      await ReportsAPI.exportProducts('xlsx', {
+        productType: productTypeFilter !== 'all' ? productTypeFilter : undefined,
+        search: searchTerm || undefined
+      });
       
-      // Add summary sheet
-      const summaryData = [
-        { Metric: "Total Products", Value: products.length },
-        { Metric: "Filtered Products", Value: filteredProducts.length },
-        { Metric: "Search Query", Value: searchTerm || "All products" },
-        { Metric: "Generated Date", Value: format(new Date(), "MMM dd, yyyy 'at' h:mm a") }
-      ]
-      
-      const summaryWs = XLSX.utils.json_to_sheet(summaryData)
-      XLSX.utils.book_append_sheet(wb, summaryWs, "Summary")
-      
-      // Save the file
-      const fileName = `products-report-${format(new Date(), "yyyy-MM-dd")}.xlsx`
-      XLSX.writeFile(wb, fileName)
-      
-      toast({
-        title: "Export Successful",
-        description: `Excel file exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("XLS export error:", error)
-      toast({
-        title: "Export Failed",
-        description: "Failed to export Excel file. Please try again.",
-        variant: "destructive"
-      })
+      // Force toast to show by using requestAnimationFrame
+      requestAnimationFrame(() => {
+        toast({
+          title: "Export Successful",
+          description: "Products report has been generated and sent to admin email(s)",
+        });
+      });
+    } catch (error: any) {
+      console.error("Excel export error:", error);
+      const errorMessage = error?.response?.data?.error || error?.message || "Failed to export Excel file. Please try again.";
+      requestAnimationFrame(() => {
+        toast({
+          title: "Export Failed",
+          description: errorMessage,
+          variant: "destructive"
+        });
+      });
     }
   }
 

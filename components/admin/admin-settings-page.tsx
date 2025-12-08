@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -183,6 +183,12 @@ export function AdminSettingsPage() {
     })
   }
 
+  // Memoize the settings change handler to prevent unnecessary re-renders
+  const handleCategorySettingsChange = useCallback((newSettings: any) => {
+    setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
+    setHasUnsavedChanges(true)
+  }, [activeCategory])
+
   const renderSettingsContent = () => {
     const categorySettings = settings[activeCategory] || {}
     
@@ -190,58 +196,37 @@ export function AdminSettingsPage() {
       case "system":
         return <SystemSettings 
           settings={categorySettings} 
-          onSettingsChange={(newSettings) => {
-            setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
-            setHasUnsavedChanges(true)
-          }} 
+          onSettingsChange={handleCategorySettingsChange}
         />
       case "business":
         return <BusinessSettings 
           settings={categorySettings} 
-          onSettingsChange={(newSettings) => {
-            setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
-            setHasUnsavedChanges(true)
-          }} 
+          onSettingsChange={handleCategorySettingsChange}
         />
       case "users":
         return <UserSettings 
           settings={categorySettings} 
-          onSettingsChange={(newSettings) => {
-            setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
-            setHasUnsavedChanges(true)
-          }} 
+          onSettingsChange={handleCategorySettingsChange}
         />
       case "database":
         return <DatabaseSettings 
           settings={categorySettings} 
-          onSettingsChange={(newSettings) => {
-            setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
-            setHasUnsavedChanges(true)
-          }} 
+          onSettingsChange={handleCategorySettingsChange}
         />
       case "notifications":
         return <NotificationSettings 
           settings={categorySettings} 
-          onSettingsChange={(newSettings) => {
-            setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
-            setHasUnsavedChanges(true)
-          }} 
+          onSettingsChange={handleCategorySettingsChange}
         />
       case "api":
         return <APISettings 
           settings={categorySettings} 
-          onSettingsChange={(newSettings) => {
-            setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
-            setHasUnsavedChanges(true)
-          }} 
+          onSettingsChange={handleCategorySettingsChange}
         />
       default:
         return <SystemSettings 
           settings={categorySettings} 
-          onSettingsChange={(newSettings) => {
-            setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
-            setHasUnsavedChanges(true)
-          }} 
+          onSettingsChange={handleCategorySettingsChange}
         />
     }
   }

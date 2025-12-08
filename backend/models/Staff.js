@@ -69,6 +69,34 @@ const staffSchema = new mongoose.Schema({
   consentUpdatedAt: {
     type: Date,
     default: null
+  },
+  // Email Notification Preferences (Managed by Admin)
+  emailNotifications: {
+    enabled: {
+      type: Boolean,
+      default: false
+    },
+    preferences: {
+      dailySummary: { type: Boolean, default: false },
+      weeklySummary: { type: Boolean, default: false },
+      appointmentAlerts: { type: Boolean, default: false },
+      receiptAlerts: { type: Boolean, default: false },
+      exportAlerts: { type: Boolean, default: false },
+      systemAlerts: { type: Boolean, default: false },
+      lowInventory: { type: Boolean, default: false }
+    },
+    managedBy: {
+      type: String,
+      enum: ['admin'],
+      default: 'admin'
+    },
+    lastUpdatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    lastUpdatedAt: {
+      type: Date
+    }
   }
 }, {
   timestamps: true

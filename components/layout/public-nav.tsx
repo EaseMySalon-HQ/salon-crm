@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { useState, useEffect } from "react"
 import { usePathname } from "next/navigation"
 import { Menu, X, ArrowRight, Sparkles, Zap, TrendingUp, Users } from "lucide-react"
@@ -53,15 +54,14 @@ export function PublicNav() {
         <div className="flex items-center justify-between gap-6">
           {/* Logo */}
           <Link href="/dashboard" className="flex items-center gap-3 group">
-            <div className="relative">
-              <div className="h-11 w-11 rounded-2xl bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-purple-200/50 group-hover:shadow-xl group-hover:shadow-purple-300/50 transition-all group-hover:scale-105">
-                E
-              </div>
-              <div className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-emerald-400 border-2 border-white animate-pulse" />
-            </div>
-            <div className="flex flex-col leading-tight">
-              <span className="text-base font-bold text-slate-900 group-hover:text-[#7C3AED] transition-colors">Ease My Salon</span>
-            </div>
+            <Image
+              src="/images/logo-no-background.png"
+              alt="Ease My Salon"
+              width={150}
+              height={40}
+              className="object-contain transition-all duration-300 group-hover:scale-105"
+              priority
+            />
           </Link>
 
           {/* Desktop Navigation */}
@@ -129,8 +129,9 @@ export function PublicNav() {
                   const isActive = pathname === link.href
                   return (
                     <NavigationMenuItem key={link.href}>
-                      <Link href={link.href} legacyBehavior passHref>
-                        <NavigationMenuLink
+                      <NavigationMenuLink asChild>
+                        <Link
+                          href={link.href}
                           className={cn(
                             "text-sm font-semibold transition-colors px-3 py-2 rounded-lg hover:bg-purple-50/50",
                             isActive
@@ -139,8 +140,8 @@ export function PublicNav() {
                           )}
                         >
                           {link.label}
-                        </NavigationMenuLink>
-                      </Link>
+                        </Link>
+                      </NavigationMenuLink>
                     </NavigationMenuItem>
                   )
                 })}

@@ -177,126 +177,55 @@ export function ClientsListPage() {
     return () => window.removeEventListener('client-added', handleClientAdded)
   }, [])
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     try {
-      const doc = new jsPDF()
+      const { ReportsAPI } = await import('@/lib/api');
+      const result = await ReportsAPI.exportClients('pdf', {
+        search: searchQuery || undefined,
+        status: statsFilter !== 'all' ? statsFilter : undefined
+      });
       
-      // Add title
-      doc.setFontSize(20)
-      doc.text("Client Management Report", 14, 22)
-      
-      // Add generation date
-      doc.setFontSize(12)
-      doc.text(`Generated: ${format(new Date(), "MMM dd, yyyy 'at' h:mm a")}`, 14, 32)
-      
-      // Add summary stats
-      doc.setFontSize(14)
-      doc.text("Summary", 14, 50)
-      doc.setFontSize(10)
-      doc.text(`Total Customers: ${clients.length}`, 14, 60)
-      doc.text(`Filter: ${statsFilter === "all" ? "All" : statsFilter === "active" ? "Active" : "Inactive"}`, 14, 70)
-      doc.text(`Search Query: ${searchQuery || "All clients"}`, 14, 80)
-      
-      let yPosition = 110
-      
-      if (filteredClients.length === 0) {
-        doc.setFontSize(14)
-        doc.text("No client data available", 14, yPosition)
+      if (result && result.success) {
+        toast({
+          title: "Export Successful",
+          description: result.message || "Clients report has been generated and sent to admin email(s)",
+        });
       } else {
-        // Client table headers
-        const headers = [
-          "Name",
-          "Phone",
-          "Email",
-          "Status",
-          "Total Visits",
-          "Total Spent",
-          "Last Visit",
-          "Created Date"
-        ]
-        
-        const data = filteredClients.map(client => [
-          client.name,
-          client.phone || "N/A",
-          client.email || "N/A",
-          client.status || "active",
-          client.totalVisits || 0,
-          `₹${(client.totalSpent || 0).toFixed(2)}`,
-          client.lastVisit ? format(new Date(client.lastVisit), "MMM dd, yyyy") : "N/A",
-          client.createdAt ? format(new Date(client.createdAt), "MMM dd, yyyy") : "N/A"
-        ])
-        
-        autoTable(doc, {
-          head: [headers],
-          body: data,
-          startY: yPosition,
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [59, 130, 246] }
-        })
+        throw new Error(result?.error || 'Export failed');
       }
-      
-      // Save the PDF
-      const fileName = `clients-report-${format(new Date(), "yyyy-MM-dd")}.pdf`
-      doc.save(fileName)
-      
-      toast({
-        title: "Export Successful",
-        description: `PDF exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("PDF export error:", error)
+    } catch (error: any) {
+      console.error("PDF export error:", error);
       toast({
         title: "Export Failed",
-        description: "Failed to export PDF. Please try again.",
+        description: error?.message || "Failed to export PDF. Please try again.",
         variant: "destructive"
-      })
+      });
     }
   }
 
-  const handleExportXLS = () => {
+  const handleExportXLS = async () => {
     try {
-      const data = filteredClients.map(client => ({
-        "Name": client.name,
-        "Phone": client.phone || "",
-        "Email": client.email || "",
-        "Status": client.status || "active",
-        "Total Visits": client.totalVisits || 0,
-        "Total Spent": client.totalSpent || 0,
-        "Last Visit": client.lastVisit ? format(new Date(client.lastVisit), "MMM dd, yyyy") : "",
-        "Created Date": client.createdAt ? format(new Date(client.createdAt), "MMM dd, yyyy") : ""
-      }))
+      const { ReportsAPI } = await import('@/lib/api');
+      const result = await ReportsAPI.exportClients('xlsx', {
+        search: searchQuery || undefined,
+        status: statsFilter !== 'all' ? statsFilter : undefined
+      });
       
-      // Create workbook and worksheet
-      const ws = XLSX.utils.json_to_sheet(data)
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, "Clients Report")
-      
-      // Add summary sheet
-      const summaryData = [
-        { Metric: "Total Customers", Value: clients.length },
-        { Metric: "Filter", Value: statsFilter === "all" ? "All" : statsFilter === "active" ? "Active" : "Inactive" },
-        { Metric: "Search Query", Value: searchQuery || "All clients" },
-        { Metric: "Generated Date", Value: format(new Date(), "MMM dd, yyyy 'at' h:mm a") }
-      ]
-      
-      const summaryWs = XLSX.utils.json_to_sheet(summaryData)
-      XLSX.utils.book_append_sheet(wb, summaryWs, "Summary")
-      
-      // Save the file
-      const fileName = `clients-report-${format(new Date(), "yyyy-MM-dd")}.xlsx`
-      XLSX.writeFile(wb, fileName)
-      
-      toast({
-        title: "Export Successful",
-        description: `Excel file exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("XLS export error:", error)
+      if (result && result.success) {
+        toast({
+          title: "Export Successful",
+          description: result.message || "Clients report has been generated and sent to admin email(s)",
+        });
+      } else {
+        throw new Error(result?.error || 'Export failed');
+      }
+    } catch (error: any) {
+      console.error("XLS export error:", error);
       toast({
         title: "Export Failed",
-        description: "Failed to export Excel file. Please try again.",
+        description: error?.message || "Failed to export Excel file. Please try again.",
         variant: "destructive"
-      })
+      });
     }
   }
 

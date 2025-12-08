@@ -237,148 +237,139 @@ export function SalesReport() {
     }
   }, 0)
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     try {
-      const doc = new jsPDF()
+      const { ReportsAPI } = await import('@/lib/api');
       
-      // Add title
-      doc.setFontSize(20)
-      doc.text("Sales Report", 14, 22)
+      // Calculate date range from datePeriod
+      let dateFrom, dateTo;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
       
-      // Add date range
-      doc.setFontSize(12)
-      const dateRangeText = datePeriod === "all" 
-        ? "All Time"
-        : `${datePeriod.charAt(0).toUpperCase() + datePeriod.slice(1)}`
-      doc.text(`Period: ${dateRangeText}`, 14, 32)
-      
-      // Add filters
-      doc.text(`Payment Filter: ${paymentFilter === "all" ? "All Payments" : paymentFilter}`, 14, 42)
-      doc.text(`Status Filter: ${statusFilter === "all" ? "All Status" : statusFilter}`, 14, 52)
-      
-      // Add generation date
-      doc.text(`Generated: ${format(new Date(), "MMM dd, yyyy 'at' h:mm a")}`, 14, 62)
-      
-      // Add summary stats
-      doc.setFontSize(14)
-      doc.text("Summary", 14, 80)
-      doc.setFontSize(10)
-      doc.text(`Total Revenue: ₹${totalRevenue.toFixed(2)}`, 14, 90)
-      doc.text(`Completed Sales: ${completedSales}`, 14, 100)
-      doc.text(`Partial Sales: ${partialSales}`, 14, 110)
-      doc.text(`Unpaid Sales: ${unpaidSales}`, 14, 120)
-      doc.text(`Cash Collected: ₹${cashCollected.toFixed(2)}`, 14, 130)
-      doc.text(`Online Collected: ₹${onlineCashCollected.toFixed(2)}`, 14, 140)
-      
-      let yPosition = 160
-      
-      if (filteredSales.length === 0) {
-        doc.setFontSize(14)
-        doc.text("No sales data available", 14, yPosition)
-      } else {
-        // Sales table headers
-        const headers = [
-          "Bill No.",
-          "Customer",
-          "Date",
-          "Status",
-          "Payment Mode",
-          "Net Total",
-          "Tax Amount",
-          "Gross Total",
-          "Staff"
-        ]
-        
-        const data = filteredSales.map(sale => [
-          sale.billNo,
-          sale.customerName,
-          format(new Date(sale.date), "MMM dd, yyyy"),
-          sale.status,
-          getPaymentModeDisplay(sale),
-          `₹${getFilteredAmount(sale).toFixed(2)}`,
-          `₹${sale.taxAmount.toFixed(2)}`,
-          `₹${getFilteredGrossTotal(sale).toFixed(2)}`,
-          sale.staffName
-        ])
-        
-        autoTable(doc, {
-          head: [headers],
-          body: data,
-          startY: yPosition,
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [59, 130, 246] }
-        })
+      switch (datePeriod) {
+        case 'today':
+          dateFrom = new Date(today);
+          dateTo = new Date(today);
+          dateTo.setHours(23, 59, 59, 999);
+          break;
+        case 'yesterday':
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          dateFrom = yesterday;
+          dateTo = new Date(yesterday);
+          dateTo.setHours(23, 59, 59, 999);
+          break;
+        case 'last7days':
+          dateFrom = new Date(today);
+          dateFrom.setDate(dateFrom.getDate() - 7);
+          dateTo = new Date(today);
+          dateTo.setHours(23, 59, 59, 999);
+          break;
+        case 'last30days':
+          dateFrom = new Date(today);
+          dateFrom.setDate(dateFrom.getDate() - 30);
+          dateTo = new Date(today);
+          dateTo.setHours(23, 59, 59, 999);
+          break;
+        case 'currentMonth':
+          dateFrom = new Date(today.getFullYear(), today.getMonth(), 1);
+          dateTo = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
+          break;
+        default:
+          dateFrom = undefined;
+          dateTo = undefined;
       }
       
-      // Save the PDF
-      const fileName = `sales-report-${datePeriod}-${format(new Date(), "yyyy-MM-dd")}.pdf`
-      doc.save(fileName)
+      const result = await ReportsAPI.exportSales('pdf', {
+        dateFrom: dateFrom?.toISOString(),
+        dateTo: dateTo?.toISOString(),
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        paymentMode: paymentFilter !== 'all' ? paymentFilter : undefined
+      });
       
-      toast({
-        title: "Export Successful",
-        description: `PDF exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("PDF export error:", error)
+      if (result && result.success) {
+        toast({
+          title: "Export Successful",
+          description: result.message || "Sales report has been generated and sent to admin email(s)",
+        });
+      } else {
+        throw new Error(result?.error || 'Export failed');
+      }
+    } catch (error: any) {
+      console.error("PDF export error:", error);
       toast({
         title: "Export Failed",
-        description: "Failed to export PDF. Please try again.",
+        description: error?.message || "Failed to export PDF. Please try again.",
         variant: "destructive"
-      })
+      });
     }
   }
 
-  const handleExportXLS = () => {
+  const handleExportXLS = async () => {
     try {
-      const data = filteredSales.map(sale => ({
-        "Bill No.": sale.billNo,
-        "Customer Name": sale.customerName,
-        "Date": format(new Date(sale.date), "MMM dd, yyyy"),
-        "Status": sale.status,
-        "Payment Mode": getPaymentModeDisplay(sale),
-        "Net Total": getFilteredAmount(sale),
-        "Tax Amount": sale.taxAmount,
-        "Gross Total": getFilteredGrossTotal(sale),
-        "Staff Name": sale.staffName,
-        "Payment Details": sale.payments ? JSON.stringify(sale.payments) : ""
-      }))
+      const { ReportsAPI } = await import('@/lib/api');
       
-      // Create workbook and worksheet
-      const ws = XLSX.utils.json_to_sheet(data)
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, "Sales Report")
+      // Calculate date range from datePeriod
+      let dateFrom, dateTo;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
       
-      // Add summary sheet
-      const summaryData = [
-        { Metric: "Total Revenue", Value: totalRevenue },
-        { Metric: "Completed Sales", Value: completedSales },
-        { Metric: "Partial Sales", Value: partialSales },
-        { Metric: "Unpaid Sales", Value: unpaidSales },
-        { Metric: "Cash Collected", Value: cashCollected },
-        { Metric: "Online Collected", Value: onlineCashCollected },
-        { Metric: "Period", Value: datePeriod === "all" ? "All Time" : datePeriod },
-        { Metric: "Payment Filter", Value: paymentFilter === "all" ? "All Payments" : paymentFilter },
-        { Metric: "Status Filter", Value: statusFilter === "all" ? "All Status" : statusFilter }
-      ]
+      switch (datePeriod) {
+        case 'today':
+          dateFrom = new Date(today);
+          dateTo = new Date(today);
+          dateTo.setHours(23, 59, 59, 999);
+          break;
+        case 'yesterday':
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+          dateFrom = yesterday;
+          dateTo = new Date(yesterday);
+          dateTo.setHours(23, 59, 59, 999);
+          break;
+        case 'last7days':
+          dateFrom = new Date(today);
+          dateFrom.setDate(dateFrom.getDate() - 7);
+          dateTo = new Date(today);
+          dateTo.setHours(23, 59, 59, 999);
+          break;
+        case 'last30days':
+          dateFrom = new Date(today);
+          dateFrom.setDate(dateFrom.getDate() - 30);
+          dateTo = new Date(today);
+          dateTo.setHours(23, 59, 59, 999);
+          break;
+        case 'currentMonth':
+          dateFrom = new Date(today.getFullYear(), today.getMonth(), 1);
+          dateTo = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
+          break;
+        default:
+          dateFrom = undefined;
+          dateTo = undefined;
+      }
       
-      const summaryWs = XLSX.utils.json_to_sheet(summaryData)
-      XLSX.utils.book_append_sheet(wb, summaryWs, "Summary")
+      const result = await ReportsAPI.exportSales('xlsx', {
+        dateFrom: dateFrom?.toISOString(),
+        dateTo: dateTo?.toISOString(),
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        paymentMode: paymentFilter !== 'all' ? paymentFilter : undefined
+      });
       
-      // Save the file
-      const fileName = `sales-report-${datePeriod}-${format(new Date(), "yyyy-MM-dd")}.xlsx`
-      XLSX.writeFile(wb, fileName)
-      
-      toast({
-        title: "Export Successful",
-        description: `Excel file exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("XLS export error:", error)
+      if (result && result.success) {
+        toast({
+          title: "Export Successful",
+          description: result.message || "Sales report has been generated and sent to admin email(s)",
+        });
+      } else {
+        throw new Error(result?.error || 'Export failed');
+      }
+    } catch (error: any) {
+      console.error("XLS export error:", error);
       toast({
         title: "Export Failed",
-        description: "Failed to export Excel file. Please try again.",
+        description: error?.message || "Failed to export Excel file. Please try again.",
         variant: "destructive"
-      })
+      });
     }
   }
 

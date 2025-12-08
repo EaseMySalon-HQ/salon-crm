@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { usePathname } from "next/navigation"
 import { CalendarDays, Home, PieChart, Settings, Users, Receipt, Scissors, Package, Wrench, DollarSign, Banknote, ChevronLeft, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -121,22 +122,33 @@ export function SideNav() {
           )}
         </Button>
 
-        {/* Logo Section with Gradient */}
+        {/* Logo Section */}
         <div className={cn(
           "flex h-16 items-center border-b border-gray-200 mb-2 pb-4 transition-all",
           isCollapsed ? "justify-center px-2" : "px-2"
         )}>
           <Link href="/dashboard" className={cn(
-            "flex items-center font-bold text-lg group transition-all",
-            isCollapsed ? "justify-center" : "gap-3"
+            "flex items-center group transition-all",
+            isCollapsed ? "justify-center" : "justify-center gap-3 w-full"
           )}>
-            <div className="p-2.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-lg group-hover:shadow-xl transition-all duration-300 transform group-hover:scale-110">
-              <Scissors className="h-6 w-6 text-white" />
-            </div>
-            {!isCollapsed && (
-              <span className="bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent whitespace-nowrap">
-                Ease My Salon
-              </span>
+            {isCollapsed ? (
+              <Image
+                src="/images/monogram-circle-color-transparent.png"
+                alt="Ease My Salon"
+                width={40}
+                height={40}
+                className="object-contain transition-all duration-300 group-hover:scale-105"
+                priority
+              />
+            ) : (
+              <Image
+                src="/images/logo-no-background.png"
+                alt="Ease My Salon"
+                width={150}
+                height={40}
+                className="object-contain transition-all duration-300 group-hover:scale-105"
+                priority
+              />
             )}
           </Link>
         </div>

@@ -968,186 +968,59 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     onlineCashDifference: totalOnlineCashCollected - totalOnlineSales
   })
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     try {
-      const doc = new jsPDF()
+      const { ReportsAPI } = await import('@/lib/api');
       
-      // Add title
-      doc.setFontSize(20)
-      doc.text("Cash Registry Report", 14, 22)
+      const result = await ReportsAPI.exportCashRegistry('pdf', {
+        reportType: reportType,
+        dateFrom: dateRange?.from?.toISOString(),
+        dateTo: dateRange?.to?.toISOString()
+      });
       
-      // Add date range
-      doc.setFontSize(12)
-      const dateRangeText = dateRange?.from && dateRange?.to 
-        ? `${format(dateRange.from, "MMM dd, yyyy")} - ${format(dateRange.to, "MMM dd, yyyy")}`
-        : "All Time"
-      doc.text(`Period: ${dateRangeText}`, 14, 32)
-      
-      // Add report type
-      doc.text(`Report Type: ${reportType === "summary" ? "Summary Report" : "Activity Report"}`, 14, 42)
-      
-      // Add generation date
-      doc.text(`Generated: ${format(new Date(), "MMM dd, yyyy 'at' h:mm a")}`, 14, 52)
-      
-      let yPosition = 70
-      
-      if (reportType === "summary") {
-        // Summary Report
-        if (dailySummaries.length === 0) {
-          doc.setFontSize(14)
-          doc.text("No summary data available", 14, yPosition)
-        } else {
-          // Summary table headers
-          const headers = [
-            "Date",
-            "Opening Balance",
-            "Cash Collected",
-            "Online Sales",
-            "Expenses",
-            "Closing Balance",
-            "Cash Diff.",
-            "Online Diff.",
-            "Status"
-          ]
-          
-          const data = dailySummaries.map(summary => [
-            format(new Date(summary.date), "MMM dd, yyyy"),
-            `₹${summary.openingBalance.toFixed(2)}`,
-            `₹${summary.cashCollected.toFixed(2)}`,
-            `₹${summary.totalOnlineSales.toFixed(2)}`,
-            `₹${summary.expense.toFixed(2)}`,
-            `₹${summary.closingBalance.toFixed(2)}`,
-            `₹${summary.cashDifference.toFixed(2)}`,
-            `₹${summary.onlineCashDifference.toFixed(2)}`,
-            summary.isVerified ? "Verified" : "Pending"
-          ])
-          
-          autoTable(doc, {
-            head: [headers],
-            body: data,
-            startY: yPosition,
-            styles: { fontSize: 8 },
-            headStyles: { fillColor: [59, 130, 246] }
-          })
-        }
+      if (result && result.success) {
+        toast({
+          title: "Export Successful",
+          description: result.message || "Cash registry report has been generated and sent to admin email(s)",
+        });
       } else {
-        // Activity Report
-        if (filteredData.length === 0) {
-          doc.setFontSize(14)
-          doc.text("No activity data available", 14, yPosition)
-        } else {
-          // Activity table headers
-          const headers = [
-            "Date",
-            "Shift",
-            "Created By",
-            "Opening Balance",
-            "Closing Balance",
-            "Total Balance",
-            "Cash Sales",
-            "Online Sales",
-            "Expenses",
-            "Status"
-          ]
-          
-          const data = filteredData.map(entry => [
-            format(new Date(entry.date), "MMM dd, yyyy"),
-            entry.shiftType === "opening" ? "Opening" : "Closing",
-            entry.createdBy,
-            `₹${entry.openingBalance.toFixed(2)}`,
-            `₹${entry.closingBalance.toFixed(2)}`,
-            `₹${entry.totalBalance.toFixed(2)}`,
-            `₹${getEntryCashSales(entry.date).toFixed(2)}`,
-            `₹${getEntryOnlineSales(entry.date).toFixed(2)}`,
-            `₹${getEntryExpenses(entry.date).toFixed(2)}`,
-            entry.isVerified ? "Verified" : "Pending"
-          ])
-          
-          autoTable(doc, {
-            head: [headers],
-            body: data,
-            startY: yPosition,
-            styles: { fontSize: 8 },
-            headStyles: { fillColor: [59, 130, 246] }
-          })
-        }
+        throw new Error(result?.error || 'Export failed');
       }
-      
-      // Save the PDF
-      const fileName = `cash-registry-${reportType}-${format(new Date(), "yyyy-MM-dd")}.pdf`
-      doc.save(fileName)
-      
-    toast({
-        title: "Export Successful",
-        description: `PDF exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("PDF export error:", error)
+    } catch (error: any) {
+      console.error("PDF export error:", error);
       toast({
         title: "Export Failed",
-        description: "Failed to export PDF. Please try again.",
+        description: error?.message || "Failed to export PDF. Please try again.",
         variant: "destructive"
-      })
+      });
     }
   }
 
-  const handleExportXLS = () => {
+  const handleExportXLS = async () => {
     try {
-      let data: any[] = []
-      let fileName = ""
+      const { ReportsAPI } = await import('@/lib/api');
       
-      if (reportType === "summary") {
-        // Summary Report
-        data = dailySummaries.map(summary => ({
-          "Date": format(new Date(summary.date), "MMM dd, yyyy"),
-          "Opening Balance": summary.openingBalance,
-          "Cash Collected": summary.cashCollected,
-          "Online Sales": summary.totalOnlineSales,
-          "Expenses": summary.expense,
-          "Closing Balance": summary.closingBalance,
-          "Cash Difference": summary.cashDifference,
-          "Online Difference": summary.onlineCashDifference,
-          "Status": summary.isVerified ? "Verified" : "Pending",
-          "Cash Diff. Reason": summary.cashDifferenceReason || "",
-          "Online Diff. Reason": summary.onlineCashDifferenceReason || ""
-        }))
-        fileName = `cash-registry-summary-${format(new Date(), "yyyy-MM-dd")}.xlsx`
+      const result = await ReportsAPI.exportCashRegistry('xlsx', {
+        reportType: reportType,
+        dateFrom: dateRange?.from?.toISOString(),
+        dateTo: dateRange?.to?.toISOString()
+      });
+      
+      if (result && result.success) {
+        toast({
+          title: "Export Successful",
+          description: result.message || "Cash registry report has been generated and sent to admin email(s)",
+        });
       } else {
-        // Activity Report
-        data = filteredData.map(entry => ({
-          "Date": format(new Date(entry.date), "MMM dd, yyyy"),
-          "Shift": entry.shiftType === "opening" ? "Opening" : "Closing",
-          "Created By": entry.createdBy,
-          "Opening Balance": entry.openingBalance,
-          "Closing Balance": entry.closingBalance,
-          "Total Balance": entry.totalBalance,
-          "Cash Sales": getEntryCashSales(entry.date),
-          "Online Sales": getEntryOnlineSales(entry.date),
-          "Expenses": getEntryExpenses(entry.date),
-          "Status": entry.isVerified ? "Verified" : "Pending"
-        }))
-        fileName = `cash-registry-activity-${format(new Date(), "yyyy-MM-dd")}.xlsx`
+        throw new Error(result?.error || 'Export failed');
       }
-      
-      // Create workbook and worksheet
-      const ws = XLSX.utils.json_to_sheet(data)
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, "Cash Registry")
-      
-      // Save the file
-      XLSX.writeFile(wb, fileName)
-      
-      toast({
-        title: "Export Successful",
-        description: `Excel file exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("XLS export error:", error)
+    } catch (error: any) {
+      console.error("XLS export error:", error);
       toast({
         title: "Export Failed",
-        description: "Failed to export Excel file. Please try again.",
+        description: error?.message || "Failed to export Excel file. Please try again.",
         variant: "destructive"
-      })
+      });
     }
   }
 

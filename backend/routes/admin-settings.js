@@ -3,8 +3,8 @@ const router = express.Router();
 const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateAdmin } = require('../middleware/admin-auth');
 
-// Admin Settings Schema (in-memory for now, can be moved to database later)
-let adminSettings = {
+// Admin Settings Schema (in-memory fallback for backward compatibility)
+let adminSettingsFallback = {
   // System Configuration
   system: {
     inactiveBusiness: {
@@ -466,27 +466,33 @@ let adminSettings = {
 };
 
 // GET /api/admin/settings - Get all admin settings
-router.get('/', authenticateAdmin, (req, res) => {
+router.get('/', authenticateAdmin, setupMainDatabase, async (req, res) => {
   try {
+    const { AdminSettings } = req.mainModels;
+    const settings = await AdminSettings.getSettings();
     res.json({
       success: true,
-      data: adminSettings
+      data: settings.toObject()
     });
   } catch (error) {
     console.error('Error fetching admin settings:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch admin settings'
+    // Fallback to in-memory settings
+    res.json({
+      success: true,
+      data: adminSettingsFallback
     });
   }
 });
 
 // GET /api/admin/settings/:category - Get specific category settings
-router.get('/:category', authenticateAdmin, (req, res) => {
+router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) => {
   try {
     const { category } = req.params;
+    const { AdminSettings } = req.mainModels;
+    const settings = await AdminSettings.getSettings();
+    const settingsObj = settings.toObject();
     
-    if (!adminSettings[category]) {
+    if (!settingsObj[category]) {
       return res.status(404).json({
         success: false,
         error: 'Settings category not found'
@@ -495,10 +501,17 @@ router.get('/:category', authenticateAdmin, (req, res) => {
     
     res.json({
       success: true,
-      data: adminSettings[category]
+      data: settingsObj[category]
     });
   } catch (error) {
     console.error('Error fetching admin settings category:', error);
+    // Fallback to in-memory settings
+    if (adminSettingsFallback[req.params.category]) {
+      return res.json({
+        success: true,
+        data: adminSettingsFallback[req.params.category]
+      });
+    }
     res.status(500).json({
       success: false,
       error: 'Failed to fetch admin settings category'
@@ -507,40 +520,36 @@ router.get('/:category', authenticateAdmin, (req, res) => {
 });
 
 // PUT /api/admin/settings/:category - Update specific category settings
-router.put('/:category', authenticateAdmin, (req, res) => {
+router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) => {
   try {
     const { category } = req.params;
     const updates = req.body;
+    const { AdminSettings } = req.mainModels;
     
-    if (!adminSettings[category]) {
+    const settings = await AdminSettings.updateSettings(category, updates);
+    const settingsObj = settings.toObject();
+    
+    if (!settingsObj[category]) {
       return res.status(404).json({
         success: false,
         error: 'Settings category not found'
       });
     }
     
-    // Deep merge the updates
-    const deepMerge = (target, source) => {
-      for (const key in source) {
-        if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-          if (!target[key]) target[key] = {};
-          deepMerge(target[key], source[key]);
-        } else {
-          target[key] = source[key];
-        }
-      }
-    };
-    
-    deepMerge(adminSettings[category], updates);
-    
     // Apply settings changes to system if needed
     if (category === 'system') {
-      applySystemSettings(adminSettings.system);
+      applySystemSettings(settingsObj.system);
+    }
+    
+    // Reload email service if email settings changed
+    if (category === 'notifications' && updates.email) {
+      const emailService = require('../services/email-service');
+      await emailService.reloadConfiguration();
     }
     
     res.json({
       success: true,
-      data: adminSettings[category],
+      data: settingsObj[category],
       message: 'Settings updated successfully'
     });
   } catch (error) {
@@ -691,19 +700,89 @@ router.post('/import', authenticateAdmin, (req, res) => {
 });
 
 // POST /api/admin/settings/test/:type - Test specific settings
-router.post('/test/:type', authenticateAdmin, (req, res) => {
+const formatErrorMessage = (error) => {
+  if (!error) return 'Failed to send test email';
+  if (typeof error === 'string') return error;
+  if (error.message) return error.message;
+  if (error.error?.message) return error.error.message;
+  try {
+    return JSON.stringify(error);
+  } catch (jsonError) {
+    return 'Unknown error occurred';
+  }
+};
+
+router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res) => {
   try {
     const { type } = req.params;
-    const { settings } = req.body;
+    const { email, settings: testSettings } = req.body;
     
     switch (type) {
       case 'email':
         // Test email configuration
-        res.json({
-          success: true,
-          message: 'Email test sent successfully'
-        });
-        break;
+        if (!email) {
+          return res.status(400).json({
+            success: false,
+            error: 'Email address is required'
+          });
+        }
+
+        const emailService = require('../services/email-service');
+        
+        // If test settings provided, temporarily update email service
+        if (testSettings) {
+          // Temporarily update config for testing
+          const originalConfig = emailService.config;
+          const originalProvider = emailService.provider;
+          emailService.config = { ...emailService.config, ...testSettings };
+          emailService.provider = testSettings.provider || emailService.provider;
+          emailService.enabled = testSettings.enabled !== false;
+          
+          try {
+            await emailService.setupProvider();
+            const result = await emailService.testConnection(email);
+            
+            // Restore original config
+            emailService.config = originalConfig;
+            emailService.provider = originalProvider;
+            await emailService.setupProvider();
+            
+            if (result.success) {
+              return res.json({
+                success: true,
+                message: 'Test email sent successfully'
+              });
+            } else {
+              console.error('Test email failed:', result.error);
+              return res.status(500).json({
+                success: false,
+                error: formatErrorMessage(result.error)
+              });
+            }
+          } catch (error) {
+            // Restore original config on error
+            emailService.config = originalConfig;
+            emailService.provider = originalProvider;
+            await emailService.setupProvider();
+            throw error;
+          }
+        } else {
+          // Use current configuration
+          const result = await emailService.testConnection(email);
+          
+          if (result.success) {
+            return res.json({
+              success: true,
+              message: 'Test email sent successfully'
+            });
+          } else {
+            console.error('Test email failed:', result.error);
+            return res.status(500).json({
+              success: false,
+              error: formatErrorMessage(result.error)
+            });
+          }
+        }
         
       case 'sms':
         // Test SMS configuration
@@ -731,7 +810,7 @@ router.post('/test/:type', authenticateAdmin, (req, res) => {
     console.error('Error testing admin settings:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to test admin settings'
+      error: formatErrorMessage(error)
     });
   }
 });
