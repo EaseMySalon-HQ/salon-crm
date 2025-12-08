@@ -2679,6 +2679,20 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
       console.log('🔍 No stock change detected, skipping inventory transaction');
     }
 
+    // Check for low inventory after stock update
+    if (stockDifference !== 0) {
+      try {
+        const { checkAndSendLowInventoryAlerts } = require('./utils/low-inventory-checker');
+        // Check only the updated product if stock decreased
+        if (stockDifference < 0) {
+          await checkAndSendLowInventoryAlerts(req.user.branchId, req.params.id);
+        }
+      } catch (inventoryCheckError) {
+        console.error('❌ Error checking low inventory:', inventoryCheckError);
+        // Don't fail the product update if inventory check fails
+      }
+    }
+
     res.json({
       success: true,
       data: updatedProduct
@@ -3195,6 +3209,15 @@ app.post('/api/inventory/out', authenticateToken, setupBusinessDatabase, require
 
     await inventoryTransaction.save();
 
+    // Check for low inventory after stock deduction
+    try {
+      const { checkAndSendLowInventoryAlerts } = require('./utils/low-inventory-checker');
+      await checkAndSendLowInventoryAlerts(req.user.branchId, productId);
+    } catch (inventoryCheckError) {
+      console.error('❌ Error checking low inventory:', inventoryCheckError);
+      // Don't fail the deduction if inventory check fails
+    }
+
     res.json({
       success: true,
       data: {
@@ -3205,9 +3228,19 @@ app.post('/api/inventory/out', authenticateToken, setupBusinessDatabase, require
     });
   } catch (error) {
     console.error('Error deducting product:', error);
+    
+    // Return more detailed error message for validation errors
+    let errorMessage = 'Internal server error';
+    if (error.name === 'ValidationError') {
+      errorMessage = error.message || 'Validation error';
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+    
     res.status(500).json({
       success: false,
-      error: 'Internal server error'
+      error: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -4141,39 +4174,19 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         const { Staff, Client } = req.businessModels;
 
         // Check if business has enabled appointment notifications
-        // Default to enabled if settings don't exist or if not explicitly disabled
-        // Note: Schema defaults to false, but we want to default to enabled for better UX
-        // Only disable if explicitly set to false AND recipient list exists (meaning it was configured)
-        const hasRecipientList = emailSettings?.appointmentNotifications?.recipientStaffIds?.length > 0;
-        const explicitlyDisabled = emailSettings?.appointmentNotifications?.enabled === false;
+        // Strictly respect the database setting - if enabled is false, don't send
+        const appointmentNotificationsEnabled = emailSettings?.appointmentNotifications?.enabled === true;
         
-        // If settings don't exist, or if enabled is not explicitly false, or if there's no recipient list (meaning it wasn't configured)
-        // then default to enabled
-        const appointmentNotificationsEnabled = !emailSettings || 
-          !emailSettings?.appointmentNotifications ||
-          (!explicitlyDisabled || !hasRecipientList);
-        
-        console.log(`📧 Appointment notifications enabled: ${appointmentNotificationsEnabled}, emailSettings exists: ${!!emailSettings}`);
-        console.log(`📧 Appointment settings details:`, {
+        console.log(`📧 Appointment notifications enabled: ${appointmentNotificationsEnabled}`, {
           enabled: emailSettings?.appointmentNotifications?.enabled,
-          explicitlyDisabled,
-          hasRecipientList,
           newAppointments: emailSettings?.appointmentNotifications?.newAppointments
         });
         
         if (appointmentNotificationsEnabled) {
         // Send confirmation to client if email exists
-        // Default to enabled unless explicitly disabled AND recipient list exists (meaning it was configured)
-        const explicitlyDisabledNewAppointments = emailSettings?.appointmentNotifications?.newAppointments === false;
-        const sendNewAppointments = !emailSettings || 
-          !emailSettings?.appointmentNotifications ||
-          (!explicitlyDisabledNewAppointments || !hasRecipientList);
+        // Check if new appointments are enabled
+        const sendNewAppointments = emailSettings?.appointmentNotifications?.newAppointments === true;
         console.log(`📧 Send new appointments to clients: ${sendNewAppointments}`);
-        console.log(`📧 Client notification settings:`, {
-          emailSettingsExists: !!emailSettings,
-          newAppointments: emailSettings?.appointmentNotifications?.newAppointments,
-          sendNewAppointments
-        });
         
         if (sendNewAppointments) {
           console.log(`📧 Processing ${createdAppointments.length} appointment(s) for client emails`);
@@ -4596,15 +4609,18 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         const business = await Business.findById(req.user.branchId);
         const emailSettings = business?.settings?.emailNotificationSettings;
         
-        // Check if business has enabled receipt notifications (default to true if not set)
-        // If emailSettings doesn't exist, default to sending emails
-        const receiptNotificationsEnabled = !emailSettings || emailSettings?.receiptNotifications?.enabled !== false;
+        // Check if business has enabled receipt notifications
+        // Strictly respect the database setting - if enabled is false, don't send
+        const receiptNotificationsEnabled = emailSettings?.receiptNotifications?.enabled === true;
         
-        console.log(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}, emailSettings exists: ${!!emailSettings}`);
+        console.log(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}`, {
+          enabled: emailSettings?.receiptNotifications?.enabled,
+          sendToClients: emailSettings?.receiptNotifications?.sendToClients
+        });
         
         if (receiptNotificationsEnabled) {
-          // Send receipt to client if email exists (default to true if not set)
-          const sendToClients = !emailSettings || emailSettings?.receiptNotifications?.sendToClients !== false;
+          // Send receipt to client if enabled
+          const sendToClients = emailSettings?.receiptNotifications?.sendToClients === true;
           if (sendToClients) {
             const client = await Client.findById(clientId);
             if (client?.email) {
@@ -5215,6 +5231,9 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       await markAppointmentCompleted(Appointment, sale.appointmentId);
     }
 
+    // Track products that had stock updated for low inventory check
+    const updatedProductIds = new Set();
+    
     // Create inventory transactions for product items
     if (saleData.items && Array.isArray(saleData.items)) {
       for (const item of saleData.items) {
@@ -5249,6 +5268,9 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
               
               await inventoryTransaction.save();
               
+              // Track product for low inventory check
+              updatedProductIds.add(item.productId.toString());
+              
               console.log(`✅ Inventory transaction created for product ${item.name}: ${item.quantity} units sold`);
             }
           } catch (inventoryError) {
@@ -5256,6 +5278,20 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
             // Don't fail the sale if inventory tracking fails
           }
         }
+      }
+    }
+    
+    // Check for low inventory after sales (for all products that had stock updated)
+    if (updatedProductIds.size > 0) {
+      try {
+        const { checkAndSendLowInventoryAlerts } = require('./utils/low-inventory-checker');
+        // Check all products that had stock updated
+        for (const productId of updatedProductIds) {
+          await checkAndSendLowInventoryAlerts(req.user.branchId, productId);
+        }
+      } catch (inventoryCheckError) {
+        console.error('❌ Error checking low inventory:', inventoryCheckError);
+        // Don't fail the sale if inventory check fails
       }
     }
 
@@ -5313,10 +5349,8 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         const emailSettings = business?.settings?.emailNotificationSettings;
         
         // Check if business has enabled receipt notifications
-        // Always default to true for receipt notifications (opt-out behavior)
-        // Receipt notifications are enabled by default unless explicitly disabled
-        // For now, we'll always enable receipt notifications to ensure emails are sent
-        const receiptNotificationsEnabled = true; // Always enable receipt notifications
+        // Strictly respect the database setting - if enabled is false, don't send
+        const receiptNotificationsEnabled = emailSettings?.receiptNotifications?.enabled === true;
         
         emailStatus.debug.receiptNotificationsEnabled = receiptNotificationsEnabled;
         emailStatus.debug.hasCustomerEmail = !!sale.customerEmail;
@@ -6956,6 +6990,158 @@ app.get('/api/inventory-transactions', authenticateToken, setupBusinessDatabase,
   }
 });
 
+// ==================== Report Export Endpoints ====================
+
+// Export products report (emailed to admin)
+app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    
+    const { exportProductsReport } = require('./utils/report-exporter');
+    const result = await exportProductsReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    
+    res.json({
+      success: true,
+      message: result.message || 'Products report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting products report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export products report'
+    });
+  }
+});
+
+// Export sales report (emailed to admin)
+app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    
+    const { exportSalesReport } = require('./utils/report-exporter');
+    const result = await exportSalesReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    
+    res.json({
+      success: true,
+      message: result.message || 'Sales report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting sales report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export sales report'
+    });
+  }
+});
+
+// Export services report (emailed to admin)
+app.post('/api/reports/export/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    
+    const { exportServicesReport } = require('./utils/report-exporter');
+    const result = await exportServicesReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    
+    res.json({
+      success: true,
+      message: result.message || 'Services report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting services report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export services report'
+    });
+  }
+});
+
+// Export clients report (emailed to admin)
+app.post('/api/reports/export/clients', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    
+    const { exportClientsReport } = require('./utils/report-exporter');
+    const result = await exportClientsReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    
+    res.json({
+      success: true,
+      message: result.message || 'Clients report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting clients report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export clients report'
+    });
+  }
+});
+
+// Export expense report (emailed to admin)
+app.post('/api/reports/export/expenses', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    
+    const { exportExpenseReport } = require('./utils/report-exporter');
+    const result = await exportExpenseReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    
+    res.json({
+      success: true,
+      message: result.message || 'Expense report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting expense report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export expense report'
+    });
+  }
+});
+
+// Export cash registry report (emailed to admin)
+app.post('/api/reports/export/cash-registry', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    
+    const { exportCashRegistryReport } = require('./utils/report-exporter');
+    const result = await exportCashRegistryReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    
+    res.json({
+      success: true,
+      message: result.message || 'Cash registry report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting cash registry report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export cash registry report'
+    });
+  }
+});
+
 // ==================== GDPR Compliance Endpoints ====================
 
 // Export user data (GDPR Right to Data Portability)
@@ -7068,9 +7254,142 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
       }
     }
 
+    // Generate export file and send via email to admin
+    try {
+      const emailService = require('./services/email-service');
+      
+      // Ensure email service is initialized
+      if (!emailService.initialized) {
+        await emailService.initialize();
+      }
+      
+      // Check if email service is enabled
+      if (emailService.enabled) {
+        // Get Business from main database
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        const business = await Business.findById(req.user.branchId);
+        const emailSettings = business?.settings?.emailNotificationSettings;
+        
+        // Generate JSON file from export data
+        const exportFileName = `export-${user.name || user.email || userId}-${new Date().toISOString().split('T')[0]}.json`;
+        const exportFileContent = JSON.stringify(exportData, null, 2);
+        const exportFileBuffer = Buffer.from(exportFileContent, 'utf-8');
+        
+        // Get admin users to send export to
+        const User = mainConnection.model('User', require('./models/User').schema);
+        const adminUsers = await User.find({
+          branchId: req.user.branchId,
+          role: 'admin',
+          email: { $exists: true, $ne: '' }
+        }).lean();
+        
+        // If no admin users found, try to get the requesting user if they're admin
+        let recipients = [...adminUsers];
+        if (recipients.length === 0 && req.user.role === 'admin' && req.user.email) {
+          recipients.push({
+            email: req.user.email,
+            name: req.user.name || `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email,
+            role: 'admin'
+          });
+        }
+        
+        // Also check export notification settings for additional recipients
+        const exportNotificationsEnabled = emailSettings?.exportNotifications?.enabled === true;
+        if (exportNotificationsEnabled) {
+          const { Staff } = req.businessModels;
+          const recipientStaffIds = emailSettings.exportNotifications.recipientStaffIds || [];
+          let staffRecipients = [];
+          
+          if (recipientStaffIds.length > 0) {
+            staffRecipients = await Staff.find({
+              _id: { $in: recipientStaffIds },
+              'emailNotifications.enabled': true,
+              'emailNotifications.preferences.exportAlerts': true,
+              email: { $exists: true, $ne: '' }
+            }).lean();
+          } else {
+            staffRecipients = await Staff.find({
+              branchId: req.user.branchId,
+              'emailNotifications.enabled': true,
+              'emailNotifications.preferences.exportAlerts': true,
+              email: { $exists: true, $ne: '' }
+            }).lean();
+          }
+          
+          // Add staff recipients (avoid duplicates)
+          for (const staff of staffRecipients) {
+            if (!recipients.some(r => r.email === staff.email)) {
+              recipients.push({
+                email: staff.email,
+                name: staff.name || staff.email,
+                role: 'staff'
+              });
+            }
+          }
+        }
+        
+        if (recipients.length === 0) {
+          console.log(`⚠️ No admin email found to send export to`);
+          return res.status(400).json({
+            success: false,
+            error: 'No admin email found. Please ensure at least one admin user has an email address configured.'
+          });
+        }
+        
+        // Prepare attachment
+        const attachment = {
+          filename: exportFileName,
+          content: exportFileBuffer.toString('base64')
+        };
+        
+        // Send export file to all recipients
+        for (const recipient of recipients) {
+          try {
+            console.log(`📧 Sending export file to ${recipient.role}: ${recipient.email}`);
+            await emailService.sendExportReady({
+              to: recipient.email,
+              exportType: 'User Data Export',
+              businessName: business?.name || 'Business',
+              attachments: [attachment]
+            });
+            console.log(`✅ Export file sent to ${recipient.email}`);
+          } catch (emailError) {
+            console.error(`❌ Error sending export file to ${recipient.email}:`, emailError);
+            console.error(`❌ Error details:`, {
+              message: emailError.message,
+              stack: emailError.stack
+            });
+          }
+        }
+      } else {
+        console.log(`⚠️ Email service is disabled, cannot send export file`);
+        return res.status(400).json({
+          success: false,
+          error: 'Email service is disabled. Please enable email service to receive export files.'
+        });
+      }
+    } catch (emailError) {
+      console.error('Error sending export file:', emailError);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to send export file via email. Please try again later.'
+      });
+    }
+
+    // Return success message instead of data
     res.json({
       success: true,
-      data: exportData
+      message: 'Export file has been generated and sent to admin email(s)',
+      data: {
+        exportDate: exportData.exportDate,
+        user: {
+          id: exportData.user.id,
+          name: exportData.user.name,
+          email: exportData.user.email
+        }
+      }
     })
   } catch (error) {
     console.error('Error exporting user data:', error)

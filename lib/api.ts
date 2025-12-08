@@ -86,6 +86,27 @@ apiClient.interceptors.response.use(
         errorInfo.statusText = String(error.response.statusText || '')
         errorInfo.data = error.response.data
         errorInfo.type = 'HTTP Error'
+        
+        // Extract error message from response data if available
+        if (error.response.data) {
+          if (typeof error.response.data === 'string') {
+            errorInfo.error = error.response.data
+            errorInfo.message = error.response.data
+          } else if (typeof error.response.data === 'object') {
+            // Try multiple possible error message fields
+            errorInfo.error = error.response.data.error || 
+                             error.response.data.message || 
+                             error.response.data.details ||
+                             JSON.stringify(error.response.data)
+            errorInfo.message = errorInfo.error
+          }
+        }
+        
+        // If still no error message, use status text
+        if (!errorInfo.error && errorInfo.statusText) {
+          errorInfo.error = errorInfo.statusText
+          errorInfo.message = errorInfo.statusText
+        }
       } else if (error?.request) {
         // Request was made but no response received (network error)
         errorInfo.type = 'Network Error'
@@ -103,9 +124,18 @@ apiClient.interceptors.response.use(
           console.warn(`⚠️ API 404: ${errorInfo.method} ${errorInfo.url} - ${errorInfo.message || 'Not Found'}`)
         }
       } else {
-        // For other errors, only log if there's meaningful information
-        if (errorInfo && Object.keys(errorInfo).length > 0) {
-          console.error('❌ API Response Interceptor: Error response:', errorInfo)
+        // Always log errors with meaningful information
+        const hasMeaningfulInfo = errorInfo.status || errorInfo.error || errorInfo.message !== 'Unknown error' || errorInfo.type !== 'Request Setup Error'
+        if (hasMeaningfulInfo) {
+          console.error('❌ API Response Interceptor: Error response:', {
+            status: errorInfo.status,
+            statusText: errorInfo.statusText,
+            error: errorInfo.error || errorInfo.message,
+            type: errorInfo.type,
+            url: errorInfo.url,
+            method: errorInfo.method,
+            data: errorInfo.data
+          })
         } else if (error?.response?.status) {
           // Log at least the status if errorInfo is empty
           console.error(`❌ API Response Interceptor: Error ${error.response.status}`, error.response.statusText || 'Unknown error')
@@ -116,6 +146,12 @@ apiClient.interceptors.response.use(
       console.error('❌ API Response Interceptor: Failed to process error:', logError)
       console.error('❌ API Response Interceptor: Original error object:', error)
       console.error('❌ API Response Interceptor: Error keys:', error ? Object.keys(error) : 'null')
+    }
+    
+    // Ensure error response data is accessible
+    if (error?.response?.data) {
+      // Attach response data to error for easier access in catch blocks
+      error.responseData = error.response.data;
     }
     
     if (error.response?.status === 401) {
@@ -611,6 +647,54 @@ export class UsersAPI {
 }
 
 export class ReportsAPI {
+  static async exportProducts(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/products', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportSales(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/sales', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportServices(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/services', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportClients(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/clients', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportExpenses(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/expenses', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportCashRegistry(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/cash-registry', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
   static async getRevenueReport(params?: { startDate?: string; endDate?: string }): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/reports/revenue', { params })
     return response.data

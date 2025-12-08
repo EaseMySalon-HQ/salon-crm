@@ -332,20 +332,21 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
         const Business = mainConnection.model('Business', require('../models/Business').schema);
         const business = await Business.findById(req.user.branchId);
         
+        // Admin user preferences (always enabled, but preferences can be set)
+        // Define outside if block so it's available for the return statement
+        const adminPreferences = {
+          dailySummary: req.body.preferences?.dailySummary !== false,
+          weeklySummary: req.body.preferences?.weeklySummary !== false,
+          appointmentAlerts: req.body.preferences?.appointmentAlerts !== false,
+          receiptAlerts: req.body.preferences?.receiptAlerts !== false,
+          exportAlerts: req.body.preferences?.exportAlerts !== false,
+          systemAlerts: req.body.preferences?.systemAlerts !== false,
+          lowInventory: req.body.preferences?.lowInventory !== false
+        };
+        
         if (business) {
           // Get all staff to build recipient lists
           const allStaff = await Staff.find({ branchId: req.user.branchId }).lean();
-          
-          // Admin user preferences (always enabled, but preferences can be set)
-          const adminPreferences = {
-            dailySummary: req.body.preferences?.dailySummary !== false,
-            weeklySummary: req.body.preferences?.weeklySummary !== false,
-            appointmentAlerts: req.body.preferences?.appointmentAlerts !== false,
-            receiptAlerts: req.body.preferences?.receiptAlerts !== false,
-            exportAlerts: req.body.preferences?.exportAlerts !== false,
-            systemAlerts: req.body.preferences?.systemAlerts !== false,
-            lowInventory: req.body.preferences?.lowInventory !== false
-          };
           
           // Build recipient lists including admin user if preferences are enabled
           const dailySummaryRecipients = allStaff
@@ -667,7 +668,7 @@ router.post('/test', authenticateToken, setupBusinessDatabase, requireAdminOrMan
 router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBusinessDatabase, requireAdminOrManager, async (req, res) => {
   try {
     const { Business } = req.mainModels;
-    const { Staff, Receipt, Appointment, Client } = req.businessModels;
+    const { Staff, Receipt, Sale, Appointment, Client } = req.businessModels;
     const business = await Business.findById(req.user.branchId);
 
     if (!business) {
@@ -690,19 +691,30 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
+    const todayDateString = today.toISOString().split('T')[0];
 
-    // Get today's data
+    // Get today's sales (from Sale model - this is the primary sales data)
+    const sales = await Sale.find({
+      branchId: req.user.branchId,
+      date: {
+        $gte: today,
+        $lt: tomorrow
+      },
+      status: { $nin: ['cancelled', 'Cancelled'] } // Exclude cancelled sales (case variations)
+    }).lean();
+
+    // Also get receipts for backward compatibility (if any exist)
     const receipts = await Receipt.find({
       branchId: req.user.branchId,
       date: {
-        $gte: today.toISOString().split('T')[0],
+        $gte: todayDateString,
         $lt: tomorrow.toISOString().split('T')[0]
       }
     }).lean();
 
     const appointments = await Appointment.find({
       branchId: req.user.branchId,
-      date: today.toISOString().split('T')[0]
+      date: todayDateString
     }).lean();
 
     const newClients = await Client.find({
@@ -710,9 +722,16 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
       createdAt: { $gte: today }
     }).lean();
 
-    // Calculate summary
-    const totalRevenue = receipts.reduce((sum, r) => sum + (r.total || 0), 0);
-    const totalSales = receipts.length;
+    // Calculate summary from Sales (primary) and Receipts (backup)
+    const salesRevenue = sales.reduce((sum, s) => {
+      const amount = s.grossTotal || s.totalAmount || s.netTotal || 0;
+      return sum + amount;
+    }, 0);
+    
+    const receiptsRevenue = receipts.reduce((sum, r) => sum + (r.total || 0), 0);
+    
+    const totalRevenue = salesRevenue + receiptsRevenue;
+    const totalSales = sales.length + receipts.length;
     const appointmentCount = appointments.length;
     const newClientsCount = newClients.length;
 

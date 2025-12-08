@@ -266,10 +266,26 @@ class EmailService {
       subject,
       html,
       text,
-      attachments: attachments.length > 0 ? attachments.map(att => ({
-        filename: att.filename,
-        content: Buffer.from(att.content).toString('base64')
-      })) : undefined,
+      attachments: attachments.length > 0 ? attachments.map(att => {
+        // att.content is now a Buffer from report exporter
+        // Resend API expects base64 string for attachments
+        let content;
+        if (Buffer.isBuffer(att.content)) {
+          // Convert Buffer to base64 string for Resend
+          content = att.content.toString('base64');
+        } else if (typeof att.content === 'string') {
+          // If it's already a base64 string (backward compatibility), use it directly
+          content = att.content;
+        } else {
+          // Fallback: try to create buffer and encode
+          content = Buffer.from(att.content).toString('base64');
+        }
+        
+        return {
+          filename: att.filename,
+          content: content
+        };
+      }) : undefined,
     });
 
     if (error) {
@@ -293,10 +309,23 @@ class EmailService {
       subject,
       html,
       text,
-      attachments: attachments.map(att => ({
-        filename: att.filename,
-        content: Buffer.from(att.content, 'base64')
-      }))
+      attachments: attachments.map(att => {
+        // att.content is now a Buffer from report exporter
+        // SMTP (nodemailer) expects Buffer or stream
+        let content;
+        if (Buffer.isBuffer(att.content)) {
+          content = att.content;
+        } else if (typeof att.content === 'string') {
+          // Backward compatibility: if it's a base64 string, decode it
+          content = Buffer.from(att.content, 'base64');
+        } else {
+          content = Buffer.from(att.content);
+        }
+        return {
+          filename: att.filename,
+          content: content
+        };
+      })
     };
 
     const info = await this.transporter.sendMail(mailOptions);
@@ -317,12 +346,25 @@ class EmailService {
       subject,
       html,
       text,
-      attachments: attachments.map(att => ({
-        content: Buffer.from(att.content, 'base64').toString('base64'),
-        filename: att.filename,
-        type: 'application/octet-stream',
-        disposition: 'attachment'
-      }))
+      attachments: attachments.map(att => {
+        // att.content is now a Buffer from report exporter
+        // SendGrid expects base64 string
+        let content;
+        if (Buffer.isBuffer(att.content)) {
+          content = att.content.toString('base64');
+        } else if (typeof att.content === 'string') {
+          // Backward compatibility: if it's already base64, use it
+          content = att.content;
+        } else {
+          content = Buffer.from(att.content).toString('base64');
+        }
+        return {
+          content: content,
+          filename: att.filename,
+          type: 'application/octet-stream',
+          disposition: 'attachment'
+        };
+      })
     };
 
     const [response] = await this.sendgrid.send(msg);
@@ -379,10 +421,23 @@ class EmailService {
     };
 
     if (attachments.length > 0) {
-      messageData.attachment = attachments.map(att => ({
-        filename: att.filename,
-        data: Buffer.from(att.content, 'base64')
-      }));
+      messageData.attachment = attachments.map(att => {
+        // att.content is now a Buffer from report exporter
+        // Mailgun expects Buffer
+        let data;
+        if (Buffer.isBuffer(att.content)) {
+          data = att.content;
+        } else if (typeof att.content === 'string') {
+          // Backward compatibility: if it's a base64 string, decode it
+          data = Buffer.from(att.content, 'base64');
+        } else {
+          data = Buffer.from(att.content);
+        }
+        return {
+          filename: att.filename,
+          data: data
+        };
+      });
     }
 
     const result = await this.mailgun.messages.create(this.mailgunDomain, messageData);
@@ -611,11 +666,12 @@ class EmailService {
   /**
    * Send export ready notification
    */
-  async sendExportReady({ to, exportType, downloadUrl, businessName }) {
+  async sendExportReady({ to, exportType, downloadUrl, businessName, attachments = [] }) {
     const { html, text } = emailTemplates.exportReady({
       exportType,
       downloadUrl,
       businessName,
+      hasAttachment: attachments.length > 0,
     });
 
     return this.sendEmail({
@@ -623,6 +679,7 @@ class EmailService {
       subject: `Your ${exportType} Export is Ready`,
       html,
       text,
+      attachments,
     });
   }
 

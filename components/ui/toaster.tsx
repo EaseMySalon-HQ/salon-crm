@@ -6,6 +6,11 @@ import { useToast } from "@/components/ui/use-toast"
 export function Toaster() {
   const { toasts } = useToast()
 
+  // Debug: Log toasts to see if they're being received
+  if (toasts.length > 0) {
+    console.log('🔔 Toaster: Received toasts:', toasts.length, toasts);
+  }
+
   return (
     <ToastProvider>
       {toasts.map(({ id, title, description, action, ...props }) => (

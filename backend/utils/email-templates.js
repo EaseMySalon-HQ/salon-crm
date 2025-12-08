@@ -488,7 +488,7 @@ ${businessPhone ? `Phone: ${businessPhone}\n` : ''}
   return { html, text };
 }
 
-function exportReady({ exportType, downloadUrl, businessName }) {
+function exportReady({ exportType, downloadUrl, businessName, hasAttachment = false }) {
   const html = `
     <!DOCTYPE html>
     <html>
@@ -501,6 +501,7 @@ function exportReady({ exportType, downloadUrl, businessName }) {
         .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
         .button { display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
         .footer { text-align: center; margin-top: 30px; color: #999; font-size: 12px; }
+        .attachment-notice { background: #e0e7ff; border-left: 4px solid #667eea; padding: 15px; margin: 20px 0; border-radius: 5px; }
       </style>
     </head>
     <body>
@@ -510,16 +511,21 @@ function exportReady({ exportType, downloadUrl, businessName }) {
         </div>
         <div class="content">
           <p>Hello,</p>
+          ${hasAttachment ? `
+          <p>Your ${exportType} export has been generated and is attached to this email.</p>
+          <div class="attachment-notice">
+            <p><strong>📎 File Attached:</strong> Please check the attachment below to download your export file.</p>
+          </div>
+          ` : `
           <p>Your ${exportType} export is ready for download.</p>
-          
           <div style="text-align: center;">
             <a href="${downloadUrl}" class="button">Download ${exportType}</a>
           </div>
-          
           <p><strong>Note:</strong> This link will expire in 7 days.</p>
+          `}
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from ${businessName || 'Ease My Salon CRM'}</p>
           </div>
         </div>
       </div>
@@ -532,11 +538,16 @@ Export Ready
 
 Hello,
 
-Your ${exportType} export is ready for download.
+${hasAttachment ? 
+  `Your ${exportType} export has been generated and is attached to this email. Please check the attachment to download your export file.` :
+  `Your ${exportType} export is ready for download.
 
 Download Link: ${downloadUrl}
 
-Note: This link will expire in 7 days.
+Note: This link will expire in 7 days.`
+}
+
+This is an automated email from ${businessName || 'Ease My Salon CRM'}
   `;
 
   return { html, text };

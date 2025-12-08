@@ -93,120 +93,53 @@ export function ServicesTable() {
       service.category.toLowerCase().includes(searchTerm.toLowerCase()),
   )
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     try {
-      const doc = new jsPDF()
+      const { ReportsAPI } = await import('@/lib/api');
+      const result = await ReportsAPI.exportServices('pdf', {
+        search: searchTerm || undefined
+      });
       
-      // Add title
-      doc.setFontSize(20)
-      doc.text("Services Management Report", 14, 22)
-      
-      // Add generation date
-      doc.setFontSize(12)
-      doc.text(`Generated: ${format(new Date(), "MMM dd, yyyy 'at' h:mm a")}`, 14, 32)
-      
-      // Add summary stats
-      doc.setFontSize(14)
-      doc.text("Summary", 14, 50)
-      doc.setFontSize(10)
-      doc.text(`Total Services: ${services.length}`, 14, 60)
-      doc.text(`Filtered Services: ${filteredServices.length}`, 14, 70)
-      doc.text(`Search Query: ${searchTerm || "All services"}`, 14, 80)
-      
-      let yPosition = 100
-      
-      if (filteredServices.length === 0) {
-        doc.setFontSize(14)
-        doc.text("No service data available", 14, yPosition)
+      if (result && result.success) {
+        toast({
+          title: "Export Successful",
+          description: result.message || "Services report has been generated and sent to admin email(s)",
+        });
       } else {
-        // Service table headers
-        const headers = [
-          "Service Name",
-          "Category",
-          "Price",
-          "Duration (min)",
-          "Description",
-          "Status"
-        ]
-        
-        const data = filteredServices.map(service => [
-          service.name,
-          service.category,
-          `₹${service.price.toFixed(2)}`,
-          service.duration || "N/A",
-          service.description ? (service.description.length > 30 ? service.description.substring(0, 30) + "..." : service.description) : "N/A",
-          service.status || "active"
-        ])
-        
-        autoTable(doc, {
-          head: [headers],
-          body: data,
-          startY: yPosition,
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [99, 102, 241] }
-        })
+        throw new Error(result?.error || 'Export failed');
       }
-      
-      // Save the PDF
-      const fileName = `services-report-${format(new Date(), "yyyy-MM-dd")}.pdf`
-      doc.save(fileName)
-      
-      toast({
-        title: "Export Successful",
-        description: `PDF exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("PDF export error:", error)
+    } catch (error: any) {
+      console.error("PDF export error:", error);
       toast({
         title: "Export Failed",
-        description: "Failed to export PDF. Please try again.",
+        description: error?.message || "Failed to export PDF. Please try again.",
         variant: "destructive"
-      })
+      });
     }
   }
 
-  const handleExportXLS = () => {
+  const handleExportXLS = async () => {
     try {
-      const data = filteredServices.map(service => ({
-        "Service Name": service.name,
-        "Category": service.category,
-        "Price": service.price,
-        "Duration (min)": service.duration || "",
-        "Description": service.description || "",
-        "Status": service.status || "active"
-      }))
+      const { ReportsAPI } = await import('@/lib/api');
+      const result = await ReportsAPI.exportServices('xlsx', {
+        search: searchTerm || undefined
+      });
       
-      // Create workbook and worksheet
-      const ws = XLSX.utils.json_to_sheet(data)
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, "Services Report")
-      
-      // Add summary sheet
-      const summaryData = [
-        { Metric: "Total Services", Value: services.length },
-        { Metric: "Filtered Services", Value: filteredServices.length },
-        { Metric: "Search Query", Value: searchTerm || "All services" },
-        { Metric: "Generated Date", Value: format(new Date(), "MMM dd, yyyy 'at' h:mm a") }
-      ]
-      
-      const summaryWs = XLSX.utils.json_to_sheet(summaryData)
-      XLSX.utils.book_append_sheet(wb, summaryWs, "Summary")
-      
-      // Save the file
-      const fileName = `services-report-${format(new Date(), "yyyy-MM-dd")}.xlsx`
-      XLSX.writeFile(wb, fileName)
-      
-      toast({
-        title: "Export Successful",
-        description: `Excel file exported as ${fileName}`,
-      })
-    } catch (error) {
-      console.error("XLS export error:", error)
+      if (result && result.success) {
+        toast({
+          title: "Export Successful",
+          description: result.message || "Services report has been generated and sent to admin email(s)",
+        });
+      } else {
+        throw new Error(result?.error || 'Export failed');
+      }
+    } catch (error: any) {
+      console.error("XLS export error:", error);
       toast({
         title: "Export Failed",
-        description: "Failed to export Excel file. Please try again.",
+        description: error?.message || "Failed to export Excel file. Please try again.",
         variant: "destructive"
-      })
+      });
     }
   }
 

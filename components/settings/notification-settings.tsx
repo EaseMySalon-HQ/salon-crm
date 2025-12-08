@@ -337,6 +337,340 @@ export function NotificationSettings() {
         </div>
       </div>
 
+      {/* Email Notification Types Configuration */}
+      <div className="space-y-4">
+        {/* Daily Summary */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock className="h-5 w-5 text-blue-600" />
+                <CardTitle>Daily Summary</CardTitle>
+              </div>
+              <Switch
+                checked={settings.dailySummary.enabled}
+                onCheckedChange={(checked) =>
+                  setSettings(prev => ({
+                    ...prev,
+                    dailySummary: { ...prev.dailySummary, enabled: checked }
+                  }))
+                }
+              />
+            </div>
+            <CardDescription>
+              Receive daily summary emails with sales, appointments, and new clients
+            </CardDescription>
+          </CardHeader>
+          {settings.dailySummary.enabled && (
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <Label>Send Time</Label>
+                <Select
+                  value={settings.dailySummary.time}
+                  onValueChange={(value) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      dailySummary: { ...prev.dailySummary, time: value }
+                    }))
+                  }
+                >
+                  <SelectTrigger className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 24 }, (_, i) => {
+                      const hour = i.toString().padStart(2, '0');
+                      return (
+                        <SelectItem key={hour} value={`${hour}:00`}>
+                          {hour}:00
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          )}
+        </Card>
+
+        {/* Weekly Summary */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-blue-600" />
+                <CardTitle>Weekly Summary</CardTitle>
+              </div>
+              <Switch
+                checked={settings.weeklySummary.enabled}
+                onCheckedChange={(checked) =>
+                  setSettings(prev => ({
+                    ...prev,
+                    weeklySummary: { ...prev.weeklySummary, enabled: checked }
+                  }))
+                }
+              />
+            </div>
+            <CardDescription>
+              Receive weekly summary emails with revenue, growth, and performance metrics
+            </CardDescription>
+          </CardHeader>
+          {settings.weeklySummary.enabled && (
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <Label>Day of Week</Label>
+                <Select
+                  value={settings.weeklySummary.day}
+                  onValueChange={(value) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      weeklySummary: { ...prev.weeklySummary, day: value }
+                    }))
+                  }
+                >
+                  <SelectTrigger className="w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sunday">Sunday</SelectItem>
+                    <SelectItem value="monday">Monday</SelectItem>
+                    <SelectItem value="tuesday">Tuesday</SelectItem>
+                    <SelectItem value="wednesday">Wednesday</SelectItem>
+                    <SelectItem value="thursday">Thursday</SelectItem>
+                    <SelectItem value="friday">Friday</SelectItem>
+                    <SelectItem value="saturday">Saturday</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center justify-between">
+                <Label>Send Time</Label>
+                <Select
+                  value={settings.weeklySummary.time}
+                  onValueChange={(value) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      weeklySummary: { ...prev.weeklySummary, time: value }
+                    }))
+                  }
+                >
+                  <SelectTrigger className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 24 }, (_, i) => {
+                      const hour = i.toString().padStart(2, '0');
+                      return (
+                        <SelectItem key={hour} value={`${hour}:00`}>
+                          {hour}:00
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          )}
+        </Card>
+
+        {/* Appointment Notifications */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-green-600" />
+                <CardTitle>Appointment Notifications</CardTitle>
+              </div>
+              <Switch
+                checked={settings.appointmentNotifications.enabled}
+                onCheckedChange={(checked) =>
+                  setSettings(prev => ({
+                    ...prev,
+                    appointmentNotifications: { ...prev.appointmentNotifications, enabled: checked }
+                  }))
+                }
+              />
+            </div>
+            <CardDescription>
+              Receive alerts for new appointments, cancellations, and reminders
+            </CardDescription>
+          </CardHeader>
+          {settings.appointmentNotifications.enabled && (
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <Label>New Appointments</Label>
+                  <p className="text-xs text-slate-500">Alert when a new appointment is created</p>
+                </div>
+                <Switch
+                  checked={settings.appointmentNotifications.newAppointments}
+                  onCheckedChange={(checked) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      appointmentNotifications: {
+                        ...prev.appointmentNotifications,
+                        newAppointments: checked
+                      }
+                    }))
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <Label>Cancellations</Label>
+                  <p className="text-xs text-slate-500">Alert when an appointment is cancelled</p>
+                </div>
+                <Switch
+                  checked={settings.appointmentNotifications.cancellations}
+                  onCheckedChange={(checked) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      appointmentNotifications: {
+                        ...prev.appointmentNotifications,
+                        cancellations: checked
+                      }
+                    }))
+                  }
+                />
+              </div>
+            </CardContent>
+          )}
+        </Card>
+
+        {/* Receipt Notifications */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Receipt className="h-5 w-5 text-purple-600" />
+                <CardTitle>Receipt Notifications</CardTitle>
+              </div>
+              <Switch
+                checked={settings.receiptNotifications.enabled}
+                onCheckedChange={(checked) =>
+                  setSettings(prev => ({
+                    ...prev,
+                    receiptNotifications: { ...prev.receiptNotifications, enabled: checked }
+                  }))
+                }
+              />
+            </div>
+            <CardDescription>
+              Configure receipt email notifications for clients and staff
+            </CardDescription>
+          </CardHeader>
+          {settings.receiptNotifications.enabled && (
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <Label>Send to Clients</Label>
+                  <p className="text-xs text-slate-500">Automatically email receipts to clients</p>
+                </div>
+                <Switch
+                  checked={settings.receiptNotifications.sendToClients}
+                  onCheckedChange={(checked) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      receiptNotifications: {
+                        ...prev.receiptNotifications,
+                        sendToClients: checked
+                      }
+                    }))
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <Label>Send to Staff</Label>
+                  <p className="text-xs text-slate-500">Notify staff when receipts are generated</p>
+                </div>
+                <Switch
+                  checked={settings.receiptNotifications.sendToStaff}
+                  onCheckedChange={(checked) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      receiptNotifications: {
+                        ...prev.receiptNotifications,
+                        sendToStaff: checked
+                      }
+                    }))
+                  }
+                />
+              </div>
+            </CardContent>
+          )}
+        </Card>
+
+        {/* Export Notifications */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Download className="h-5 w-5 text-orange-600" />
+                <CardTitle>Export Notifications</CardTitle>
+              </div>
+              <Switch
+                checked={settings.exportNotifications.enabled}
+                onCheckedChange={(checked) =>
+                  setSettings(prev => ({
+                    ...prev,
+                    exportNotifications: { ...prev.exportNotifications, enabled: checked }
+                  }))
+                }
+              />
+            </div>
+            <CardDescription>
+              Receive notifications when data exports are ready
+            </CardDescription>
+          </CardHeader>
+        </Card>
+
+        {/* System Alerts */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+                <CardTitle>System Alerts</CardTitle>
+              </div>
+              <Switch
+                checked={settings.systemAlerts.enabled}
+                onCheckedChange={(checked) =>
+                  setSettings(prev => ({
+                    ...prev,
+                    systemAlerts: { ...prev.systemAlerts, enabled: checked }
+                  }))
+                }
+              />
+            </div>
+            <CardDescription>
+              Receive alerts for system errors, low inventory, and payment failures
+            </CardDescription>
+          </CardHeader>
+          {settings.systemAlerts.enabled && (
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <Label>Low Inventory</Label>
+                  <p className="text-xs text-slate-500">Alert when product stock is low</p>
+                </div>
+                <Switch
+                  checked={settings.systemAlerts.lowInventory}
+                  onCheckedChange={(checked) =>
+                    setSettings(prev => ({
+                      ...prev,
+                      systemAlerts: {
+                        ...prev.systemAlerts,
+                        lowInventory: checked
+                      }
+                    }))
+                  }
+                />
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      </div>
+
       {/* Staff Recipients Selection */}
       <Card>
         <CardHeader>
@@ -398,6 +732,7 @@ export function NotificationSettings() {
                       size="sm"
                       variant="outline"
                       onClick={() => openPreferencesModal(staff._id)}
+                      disabled={!settings.recipientStaffIds.includes(staff._id)}
                     >
                       Configure
                     </Button>

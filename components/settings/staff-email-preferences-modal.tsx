@@ -111,9 +111,11 @@ export function StaffEmailPreferencesModal({
         throw new Error(response.error || 'Failed to update preferences')
       }
     } catch (error: any) {
+      console.error('Error updating staff preferences:', error);
+      const errorMessage = error?.response?.data?.error || error?.message || "Failed to update preferences";
       toast({
         title: "Error",
-        description: error.message || "Failed to update preferences",
+        description: errorMessage,
         variant: "destructive",
       })
     } finally {
@@ -215,15 +217,6 @@ export function StaffEmailPreferencesModal({
               <div className="space-y-3">
                 <h3 className="font-semibold text-slate-800">Transactions</h3>
                 <div className="space-y-2 pl-4">
-                  <div className="flex items-center justify-between p-3 border rounded-lg">
-                    <Label>Receipt Alerts</Label>
-                    <Switch
-                      checked={preferences.receiptAlerts}
-                      onCheckedChange={(checked) =>
-                        setPreferences(prev => ({ ...prev, receiptAlerts: checked }))
-                      }
-                    />
-                  </div>
                   <div className="flex items-center justify-between p-3 border rounded-lg">
                     <Label>Export Alerts</Label>
                     <Switch

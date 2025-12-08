@@ -36,7 +36,8 @@
     "pdfkit": "^0.17.2",
     "puppeteer": "^24.31.0",
     "resend": "^6.5.2",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "mongodb-memory-server": "^10.3.0",
