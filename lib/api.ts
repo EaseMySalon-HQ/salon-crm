@@ -124,21 +124,35 @@ apiClient.interceptors.response.use(
           console.warn(`⚠️ API 404: ${errorInfo.method} ${errorInfo.url} - ${errorInfo.message || 'Not Found'}`)
         }
       } else {
-        // Always log errors with meaningful information
-        const hasMeaningfulInfo = errorInfo.status || errorInfo.error || errorInfo.message !== 'Unknown error' || errorInfo.type !== 'Request Setup Error'
-        if (hasMeaningfulInfo) {
-          console.error('❌ API Response Interceptor: Error response:', {
-            status: errorInfo.status,
-            statusText: errorInfo.statusText,
-            error: errorInfo.error || errorInfo.message,
-            type: errorInfo.type,
-            url: errorInfo.url,
-            method: errorInfo.method,
-            data: errorInfo.data
-          })
+        // Build error object with only defined, meaningful values
+        const errorDetails: Record<string, any> = {}
+        if (errorInfo.status !== undefined && errorInfo.status !== null) errorDetails.status = errorInfo.status
+        if (errorInfo.statusText && errorInfo.statusText.trim()) errorDetails.statusText = errorInfo.statusText
+        if (errorInfo.error && errorInfo.error.trim()) {
+          errorDetails.error = errorInfo.error
+        } else if (errorInfo.message && errorInfo.message !== 'Unknown error' && errorInfo.message.trim()) {
+          errorDetails.error = errorInfo.message
+        }
+        if (errorInfo.type && errorInfo.type !== 'Request Setup Error') errorDetails.type = errorInfo.type
+        if (errorInfo.url && errorInfo.url !== 'Unknown URL') errorDetails.url = errorInfo.url
+        if (errorInfo.method && errorInfo.method !== 'Unknown method') errorDetails.method = errorInfo.method
+        if (errorInfo.data !== undefined && errorInfo.data !== null) errorDetails.data = errorInfo.data
+        
+        // Only log if we have at least one meaningful property with a real value
+        const hasValidProperties = Object.keys(errorDetails).some(key => {
+          const value = errorDetails[key]
+          return value !== undefined && value !== null && value !== '' && 
+                 (typeof value !== 'string' || value.trim() !== '')
+        })
+        
+        if (hasValidProperties) {
+          console.error('❌ API Response Interceptor: Error response:', errorDetails)
         } else if (error?.response?.status) {
-          // Log at least the status if errorInfo is empty
+          // Fallback: log at least the status if errorInfo is empty
           console.error(`❌ API Response Interceptor: Error ${error.response.status}`, error.response.statusText || 'Unknown error')
+        } else if (error?.message) {
+          // Fallback: log the error message if available
+          console.error('❌ API Response Interceptor: Error:', error.message)
         }
       }
     } catch (logError) {
