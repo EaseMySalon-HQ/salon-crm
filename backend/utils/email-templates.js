@@ -191,56 +191,40 @@ This is an automated email from Ease My Salon CRM
   return { html, text };
 }
 
-function receipt({ clientName, receiptNumber, businessName, date, items, subtotal, tax, discount, total, paymentMethod }) {
+function receipt({ clientName, receiptNumber, businessName, date, items, subtotal, tax, discount, total, paymentMethod, receiptLink }) {
   const html = `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
       <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
         .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: #667eea; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
-        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
-        .receipt-info { background: white; padding: 20px; margin: 15px 0; border-radius: 8px; }
-        .item { padding: 10px; border-bottom: 1px solid #eee; }
-        .total { font-size: 20px; font-weight: bold; color: #667eea; margin-top: 15px; }
+        .header { background: #667eea; color: white; padding: 30px 20px; text-align: center; border-radius: 10px 10px 0 0; }
+        .content { background: #f9f9f9; padding: 40px 30px; border-radius: 0 0 10px 10px; text-align: center; }
         .footer { text-align: center; margin-top: 30px; color: #999; font-size: 12px; }
+        .button { display: inline-block; background: #667eea; color: white; padding: 18px 40px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 18px; margin: 30px 0; }
+        .button:hover { background: #5568d3; }
       </style>
     </head>
     <body>
       <div class="container">
         <div class="header">
-          <h1>🧾 Receipt ${receiptNumber}</h1>
+          <h1 style="margin: 0; font-size: 24px;">🧾 Receipt ${receiptNumber}</h1>
         </div>
         <div class="content">
-          <p>Dear ${clientName},</p>
-          <p>Thank you for your visit! Here's your receipt:</p>
+          <p style="font-size: 16px; margin-bottom: 20px;">Dear ${clientName},</p>
+          <p style="font-size: 16px; margin-bottom: 30px;">Thank you for your visit!</p>
           
-          <div class="receipt-info">
-            <p><strong>Receipt Number:</strong> ${receiptNumber}</p>
-            <p><strong>Date:</strong> ${date}</p>
-            <p><strong>Business:</strong> ${businessName}</p>
+          ${receiptLink ? `
+          <div style="margin: 40px 0;">
+            <a href="${receiptLink}" class="button">View Your Invoice Here</a>
           </div>
-          
-          <div class="receipt-info">
-            <h3>Items:</h3>
-            ${items.map(item => `
-              <div class="item">
-                <strong>${item.name}</strong> - ₹${item.total?.toFixed(2) || item.price?.toFixed(2)}
-              </div>
-            `).join('')}
-            
-            <div style="margin-top: 15px; padding-top: 15px; border-top: 2px solid #667eea;">
-              <p>Subtotal: ₹${subtotal?.toFixed(2) || '0.00'}</p>
-              ${tax ? `<p>Tax: ₹${tax.toFixed(2)}</p>` : ''}
-              ${discount ? `<p>Discount: -₹${discount.toFixed(2)}</p>` : ''}
-              <p class="total">Total: ₹${total?.toFixed(2) || '0.00'}</p>
-              <p>Payment Method: ${paymentMethod || 'N/A'}</p>
-            </div>
-          </div>
-          
-          <p>Please find the PDF receipt attached to this email.</p>
+          ` : `
+          <p style="color: #666; font-size: 14px;">
+            Please contact us if you need a copy of your receipt.
+          </p>
+          `}
           
           <div class="footer">
             <p>Thank you for choosing ${businessName}!</p>
@@ -257,22 +241,9 @@ Receipt ${receiptNumber}
 
 Dear ${clientName},
 
-Thank you for your visit! Here's your receipt:
+Thank you for your visit!
 
-Receipt Number: ${receiptNumber}
-Date: ${date}
-Business: ${businessName}
-
-Items:
-${items.map(item => `- ${item.name}: ₹${item.total?.toFixed(2) || item.price?.toFixed(2)}`).join('\n')}
-
-Subtotal: ₹${subtotal?.toFixed(2) || '0.00'}
-${tax ? `Tax: ₹${tax.toFixed(2)}\n` : ''}
-${discount ? `Discount: -₹${discount.toFixed(2)}\n` : ''}
-Total: ₹${total?.toFixed(2) || '0.00'}
-Payment Method: ${paymentMethod || 'N/A'}
-
-Please find the PDF receipt attached to this email.
+${receiptLink ? `View your invoice here: ${receiptLink}` : 'Please contact us if you need a copy of your receipt.'}
 
 Thank you for choosing ${businessName}!
   `;

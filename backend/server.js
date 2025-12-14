@@ -4627,90 +4627,20 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
             try {
               console.log(`📧 Attempting to send receipt email to: ${client.email}`);
               
-              // Generate PDF receipt using HTML (same as frontend)
-              let pdfBuffer = null;
+              // Try to find related sale by receiptNumber (which might match billNo)
+              let receiptLink = null;
               try {
-                // Get BusinessSettings from business database for full settings
-                const { BusinessSettings } = req.businessModels;
-                const businessSettingsDoc = await BusinessSettings.findOne();
-                
-                // Format address properly (handle both object and string)
-                let formattedAddress = '';
-                if (business?.address) {
-                  if (typeof business.address === 'object') {
-                    const addr = business.address;
-                    const addressParts = [];
-                    if (addr.street) addressParts.push(addr.street);
-                    if (addr.city) addressParts.push(addr.city);
-                    if (addr.state) addressParts.push(addr.state);
-                    if (addr.zipCode) addressParts.push(addr.zipCode);
-                    if (addr.country) addressParts.push(addr.country);
-                    formattedAddress = addressParts.join(', ');
-                  } else {
-                    formattedAddress = business.address;
-                  }
+                const { Sale } = req.businessModels;
+                const relatedSale = await Sale.findOne({ billNo: savedReceipt.receiptNumber });
+                if (relatedSale?.shareToken) {
+                  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+                  receiptLink = `${frontendUrl}/receipt/public/${relatedSale.billNo}/${relatedSale.shareToken}`;
+                  console.log(`✅ Receipt link generated from related sale: ${receiptLink}`);
+                } else {
+                  console.log('⚠️ No related sale found or sale does not have shareToken');
                 }
-                
-                // Get phone and email from contact object or direct property
-                const businessPhone = business?.contact?.phone || business?.phone || '';
-                const businessEmail = business?.contact?.email || business?.email || '';
-                
-                // Combine business info with BusinessSettings
-                const businessSettings = {
-                  name: businessSettingsDoc?.name || business?.name || 'Business',
-                  address: businessSettingsDoc?.address || formattedAddress,
-                  city: businessSettingsDoc?.city || business?.address?.city || '',
-                  state: businessSettingsDoc?.state || business?.address?.state || '',
-                  zipCode: businessSettingsDoc?.zipCode || business?.address?.zipCode || '',
-                  phone: businessSettingsDoc?.phone || businessPhone,
-                  email: businessSettingsDoc?.email || businessEmail,
-                  logo: businessSettingsDoc?.logo || '',
-                  gstNumber: businessSettingsDoc?.gstNumber || '',
-                  socialMedia: businessSettingsDoc?.socialMedia || '',
-                  currency: businessSettingsDoc?.currency || 'INR',
-                  enableCurrency: businessSettingsDoc?.enableCurrency !== false,
-                  taxRate: businessSettingsDoc?.taxRate || 18
-                };
-                
-                // Format receipt data to match frontend ReceiptGenerator format
-                const receiptData = {
-                  receiptNumber: savedReceipt.receiptNumber,
-                  date: savedReceipt.date ? new Date(savedReceipt.date).toISOString() : new Date().toISOString(),
-                  time: savedReceipt.time || (savedReceipt.date ? new Date(savedReceipt.date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })),
-                  clientName: client.name,
-                  clientPhone: client.phone || '',
-                  items: (savedReceipt.items || []).map(item => ({
-                    name: item.name,
-                    type: item.type || 'service',
-                    price: item.price || 0,
-                    quantity: item.quantity || 1,
-                    total: item.total || (item.price || 0) * (item.quantity || 1),
-                    discount: item.discount || 0,
-                    discountType: item.discountType || 'percentage',
-                    staffName: item.staffName || ''
-                  })),
-                  subtotal: savedReceipt.subtotal || 0,
-                  tax: savedReceipt.tax || 0,
-                  discount: savedReceipt.discount || 0,
-                  tip: savedReceipt.tip || 0,
-                  roundOff: savedReceipt.roundOff || 0,
-                  total: savedReceipt.total || 0,
-                  payments: savedReceipt.payments?.length > 0 
-                    ? savedReceipt.payments.map(p => ({ type: (p.type?.toLowerCase() || 'cash'), amount: p.amount || 0 }))
-                    : [{ type: 'cash', amount: savedReceipt.total || 0 }],
-                  taxBreakdown: savedReceipt.taxBreakdown || null
-                };
-                
-                const { generateReceiptPDFFromHTML } = require('./utils/html-receipt-generator');
-                pdfBuffer = await generateReceiptPDFFromHTML(receiptData, businessSettings);
-                console.log(`✅ PDF receipt generated from HTML: ${pdfBuffer.length} bytes`);
-              } catch (pdfError) {
-                console.error('⚠️ Error generating PDF receipt from HTML:', pdfError);
-                console.error('⚠️ PDF Error details:', {
-                  message: pdfError.message,
-                  stack: pdfError.stack
-                });
-                // Continue without PDF attachment
+              } catch (saleLookupError) {
+                console.warn('⚠️ Error looking up related sale:', saleLookupError.message);
               }
               
               const emailResult = await emailService.sendReceipt({
@@ -4727,7 +4657,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                   total: savedReceipt.total,
                   paymentMethod: savedReceipt.payments?.[0]?.type || 'N/A'
                 },
-                pdfBuffer: pdfBuffer
+                receiptLink: receiptLink
               });
               if (emailResult && emailResult.success !== false) {
                 console.log(`✅ Receipt email sent to client: ${client.email}`);
@@ -5226,9 +5156,18 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     
     const sale = new Sale(saleData);
     await sale.save();
+    
+    // Reload sale to ensure shareToken is included (generated by pre-save middleware)
+    const savedSale = await Sale.findById(sale._id);
+    if (!savedSale.shareToken) {
+      console.warn('⚠️ Sale saved but shareToken is missing, generating now...');
+      const crypto = require('crypto');
+      savedSale.shareToken = crypto.randomBytes(32).toString('hex');
+      await savedSale.save();
+    }
 
-    if (sale.appointmentId && String(sale.status).toLowerCase() === 'completed') {
-      await markAppointmentCompleted(Appointment, sale.appointmentId);
+    if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
+      await markAppointmentCompleted(Appointment, savedSale.appointmentId);
     }
 
     // Track products that had stock updated for low inventory check
@@ -5381,121 +5320,49 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
               // Calculate subtotal from items
               const subtotal = sale.items?.reduce((sum, item) => sum + (item.total || 0), 0) || 0;
               
-              // Generate PDF receipt using HTML (same as frontend)
-              let pdfBuffer = null;
-              try {
-                // Get BusinessSettings from business database for full settings
-                const databaseManager = require('./config/database-manager');
-                const businessConnection = await databaseManager.getConnection(req.user.branchId);
-                const modelFactory = require('./models/model-factory');
-                const businessModels = modelFactory.createBusinessModels(businessConnection);
-                const { BusinessSettings } = businessModels;
-                const businessSettingsDoc = await BusinessSettings.findOne();
-                
-                // Format address properly (handle both object and string)
-                let formattedAddress = '';
-                if (business?.address) {
-                  if (typeof business.address === 'object') {
-                    const addr = business.address;
-                    const addressParts = [];
-                    if (addr.street) addressParts.push(addr.street);
-                    if (addr.city) addressParts.push(addr.city);
-                    if (addr.state) addressParts.push(addr.state);
-                    if (addr.zipCode) addressParts.push(addr.zipCode);
-                    if (addr.country) addressParts.push(addr.country);
-                    formattedAddress = addressParts.join(', ');
-                  } else {
-                    formattedAddress = business.address;
-                  }
-                }
-                
-                // Get phone and email from contact object or direct property
-                const businessPhone = business?.contact?.phone || business?.phone || '';
-                const businessEmail = business?.contact?.email || business?.email || '';
-                
-                // Combine business info with BusinessSettings
-                const businessSettings = {
-                  name: businessSettingsDoc?.name || business?.name || 'Business',
-                  address: businessSettingsDoc?.address || formattedAddress,
-                  city: businessSettingsDoc?.city || business?.address?.city || '',
-                  state: businessSettingsDoc?.state || business?.address?.state || '',
-                  zipCode: businessSettingsDoc?.zipCode || business?.address?.zipCode || '',
-                  phone: businessSettingsDoc?.phone || businessPhone,
-                  email: businessSettingsDoc?.email || businessEmail,
-                  logo: businessSettingsDoc?.logo || '',
-                  gstNumber: businessSettingsDoc?.gstNumber || '',
-                  socialMedia: businessSettingsDoc?.socialMedia || '',
-                  currency: businessSettingsDoc?.currency || 'INR',
-                  enableCurrency: businessSettingsDoc?.enableCurrency !== false,
-                  taxRate: businessSettingsDoc?.taxRate || 18
-                };
-                
-                // Format receipt data to match frontend ReceiptGenerator format
-                const receiptData = {
-                  receiptNumber: sale.billNo,
-                  date: sale.date ? new Date(sale.date).toISOString() : new Date().toISOString(),
-                  time: sale.date ? new Date(sale.date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-                  clientName: sale.customerName,
-                  clientPhone: sale.customerPhone || '',
-                  customerName: sale.customerName, // Alias for compatibility
-                  customerPhone: sale.customerPhone || '', // Alias for compatibility
-                  items: (sale.items || []).map(item => ({
-                    name: item.name,
-                    type: item.type || 'service',
-                    price: item.price || 0,
-                    quantity: item.quantity || 1,
-                    total: item.total || (item.price || 0) * (item.quantity || 1),
-                    discount: item.discount || 0,
-                    discountType: item.discountType || 'percentage',
-                    staffName: item.staffName || sale.staffName || ''
-                  })),
-                  subtotal: subtotal,
-                  tax: sale.taxAmount || 0,
-                  discount: sale.discount || 0,
-                  tip: sale.tip || 0,
-                  roundOff: sale.roundOff || 0,
-                  total: sale.netTotal || sale.grossTotal || 0,
-                  payments: sale.paymentHistory?.length > 0 
-                    ? sale.paymentHistory.map(p => ({ type: p.method?.toLowerCase() || 'cash', amount: p.amount || 0 }))
-                    : [{ type: (sale.paymentMode?.toLowerCase() || 'cash'), amount: sale.netTotal || sale.grossTotal || 0 }],
-                  taxBreakdown: sale.taxBreakdown || null
-                };
-                
-                const { generateReceiptPDFFromHTML } = require('./utils/html-receipt-generator');
-                pdfBuffer = await generateReceiptPDFFromHTML(receiptData, businessSettings);
-                console.log(`✅ PDF receipt generated from HTML: ${pdfBuffer.length} bytes`);
-              } catch (pdfError) {
-                console.error('⚠️ Error generating PDF receipt from HTML:', pdfError);
-                console.error('⚠️ PDF Error details:', {
-                  message: pdfError.message,
-                  stack: pdfError.stack
+              // Use savedSale (with shareToken) instead of sale
+              const saleForEmail = savedSale || sale;
+              
+              // Generate receipt link using shareToken
+              let receiptLink = null;
+              if (saleForEmail.shareToken) {
+                const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+                receiptLink = `${frontendUrl}/receipt/public/${saleForEmail.billNo}/${saleForEmail.shareToken}`;
+                console.log(`✅ Receipt link generated: ${receiptLink}`);
+                console.log(`🔍 ShareToken: ${saleForEmail.shareToken.substring(0, 10)}...`);
+              } else {
+                console.error('❌ Sale does not have shareToken, cannot generate receipt link');
+                console.error('❌ Sale data:', {
+                  _id: saleForEmail._id,
+                  billNo: saleForEmail.billNo,
+                  hasShareToken: !!saleForEmail.shareToken
                 });
-                // Continue without PDF attachment
               }
               
               console.log(`📧 Calling emailService.sendReceipt with:`, {
-                to: sale.customerEmail,
-                clientName: sale.customerName,
-                receiptNumber: sale.billNo,
+                to: saleForEmail.customerEmail,
+                clientName: saleForEmail.customerName,
+                receiptNumber: saleForEmail.billNo,
                 businessName: business?.name,
-                hasPdf: !!pdfBuffer
+                hasReceiptLink: !!receiptLink,
+                receiptLink: receiptLink || 'NOT GENERATED'
               });
               
               const emailResult = await emailService.sendReceipt({
-                to: sale.customerEmail,
-                clientName: sale.customerName,
-                receiptNumber: sale.billNo,
+                to: saleForEmail.customerEmail,
+                clientName: saleForEmail.customerName,
+                receiptNumber: saleForEmail.billNo,
                 receiptData: {
                   businessName: business?.name || 'Business',
-                  date: sale.date ? new Date(sale.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-                  items: sale.items || [],
+                  date: saleForEmail.date ? new Date(saleForEmail.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+                  items: saleForEmail.items || [],
                   subtotal: subtotal,
-                  tax: sale.taxAmount || 0,
-                  discount: sale.discount || 0,
-                  total: sale.netTotal || sale.grossTotal || 0,
-                  paymentMethod: sale.paymentMode || sale.paymentHistory?.[0]?.method || 'N/A'
+                  tax: saleForEmail.taxAmount || 0,
+                  discount: saleForEmail.discount || 0,
+                  total: saleForEmail.netTotal || saleForEmail.grossTotal || 0,
+                  paymentMethod: saleForEmail.paymentMode || saleForEmail.paymentHistory?.[0]?.method || 'N/A'
                 },
-                pdfBuffer: pdfBuffer
+                receiptLink: receiptLink
               });
               
               console.log(`📧 Email result:`, emailResult);
@@ -5529,7 +5396,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
 
     res.status(201).json({ 
       success: true, 
-      data: sale,
+      data: savedSale || sale,
       emailStatus: emailStatus // Include email sending status in response
     });
   } catch (err) {
@@ -5604,6 +5471,94 @@ app.get('/api/sales/bill/:billNo', authenticateToken, setupBusinessDatabase, asy
     res.json({ success: true, data: sale });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Public endpoint to get sale by bill number and share token (for SMS sharing)
+app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
+  try {
+    const { billNo, token } = req.params;
+    
+    if (!billNo || !token) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Bill number and token are required' 
+      });
+    }
+
+    // Get main connection to iterate through businesses
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+    const modelFactory = require('./models/model-factory');
+    
+    // Get all active businesses
+    const businesses = await Business.find({ status: 'active' });
+    
+    // Search through each business database
+    for (const business of businesses) {
+      try {
+        const businessDb = await databaseManager.getConnection(business._id, mainConnection);
+        const businessModels = modelFactory.createBusinessModels(businessDb);
+        const { Sale, BusinessSettings } = businessModels;
+        
+        // Find sale by billNo and shareToken
+        const sale = await Sale.findOne({ 
+          billNo: billNo,
+          shareToken: token 
+        });
+        
+        if (sale) {
+          // Found the sale - get business settings
+          let businessSettings = await BusinessSettings.findOne();
+          if (!businessSettings) {
+            // Use business info as fallback
+            businessSettings = {
+              name: business.name || 'Business',
+              address: business.address?.street || '',
+              city: business.address?.city || '',
+              state: business.address?.state || '',
+              zipCode: business.address?.zipCode || '',
+              phone: business.contact?.phone || business.phone || '',
+              email: business.contact?.email || business.email || '',
+              logo: '',
+              gstNumber: '',
+              currency: 'INR',
+              taxRate: 18
+            };
+          } else {
+            // Convert to plain object and include business info
+            businessSettings = businessSettings.toObject();
+            businessSettings.name = businessSettings.name || business.name || 'Business';
+            businessSettings.phone = businessSettings.phone || business.contact?.phone || business.phone || '';
+            businessSettings.email = businessSettings.email || business.contact?.email || business.email || '';
+          }
+          
+          // Return sale with business settings
+          return res.json({ 
+            success: true, 
+            data: sale,
+            businessSettings: businessSettings
+          });
+        }
+      } catch (businessError) {
+        // Continue searching other businesses if one fails
+        console.error(`Error searching business ${business.name}:`, businessError.message);
+        continue;
+      }
+    }
+    
+    // Sale not found
+    return res.status(404).json({ 
+      success: false, 
+      error: 'Receipt not found or invalid token' 
+    });
+  } catch (err) {
+    console.error('Error in public sale endpoint:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to retrieve receipt' 
+    });
   }
 });
 
@@ -7038,106 +6993,6 @@ app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, 
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export sales report'
-    });
-  }
-});
-
-// Export services report (emailed to admin)
-app.post('/api/reports/export/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
-  try {
-    const { format = 'xlsx', filters = {} } = req.body;
-    
-    const { exportServicesReport } = require('./utils/report-exporter');
-    const result = await exportServicesReport({
-      branchId: req.user.branchId,
-      format,
-      filters
-    });
-    
-    res.json({
-      success: true,
-      message: result.message || 'Services report has been generated and sent to admin email(s)'
-    });
-  } catch (error) {
-    console.error('Error exporting services report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export services report'
-    });
-  }
-});
-
-// Export clients report (emailed to admin)
-app.post('/api/reports/export/clients', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
-  try {
-    const { format = 'xlsx', filters = {} } = req.body;
-    
-    const { exportClientsReport } = require('./utils/report-exporter');
-    const result = await exportClientsReport({
-      branchId: req.user.branchId,
-      format,
-      filters
-    });
-    
-    res.json({
-      success: true,
-      message: result.message || 'Clients report has been generated and sent to admin email(s)'
-    });
-  } catch (error) {
-    console.error('Error exporting clients report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export clients report'
-    });
-  }
-});
-
-// Export expense report (emailed to admin)
-app.post('/api/reports/export/expenses', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
-  try {
-    const { format = 'xlsx', filters = {} } = req.body;
-    
-    const { exportExpenseReport } = require('./utils/report-exporter');
-    const result = await exportExpenseReport({
-      branchId: req.user.branchId,
-      format,
-      filters
-    });
-    
-    res.json({
-      success: true,
-      message: result.message || 'Expense report has been generated and sent to admin email(s)'
-    });
-  } catch (error) {
-    console.error('Error exporting expense report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export expense report'
-    });
-  }
-});
-
-// Export cash registry report (emailed to admin)
-app.post('/api/reports/export/cash-registry', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
-  try {
-    const { format = 'xlsx', filters = {} } = req.body;
-    
-    const { exportCashRegistryReport } = require('./utils/report-exporter');
-    const result = await exportCashRegistryReport({
-      branchId: req.user.branchId,
-      format,
-      filters
-    });
-    
-    res.json({
-      success: true,
-      message: result.message || 'Cash registry report has been generated and sent to admin email(s)'
-    });
-  } catch (error) {
-    console.error('Error exporting cash registry report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export cash registry report'
     });
   }
 });

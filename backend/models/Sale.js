@@ -81,6 +81,12 @@ const saleSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Business',
     required: true
+  },
+  // Share token for public receipt access
+  shareToken: { 
+    type: String, 
+    unique: true,
+    sparse: true // Allows null values but enforces uniqueness when present
   }
 }, {
   timestamps: true
@@ -111,6 +117,12 @@ saleSchema.pre('save', function(next) {
     } else if (uniqueModes.length === 1) {
       this.paymentMode = uniqueModes[0]
     }
+  }
+  
+  // Generate shareToken if it doesn't exist (for public receipt access)
+  if (!this.shareToken) {
+    const crypto = require('crypto');
+    this.shareToken = crypto.randomBytes(32).toString('hex');
   }
   
   next()

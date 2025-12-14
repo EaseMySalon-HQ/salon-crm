@@ -122,7 +122,7 @@ const adminSettingsSchema = new mongoose.Schema({
       },
       receiptNotification: {
         subject: { type: String, default: 'Receipt {receiptNumber} - {businessName}' },
-        body: { type: String, default: 'Dear {clientName},\n\nThank you for your visit! Here\'s your receipt:\n\nReceipt Number: {receiptNumber}\nDate: {date}\nBusiness: {businessName}\n\nItems:\n{items}\n\nSubtotal: ₹{subtotal}\nTax: ₹{tax}\nDiscount: ₹{discount}\nTotal: ₹{total}\nPayment Method: {paymentMethod}\n\nPlease find the PDF receipt attached to this email.\n\nThank you for choosing {businessName}!' },
+        body: { type: String, default: 'Dear {clientName},\n\nThank you for your visit!\n\n{receiptLink}\n\nThank you for choosing {businessName}!' },
         enabled: { type: Boolean, default: true }
       },
       appointmentNotification: {
@@ -198,7 +198,7 @@ adminSettingsSchema.statics.getSettings = async function() {
     const defaultTemplates = {
       receiptNotification: {
         subject: 'Receipt {receiptNumber} - {businessName}',
-        body: 'Dear {clientName},\n\nThank you for your visit! Here\'s your receipt:\n\nReceipt Number: {receiptNumber}\nDate: {date}\nBusiness: {businessName}\n\nItems:\n{items}\n\nSubtotal: ₹{subtotal}\nTax: ₹{tax}\nDiscount: ₹{discount}\nTotal: ₹{total}\nPayment Method: {paymentMethod}\n\nPlease find the PDF receipt attached to this email.\n\nThank you for choosing {businessName}!',
+        body: 'Dear {clientName},\n\nThank you for your visit!\n\n{receiptLink}\n\nThank you for choosing {businessName}!',
         enabled: true
       },
       appointmentNotification: {
@@ -225,7 +225,31 @@ adminSettingsSchema.statics.getSettings = async function() {
       }
     });
 
-    // Save if we added new templates
+    // Update old receiptNotification template format to new simplified format
+    const receiptTemplate = settings.notifications.templates.receiptNotification;
+    if (receiptTemplate && receiptTemplate.body) {
+      const oldFormatIndicators = [
+        'Please find the PDF receipt attached',
+        'Items:',
+        'Subtotal:',
+        'Payment Method:'
+      ];
+      const hasOldFormat = oldFormatIndicators.some(indicator => 
+        receiptTemplate.body.includes(indicator)
+      );
+      
+      if (hasOldFormat) {
+        console.log('🔄 Updating old receiptNotification template to new format');
+        settings.notifications.templates.receiptNotification = {
+          subject: 'Receipt {receiptNumber} - {businessName}',
+          body: 'Dear {clientName},\n\nThank you for your visit!\n\n{receiptLink}\n\nThank you for choosing {businessName}!',
+          enabled: receiptTemplate.enabled !== false
+        };
+        needsSave = true;
+      }
+    }
+
+    // Save if we added new templates or updated old ones
     if (needsSave) {
       await settings.save();
     }

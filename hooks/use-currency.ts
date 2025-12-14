@@ -15,6 +15,23 @@ export function useCurrency() {
 
   const loadCurrencySettings = async () => {
     try {
+      // Skip API call on public routes (like public receipt page)
+      if (typeof window !== 'undefined') {
+        const isPublicRoute = window.location.pathname.includes('/receipt/public/') ||
+                             window.location.pathname.includes('/public/')
+        if (isPublicRoute) {
+          setIsLoading(false)
+          return
+        }
+        
+        // Skip if no auth token (not authenticated)
+        const token = localStorage.getItem('salon-auth-token')
+        if (!token) {
+          setIsLoading(false)
+          return
+        }
+      }
+      
       const response = await SettingsAPI.getPaymentSettings()
       if (response.success) {
         setCurrencySettings({
@@ -22,8 +39,13 @@ export function useCurrency() {
           enableCurrency: response.data.enableCurrency !== false
         })
       }
-    } catch (error) {
-      console.error('Failed to load currency settings:', error)
+    } catch (error: any) {
+      // Silently handle 401 errors (user not authenticated)
+      if (error?.response?.status === 401) {
+        // User is not authenticated, keep default values
+      } else {
+        console.error('Failed to load currency settings:', error)
+      }
       // Keep default values
     } finally {
       setIsLoading(false)

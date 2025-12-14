@@ -48,6 +48,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return
         }
         
+        // Skip auth check on public routes (like public receipt page)
+        const isPublicRoute = window.location.pathname.includes('/receipt/public/') ||
+                             window.location.pathname.includes('/public/')
+        if (isPublicRoute) {
+          console.log('🔓 Public route detected, skipping auth check')
+          setIsLoading(false)
+          return
+        }
+        
         // Check if we have a stored token
         const storedToken = localStorage.getItem("salon-auth-token")
         const storedUser = localStorage.getItem("salon-auth-user")
