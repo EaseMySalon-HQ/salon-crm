@@ -148,8 +148,17 @@ apiClient.interceptors.response.use(
         if (hasValidProperties) {
           console.error('❌ API Response Interceptor: Error response:', errorDetails)
         } else if (error?.response?.status) {
-          // Fallback: log at least the status if errorInfo is empty
-          console.error(`❌ API Response Interceptor: Error ${error.response.status}`, error.response.statusText || 'Unknown error')
+          // For 401 errors, only log if not on public route (to reduce noise)
+          const isPublicRoute = typeof window !== 'undefined' && 
+            (window.location.pathname.includes('/receipt/public/') ||
+             window.location.pathname.includes('/public/'))
+          
+          if (error.response.status === 401 && isPublicRoute) {
+            // Silently skip 401 errors on public routes
+          } else {
+            // Fallback: log at least the status if errorInfo is empty
+            console.error(`❌ API Response Interceptor: Error ${error.response.status}`, error.response.statusText || 'Unknown error')
+          }
         } else if (error?.message) {
           // Fallback: log the error message if available
           console.error('❌ API Response Interceptor: Error:', error.message)
@@ -171,21 +180,26 @@ apiClient.interceptors.response.use(
     if (error.response?.status === 401) {
       // Handle unauthorized access - but only if we're not already on login page
       // Don't redirect if this is the initial auth check (profile endpoint)
+      // Don't redirect if we're on a public route (like public receipt page)
       const isAuthCheck = error.config?.url?.includes('/auth/profile')
+      const isPublicRoute = typeof window !== 'undefined' && 
+        (window.location.pathname.includes('/receipt/public/') ||
+         window.location.pathname.includes('/public/'))
       
-      console.log('🔐 API Response Interceptor: Unauthorized, clearing auth data', { isAuthCheck })
+      console.log('🔐 API Response Interceptor: Unauthorized, clearing auth data', { isAuthCheck, isPublicRoute })
       
-      // Clear tokens
-      if (typeof window !== 'undefined') {
+      // Clear tokens only if not on public route
+      if (typeof window !== 'undefined' && !isPublicRoute) {
         localStorage.removeItem('salon-auth-token')
         localStorage.removeItem('salon-auth-user')
       }
       
-      // Only redirect if not on login page and not during initial auth check
+      // Only redirect if not on login page, not during initial auth check, and not on public route
       // The auth context will handle the redirect for auth checks
       if (typeof window !== 'undefined' && 
           !window.location.pathname.includes('/login') && 
-          !isAuthCheck) {
+          !isAuthCheck &&
+          !isPublicRoute) {
         try {
           window.location.href = '/login'
         } catch (redirectError) {
@@ -544,6 +558,20 @@ export class SalesAPI {
 
   static async getByBillNo(billNo: string): Promise<ApiResponse<any>> {
     const response = await apiClient.get(`/sales/bill/${billNo}`)
+    return response.data
+  }
+
+  // Public method to get sale by bill number and token (no authentication required)
+  static async getByBillNoPublic(billNo: string, token: string): Promise<ApiResponse<any>> {
+    // Create a new axios instance without auth interceptor for public access
+    const publicClient = axios.create({
+      baseURL: API_BASE_URL,
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+    const response = await publicClient.get(`/public/sales/bill/${billNo}/${token}`)
     return response.data
   }
 

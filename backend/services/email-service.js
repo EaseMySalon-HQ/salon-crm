@@ -496,8 +496,15 @@ class EmailService {
         let subject = customTemplate.subject || '';
         let body = customTemplate.body || '';
 
-        // Replace placeholders in subject and body
+        // Special handling for receiptLink - replace with button HTML before other replacements
+        if (data.receiptLink && body.includes('{receiptLink}')) {
+          const buttonHtml = `<div style="text-align: center; margin: 30px 0;"><a href="${data.receiptLink}" style="display: inline-block; background: #667eea; color: white; padding: 18px 40px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 18px;">View Your Invoice Here</a></div>`;
+          body = body.replace(/\{receiptLink\}/g, buttonHtml);
+        }
+
+        // Replace other placeholders in subject and body
         Object.keys(data).forEach(key => {
+          if (key === 'receiptLink') return; // Already handled above
           const value = data[key];
           const placeholder = new RegExp(`\\{${key}\\}`, 'g');
           const stringValue = value !== null && value !== undefined ? String(value) : '';
@@ -506,15 +513,35 @@ class EmailService {
         });
 
         // Convert plain text body to HTML (simple conversion)
-        const html = body
+        let html = body
           .replace(/\n/g, '<br>')
           .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
           .replace(/\*(.*?)\*/g, '<em>$1</em>');
 
+        // If receiptLink exists but wasn't in template, add button before closing
+        if (data.receiptLink && !customTemplate.body.includes('{receiptLink}')) {
+          const buttonHtml = `<div style="text-align: center; margin: 30px 0;"><a href="${data.receiptLink}" style="display: inline-block; background: #667eea; color: white; padding: 18px 40px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 18px;">View Your Invoice Here</a></div>`;
+          html = html.replace(/(Thank you for choosing)/i, buttonHtml + '<br><br>$1');
+        }
+
+        // For text version, replace receiptLink with plain URL
+        let textBody = customTemplate.body || '';
+        if (data.receiptLink) {
+          textBody = textBody.replace(/\{receiptLink\}/g, `View your invoice here: ${data.receiptLink}`);
+        }
+        // Replace other placeholders in text version
+        Object.keys(data).forEach(key => {
+          if (key === 'receiptLink') return; // Already handled
+          const value = data[key];
+          const placeholder = new RegExp(`\\{${key}\\}`, 'g');
+          const stringValue = value !== null && value !== undefined ? String(value) : '';
+          textBody = textBody.replace(placeholder, stringValue);
+        });
+
         return {
           subject,
           html,
-          text: body
+          text: textBody
         };
       }
     } catch (error) {
@@ -533,7 +560,7 @@ class EmailService {
   /**
    * Send receipt email to client
    */
-  async sendReceipt({ to, clientName, receiptNumber, receiptData, pdfBuffer }) {
+  async sendReceipt({ to, clientName, receiptNumber, receiptData, pdfBuffer, receiptLink }) {
     // Format items for template replacement
     const itemsText = receiptData.items?.map(item => 
       `${item.name || 'Item'} - ₹${item.total?.toFixed(2) || item.price?.toFixed(2) || '0.00'}`
@@ -550,7 +577,8 @@ class EmailService {
       tax: (receiptData.tax || 0).toFixed(2),
       discount: (receiptData.discount || 0).toFixed(2),
       total: (receiptData.total || 0).toFixed(2),
-      paymentMethod: receiptData.paymentMethod || 'N/A'
+      paymentMethod: receiptData.paymentMethod || 'N/A',
+      receiptLink: receiptLink || ''
     };
 
     // Get template (custom or default)
@@ -564,7 +592,8 @@ class EmailService {
       tax: receiptData.tax || 0,
       discount: receiptData.discount || 0,
       total: receiptData.total || 0,
-      paymentMethod: receiptData.paymentMethod || 'N/A'
+      paymentMethod: receiptData.paymentMethod || 'N/A',
+      receiptLink: receiptLink || ''
     });
 
     const template = await this.getCustomTemplate(
@@ -573,10 +602,8 @@ class EmailService {
       templateData
     );
 
-    const attachments = pdfBuffer ? [{
-      filename: `receipt-${receiptNumber}.pdf`,
-      content: pdfBuffer,
-    }] : [];
+    // No PDF attachments - using receipt link instead
+    const attachments = [];
 
     return this.sendEmail({
       to,
