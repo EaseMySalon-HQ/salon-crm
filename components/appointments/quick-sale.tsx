@@ -2176,40 +2176,21 @@ export function QuickSale() {
               }
             }
 
-            // Open receipt in new tab
+            // Open receipt in new tab - Use business receipt page (with Print/Thermal Print buttons)
             try {
-              // Get shareToken from backend sale response for public URL
-              const shareToken = result.data?.shareToken
-              let receiptUrl: string
-              
-              if (shareToken) {
-                // Use public receipt URL (shareable via SMS)
-                receiptUrl = `/receipt/public/${receipt.receiptNumber}/${shareToken}`
-                console.log('🎯 Opening public receipt URL (shareable):', receiptUrl)
-              } else {
-                // Fallback to authenticated receipt URL
-                receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&t=${Date.now()}`
-                console.log('🎯 Opening receipt in new tab (fallback):', receiptUrl)
-              }
+              // Always use business receipt URL for internal use (has Print/Thermal Print buttons)
+              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&t=${Date.now()}`
+              console.log('🎯 Opening business receipt URL (with print options):', receiptUrl)
               
               const newWindow = window.open(receiptUrl, '_blank')
               if (!newWindow || newWindow.closed || typeof newWindow.closed == 'undefined') {
                 console.warn('⚠️ Popup was blocked, showing fallback message')
                 toast({
                   title: "Receipt Generated",
-                  description: shareToken 
-                    ? `Receipt #${receipt.receiptNumber} created. Share this link: ${window.location.origin}${receiptUrl}`
-                    : `Receipt #${receipt.receiptNumber} created successfully. Please check the receipts page.`,
+                  description: `Receipt #${receipt.receiptNumber} created successfully. Please check the receipts page.`,
                 })
               } else {
                 console.log('✅ Receipt opened successfully in new tab')
-                if (shareToken) {
-                  // Show toast with shareable link for SMS
-                  toast({
-                    title: "Receipt Generated",
-                    description: `Receipt #${receipt.receiptNumber} created. You can share this link via SMS.`,
-                  })
-                }
               }
             } catch (error) {
               console.error('❌ Error opening receipt:', error)

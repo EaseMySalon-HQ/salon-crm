@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { useParams, useSearchParams } from "next/navigation"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { Button } from "@/components/ui/button"
-import { Printer, Download, ArrowLeft, Thermometer } from "lucide-react"
+import { Printer, ArrowLeft, Thermometer } from "lucide-react"
 import Link from "next/link"
 import { SettingsAPI } from "@/lib/api"
 import { SalesAPI } from "@/lib/api"
@@ -201,11 +201,6 @@ export default function ReceiptPage() {
     window.print()
   }
 
-  const handleDownload = () => {
-    // In a real app, this would generate and download a PDF
-    alert('PDF download functionality coming soon!')
-  }
-
   const handleThermalPrint = () => {
     if (!receipt || !businessSettings) return
     
@@ -296,6 +291,12 @@ export default function ReceiptPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <Link href="/quick-sale">
+              <Button variant="outline">
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back
+              </Button>
+            </Link>
             <Button onClick={handlePrint} variant="outline">
               <Printer className="h-4 w-4 mr-2" />
               Print
@@ -304,16 +305,6 @@ export default function ReceiptPage() {
               <Thermometer className="h-4 w-4 mr-2" />
               Thermal Print
             </Button>
-            <Button onClick={handleDownload} variant="outline">
-              <Download className="h-4 w-4 mr-2" />
-              Download
-            </Button>
-            <Link href="/reports">
-              <Button variant="outline">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back
-              </Button>
-            </Link>
           </div>
         </div>
       </div>
