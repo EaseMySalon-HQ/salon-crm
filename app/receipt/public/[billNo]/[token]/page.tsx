@@ -4,9 +4,8 @@ import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { Button } from "@/components/ui/button"
-import { Printer, Download, Thermometer } from "lucide-react"
+import { Download } from "lucide-react"
 import { SalesAPI } from "@/lib/api"
-import { ThermalReceiptGenerator } from "@/components/receipts/thermal-receipt-generator"
 
 interface ReceiptData {
   id: string
@@ -142,55 +141,9 @@ export default function PublicReceiptPage() {
     loadReceipt()
   }, [params.billNo, params.token])
 
-  const handlePrint = () => {
+  const handleDownloadPDF = () => {
+    // Simply trigger browser's print dialog (user can save as PDF)
     window.print()
-  }
-
-  const handleThermalPrint = () => {
-    if (!receipt || !businessSettings) return
-    
-    // Convert receipt data to the format expected by ThermalReceiptGenerator
-    const receiptForThermal = {
-      id: receipt.id,
-      receiptNumber: receipt.billNo,
-      clientId: receipt.id,
-      clientName: receipt.customerName,
-      clientPhone: receipt.customerPhone,
-      date: receipt.date,
-      time: receipt.time,
-      items: receipt.items.map(item => ({
-        id: Math.random().toString(),
-        name: item.name,
-        type: item.type as "service" | "product",
-        quantity: item.quantity,
-        price: item.price,
-        total: item.total,
-        discount: 0,
-        discountType: "percentage" as const,
-        staffId: "",
-        staffName: item.staffName || ""
-      })),
-      subtotal: receipt.netTotal,
-      tip: 0,
-      discount: 0,
-      tax: receipt.taxAmount,
-      roundOff: 0,
-      total: receipt.grossTotal,
-      payments: receipt.payments.map(payment => ({
-        type: payment.type as "cash" | "card" | "online",
-        amount: payment.amount
-      })),
-      staffId: "",
-      staffName: receipt.staffName,
-      notes: ""
-    }
-
-    const { printThermalReceipt } = ThermalReceiptGenerator({ 
-      receipt: receiptForThermal,
-      businessSettings 
-    })
-    
-    printThermalReceipt()
   }
 
   if (isLoading) {
@@ -221,29 +174,19 @@ export default function PublicReceiptPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      {/* Header with Actions */}
-      <div className="max-w-4xl mx-auto mb-6">
-        <div className="flex items-center justify-between bg-white rounded-lg shadow-sm p-4">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Receipt #{receipt.billNo}</h1>
-            <p className="text-gray-600">
-              {receipt.customerName} • {new Date(receipt.date).toLocaleDateString()} • {receipt.time}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button onClick={handlePrint} variant="outline">
-              <Printer className="h-4 w-4 mr-2" />
-              Print
-            </Button>
-            <Button onClick={handleThermalPrint} variant="outline" className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100">
-              <Thermometer className="h-4 w-4 mr-2" />
-              Thermal Print
-            </Button>
-          </div>
-        </div>
+      {/* Download PDF Button - Only for customers */}
+      <div className="max-w-4xl mx-auto mb-4 flex justify-end no-print">
+        <Button 
+          onClick={handleDownloadPDF}
+          variant="outline"
+          className="bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+        >
+          <Download className="h-4 w-4 mr-2" />
+          Download PDF
+        </Button>
       </div>
 
-      {/* Receipt Content */}
+      {/* Receipt Content - Clean view without action buttons */}
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-lg shadow-sm overflow-hidden">
           <ReceiptPreview 
@@ -286,7 +229,7 @@ export default function PublicReceiptPage() {
         </div>
       </div>
 
-      {/* Print-only styles */}
+      {/* Print styles - hide button when printing */}
       <style jsx global>{`
         @media print {
           body { margin: 0; }
