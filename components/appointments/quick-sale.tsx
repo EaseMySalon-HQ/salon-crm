@@ -547,6 +547,97 @@ export function QuickSale() {
     prefillAppointmentData()
   }, [searchParams, services, clients, staff])
 
+  // Pre-fill form from lead data in URL
+  useEffect(() => {
+    const leadParam = searchParams.get('lead')
+    if (!leadParam || services.length === 0 || clients.length === 0 || staff.length === 0) return
+
+    const prefillLeadData = async () => {
+      try {
+        // Decode the base64 lead data
+        const leadData = JSON.parse(atob(leadParam))
+        console.log('Pre-filling from lead:', leadData)
+
+        // Try to find existing client by phone or name
+        let client = clients.find(c => 
+          c.phone === leadData.clientPhone || 
+          c.name?.toLowerCase() === leadData.clientName?.toLowerCase()
+        )
+
+        if (client) {
+          // Client exists, set it
+          setSelectedCustomer(client)
+          setCustomerSearch(client.name)
+          console.log('Pre-filled existing client:', client.name)
+          
+          // Fetch customer statistics
+          const customerId = client._id || client.id
+          if (customerId) {
+            await fetchCustomerStats(customerId)
+            console.log('Fetched customer stats for pre-filled client')
+          }
+        } else {
+          // Client doesn't exist, pre-fill the search with lead info
+          setCustomerSearch(`${leadData.clientName} (${leadData.clientPhone})`)
+          console.log('Pre-filled customer search with lead info')
+        }
+
+        // Add services from lead's interested services
+        if (leadData.services && leadData.services.length > 0) {
+          const serviceItemsToAdd: ServiceItem[] = []
+          
+          for (const serviceData of leadData.services) {
+            const service = services.find(s => 
+              (s._id || s.id) === serviceData.serviceId
+            )
+            
+            if (service) {
+              // Find staff member if available
+              const staffMember = leadData.staffId 
+                ? staff.find(s => (s._id || s.id) === leadData.staffId)
+                : null
+              
+              const newServiceItem: ServiceItem = {
+                id: Date.now().toString() + Math.random(),
+                serviceId: service._id || service.id,
+                staffId: leadData.staffId || "",
+                quantity: 1,
+                price: service.price || 0,
+                discount: 0,
+                total: service.price || 0,
+                staffContributions: (leadData.staffId && staffMember) ? [{
+                  staffId: leadData.staffId,
+                  staffName: staffMember.name || '',
+                  percentage: 100,
+                  amount: service.price || 0
+                }] : []
+              }
+              
+              serviceItemsToAdd.push(newServiceItem)
+              console.log('Pre-filled service:', service.name)
+            }
+          }
+          
+          if (serviceItemsToAdd.length > 0) {
+            setServiceItems(serviceItemsToAdd)
+          }
+        }
+
+        // Clear the URL parameter after reading it
+        if (typeof window !== 'undefined') {
+          const url = new URL(window.location.href)
+          url.searchParams.delete('lead')
+          window.history.replaceState({}, '', url.toString())
+        }
+      } catch (error) {
+        console.error('Failed to parse lead data:', error)
+      }
+    }
+    
+    // Call the async function
+    prefillLeadData()
+  }, [searchParams, services, clients, staff])
+
   // In production, prefill data should come from URL params or API
   // No localStorage dependency for critical business functionality
 

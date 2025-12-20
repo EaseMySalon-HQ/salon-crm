@@ -474,6 +474,63 @@ export class AppointmentsAPI {
   }
 }
 
+export class LeadsAPI {
+  static async getAll(params?: { 
+    page?: number; 
+    limit?: number; 
+    search?: string; 
+    status?: string; 
+    assignedStaffId?: string; 
+    source?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<PaginatedResponse<any>> {
+    const response = await apiClient.get('/leads', { params })
+    return response.data
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/leads/${id}`)
+    return response.data
+  }
+
+  static async create(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/leads', data)
+    return response.data
+  }
+
+  static async update(id: string, data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/leads/${id}`, data)
+    return response.data
+  }
+
+  static async updateStatus(id: string, status: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/leads/${id}/status`, { status })
+    return response.data
+  }
+
+  static async convertToAppointment(id: string, appointmentData: {
+    date: string;
+    time: string;
+    staffId?: string;
+    staffAssignments?: Array<{ staffId: string; percentage: number; role?: string }>;
+    notes?: string;
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/leads/${id}/convert-to-appointment`, appointmentData)
+    return response.data
+  }
+
+  static async delete(id: string): Promise<ApiResponse> {
+    const response = await apiClient.delete(`/leads/${id}`)
+    return response.data
+  }
+
+  static async getActivities(id: string): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get(`/leads/${id}/activities`)
+    return response.data
+  }
+}
+
 export class StaffAPI {
   static async getAll(params?: { page?: number; limit?: number; search?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/staff', { params })
