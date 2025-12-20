@@ -74,7 +74,13 @@ class ModelFactory {
       Category: this.getModel('Category', require('./Category').schema, connection),
       
       // Commission Profile model
-      CommissionProfile: this.getModel('CommissionProfile', require('./CommissionProfile').schema, connection)
+      CommissionProfile: this.getModel('CommissionProfile', require('./CommissionProfile').schema, connection),
+      
+      // Lead model
+      Lead: this.getModel('Lead', require('./Lead').schema, connection),
+      
+      // LeadActivity model
+      LeadActivity: this.getModel('LeadActivity', require('./LeadActivity').schema, connection)
     };
   }
 

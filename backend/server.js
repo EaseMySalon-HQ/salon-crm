@@ -2114,6 +2114,730 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
   }
 });
 
+// ============================================
+// LEAD MANAGEMENT ROUTES
+// ============================================
+
+// Get all leads with filters
+app.get('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), async (req, res) => {
+  try {
+    const { Lead } = req.businessModels;
+    const { 
+      page = 1, 
+      limit = 10, 
+      search = '', 
+      status, 
+      assignedStaffId, 
+      source,
+      startDate,
+      endDate
+    } = req.query;
+    
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    let query = { branchId: req.user.branchId };
+
+    // Search filter
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Status filter
+    if (status) {
+      query.status = status;
+    }
+
+    // Assigned staff filter
+    if (assignedStaffId) {
+      query.assignedStaffId = assignedStaffId;
+    }
+
+    // Source filter
+    if (source) {
+      query.source = source;
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) {
+        query.createdAt.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        query.createdAt.$lte = new Date(endDate);
+      }
+    }
+
+    const leads = await Lead.find(query)
+      .populate('assignedStaffId', 'name')
+      .populate('interestedServices.serviceId', 'name price')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    const total = await Lead.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: leads,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching leads:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get single lead by ID
+app.get('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), async (req, res) => {
+  try {
+    const { Lead } = req.businessModels;
+    const lead = await Lead.findOne({ 
+      _id: req.params.id, 
+      branchId: req.user.branchId 
+    })
+      .populate('assignedStaffId', 'name')
+      .populate('interestedServices.serviceId', 'name price duration')
+      .populate('convertedToAppointmentId', 'date time status')
+      .populate('convertedToClientId', 'name phone');
+
+    if (!lead) {
+      return res.status(404).json({
+        success: false,
+        error: 'Lead not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: lead
+    });
+  } catch (error) {
+    console.error('Error fetching lead:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get lead activities
+app.get('/api/leads/:id/activities', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), async (req, res) => {
+  try {
+    const { Lead, LeadActivity } = req.businessModels;
+    
+    // Verify lead exists and belongs to user's branch
+    const lead = await Lead.findOne({ 
+      _id: req.params.id, 
+      branchId: req.user.branchId 
+    });
+
+    if (!lead) {
+      return res.status(404).json({
+        success: false,
+        error: 'Lead not found'
+      });
+    }
+
+    // Fetch all activities for this lead, sorted by creation date (newest first)
+    // Convert string ID to ObjectId to ensure proper matching
+    const leadObjectId = new mongoose.Types.ObjectId(req.params.id);
+    
+    // Note: We don't populate 'performedBy' because User model is in main DB, not business DB
+    // We already have 'performedByName' stored in the activity document
+    const activities = await LeadActivity.find({ 
+      leadId: leadObjectId,
+      branchId: req.user.branchId
+    })
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: activities
+    });
+  } catch (error) {
+    console.error('Error fetching lead activities:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Create new lead
+app.post('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'create'), async (req, res) => {
+  try {
+    const { Lead } = req.businessModels;
+    const { 
+      name, 
+      phone, 
+      email, 
+      source = 'walk-in', 
+      status = 'new',
+      interestedServices,
+      assignedStaffId,
+      followUpDate,
+      notes
+    } = req.body;
+
+    if (!name || !phone) {
+      return res.status(400).json({
+        success: false,
+        error: 'Name and phone are required'
+      });
+    }
+
+    // Format interested services (allow custom services without serviceId)
+    const formattedServices = interestedServices?.map(service => ({
+      serviceId: service.serviceId && service.serviceId !== 'null' && service.serviceId !== 'none' 
+        ? service.serviceId 
+        : null,
+      serviceName: service.serviceName || service.name
+    })) || [];
+
+    const newLead = new Lead({
+      name,
+      phone,
+      email,
+      source,
+      status,
+      interestedServices: formattedServices,
+      assignedStaffId,
+      followUpDate: followUpDate ? new Date(followUpDate) : undefined,
+      notes,
+      branchId: req.user.branchId
+    });
+
+    const savedLead = await newLead.save();
+    const populatedLead = await Lead.findById(savedLead._id)
+      .populate('assignedStaffId', 'name')
+      .populate('interestedServices.serviceId', 'name price');
+
+    // Log creation activity and any initial values
+    try {
+      const { LeadActivity } = req.businessModels;
+      const activities = [];
+
+      // Log creation
+      activities.push({
+        leadId: savedLead._id,
+        activityType: 'created',
+        performedBy: req.user.userId,
+        performedByName: req.user.name || req.user.email || 'System',
+        newValue: {
+          name: savedLead.name,
+          phone: savedLead.phone,
+          source: savedLead.source,
+          status: savedLead.status,
+          notes: savedLead.notes || null // Include notes in created activity
+        },
+        description: `Lead created from ${source}`,
+        branchId: req.user.branchId
+      });
+
+      // Log follow-up date if set during creation
+      if (savedLead.followUpDate) {
+        activities.push({
+          leadId: savedLead._id,
+          activityType: 'follow_up_scheduled',
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          newValue: savedLead.followUpDate,
+          field: 'followUpDate',
+          description: `Follow-up scheduled for ${new Date(savedLead.followUpDate).toLocaleDateString()}`,
+          branchId: req.user.branchId
+        });
+      }
+
+      // Log status if not 'new'
+      if (savedLead.status && savedLead.status !== 'new') {
+        activities.push({
+          leadId: savedLead._id,
+          activityType: 'status_changed',
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          previousValue: 'new',
+          newValue: savedLead.status,
+          field: 'status',
+          description: `Status set to ${savedLead.status}`,
+          branchId: req.user.branchId
+        });
+      }
+
+      // Log staff assignment if set during creation
+      if (savedLead.assignedStaffId) {
+        activities.push({
+          leadId: savedLead._id,
+          activityType: 'staff_assigned',
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          newValue: savedLead.assignedStaffId,
+          field: 'assignedStaffId',
+          description: 'Staff assigned',
+          branchId: req.user.branchId
+        });
+      }
+
+      // Log notes if set during creation
+      if (savedLead.notes && savedLead.notes.trim()) {
+        activities.push({
+          leadId: savedLead._id,
+          activityType: 'notes_updated',
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          newValue: savedLead.notes,
+          field: 'notes',
+          description: 'Notes added',
+          branchId: req.user.branchId
+        });
+      }
+
+      // Insert all activities
+      if (activities.length > 0) {
+        await LeadActivity.insertMany(activities);
+      }
+    } catch (activityError) {
+      console.error('Error logging lead creation activities:', activityError);
+      // Don't fail the request if activity logging fails
+    }
+
+    res.status(201).json({
+      success: true,
+      data: populatedLead
+    });
+  } catch (error) {
+    console.error('Error creating lead:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Update lead
+app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), async (req, res) => {
+  try {
+    const { Lead } = req.businessModels;
+    const { 
+      name, 
+      phone, 
+      email, 
+      source, 
+      status,
+      interestedServices,
+      assignedStaffId,
+      followUpDate,
+      notes
+    } = req.body;
+
+    const lead = await Lead.findOne({ 
+      _id: req.params.id, 
+      branchId: req.user.branchId 
+    });
+
+    if (!lead) {
+      return res.status(404).json({
+        success: false,
+        error: 'Lead not found'
+      });
+    }
+
+    const { LeadActivity } = req.businessModels;
+    const activities = [];
+
+    // Track changes and log activities
+    // Always create a status activity if status is provided (for "Add Status" functionality)
+    // This ensures we preserve history even if status value doesn't change
+    if (status !== undefined) {
+      if (lead.status !== status) {
+        // Status actually changed
+        activities.push({
+          leadId: lead._id,
+          activityType: 'status_changed',
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          previousValue: lead.status,
+          newValue: status,
+          field: 'status',
+          description: `Status changed from ${lead.status} to ${status}`,
+          branchId: req.user.branchId
+        });
+        lead.status = status;
+      } else {
+        // Status is the same, but we still want to record this as a status update activity
+        // This happens when user clicks "Add Status" with the same status value
+        activities.push({
+          leadId: lead._id,
+          activityType: 'status_changed',
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          previousValue: lead.status,
+          newValue: status,
+          field: 'status',
+          description: `Status confirmed: ${status}`,
+          branchId: req.user.branchId
+        });
+        // Don't update lead.status since it's the same, but we still log the activity
+      }
+    }
+
+    if (assignedStaffId !== undefined && String(lead.assignedStaffId) !== String(assignedStaffId)) {
+      const activityType = lead.assignedStaffId ? 'staff_changed' : 'staff_assigned';
+      activities.push({
+        leadId: lead._id,
+        activityType: activityType,
+        performedBy: req.user.userId,
+        performedByName: req.user.name || req.user.email || 'System',
+        previousValue: lead.assignedStaffId,
+        newValue: assignedStaffId,
+        field: 'assignedStaffId',
+        description: assignedStaffId 
+          ? `Staff ${activityType === 'staff_changed' ? 'changed' : 'assigned'}`
+          : 'Staff assignment removed',
+        branchId: req.user.branchId
+      });
+      lead.assignedStaffId = assignedStaffId;
+    }
+
+    if (followUpDate !== undefined) {
+      const oldDate = lead.followUpDate ? lead.followUpDate.toISOString() : null;
+      const newDate = followUpDate ? new Date(followUpDate).toISOString() : null;
+      if (oldDate !== newDate) {
+        const activityType = lead.followUpDate ? 'follow_up_updated' : 'follow_up_scheduled';
+        activities.push({
+          leadId: lead._id,
+          activityType: activityType,
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          previousValue: lead.followUpDate,
+          newValue: followUpDate ? new Date(followUpDate) : null,
+          field: 'followUpDate',
+          description: followUpDate 
+            ? `Follow-up ${activityType === 'follow_up_updated' ? 'updated' : 'scheduled'} for ${new Date(followUpDate).toLocaleDateString()}`
+            : 'Follow-up date removed',
+          branchId: req.user.branchId
+        });
+        lead.followUpDate = followUpDate ? new Date(followUpDate) : null;
+      }
+    }
+
+    // Always create a notes activity if notes are provided (for "Add Status" functionality)
+    // This ensures we preserve history even if notes value doesn't change
+    if (notes !== undefined) {
+      if (lead.notes !== notes) {
+        // Notes actually changed
+        activities.push({
+          leadId: lead._id,
+          activityType: 'notes_updated',
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          previousValue: lead.notes,
+          newValue: notes,
+          field: 'notes',
+          description: notes ? 'Notes updated' : 'Notes cleared',
+          details: { notesLength: notes?.length || 0 },
+          branchId: req.user.branchId
+        });
+        lead.notes = notes;
+      } else if (notes && notes.trim()) {
+        // Notes are the same but not empty - still record as an activity
+        // This happens when user clicks "Add Status" with the same notes
+        activities.push({
+          leadId: lead._id,
+          activityType: 'notes_updated',
+          performedBy: req.user.id || req.user.userId || req.user._id,
+          performedByName: req.user.name || req.user.email || 'System',
+          previousValue: lead.notes,
+          newValue: notes,
+          field: 'notes',
+          description: 'Notes confirmed',
+          details: { notesLength: notes?.length || 0 },
+          branchId: req.user.branchId
+        });
+        // Don't update lead.notes since it's the same, but we still log the activity
+      }
+    }
+
+    // Update other fields
+    if (name) lead.name = name;
+    if (phone) lead.phone = phone;
+    if (email !== undefined) lead.email = email;
+    if (source) lead.source = source;
+
+    // Update interested services (allow custom services without serviceId)
+    if (interestedServices !== undefined) {
+      lead.interestedServices = interestedServices.map(service => ({
+        serviceId: service.serviceId && service.serviceId !== 'null' && service.serviceId !== 'none'
+          ? service.serviceId
+          : null,
+        serviceName: service.serviceName || service.name
+      }));
+    }
+
+    const updatedLead = await lead.save();
+
+    // Log all activities
+    if (activities.length > 0) {
+      try {
+        await LeadActivity.insertMany(activities);
+      } catch (activityError) {
+        console.error('Error logging lead activities:', activityError);
+        // Don't fail the request if activity logging fails
+      }
+    }
+    const populatedLead = await Lead.findById(updatedLead._id)
+      .populate('assignedStaffId', 'name')
+      .populate('interestedServices.serviceId', 'name price');
+
+    res.json({
+      success: true,
+      data: populatedLead
+    });
+  } catch (error) {
+    console.error('Error updating lead:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Update lead status
+app.patch('/api/leads/:id/status', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), async (req, res) => {
+  try {
+    const { Lead } = req.businessModels;
+    const { status } = req.body;
+
+    if (!status || !['new', 'follow-up', 'converted', 'lost'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valid status is required'
+      });
+    }
+
+    const lead = await Lead.findOne({ 
+      _id: req.params.id, 
+      branchId: req.user.branchId 
+    });
+
+    if (!lead) {
+      return res.status(404).json({
+        success: false,
+        error: 'Lead not found'
+      });
+    }
+
+    const oldStatus = lead.status;
+    lead.status = status;
+    const updatedLead = await lead.save();
+
+    // Log status change activity
+    try {
+      const { LeadActivity } = req.businessModels;
+      await LeadActivity.create({
+        leadId: lead._id,
+        activityType: 'status_changed',
+        performedBy: req.user.userId,
+        performedByName: req.user.name || req.user.email || 'System',
+        previousValue: oldStatus,
+        newValue: status,
+        field: 'status',
+        description: `Status changed from ${oldStatus} to ${status}`,
+        branchId: req.user.branchId
+      });
+    } catch (activityError) {
+      console.error('Error logging lead status change activity:', activityError);
+      // Don't fail the request if activity logging fails
+    }
+
+    res.json({
+      success: true,
+      data: updatedLead
+    });
+  } catch (error) {
+    console.error('Error updating lead status:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Convert lead to appointment
+app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), async (req, res) => {
+  try {
+    const { Lead, Appointment, Client, Service } = req.businessModels;
+    const { date, time, staffId, staffAssignments, notes: appointmentNotes } = req.body;
+
+    if (!date || !time) {
+      return res.status(400).json({
+        success: false,
+        error: 'Date and time are required'
+      });
+    }
+
+    const lead = await Lead.findOne({ 
+      _id: req.params.id, 
+      branchId: req.user.branchId 
+    }).populate('interestedServices.serviceId');
+
+    if (!lead) {
+      return res.status(404).json({
+        success: false,
+        error: 'Lead not found'
+      });
+    }
+
+    if (lead.status === 'converted') {
+      return res.status(400).json({
+        success: false,
+        error: 'Lead has already been converted'
+      });
+    }
+
+    // Check if client exists, create if not
+    let client = await Client.findOne({ phone: lead.phone, branchId: req.user.branchId });
+    
+    if (!client) {
+      client = new Client({
+        name: lead.name,
+        phone: lead.phone,
+        email: lead.email,
+        branchId: req.user.branchId,
+        status: 'active'
+      });
+      await client.save();
+    }
+
+    // Create appointments for interested services
+    // Note: Custom services (without serviceId) will be skipped - they can be added manually later
+    const createdAppointments = [];
+    
+    for (const interestedService of lead.interestedServices) {
+      const serviceId = interestedService.serviceId?._id || interestedService.serviceId;
+      
+      // Skip custom services (those without a serviceId)
+      if (!serviceId) {
+        console.log(`Skipping custom service "${interestedService.serviceName}" - no serviceId available`);
+        continue;
+      }
+      
+      const service = await Service.findById(serviceId);
+      
+      if (!service) {
+        console.log(`Service with ID ${serviceId} not found, skipping`);
+        continue;
+      }
+
+      const appointmentData = {
+        clientId: client._id,
+        serviceId: serviceId,
+        date,
+        time,
+        duration: service.duration || 60,
+        status: 'scheduled',
+        notes: appointmentNotes || lead.notes || '',
+        price: service.price || 0,
+        branchId: req.user.branchId
+      };
+
+      // Handle staff assignments
+      if (staffAssignments && Array.isArray(staffAssignments)) {
+        appointmentData.staffAssignments = staffAssignments;
+      } else if (staffId) {
+        appointmentData.staffId = staffId;
+        appointmentData.staffAssignments = [{
+          staffId: staffId,
+          percentage: 100,
+          role: 'primary'
+        }];
+      } else if (lead.assignedStaffId) {
+        appointmentData.staffId = lead.assignedStaffId;
+        appointmentData.staffAssignments = [{
+          staffId: lead.assignedStaffId,
+          percentage: 100,
+          role: 'primary'
+        }];
+      }
+
+      const newAppointment = new Appointment(appointmentData);
+      const savedAppointment = await newAppointment.save();
+      const populatedAppointment = await Appointment.findById(savedAppointment._id)
+        .populate('clientId', 'name phone')
+        .populate('serviceId', 'name price')
+        .populate('staffId', 'name');
+      
+      createdAppointments.push(populatedAppointment);
+    }
+
+    // Update lead status
+    lead.status = 'converted';
+    lead.convertedToAppointmentId = createdAppointments[0]?._id;
+    lead.convertedToClientId = client._id;
+    lead.convertedAt = new Date();
+    await lead.save();
+
+    // Log conversion activity
+    try {
+      const { LeadActivity } = req.businessModels;
+      await LeadActivity.create({
+        leadId: lead._id,
+        activityType: 'converted',
+        performedBy: req.user.userId,
+        performedByName: req.user.name || req.user.email || 'System',
+        newValue: {
+          appointmentIds: createdAppointments.map(a => a._id),
+          clientId: client._id
+        },
+        description: `Lead converted to ${createdAppointments.length} appointment(s) and client`,
+        details: {
+          appointmentCount: createdAppointments.length,
+          clientName: client.name
+        },
+        branchId: req.user.branchId
+      });
+    } catch (activityError) {
+      console.error('Error logging lead conversion activity:', activityError);
+      // Don't fail the request if activity logging fails
+    }
+
+    res.json({
+      success: true,
+      data: {
+        lead,
+        appointments: createdAppointments,
+        client
+      },
+      message: 'Lead converted to appointment successfully'
+    });
+  } catch (error) {
+    console.error('Error converting lead to appointment:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Delete lead
+app.delete('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'delete'), async (req, res) => {
+  try {
+    const { Lead } = req.businessModels;
+    const deletedLead = await Lead.findOneAndDelete({ 
+      _id: req.params.id, 
+      branchId: req.user.branchId 
+    });
+
+    if (!deletedLead) {
+      return res.status(404).json({
+        success: false,
+        error: 'Lead not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Lead deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting lead:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // Services routes
 app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
