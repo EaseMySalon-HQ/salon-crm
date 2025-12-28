@@ -309,13 +309,19 @@ adminSettingsSchema.statics.updateSettings = async function(category, updates) {
   // Deep merge function for nested objects
   const deepMerge = (target, source) => {
     for (const key in source) {
-      if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key]) && !(source[key] instanceof Date) && !(source[key] instanceof mongoose.Types.ObjectId)) {
-        if (!target[key]) {
-          target[key] = {};
+      // Check if the value exists (including false, 0, empty string, null, undefined)
+      // Use hasOwnProperty to check if key exists, and check if value is not undefined
+      if (source.hasOwnProperty(key) && source[key] !== undefined) {
+        // Check if it's an object that should be merged (not null, not array, not Date, not ObjectId)
+        if (source[key] !== null && typeof source[key] === 'object' && !Array.isArray(source[key]) && !(source[key] instanceof Date) && !(source[key] instanceof mongoose.Types.ObjectId)) {
+          if (!target[key] || typeof target[key] !== 'object') {
+            target[key] = {};
+          }
+          deepMerge(target[key], source[key]);
+        } else {
+          // For primitives (including false, 0, empty string), boolean false, etc., directly assign
+          target[key] = source[key];
         }
-        deepMerge(target[key], source[key]);
-      } else {
-        target[key] = source[key];
       }
     }
   };
@@ -331,12 +337,14 @@ adminSettingsSchema.statics.updateSettings = async function(category, updates) {
       }
       
       // Log before merge for debugging
+      console.log('🔄 [updateSettings] Before merge - enabled:', settings[category].whatsapp.enabled, 'Updates enabled:', updates.whatsapp.enabled);
       console.log('🔄 [updateSettings] Before merge - templateJavaScriptCodes keys:', Object.keys(settings[category].whatsapp.templateJavaScriptCodes || {}));
       console.log('🔄 [updateSettings] Updates - templateJavaScriptCodes keys:', Object.keys(updates.whatsapp.templateJavaScriptCodes || {}));
       
       deepMerge(settings[category].whatsapp, updates.whatsapp);
       
       // Log after merge for debugging
+      console.log('🔄 [updateSettings] After merge - enabled:', settings[category].whatsapp.enabled);
       console.log('🔄 [updateSettings] After merge - templateJavaScriptCodes keys:', Object.keys(settings[category].whatsapp.templateJavaScriptCodes || {}));
       
       // Mark Mixed type fields as modified for Mongoose

@@ -755,6 +755,7 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     // Log what we're receiving for debugging
     if (category === 'notifications' && updates.whatsapp) {
       console.log('📤 [Backend PUT] Received WhatsApp settings:', {
+        enabled: updates.whatsapp.enabled,
         hasTemplateJavaScriptCodes: !!updates.whatsapp.templateJavaScriptCodes,
         hasTemplateVariables: !!updates.whatsapp.templateVariables,
         templateJavaScriptCodesKeys: Object.keys(updates.whatsapp.templateJavaScriptCodes || {}),
@@ -769,6 +770,7 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     // Log what we're returning for debugging
     if (category === 'notifications' && settingsObj.notifications?.whatsapp) {
       console.log('📥 [Backend PUT] Returning WhatsApp settings:', {
+        enabled: settingsObj.notifications.whatsapp.enabled,
         hasTemplateJavaScriptCodes: !!settingsObj.notifications.whatsapp.templateJavaScriptCodes,
         hasTemplateVariables: !!settingsObj.notifications.whatsapp.templateVariables,
         templateJavaScriptCodesKeys: Object.keys(settingsObj.notifications.whatsapp.templateJavaScriptCodes || {}),
