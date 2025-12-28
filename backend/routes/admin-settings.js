@@ -718,6 +718,15 @@ router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     const settings = await AdminSettings.getSettings();
     const settingsObj = settings.toObject();
     
+    // Log WhatsApp settings if category is notifications
+    if (category === 'notifications' && settingsObj.notifications?.whatsapp) {
+      console.log('📥 [Backend GET] Returning WhatsApp settings:', {
+        enabled: settingsObj.notifications.whatsapp.enabled,
+        enabledType: typeof settingsObj.notifications.whatsapp.enabled,
+        hasWhatsapp: !!settingsObj.notifications.whatsapp
+      });
+    }
+    
     if (!settingsObj[category]) {
       return res.status(404).json({
         success: false,
@@ -733,6 +742,7 @@ router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     console.error('Error fetching admin settings category:', error);
     // Fallback to in-memory settings
     if (adminSettingsFallback[req.params.category]) {
+      console.log('⚠️ [Backend GET] Using fallback settings for category:', req.params.category);
       return res.json({
         success: true,
         data: adminSettingsFallback[req.params.category]

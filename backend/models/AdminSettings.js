@@ -239,7 +239,52 @@ adminSettingsSchema.statics.getSettings = async function() {
   let settings = await this.findOne();
   if (!settings) {
     settings = await this.create({});
+  }
+  
+  // Ensure WhatsApp settings structure exists with proper defaults
+  if (!settings.notifications) {
+    settings.notifications = {};
+  }
+  if (!settings.notifications.whatsapp) {
+    settings.notifications.whatsapp = {
+      enabled: false,
+      provider: 'msg91',
+      msg91ApiKey: '',
+      msg91SenderId: '',
+      templateIncludesBaseUrl: true,
+      templates: {
+        welcomeMessage: '',
+        businessAccountCreated: '',
+        receipt: '',
+        receiptCancellation: '',
+        appointmentScheduling: '',
+        appointmentConfirmation: '',
+        appointmentCancellation: '',
+        appointmentReminder: '',
+        default: ''
+      },
+      templateVariables: {},
+      templateJavaScriptCodes: {},
+      receiptNotifications: true,
+      appointmentNotifications: true,
+      systemAlerts: false,
+      quietHours: {
+        enabled: false,
+        start: '22:00',
+        end: '08:00'
+      }
+    };
+    await settings.save();
   } else {
+    // Ensure enabled field exists, but only set to false if it's truly undefined
+    // Don't overwrite existing false/true values
+    if (!settings.notifications.whatsapp.hasOwnProperty('enabled')) {
+      settings.notifications.whatsapp.enabled = false;
+      await settings.save();
+    }
+  }
+  
+  if (settings) {
     // Ensure new templates are added to existing settings
     const defaultTemplates = {
       receiptNotification: {
@@ -373,13 +418,20 @@ adminSettingsSchema.statics.updateSettings = async function(category, updates) {
   
   // Log before save for debugging
   if (category === 'notifications' && settings.notifications?.whatsapp) {
+    console.log('💾 [updateSettings] Before save - enabled:', settings.notifications.whatsapp.enabled);
     console.log('💾 [updateSettings] Before save - templateJavaScriptCodes keys:', Object.keys(settings.notifications.whatsapp.templateJavaScriptCodes || {}));
+  }
+  
+  // Mark the entire whatsapp object as modified to ensure all fields are saved
+  if (category === 'notifications' && updates.whatsapp) {
+    settings.markModified('notifications.whatsapp');
   }
   
   await settings.save();
   
   // Log after save for debugging
   if (category === 'notifications' && settings.notifications?.whatsapp) {
+    console.log('✅ [updateSettings] After save - enabled:', settings.notifications.whatsapp.enabled);
     console.log('✅ [updateSettings] After save - templateJavaScriptCodes keys:', Object.keys(settings.notifications.whatsapp.templateJavaScriptCodes || {}));
   }
   
