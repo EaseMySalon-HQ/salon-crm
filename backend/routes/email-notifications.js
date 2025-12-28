@@ -137,11 +137,12 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
     
     // If we have saved settings, use them directly (only merge missing nested properties)
     // Check if settings exist and are not just an empty object
+    // Use hasOwnProperty to properly check for boolean false values
     const hasSavedSettings = dbWhatsappSettings && 
                              typeof dbWhatsappSettings === 'object' && 
                              !Array.isArray(dbWhatsappSettings) &&
-                             (dbWhatsappSettings.enabled !== undefined || 
-                              dbWhatsappSettings.receiptNotifications !== undefined ||
+                             (dbWhatsappSettings.hasOwnProperty('enabled') || 
+                              dbWhatsappSettings.hasOwnProperty('receiptNotifications') ||
                               Object.keys(dbWhatsappSettings).length > 0);
     
     console.log('📱 [GET Settings] hasSavedSettings check:', {
@@ -157,10 +158,17 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
     if (hasSavedSettings) {
       console.log('📱 [GET Settings] ✅ Using saved settings from database');
       console.log('📱 [GET Settings] dbWhatsappSettings.enabled:', dbWhatsappSettings.enabled);
+      console.log('📱 [GET Settings] dbWhatsappSettings.hasOwnProperty("enabled"):', dbWhatsappSettings.hasOwnProperty('enabled'));
+      
       // We have saved settings - use saved values as base, only fill in missing nested properties
+      // Explicitly preserve enabled field from saved settings (even if false)
       mergedWhatsappSettings = {
-        // Start with saved settings (this preserves enabled: true)
+        // Start with defaults first
+        ...defaultWhatsappSettings,
+        // Then override with saved settings (this preserves enabled: true/false from DB)
         ...dbWhatsappSettings,
+        // Explicitly set enabled from saved settings if it exists
+        enabled: dbWhatsappSettings.hasOwnProperty('enabled') ? dbWhatsappSettings.enabled : defaultWhatsappSettings.enabled,
         // Only merge nested objects if they exist in saved settings, otherwise use defaults
         receiptNotifications: dbWhatsappSettings.receiptNotifications ? {
           ...defaultWhatsappSettings.receiptNotifications,
@@ -249,32 +257,46 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
       if (!business.settings.whatsappNotificationSettings) {
         business.settings.whatsappNotificationSettings = {};
       }
-      business.settings.whatsappNotificationSettings = {
+      
+      // Deep merge for nested objects first
+      const newWhatsappSettings = {
         ...business.settings.whatsappNotificationSettings,
-        ...req.body.whatsappNotificationSettings
+        ...req.body.whatsappNotificationSettings,
+        // Explicitly set enabled field if it exists in request (even if false)
+        enabled: req.body.whatsappNotificationSettings.hasOwnProperty('enabled') 
+          ? req.body.whatsappNotificationSettings.enabled 
+          : business.settings.whatsappNotificationSettings.enabled
       };
       
-      // Deep merge for nested objects
+      // Deep merge nested objects
       if (req.body.whatsappNotificationSettings.receiptNotifications) {
-        business.settings.whatsappNotificationSettings.receiptNotifications = {
+        newWhatsappSettings.receiptNotifications = {
           ...(business.settings.whatsappNotificationSettings.receiptNotifications || {}),
           ...req.body.whatsappNotificationSettings.receiptNotifications
         };
       }
       if (req.body.whatsappNotificationSettings.appointmentNotifications) {
-        business.settings.whatsappNotificationSettings.appointmentNotifications = {
+        newWhatsappSettings.appointmentNotifications = {
           ...(business.settings.whatsappNotificationSettings.appointmentNotifications || {}),
           ...req.body.whatsappNotificationSettings.appointmentNotifications
         };
       }
       if (req.body.whatsappNotificationSettings.systemAlerts) {
-        business.settings.whatsappNotificationSettings.systemAlerts = {
+        newWhatsappSettings.systemAlerts = {
           ...(business.settings.whatsappNotificationSettings.systemAlerts || {}),
           ...req.body.whatsappNotificationSettings.systemAlerts
         };
       }
       
-      console.log('📱 [PUT Settings] WhatsApp settings after merge (before save):', JSON.stringify(business.settings.whatsappNotificationSettings, null, 2));
+      // Set the entire object
+      business.settings.whatsappNotificationSettings = newWhatsappSettings;
+      
+      console.log('📱 [PUT Settings] WhatsApp settings after merge (before save):', {
+        enabled: business.settings.whatsappNotificationSettings.enabled,
+        enabledType: typeof business.settings.whatsappNotificationSettings.enabled,
+        hasEnabled: business.settings.whatsappNotificationSettings.hasOwnProperty('enabled'),
+        fullSettings: JSON.stringify(business.settings.whatsappNotificationSettings, null, 2)
+      });
       
       // Mark nested object as modified for Mongoose - mark both the nested path and parent
       business.markModified('settings');
