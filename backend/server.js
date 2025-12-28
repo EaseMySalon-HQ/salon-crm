@@ -105,6 +105,7 @@ app.use('/api/admin/plans', require('./routes/admin-plans'));
 app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
+app.use('/api/whatsapp', require('./routes/whatsapp'));
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
@@ -5200,6 +5201,132 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       // Don't fail appointment creation if email fails
     }
 
+    // Send WhatsApp appointment confirmation if enabled
+    try {
+      const whatsappService = require('./services/whatsapp-service');
+      await whatsappService.initialize();
+      
+      if (whatsappService.enabled) {
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        const WhatsAppMessageLog = mainConnection.model('WhatsAppMessageLog', require('./models/WhatsAppMessageLog').schema);
+        
+        const adminSettings = await AdminSettings.getSettings();
+        const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
+        const adminAppointmentNotificationsEnabled = adminSettings?.notifications?.whatsapp?.appointmentNotifications === true;
+        
+        console.log('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
+        console.log('📱 [WhatsApp] Admin Appointment Notifications enabled:', adminAppointmentNotificationsEnabled);
+        
+        if (whatsappEnabled && adminAppointmentNotificationsEnabled) {
+          const business = await Business.findById(req.user.branchId);
+          const whatsappSettings = business?.settings?.whatsappNotificationSettings;
+          const businessWhatsappEnabled = whatsappSettings?.enabled === true;
+          const appointmentWhatsappEnabled = whatsappSettings?.appointmentNotifications?.enabled === true;
+          const confirmationsEnabled = whatsappSettings?.appointmentNotifications?.confirmations === true;
+          
+          if (businessWhatsappEnabled && appointmentWhatsappEnabled && confirmationsEnabled) {
+            // Check quiet hours
+            const quietHours = adminSettings?.notifications?.whatsapp?.quietHours;
+            const inQuietHours = whatsappService.isQuietHours(quietHours);
+            
+            if (!inQuietHours) {
+              const { Client, Staff } = req.businessModels;
+              
+              for (const appointment of createdAppointments) {
+                // Get client
+                let client = null;
+                if (appointment.clientId && typeof appointment.clientId === 'object') {
+                  client = appointment.clientId;
+                } else {
+                  const clientId = appointment.clientId?._id || appointment.clientId;
+                  if (clientId) {
+                    client = await Client.findById(clientId);
+                  }
+                }
+                
+                if (client?.phone) {
+                  try {
+                    // Get service name
+                    let serviceName = 'Service';
+                    if (appointment.serviceId) {
+                      if (typeof appointment.serviceId === 'object' && appointment.serviceId.name) {
+                        serviceName = appointment.serviceId.name;
+                      } else {
+                        const { Service } = req.businessModels;
+                        const service = await Service.findById(appointment.serviceId);
+                        serviceName = service?.name || 'Service';
+                      }
+                    }
+                    
+                    // Get staff name
+                    let staffName = 'Not assigned';
+                    if (appointment.staffId) {
+                      if (typeof appointment.staffId === 'object' && appointment.staffId.name) {
+                        staffName = appointment.staffId.name;
+                      } else {
+                        const staff = await Staff.findById(appointment.staffId);
+                        staffName = staff?.name || 'Not assigned';
+                      }
+                    } else if (appointment.staffAssignments && appointment.staffAssignments.length > 0) {
+                      const firstAssignment = appointment.staffAssignments[0];
+                      if (firstAssignment.staffId && typeof firstAssignment.staffId === 'object' && firstAssignment.staffId.name) {
+                        staffName = firstAssignment.staffId.name;
+                      } else if (firstAssignment.staffId) {
+                        const staff = await Staff.findById(firstAssignment.staffId);
+                        staffName = staff?.name || 'Not assigned';
+                      }
+                    }
+                    
+                    const result = await whatsappService.sendAppointmentConfirmation({
+                      to: client.phone,
+                      clientName: client.name || 'Client',
+                      appointmentData: {
+                        serviceName: serviceName,
+                        date: appointment.date,
+                        time: appointment.time,
+                        staffName: staffName,
+                        businessName: business.name,
+                        businessPhone: business.contact?.phone
+                      }
+                    });
+                    
+                    // Log to WhatsAppMessageLog
+                    await WhatsAppMessageLog.create({
+                      businessId: business._id,
+                      recipientPhone: client.phone,
+                      messageType: 'appointment',
+                      status: result.success ? 'sent' : 'failed',
+                      msg91Response: result.data || null,
+                      relatedEntityId: appointment._id,
+                      relatedEntityType: 'Appointment',
+                      error: result.error || null,
+                      timestamp: new Date()
+                    });
+                    
+                    if (result.success) {
+                      console.log(`✅ Appointment WhatsApp sent to client: ${client.phone}`);
+                    } else {
+                      console.error(`❌ Failed to send appointment WhatsApp to ${client.phone}:`, result.error);
+                    }
+                  } catch (whatsappError) {
+                    console.error('❌ Error sending appointment WhatsApp to client:', whatsappError);
+                  }
+                }
+              }
+            } else {
+              console.log('📱 WhatsApp quiet hours active, skipping appointment message');
+            }
+          }
+        }
+      }
+    } catch (whatsappError) {
+      console.error('Error sending appointment WhatsApp:', whatsappError);
+      // Don't fail appointment creation if WhatsApp fails
+    }
+
     res.status(201).json({
       success: true,
       data: createdAppointments,
@@ -5428,6 +5555,98 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
     } catch (emailError) {
       console.error('Error sending receipt email:', emailError);
       // Don't fail receipt creation if email fails
+    }
+
+    // Send WhatsApp receipt if enabled
+    try {
+      const whatsappService = require('./services/whatsapp-service');
+      await whatsappService.initialize();
+      
+      if (whatsappService.enabled) {
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        const WhatsAppMessageLog = mainConnection.model('WhatsAppMessageLog', require('./models/WhatsAppMessageLog').schema);
+        
+        const adminSettings = await AdminSettings.getSettings();
+        const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
+        const adminReceiptNotificationsEnabled = adminSettings?.notifications?.whatsapp?.receiptNotifications === true;
+        
+        if (whatsappEnabled && adminReceiptNotificationsEnabled) {
+          // Use lean() to get plain object so nested objects are accessible
+          const business = await Business.findById(req.user.branchId).lean();
+          const whatsappSettings = business?.settings?.whatsappNotificationSettings;
+          const businessWhatsappEnabled = whatsappSettings?.enabled === true;
+          const receiptNotificationsEnabled = whatsappSettings?.receiptNotifications?.enabled === true;
+          const autoSendEnabled = whatsappSettings?.receiptNotifications?.autoSendToClients === true;
+          
+          if (businessWhatsappEnabled && receiptNotificationsEnabled && autoSendEnabled) {
+            // Check quiet hours
+            const quietHours = adminSettings?.notifications?.whatsapp?.quietHours;
+            const inQuietHours = whatsappService.isQuietHours(quietHours);
+            
+            if (!inQuietHours) {
+              const { Client } = req.businessModels;
+              const client = await Client.findById(clientId);
+              
+              if (client?.phone) {
+                try {
+                  // Get receipt link
+                  let receiptLink = null;
+                  try {
+                    const { Sale } = req.businessModels;
+                    const relatedSale = await Sale.findOne({ billNo: savedReceipt.receiptNumber });
+                    if (relatedSale?.shareToken) {
+                      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+                      receiptLink = `${frontendUrl}/receipt/public/${relatedSale.billNo}/${relatedSale.shareToken}`;
+                    }
+                  } catch (saleLookupError) {
+                    console.warn('⚠️ Error looking up related sale for WhatsApp:', saleLookupError.message);
+                  }
+                  
+                  const result = await whatsappService.sendReceipt({
+                    to: client.phone,
+                    clientName: client.name,
+                    receiptNumber: savedReceipt.receiptNumber,
+                    receiptData: {
+                      businessName: business.name,
+                      total: savedReceipt.total
+                    },
+                    receiptLink: receiptLink
+                  });
+                  
+                  // Log to WhatsAppMessageLog
+                  await WhatsAppMessageLog.create({
+                    businessId: business._id,
+                    recipientPhone: client.phone,
+                    messageType: 'receipt',
+                    status: result.success ? 'sent' : 'failed',
+                    msg91Response: result.data || null,
+                    relatedEntityId: savedReceipt._id,
+                    relatedEntityType: 'Receipt',
+                    error: result.error || null,
+                    timestamp: new Date()
+                  });
+                  
+                  if (result.success) {
+                    console.log(`✅ Receipt WhatsApp sent to client: ${client.phone}`);
+                  } else {
+                    console.error(`❌ Failed to send receipt WhatsApp to ${client.phone}:`, result.error);
+                  }
+                } catch (whatsappError) {
+                  console.error('❌ Error sending receipt WhatsApp to client:', whatsappError);
+                }
+              }
+            } else {
+              console.log('📱 WhatsApp quiet hours active, skipping receipt message');
+            }
+          }
+        }
+      }
+    } catch (whatsappError) {
+      console.error('Error sending receipt WhatsApp:', whatsappError);
+      // Don't fail receipt creation if WhatsApp fails
     }
 
     res.status(201).json({
@@ -6118,10 +6337,171 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       // Don't fail sale creation if email fails
     }
 
+    // Send WhatsApp receipt if enabled
+    const whatsappStatus = { sent: false, error: null };
+    try {
+      console.log('📱 [WhatsApp] Starting WhatsApp receipt sending for sale...');
+      const whatsappService = require('./services/whatsapp-service');
+      await whatsappService.initialize();
+      
+      console.log('📱 [WhatsApp] Service initialized. Enabled:', whatsappService.enabled);
+      
+      if (whatsappService.enabled) {
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        const WhatsAppMessageLog = mainConnection.model('WhatsAppMessageLog', require('./models/WhatsAppMessageLog').schema);
+        
+        const adminSettings = await AdminSettings.getSettings();
+        const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
+        const adminReceiptNotificationsEnabled = adminSettings?.notifications?.whatsapp?.receiptNotifications === true; // Admin master switch
+        
+        console.log('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
+        console.log('📱 [WhatsApp] Admin Receipt Notifications enabled:', adminReceiptNotificationsEnabled);
+        
+        if (whatsappEnabled && adminReceiptNotificationsEnabled) { // Check admin master switch
+          // Use lean() to get plain object so nested objects are accessible
+          const business = await Business.findById(req.user.branchId).lean();
+          
+          // Debug: Log the entire business object structure
+          console.log('📱 [WhatsApp] Business object structure:', {
+            hasBusiness: !!business,
+            hasSettings: !!business?.settings,
+            settingsKeys: business?.settings ? Object.keys(business.settings) : [],
+            hasWhatsappSettings: !!business?.settings?.whatsappNotificationSettings,
+            whatsappSettingsEnabled: business?.settings?.whatsappNotificationSettings?.enabled,
+            fullBusinessSettings: JSON.stringify(business?.settings, null, 2)
+          });
+          
+          // Access WhatsApp settings from plain object (accessible with lean())
+          const whatsappSettings = business?.settings?.whatsappNotificationSettings;
+          const businessWhatsappEnabled = whatsappSettings?.enabled === true;
+          const receiptNotificationsEnabled = whatsappSettings?.receiptNotifications?.enabled === true;
+          const autoSendEnabled = whatsappSettings?.receiptNotifications?.autoSendToClients === true;
+          
+          console.log('📱 [WhatsApp] Business settings:', {
+            businessWhatsappEnabled,
+            receiptNotificationsEnabled,
+            autoSendEnabled,
+            whatsappSettings: JSON.stringify(whatsappSettings, null, 2)
+          });
+          
+          if (businessWhatsappEnabled && receiptNotificationsEnabled && autoSendEnabled) {
+            // Check quiet hours
+            const quietHours = adminSettings?.notifications?.whatsapp?.quietHours;
+            const inQuietHours = whatsappService.isQuietHours(quietHours);
+            
+            console.log('📱 [WhatsApp] Quiet hours check:', { inQuietHours, quietHours });
+            
+            if (!inQuietHours) {
+              // Get client phone number from sale
+              const customerPhone = sale?.customerPhone || sale?.customerMobile;
+              
+              console.log('📱 [WhatsApp] Customer phone from sale:', customerPhone);
+              
+              if (customerPhone) {
+                try {
+                  // Generate receipt link for WhatsApp (use savedSale which has shareToken)
+                  let whatsappReceiptLink = null;
+                  const saleForWhatsapp = savedSale || sale;
+                  if (saleForWhatsapp?.shareToken) {
+                    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+                    whatsappReceiptLink = `${frontendUrl}/receipt/public/${saleForWhatsapp.billNo}/${saleForWhatsapp.shareToken}`;
+                    console.log(`📱 [WhatsApp] Receipt link generated: ${whatsappReceiptLink}`);
+                  } else {
+                    console.warn('⚠️ [WhatsApp] Sale does not have shareToken, receipt link will be null');
+                  }
+                  
+                  const result = await whatsappService.sendReceipt({
+                    to: customerPhone,
+                    clientName: sale.customerName || 'Customer',
+                    receiptNumber: sale.billNo,
+                    receiptData: {
+                      businessName: business?.name || 'Business',
+                      total: sale.netTotal || sale.grossTotal || 0
+                    },
+                    receiptLink: whatsappReceiptLink
+                  });
+                  
+                  // Log to WhatsAppMessageLog
+                  await WhatsAppMessageLog.create({
+                    businessId: business._id,
+                    recipientPhone: customerPhone,
+                    messageType: 'receipt',
+                    status: result.success ? 'sent' : 'failed',
+                    msg91Response: result.data || null,
+                    relatedEntityId: savedSale?._id || sale._id,
+                    relatedEntityType: 'Sale',
+                    error: result.error || null,
+                    timestamp: new Date()
+                  });
+                  
+                  if (result.success) {
+                    console.log(`✅ Sale receipt WhatsApp sent to client: ${customerPhone}`);
+                    whatsappStatus.sent = true;
+                  } else {
+                    console.error(`❌ Failed to send sale receipt WhatsApp to ${customerPhone}:`, result.error);
+                    whatsappStatus.error = result.error;
+                  }
+                } catch (whatsappError) {
+                  console.error('❌ Error sending sale receipt WhatsApp to client:', whatsappError);
+                  console.error('❌ Error stack:', whatsappError.stack);
+                  whatsappStatus.error = whatsappError.message;
+                }
+              } else {
+                console.log('📱 [WhatsApp] No customer phone number found in sale');
+                whatsappStatus.error = 'No customer phone number';
+              }
+            } else {
+              console.log('📱 [WhatsApp] Quiet hours active, skipping sale receipt message');
+              whatsappStatus.error = 'Quiet hours active';
+            }
+          } else {
+            console.log('📱 [WhatsApp] Business WhatsApp settings not enabled:', {
+              businessWhatsappEnabled,
+              receiptNotificationsEnabled,
+              autoSendEnabled
+            });
+            
+            // Provide specific error message
+            if (!businessWhatsappEnabled) {
+              whatsappStatus.error = 'WhatsApp is not enabled for this business. Please enable it in Business Settings → Notifications → WhatsApp.';
+            } else if (!receiptNotificationsEnabled) {
+              whatsappStatus.error = 'Receipt notifications are not enabled for this business. Please enable them in Business Settings → Notifications → WhatsApp.';
+            } else if (!autoSendEnabled) {
+              whatsappStatus.error = 'Auto-send receipts is not enabled for this business. Please enable it in Business Settings → Notifications → WhatsApp.';
+            } else {
+              whatsappStatus.error = 'WhatsApp notifications disabled for this business or receipt type';
+            }
+          }
+        } else {
+          if (!whatsappEnabled) {
+            console.log('📱 [WhatsApp] WhatsApp not enabled at admin level');
+            whatsappStatus.error = 'WhatsApp not enabled at admin level';
+          } else if (!adminReceiptNotificationsEnabled) {
+            console.log('📱 [WhatsApp] Receipt notifications not enabled at admin level');
+            whatsappStatus.error = 'Receipt notifications not enabled at admin level';
+          }
+        }
+      } else {
+        console.log('📱 [WhatsApp] WhatsApp service not configured (enabled=false)');
+        whatsappStatus.error = 'WhatsApp service not configured';
+      }
+    } catch (whatsappError) {
+      console.error('❌ [WhatsApp] Error in WhatsApp sending block:', whatsappError);
+      console.error('❌ [WhatsApp] Error stack:', whatsappError.stack);
+      whatsappStatus.error = whatsappError.message;
+      // Don't fail sale creation if WhatsApp fails
+    }
+    
+    console.log('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
+
     res.status(201).json({ 
       success: true, 
       data: savedSale || sale,
-      emailStatus: emailStatus // Include email sending status in response
+      emailStatus: emailStatus, // Include email sending status in response
+      whatsappStatus: whatsappStatus // Include WhatsApp sending status in response
     });
   } catch (err) {
     console.error('❌ Sales creation error:', err);

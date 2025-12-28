@@ -2208,6 +2208,20 @@ export function QuickSale() {
               console.warn('⚠️ No email status in response')
             }
             
+            // Check WhatsApp status if available
+            if (result.whatsappStatus) {
+              console.log('📱 WhatsApp Status from backend:', result.whatsappStatus)
+              if (result.whatsappStatus.sent) {
+                console.log('✅ Receipt WhatsApp sent successfully!')
+              } else if (result.whatsappStatus.error) {
+                console.warn('⚠️ WhatsApp sending failed:', result.whatsappStatus.error)
+              } else {
+                console.warn('⚠️ WhatsApp not sent. Status:', result.whatsappStatus)
+              }
+            } else {
+              console.warn('⚠️ No WhatsApp status in response')
+            }
+            
             // Mark linked appointment as completed if fully paid
             if (linkedAppointmentId && (totalPaid >= calculatedTotal || result.data?.status === 'completed')) {
               try {

@@ -110,6 +110,28 @@ const businessSchema = new mongoose.Schema({
         paymentFailures: { type: Boolean, default: false },
         systemErrors: { type: Boolean, default: false },
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      
+      // WhatsApp Notification Configuration
+      whatsappNotificationSettings: {
+        enabled: { type: Boolean, default: false },
+        receiptNotifications: {
+          enabled: { type: Boolean, default: false },
+          autoSendToClients: { type: Boolean, default: true },
+          highValueThreshold: { type: Number, default: 0 }
+        },
+        appointmentNotifications: {
+          enabled: { type: Boolean, default: false },
+          newAppointments: { type: Boolean, default: false },
+          confirmations: { type: Boolean, default: false },
+          reminders: { type: Boolean, default: false },
+          cancellations: { type: Boolean, default: false }
+        },
+        systemAlerts: {
+          enabled: { type: Boolean, default: false },
+          lowInventory: { type: Boolean, default: false },
+          paymentFailures: { type: Boolean, default: false }
+        }
       }
     },
     

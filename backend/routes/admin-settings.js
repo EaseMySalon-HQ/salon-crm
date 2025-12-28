@@ -442,6 +442,30 @@ let adminSettingsFallback = {
         twilioAuthToken: "",
         twilioFromNumber: ""
       },
+      whatsappService: {
+        enabled: false,
+        provider: "msg91",
+        msg91ApiKey: "",
+        msg91SenderId: "",
+        templateIncludesBaseUrl: true, // If true, template already has base URL, only pass path variables
+        templates: {
+          welcomeMessage: "",
+          businessAccountCreated: "",
+          receipt: "",
+          receiptCancellation: "",
+          appointmentScheduling: "",
+          appointmentConfirmation: "",
+          appointmentCancellation: "",
+          appointmentReminder: "",
+          default: ""
+        },
+        templateVariables: {},
+        templateJavaScriptCodes: {},
+        msg91TemplateId: "", // Legacy field for backward compatibility
+        receiptNotifications: true,
+        appointmentNotifications: true,
+        systemAlerts: false
+      },
       analytics: {
         enabled: false,
         provider: "google",
@@ -480,6 +504,208 @@ router.get('/', authenticateAdmin, setupMainDatabase, async (req, res) => {
     res.json({
       success: true,
       data: adminSettingsFallback
+    });
+  }
+});
+
+// POST /api/admin/settings/test/:type - Test specific settings
+// IMPORTANT: This route must be defined BEFORE /:category to avoid route conflicts
+const formatErrorMessage = (error) => {
+  if (!error) return 'Failed to send test email';
+  if (typeof error === 'string') return error;
+  if (error.message) return error.message;
+  if (error.error?.message) return error.error.message;
+  try {
+    return JSON.stringify(error);
+  } catch (jsonError) {
+    return 'Unknown error occurred';
+  }
+};
+
+router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res) => {
+  try {
+    console.log(`🔔 Test endpoint hit: /test/${req.params.type}`, req.method, req.url);
+    const { type } = req.params;
+    const { email, phone, templateType, settings: testSettings } = req.body;
+    console.log(`📱 Test endpoint called with type: ${type}, phone: ${phone}, templateType: ${templateType}, hasSettings: ${!!testSettings}`);
+    
+    switch (type) {
+      case 'email':
+        // Test email configuration
+        if (!email) {
+          return res.status(400).json({
+            success: false,
+            error: 'Email address is required'
+          });
+        }
+
+        const emailService = require('../services/email-service');
+        
+        // If test settings provided, temporarily update email service
+        if (testSettings) {
+          // Temporarily update config for testing
+          const originalConfig = emailService.config;
+          const originalProvider = emailService.provider;
+          emailService.config = { ...emailService.config, ...testSettings };
+          emailService.provider = testSettings.provider || emailService.provider;
+          emailService.enabled = testSettings.enabled !== false;
+          
+          try {
+            await emailService.setupProvider();
+            const result = await emailService.testConnection(email);
+            
+            // Restore original config
+            emailService.config = originalConfig;
+            emailService.provider = originalProvider;
+            await emailService.setupProvider();
+            
+            if (result.success) {
+              return res.json({
+                success: true,
+                message: 'Test email sent successfully'
+              });
+            } else {
+              console.error('Test email failed:', result.error);
+              return res.status(500).json({
+                success: false,
+                error: formatErrorMessage(result.error)
+              });
+            }
+          } catch (error) {
+            // Restore original config on error
+            emailService.config = originalConfig;
+            emailService.provider = originalProvider;
+            await emailService.setupProvider();
+            throw error;
+          }
+        } else {
+          // Use current configuration
+          const result = await emailService.testConnection(email);
+          
+          if (result.success) {
+            return res.json({
+              success: true,
+              message: 'Test email sent successfully'
+            });
+          } else {
+            console.error('Test email failed:', result.error);
+            return res.status(500).json({
+              success: false,
+              error: formatErrorMessage(result.error)
+            });
+          }
+        }
+        
+      case 'sms':
+        // Test SMS configuration
+        res.json({
+          success: true,
+          message: 'SMS test sent successfully'
+        });
+        break;
+        
+      case 'whatsapp':
+        // Test WhatsApp configuration
+        if (!phone) {
+          return res.status(400).json({
+            success: false,
+            error: 'Phone number is required'
+          });
+        }
+
+        const whatsappService = require('../services/whatsapp-service');
+        
+        // If test settings provided, temporarily update WhatsApp service
+        if (testSettings) {
+          // Ensure service is initialized first
+          if (!whatsappService.initialized) {
+            await whatsappService.initialize();
+          }
+          
+          const originalConfig = whatsappService.config;
+          const originalEnabled = whatsappService.enabled;
+          
+          // Temporarily set test config
+          whatsappService.config = {
+            ...(originalConfig || {}),
+            ...testSettings,
+            provider: 'msg91',
+            // Ensure templates object exists
+            templates: {
+              ...(originalConfig?.templates || {}),
+              ...(testSettings.templates || {})
+            }
+          };
+          // Check if at least one template is configured or legacy template ID exists
+          const hasTemplate = testSettings.templates?.[templateType || 'default'] || 
+                             testSettings.templates?.default || 
+                             testSettings.msg91TemplateId;
+          whatsappService.enabled = testSettings.enabled !== false && testSettings.msg91ApiKey && hasTemplate;
+          
+          try {
+            const result = await whatsappService.testConnection(phone, templateType || 'default');
+            
+            // Restore original config
+            whatsappService.config = originalConfig;
+            whatsappService.enabled = originalEnabled;
+            
+            if (result.success) {
+              return res.json({
+                success: true,
+                message: 'Test WhatsApp message sent successfully'
+              });
+            } else {
+              return res.status(500).json({
+                success: false,
+                error: formatErrorMessage(result.error)
+              });
+            }
+          } catch (error) {
+            // Restore original config on error
+            whatsappService.config = originalConfig;
+            whatsappService.enabled = originalEnabled;
+            throw error;
+          }
+        } else {
+          // Use current configuration
+          if (!whatsappService.initialized) {
+            await whatsappService.initialize();
+          }
+          const result = await whatsappService.testConnection(phone, templateType || 'default');
+          
+          if (result.success) {
+            return res.json({
+              success: true,
+              message: 'Test WhatsApp message sent successfully'
+            });
+          } else {
+            return res.status(500).json({
+              success: false,
+              error: formatErrorMessage(result.error)
+            });
+          }
+        }
+        break;
+        
+      case 'webhook':
+        // Test webhook configuration
+        res.json({
+          success: true,
+          message: 'Webhook test sent successfully'
+        });
+        break;
+        
+      default:
+        res.status(400).json({
+          success: false,
+          error: `Unknown test type: ${type}`
+        });
+    }
+  } catch (error) {
+    console.error(`Error testing ${req.params.type}:`, error);
+    res.status(500).json({
+      success: false,
+      error: formatErrorMessage(error)
     });
   }
 });
@@ -526,8 +752,29 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     const updates = req.body;
     const { AdminSettings } = req.mainModels;
     
+    // Log what we're receiving for debugging
+    if (category === 'notifications' && updates.whatsapp) {
+      console.log('📤 [Backend PUT] Received WhatsApp settings:', {
+        hasTemplateJavaScriptCodes: !!updates.whatsapp.templateJavaScriptCodes,
+        hasTemplateVariables: !!updates.whatsapp.templateVariables,
+        templateJavaScriptCodesKeys: Object.keys(updates.whatsapp.templateJavaScriptCodes || {}),
+        templateVariablesKeys: Object.keys(updates.whatsapp.templateVariables || {}),
+        templateJavaScriptCodesSample: updates.whatsapp.templateJavaScriptCodes ? Object.keys(updates.whatsapp.templateJavaScriptCodes).slice(0, 2) : []
+      })
+    }
+    
     const settings = await AdminSettings.updateSettings(category, updates);
     const settingsObj = settings.toObject();
+    
+    // Log what we're returning for debugging
+    if (category === 'notifications' && settingsObj.notifications?.whatsapp) {
+      console.log('📥 [Backend PUT] Returning WhatsApp settings:', {
+        hasTemplateJavaScriptCodes: !!settingsObj.notifications.whatsapp.templateJavaScriptCodes,
+        hasTemplateVariables: !!settingsObj.notifications.whatsapp.templateVariables,
+        templateJavaScriptCodesKeys: Object.keys(settingsObj.notifications.whatsapp.templateJavaScriptCodes || {}),
+        templateVariablesKeys: Object.keys(settingsObj.notifications.whatsapp.templateVariables || {})
+      })
+    }
     
     if (!settingsObj[category]) {
       return res.status(404).json({
@@ -545,6 +792,12 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     if (category === 'notifications' && updates.email) {
       const emailService = require('../services/email-service');
       await emailService.reloadConfiguration();
+    }
+    
+    // Reload WhatsApp service if WhatsApp settings changed
+    if (category === 'notifications' && updates.whatsapp) {
+      const whatsappService = require('../services/whatsapp-service');
+      await whatsappService.reloadConfiguration();
     }
     
     res.json({
@@ -699,121 +952,8 @@ router.post('/import', authenticateAdmin, (req, res) => {
   }
 });
 
-// POST /api/admin/settings/test/:type - Test specific settings
-const formatErrorMessage = (error) => {
-  if (!error) return 'Failed to send test email';
-  if (typeof error === 'string') return error;
-  if (error.message) return error.message;
-  if (error.error?.message) return error.error.message;
-  try {
-    return JSON.stringify(error);
-  } catch (jsonError) {
-    return 'Unknown error occurred';
-  }
-};
-
-router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res) => {
-  try {
-    const { type } = req.params;
-    const { email, settings: testSettings } = req.body;
-    
-    switch (type) {
-      case 'email':
-        // Test email configuration
-        if (!email) {
-          return res.status(400).json({
-            success: false,
-            error: 'Email address is required'
-          });
-        }
-
-        const emailService = require('../services/email-service');
-        
-        // If test settings provided, temporarily update email service
-        if (testSettings) {
-          // Temporarily update config for testing
-          const originalConfig = emailService.config;
-          const originalProvider = emailService.provider;
-          emailService.config = { ...emailService.config, ...testSettings };
-          emailService.provider = testSettings.provider || emailService.provider;
-          emailService.enabled = testSettings.enabled !== false;
-          
-          try {
-            await emailService.setupProvider();
-            const result = await emailService.testConnection(email);
-            
-            // Restore original config
-            emailService.config = originalConfig;
-            emailService.provider = originalProvider;
-            await emailService.setupProvider();
-            
-            if (result.success) {
-              return res.json({
-                success: true,
-                message: 'Test email sent successfully'
-              });
-            } else {
-              console.error('Test email failed:', result.error);
-              return res.status(500).json({
-                success: false,
-                error: formatErrorMessage(result.error)
-              });
-            }
-          } catch (error) {
-            // Restore original config on error
-            emailService.config = originalConfig;
-            emailService.provider = originalProvider;
-            await emailService.setupProvider();
-            throw error;
-          }
-        } else {
-          // Use current configuration
-          const result = await emailService.testConnection(email);
-          
-          if (result.success) {
-            return res.json({
-              success: true,
-              message: 'Test email sent successfully'
-            });
-          } else {
-            console.error('Test email failed:', result.error);
-            return res.status(500).json({
-              success: false,
-              error: formatErrorMessage(result.error)
-            });
-          }
-        }
-        
-      case 'sms':
-        // Test SMS configuration
-        res.json({
-          success: true,
-          message: 'SMS test sent successfully'
-        });
-        break;
-        
-      case 'webhook':
-        // Test webhook configuration
-        res.json({
-          success: true,
-          message: 'Webhook test sent successfully'
-        });
-        break;
-        
-      default:
-        res.status(400).json({
-          success: false,
-          error: 'Invalid test type'
-        });
-    }
-  } catch (error) {
-    console.error('Error testing admin settings:', error);
-    res.status(500).json({
-      success: false,
-      error: formatErrorMessage(error)
-    });
-  }
-});
+// Note: /test/:type route is defined earlier in the file (before /:category routes)
+// to avoid route conflicts. Do not duplicate it here.
 
 // Function to apply system settings changes
 function applySystemSettings(systemSettings) {

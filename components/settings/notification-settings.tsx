@@ -10,8 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { EmailNotificationsAPI } from "@/lib/api"
-import { Settings, Mail, Users, Clock, Calendar, Receipt, Download, AlertTriangle, TestTube, CheckCircle2, XCircle } from "lucide-react"
+import { Settings, Mail, Users, Clock, Calendar, Receipt, Download, AlertTriangle, TestTube, CheckCircle2, XCircle, MessageCircle } from "lucide-react"
 import { StaffEmailPreferencesModal } from "./staff-email-preferences-modal"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { WhatsAppBusinessSettings } from "./whatsapp-business-settings"
 
 interface StaffMember {
   _id: string
@@ -325,17 +327,38 @@ export function NotificationSettings() {
                 <Mail className="h-5 w-5 text-blue-600" />
               </div>
               <div>
-                <h2 className="text-2xl font-bold text-slate-800">Email Notification Settings</h2>
-                <p className="text-slate-600">Configure email notifications for your business. Only admin/manager can manage these settings.</p>
+                <h2 className="text-2xl font-bold text-slate-800">Notification Settings</h2>
+                <p className="text-slate-600">Configure notifications for your business. Only admin/manager can manage these settings.</p>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <Tabs defaultValue="email" className="w-full">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="email" className="flex items-center gap-2">
+            <Mail className="h-4 w-4" />
+            Email
+          </TabsTrigger>
+          <TabsTrigger value="whatsapp" className="flex items-center gap-2">
+            <MessageCircle className="h-4 w-4" />
+            WhatsApp
+          </TabsTrigger>
+          <TabsTrigger value="sms" className="flex items-center gap-2" disabled>
+            <AlertTriangle className="h-4 w-4" />
+            SMS
+            <Badge variant="secondary" className="ml-2">Coming Soon</Badge>
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="email" className="space-y-6 mt-6">
+          <div className="flex justify-end">
             <Button onClick={handleTestEmail} variant="outline" className="flex items-center gap-2">
               <TestTube className="h-4 w-4" />
               Send Test Email
             </Button>
           </div>
-        </div>
-      </div>
 
       {/* Email Notification Types Configuration */}
       <div className="space-y-4">
@@ -768,6 +791,33 @@ export function NotificationSettings() {
           onUpdate={handleStaffPreferencesUpdate}
         />
       )}
+        </TabsContent>
+
+        <TabsContent value="whatsapp" className="mt-6">
+          <WhatsAppBusinessSettings />
+        </TabsContent>
+
+        <TabsContent value="sms" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <AlertTriangle className="h-5 w-5 text-green-600" />
+                <span>SMS Configuration</span>
+              </CardTitle>
+              <CardDescription>
+                SMS notifications are coming soon
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-center py-8 text-gray-500">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p className="text-lg font-medium mb-2">SMS Notifications Coming Soon</p>
+                <p className="text-sm">We're working on adding SMS notification support. Stay tuned!</p>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

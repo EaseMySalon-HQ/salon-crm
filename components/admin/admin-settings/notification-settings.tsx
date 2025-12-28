@@ -16,10 +16,13 @@ import {
   AlertTriangle,
   Settings,
   TestTube,
-  Send
+  Send,
+  MessageCircle
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { WhatsAppAdminSettings } from "./whatsapp-admin-settings"
 
 interface NotificationSettingsProps {
   settings?: any
@@ -229,7 +232,24 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
   }
 
   return (
-    <div className="space-y-6">
+    <Tabs defaultValue="email" className="w-full">
+      <TabsList className="grid w-full grid-cols-3">
+        <TabsTrigger value="email" className="flex items-center gap-2">
+          <Mail className="h-4 w-4" />
+          Email
+        </TabsTrigger>
+        <TabsTrigger value="whatsapp" className="flex items-center gap-2">
+          <MessageCircle className="h-4 w-4" />
+          WhatsApp
+        </TabsTrigger>
+        <TabsTrigger value="sms" className="flex items-center gap-2" disabled>
+          <MessageSquare className="h-4 w-4" />
+          SMS
+          <Badge variant="secondary" className="ml-2">Coming Soon</Badge>
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="email" className="space-y-6 mt-6">
       {/* Email Configuration */}
       <Card>
         <CardHeader>
@@ -1000,6 +1020,42 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
           </div>
         </CardContent>
       </Card>
-    </div>
+      </TabsContent>
+
+      <TabsContent value="whatsapp" className="mt-6">
+        <WhatsAppAdminSettings 
+          settings={settings?.whatsapp}
+          onSettingsChange={(whatsappSettings) => {
+            // settings is already the notifications object, so just merge whatsapp into it
+            const newSettings = {
+              ...settings,
+              whatsapp: whatsappSettings
+            };
+            onSettingsChange(newSettings);
+          }}
+        />
+      </TabsContent>
+
+      <TabsContent value="sms" className="mt-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <MessageSquare className="h-5 w-5 text-green-600" />
+              <span>SMS Configuration</span>
+            </CardTitle>
+            <CardDescription>
+              SMS notifications are coming soon
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-center py-8 text-gray-500">
+              <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <p className="text-lg font-medium mb-2">SMS Notifications Coming Soon</p>
+              <p className="text-sm">We're working on adding SMS notification support. Stay tuned!</p>
+            </div>
+          </CardContent>
+        </Card>
+      </TabsContent>
+    </Tabs>
   )
 }

@@ -99,6 +99,52 @@ const adminSettingsSchema = new mongoose.Schema({
       maxRetries: { type: Number, default: 3 },
       retryDelay: { type: Number, default: 5000 }
     },
+    whatsapp: {
+      enabled: { type: Boolean, default: false },
+      provider: { type: String, enum: ['msg91'], default: 'msg91' },
+      msg91ApiKey: { type: String, default: '' },
+      msg91SenderId: { type: String, default: '' },
+      // Template IDs for different notification types
+      templates: {
+        welcomeMessage: { type: String, default: '' }, // Welcome message
+        businessAccountCreated: { type: String, default: '' }, // Business account created
+        receipt: { type: String, default: '' }, // Sending bills/receipts
+        receiptCancellation: { type: String, default: '' }, // Bill cancellation
+        appointmentScheduling: { type: String, default: '' }, // Appointment scheduling
+        appointmentConfirmation: { type: String, default: '' }, // Appointment confirmation
+        appointmentCancellation: { type: String, default: '' }, // Appointment cancellation
+        appointmentReminder: { type: String, default: '' }, // Appointment reminder
+        default: { type: String, default: '' } // Default/fallback template
+      },
+      // Template variable mappings - configure which variables each template uses
+      // Maps template variable names (body_1, body_2, etc.) to data field names
+      // These are auto-populated when JavaScript code is parsed from approved MSG91 templates
+      // Example structure: { welcomeMessage: { body_1: 'clientName', body_2: 'businessName' }, ... }
+      templateVariables: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {} // Start empty - will be populated when templates are configured with JavaScript code
+      },
+      // Store the raw JavaScript code for each template (for parsing and re-display)
+      templateJavaScriptCodes: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {} // Stores JavaScript code for each template type
+      },
+      // Legacy: Keep for backward compatibility
+      msg91TemplateId: { type: String, default: '' },
+      // Template configuration
+      templateIncludesBaseUrl: { type: Boolean, default: true }, // If true, template already has base URL, only pass path variables
+      // Notification preferences (system defaults)
+      receiptNotifications: { type: Boolean, default: true },
+      appointmentNotifications: { type: Boolean, default: true },
+      systemAlerts: { type: Boolean, default: false },
+      quietHours: {
+        enabled: { type: Boolean, default: false },
+        start: { type: String, default: '22:00' },
+        end: { type: String, default: '08:00' }
+      },
+      maxRetries: { type: Number, default: 3 },
+      retryDelay: { type: Number, default: 5000 }
+    },
     templates: {
       businessCreated: {
         subject: { type: String, default: 'Welcome to Ease My Salon - Business Account Created' },
@@ -259,12 +305,76 @@ adminSettingsSchema.statics.getSettings = async function() {
 
 adminSettingsSchema.statics.updateSettings = async function(category, updates) {
   const settings = await this.getSettings();
+  
+  // Deep merge function for nested objects
+  const deepMerge = (target, source) => {
+    for (const key in source) {
+      if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key]) && !(source[key] instanceof Date) && !(source[key] instanceof mongoose.Types.ObjectId)) {
+        if (!target[key]) {
+          target[key] = {};
+        }
+        deepMerge(target[key], source[key]);
+      } else {
+        target[key] = source[key];
+      }
+    }
+  };
+  
   if (category) {
-    settings[category] = { ...settings[category], ...updates };
+    // Deep merge for nested objects like notifications.whatsapp
+    if (category === 'notifications' && updates.whatsapp) {
+      if (!settings[category]) {
+        settings[category] = {};
+      }
+      if (!settings[category].whatsapp) {
+        settings[category].whatsapp = {};
+      }
+      
+      // Log before merge for debugging
+      console.log('🔄 [updateSettings] Before merge - templateJavaScriptCodes keys:', Object.keys(settings[category].whatsapp.templateJavaScriptCodes || {}));
+      console.log('🔄 [updateSettings] Updates - templateJavaScriptCodes keys:', Object.keys(updates.whatsapp.templateJavaScriptCodes || {}));
+      
+      deepMerge(settings[category].whatsapp, updates.whatsapp);
+      
+      // Log after merge for debugging
+      console.log('🔄 [updateSettings] After merge - templateJavaScriptCodes keys:', Object.keys(settings[category].whatsapp.templateJavaScriptCodes || {}));
+      
+      // Mark Mixed type fields as modified for Mongoose
+      settings.markModified(`notifications.whatsapp.templateJavaScriptCodes`);
+      settings.markModified(`notifications.whatsapp.templateVariables`);
+      
+      // Also merge other notification fields
+      Object.keys(updates).forEach(key => {
+        if (key !== 'whatsapp') {
+          if (!settings[category][key]) {
+            settings[category][key] = {};
+          }
+          deepMerge(settings[category][key], updates[key]);
+        }
+      });
+    } else {
+      // For other categories, use deep merge
+      if (!settings[category]) {
+        settings[category] = {};
+      }
+      deepMerge(settings[category], updates);
+    }
   } else {
-    Object.assign(settings, updates);
+    deepMerge(settings, updates);
   }
+  
+  // Log before save for debugging
+  if (category === 'notifications' && settings.notifications?.whatsapp) {
+    console.log('💾 [updateSettings] Before save - templateJavaScriptCodes keys:', Object.keys(settings.notifications.whatsapp.templateJavaScriptCodes || {}));
+  }
+  
   await settings.save();
+  
+  // Log after save for debugging
+  if (category === 'notifications' && settings.notifications?.whatsapp) {
+    console.log('✅ [updateSettings] After save - templateJavaScriptCodes keys:', Object.keys(settings.notifications.whatsapp.templateJavaScriptCodes || {}));
+  }
+  
   return settings;
 };
 

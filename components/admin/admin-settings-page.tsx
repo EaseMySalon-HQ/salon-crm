@@ -129,6 +129,17 @@ export function AdminSettingsPage() {
   const handleSave = async () => {
     setIsLoading(true)
     try {
+      // Log what we're sending for debugging
+      if (activeCategory === 'notifications' && settings[activeCategory]?.whatsapp) {
+        console.log('📤 [Save] Sending WhatsApp settings:', {
+          hasTemplateJavaScriptCodes: !!settings[activeCategory].whatsapp.templateJavaScriptCodes,
+          hasTemplateVariables: !!settings[activeCategory].whatsapp.templateVariables,
+          templateJavaScriptCodesKeys: Object.keys(settings[activeCategory].whatsapp.templateJavaScriptCodes || {}),
+          templateVariablesKeys: Object.keys(settings[activeCategory].whatsapp.templateVariables || {}),
+          fullWhatsapp: JSON.stringify(settings[activeCategory].whatsapp, null, 2)
+        })
+      }
+      
       const response = await fetch(`${API_URL}/admin/settings/${activeCategory}`, {
         method: 'PUT',
         headers: authHeaders({
@@ -138,18 +149,61 @@ export function AdminSettingsPage() {
       })
 
       if (response.ok) {
+        const data = await response.json()
+        // Update local settings with saved data to ensure consistency
+        // Use deep merge to preserve nested objects like templateJavaScriptCodes and templateVariables
+        if (data.data) {
+          // Log what we received for debugging
+          if (activeCategory === 'notifications' && data.data.whatsapp) {
+            console.log('📥 Received WhatsApp settings from server:', {
+              hasTemplateJavaScriptCodes: !!data.data.whatsapp.templateJavaScriptCodes,
+              hasTemplateVariables: !!data.data.whatsapp.templateVariables,
+              templateJavaScriptCodesKeys: Object.keys(data.data.whatsapp.templateJavaScriptCodes || {}),
+              templateVariablesKeys: Object.keys(data.data.whatsapp.templateVariables || {})
+            })
+          }
+          
+          setSettings(prev => {
+            const updated = { ...prev }
+            // Deep merge for nested objects (especially notifications.whatsapp)
+            if (activeCategory === 'notifications' && data.data.whatsapp) {
+              updated[activeCategory] = {
+                ...(prev[activeCategory] || {}),
+                ...data.data,
+                whatsapp: {
+                  ...(prev[activeCategory]?.whatsapp || {}),
+                  ...data.data.whatsapp,
+                  // Explicitly preserve nested objects
+                  templateJavaScriptCodes: {
+                    ...(prev[activeCategory]?.whatsapp?.templateJavaScriptCodes || {}),
+                    ...(data.data.whatsapp.templateJavaScriptCodes || {})
+                  },
+                  templateVariables: {
+                    ...(prev[activeCategory]?.whatsapp?.templateVariables || {}),
+                    ...(data.data.whatsapp.templateVariables || {})
+                  }
+                }
+              }
+            } else {
+              updated[activeCategory] = data.data
+            }
+            return updated
+          })
+        }
         setHasUnsavedChanges(false)
         toast({
           title: "Settings saved",
           description: "Your admin settings have been updated successfully.",
         })
+        // Don't reload all settings - we already have the updated data from the save response
       } else {
-        throw new Error('Failed to save settings')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Failed to save settings')
       }
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: "Error",
-        description: "Failed to save settings. Please try again.",
+        description: error.message || "Failed to save settings. Please try again.",
         variant: "destructive",
       })
     } finally {
