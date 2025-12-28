@@ -1148,6 +1148,65 @@ export class EmailNotificationsAPI {
   }
 }
 
+export class WhatsAppAPI {
+  // Test WhatsApp connection
+  static async testConnection(phone: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/test', { phone })
+    return response.data
+  }
+
+  // Get admin-level tracking (all businesses)
+  static async getAdminTracking(filters?: {
+    dateFrom?: string;
+    dateTo?: string;
+  }): Promise<ApiResponse<any>> {
+    const params = new URLSearchParams();
+    if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom);
+    if (filters?.dateTo) params.append('dateTo', filters.dateTo);
+    
+    const response = await apiClient.get(`/whatsapp/tracking/admin?${params.toString()}`)
+    return response.data
+  }
+
+  // Get business-level tracking
+  static async getBusinessTracking(filters?: {
+    dateFrom?: string;
+    dateTo?: string;
+  }): Promise<ApiResponse<any>> {
+    const params = new URLSearchParams();
+    if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom);
+    if (filters?.dateTo) params.append('dateTo', filters.dateTo);
+    
+    const queryString = params.toString();
+    const url = queryString ? `/whatsapp/tracking/business?${queryString}` : '/whatsapp/tracking/business';
+    const response = await apiClient.get(url)
+    return response.data
+  }
+
+  // Get message logs
+  static async getLogs(filters?: {
+    dateFrom?: string;
+    dateTo?: string;
+    status?: string;
+    messageType?: string;
+    businessId?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<ApiResponse<any>> {
+    const params = new URLSearchParams();
+    if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom);
+    if (filters?.dateTo) params.append('dateTo', filters.dateTo);
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.messageType) params.append('messageType', filters.messageType);
+    if (filters?.businessId) params.append('businessId', filters.businessId);
+    if (filters?.page) params.append('page', filters.page.toString());
+    if (filters?.limit) params.append('limit', filters.limit.toString());
+    
+    const response = await apiClient.get(`/whatsapp/logs?${params.toString()}`)
+    return response.data
+  }
+}
+
 // Export the main API client for direct use if needed
 export { apiClient }
 export default apiClient 
