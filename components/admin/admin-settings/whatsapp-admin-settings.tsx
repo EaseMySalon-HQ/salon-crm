@@ -80,10 +80,44 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
   })
 
   useEffect(() => {
-    if (propSettings) {
-      setSettings(propSettings)
+    // Only update settings if propSettings is defined (not undefined/null)
+    // This prevents resetting to defaults when data is still loading
+    if (propSettings !== undefined && propSettings !== null) {
+      console.log('📥 [WhatsAppAdminSettings] Received propSettings:', {
+        enabled: propSettings.enabled,
+        enabledType: typeof propSettings.enabled,
+        hasEnabled: propSettings.hasOwnProperty('enabled'),
+        fullSettings: JSON.stringify(propSettings, null, 2)
+      });
+      
+      // Deep merge to preserve existing state when propSettings updates
+      setSettings(prev => {
+        // Always use propSettings.enabled if it exists (even if false)
+        // This ensures saved state from server is preserved
+        const newSettings = {
+          ...prev,
+          ...propSettings,
+          // Explicitly set enabled from propSettings if it exists
+          enabled: propSettings.hasOwnProperty('enabled') ? propSettings.enabled : prev.enabled,
+          // Preserve nested objects
+          templates: {
+            ...prev.templates,
+            ...(propSettings.templates || {})
+          },
+          templateVariables: {
+            ...prev.templateVariables,
+            ...(propSettings.templateVariables || {})
+          },
+          templateJavaScriptCodes: {
+            ...prev.templateJavaScriptCodes,
+            ...(propSettings.templateJavaScriptCodes || {})
+          }
+        };
+        
+        console.log('📥 [WhatsAppAdminSettings] Setting new settings with enabled:', newSettings.enabled);
+        return newSettings;
+      })
       // Load template JavaScript codes from settings if they exist
-      // Always set it, even if empty, to ensure state is in sync
       setTemplateJavaScriptCodes(propSettings.templateJavaScriptCodes || {})
       isInitialMount.current = true
     }
