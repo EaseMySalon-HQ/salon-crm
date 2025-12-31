@@ -30,9 +30,9 @@ export function WhatsAppBusinessSettings() {
   const isAdmin = user?.role === 'admin' || user?.role === 'manager'
 
   const [settings, setSettings] = useState({
-    enabled: false,
+    enabled: true,
     receiptNotifications: {
-      enabled: false,
+      enabled: true,
       autoSendToClients: true,
       highValueThreshold: 0
     },
@@ -115,10 +115,24 @@ export function WhatsAppBusinessSettings() {
 
     setIsLoading(true)
     try {
+      console.log('📤 [Frontend] Sending WhatsApp settings to save:', {
+        enabled: settings.enabled,
+        receiptNotificationsEnabled: settings.receiptNotifications?.enabled,
+        fullSettings: JSON.stringify(settings, null, 2)
+      });
+      
       // Update via email notifications API (same endpoint structure)
       const response = await EmailNotificationsAPI.updateSettings({
         whatsappNotificationSettings: settings
       })
+      
+      console.log('📥 [Frontend] Save response:', {
+        success: response.success,
+        hasData: !!response.data?.whatsappNotificationSettings,
+        enabled: response.data?.whatsappNotificationSettings?.enabled,
+        receiptNotificationsEnabled: response.data?.whatsappNotificationSettings?.receiptNotifications?.enabled
+      });
+      
       if (response.success) {
         // Update local state with the saved data from server
         if (response.data?.whatsappNotificationSettings) {
@@ -126,6 +140,7 @@ export function WhatsAppBusinessSettings() {
           setSettings(response.data.whatsappNotificationSettings)
         } else {
           // If response doesn't include the data, reload from server
+          console.log('📥 No data in response, reloading from server...')
           await loadSettings()
         }
         toast({

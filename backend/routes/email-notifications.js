@@ -99,9 +99,9 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
 
     // Get WhatsApp settings
     const defaultWhatsappSettings = {
-      enabled: false,
+      enabled: true,
       receiptNotifications: {
-        enabled: false,
+        enabled: true,
         autoSendToClients: true,
         highValueThreshold: 0
       },
@@ -272,7 +272,11 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
       if (req.body.whatsappNotificationSettings.receiptNotifications) {
         newWhatsappSettings.receiptNotifications = {
           ...(business.settings.whatsappNotificationSettings.receiptNotifications || {}),
-          ...req.body.whatsappNotificationSettings.receiptNotifications
+          ...req.body.whatsappNotificationSettings.receiptNotifications,
+          // Explicitly preserve enabled field if it exists in request (even if false)
+          enabled: req.body.whatsappNotificationSettings.receiptNotifications.hasOwnProperty('enabled')
+            ? req.body.whatsappNotificationSettings.receiptNotifications.enabled
+            : (business.settings.whatsappNotificationSettings.receiptNotifications?.enabled ?? true)
         };
       }
       if (req.body.whatsappNotificationSettings.appointmentNotifications) {
@@ -306,21 +310,67 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
       business.set('settings.whatsappNotificationSettings', business.settings.whatsappNotificationSettings);
     }
 
-    // Save and verify
-    const saveResult = await business.save();
-    console.log('📱 [PUT Settings] Save result:', {
-      saved: !!saveResult,
-      enabled: saveResult.settings?.whatsappNotificationSettings?.enabled,
-      isNew: saveResult.isNew
-    });
-    
-    // Use updateOne as an alternative to ensure nested object is saved
+    // CRITICAL: Use updateOne as PRIMARY method for saving nested objects
+    // Mongoose save() sometimes doesn't detect changes to deeply nested objects in production
+    // updateOne with $set is more reliable for nested object updates
+    let updateResult;
     if (req.body.whatsappNotificationSettings) {
-      await Business.updateOne(
+      // Build the update object - ensure both parent and nested objects are set
+      const updateData = {};
+      
+      // Always set the nested whatsappNotificationSettings
+      updateData['settings.whatsappNotificationSettings'] = newWhatsappSettings;
+      
+      // If settings object doesn't exist, we need to ensure it's created
+      // MongoDB will create the nested path automatically with $set, but let's be explicit
+      if (!business.settings || Object.keys(business.settings).length === 0) {
+        // Initialize settings object if it doesn't exist
+        updateData['settings'] = {
+          whatsappNotificationSettings: newWhatsappSettings
+        };
+      }
+      
+      updateResult = await Business.updateOne(
         { _id: req.user.branchId },
-        { $set: { 'settings.whatsappNotificationSettings': business.settings.whatsappNotificationSettings } }
+        { $set: updateData }
       );
-      console.log('📱 [PUT Settings] Also updated using updateOne');
+      
+      console.log('📱 [PUT Settings] updateOne result:', {
+        matched: updateResult.matchedCount,
+        modified: updateResult.modifiedCount,
+        acknowledged: updateResult.acknowledged,
+        enabled: newWhatsappSettings.enabled,
+        receiptNotificationsEnabled: newWhatsappSettings.receiptNotifications?.enabled,
+        hasSettings: !!business.settings,
+        updateDataKeys: Object.keys(updateData)
+      });
+      
+      // Verify the update was successful
+      if (updateResult.matchedCount === 0) {
+        console.error('❌ [PUT Settings] Business not found for update!');
+        return res.status(404).json({
+          success: false,
+          error: 'Business not found'
+        });
+      }
+      
+      if (updateResult.modifiedCount === 0 && updateResult.matchedCount > 0) {
+        console.warn('⚠️ [PUT Settings] Update matched but no documents were modified. This might indicate the data is already the same.');
+        // This is not necessarily an error - the data might already be correct
+      }
+    }
+    
+    // Also try save() as a backup (but updateOne is primary)
+    try {
+      const saveResult = await business.save();
+      console.log('📱 [PUT Settings] Save result (backup):', {
+        saved: !!saveResult,
+        enabled: saveResult.settings?.whatsappNotificationSettings?.enabled,
+        isNew: saveResult.isNew
+      });
+    } catch (saveError) {
+      console.warn('⚠️ [PUT Settings] Save() failed (but updateOne should have worked):', saveError.message);
+      // Don't fail the request if save() fails, updateOne is the primary method
     }
     
     // Reload business to ensure we have the latest data (use lean() to get plain object)
@@ -328,6 +378,8 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
     console.log('📱 [PUT Settings] WhatsApp settings after save (from DB):', {
       enabled: savedBusiness.settings?.whatsappNotificationSettings?.enabled,
       receiptNotificationsEnabled: savedBusiness.settings?.whatsappNotificationSettings?.receiptNotifications?.enabled,
+      hasSettings: !!savedBusiness.settings,
+      hasWhatsappSettings: !!savedBusiness.settings?.whatsappNotificationSettings,
       fullSettings: JSON.stringify(savedBusiness.settings?.whatsappNotificationSettings, null, 2)
     });
 
