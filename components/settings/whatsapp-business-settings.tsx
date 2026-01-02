@@ -295,6 +295,28 @@ export function WhatsAppBusinessSettings() {
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
+                  <Label>Enable Receipt Notifications</Label>
+                  <p className="text-sm text-gray-500">
+                    Enable WhatsApp notifications for receipts and bills.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.receiptNotifications.enabled}
+                  onCheckedChange={(checked) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      receiptNotifications: {
+                        ...prev.receiptNotifications,
+                        enabled: checked
+                      }
+                    }))
+                  }
+                  disabled={!isAdmin || !settings.enabled}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
                   <Label>Auto-send to Clients</Label>
                   <p className="text-sm text-gray-500">
                     Automatically send receipts when created.
@@ -311,7 +333,7 @@ export function WhatsAppBusinessSettings() {
                       }
                     }))
                   }
-                  disabled={!isAdmin || !settings.enabled}
+                  disabled={!isAdmin || !settings.enabled || !settings.receiptNotifications.enabled}
                 />
               </div>
 
