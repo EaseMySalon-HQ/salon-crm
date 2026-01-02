@@ -53,3 +53,7 @@ backend/scripts/
 *.cache
 backend/node_modules/.cache/
 backend/node_modules/.bin/
+
+# macOS system files
+.DS_Store
+**/.DS_Store

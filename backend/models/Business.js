@@ -114,7 +114,7 @@ const businessSchema = new mongoose.Schema({
       
       // WhatsApp Notification Configuration
       whatsappNotificationSettings: {
-        enabled: { type: Boolean, default: true },
+        enabled: { type: Boolean },
         receiptNotifications: {
           enabled: { type: Boolean, default: true },
           autoSendToClients: { type: Boolean, default: true },

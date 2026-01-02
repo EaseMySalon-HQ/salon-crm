@@ -119,3 +119,4 @@ Your email service is now configured. You can:
 - Configure email templates
 - Set up alert rules
 
+

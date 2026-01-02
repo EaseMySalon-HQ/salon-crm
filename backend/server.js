@@ -98,6 +98,85 @@ app.use(express.json({ limit: '10mb' }));
 // Handle CORS preflight for all routes
 app.options('*', cors());
 
+// Helper function to apply WhatsApp settings defaults
+// This ensures that even if settings don't exist in DB, we use schema defaults
+function getWhatsAppSettingsWithDefaults(whatsappSettings) {
+  // Default values from Business model schema
+  const defaults = {
+    enabled: true,
+    receiptNotifications: {
+      enabled: true,
+      autoSendToClients: true,
+      highValueThreshold: 0
+    },
+    appointmentNotifications: {
+      enabled: false,
+      newAppointments: false,
+      confirmations: false,
+      reminders: false,
+      cancellations: false
+    },
+    systemAlerts: {
+      enabled: false,
+      lowInventory: false,
+      paymentFailures: false
+    }
+  };
+
+  // If no settings exist, return defaults
+  if (!whatsappSettings || typeof whatsappSettings !== 'object' || Array.isArray(whatsappSettings)) {
+    return defaults;
+  }
+
+  // Merge with defaults, preserving existing values (including false)
+  const merged = {
+    ...defaults,
+    ...whatsappSettings,
+    // Explicitly handle enabled field - use saved value if it exists, otherwise default
+    enabled: whatsappSettings.hasOwnProperty('enabled') ? whatsappSettings.enabled : defaults.enabled,
+    // Merge nested objects, explicitly preserving enabled fields
+    receiptNotifications: whatsappSettings.receiptNotifications ? {
+      ...defaults.receiptNotifications,
+      ...whatsappSettings.receiptNotifications,
+      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
+      enabled: whatsappSettings.receiptNotifications.hasOwnProperty('enabled')
+        ? whatsappSettings.receiptNotifications.enabled
+        : defaults.receiptNotifications.enabled,
+      // CRITICAL: Explicitly preserve autoSendToClients if it exists (even if false)
+      autoSendToClients: whatsappSettings.receiptNotifications.hasOwnProperty('autoSendToClients')
+        ? whatsappSettings.receiptNotifications.autoSendToClients
+        : defaults.receiptNotifications.autoSendToClients
+    } : defaults.receiptNotifications,
+    appointmentNotifications: whatsappSettings.appointmentNotifications ? {
+      ...defaults.appointmentNotifications,
+      ...whatsappSettings.appointmentNotifications,
+      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
+      enabled: whatsappSettings.appointmentNotifications.hasOwnProperty('enabled')
+        ? whatsappSettings.appointmentNotifications.enabled
+        : defaults.appointmentNotifications.enabled
+    } : defaults.appointmentNotifications,
+    systemAlerts: whatsappSettings.systemAlerts ? {
+      ...defaults.systemAlerts,
+      ...whatsappSettings.systemAlerts,
+      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
+      enabled: whatsappSettings.systemAlerts.hasOwnProperty('enabled')
+        ? whatsappSettings.systemAlerts.enabled
+        : defaults.systemAlerts.enabled
+    } : defaults.systemAlerts
+  };
+  
+  console.log('📱 [getWhatsAppSettingsWithDefaults] Merged settings:', {
+    rawEnabled: whatsappSettings?.enabled,
+    mergedEnabled: merged.enabled,
+    rawReceiptEnabled: whatsappSettings?.receiptNotifications?.enabled,
+    mergedReceiptEnabled: merged.receiptNotifications?.enabled,
+    rawAutoSend: whatsappSettings?.receiptNotifications?.autoSendToClients,
+    mergedAutoSend: merged.receiptNotifications?.autoSendToClients
+  });
+  
+  return merged;
+}
+
 // Register Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/settings', require('./routes/admin-settings'));
@@ -5222,10 +5301,11 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         
         if (whatsappEnabled && adminAppointmentNotificationsEnabled) {
           const business = await Business.findById(req.user.branchId);
-          const whatsappSettings = business?.settings?.whatsappNotificationSettings;
-          const businessWhatsappEnabled = whatsappSettings?.enabled === true;
-          const appointmentWhatsappEnabled = whatsappSettings?.appointmentNotifications?.enabled === true;
-          const confirmationsEnabled = whatsappSettings?.appointmentNotifications?.confirmations === true;
+          const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
+          const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
+          const businessWhatsappEnabled = whatsappSettings.enabled === true;
+          const appointmentWhatsappEnabled = whatsappSettings.appointmentNotifications?.enabled === true;
+          const confirmationsEnabled = whatsappSettings.appointmentNotifications?.confirmations === true;
           
           if (businessWhatsappEnabled && appointmentWhatsappEnabled && confirmationsEnabled) {
             // Check quiet hours
@@ -5307,6 +5387,20 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                     });
                     
                     if (result.success) {
+                      // Increment WhatsApp quota usage
+                      try {
+                        const mainConnection = await databaseManager.getMainConnection();
+                        const Business = mainConnection.model('Business', require('./models/Business').schema);
+                        await Business.updateOne(
+                          { _id: business._id },
+                          { $inc: { 'plan.addons.whatsapp.used': 1 } }
+                        );
+                        console.log(`📊 WhatsApp quota incremented for business: ${business._id}`);
+                      } catch (quotaError) {
+                        console.error('❌ Error incrementing WhatsApp quota:', quotaError);
+                        // Don't fail the appointment if quota increment fails
+                      }
+                      
                       console.log(`✅ Appointment WhatsApp sent to client: ${client.phone}`);
                     } else {
                       console.error(`❌ Failed to send appointment WhatsApp to ${client.phone}:`, result.error);
@@ -5576,10 +5670,11 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         if (whatsappEnabled && adminReceiptNotificationsEnabled) {
           // Use lean() to get plain object so nested objects are accessible
           const business = await Business.findById(req.user.branchId).lean();
-          const whatsappSettings = business?.settings?.whatsappNotificationSettings;
-          const businessWhatsappEnabled = whatsappSettings?.enabled === true;
-          const receiptNotificationsEnabled = whatsappSettings?.receiptNotifications?.enabled === true;
-          const autoSendEnabled = whatsappSettings?.receiptNotifications?.autoSendToClients === true;
+          const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
+          const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
+          const businessWhatsappEnabled = whatsappSettings.enabled === true;
+          const receiptNotificationsEnabled = whatsappSettings.receiptNotifications?.enabled === true;
+          const autoSendEnabled = whatsappSettings.receiptNotifications?.autoSendToClients === true;
           
           if (businessWhatsappEnabled && receiptNotificationsEnabled && autoSendEnabled) {
             // Check quiet hours
@@ -5630,6 +5725,20 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                   });
                   
                   if (result.success) {
+                    // Increment WhatsApp quota usage
+                    try {
+                      const mainConnection = await databaseManager.getMainConnection();
+                      const Business = mainConnection.model('Business', require('./models/Business').schema);
+                      await Business.updateOne(
+                        { _id: business._id },
+                        { $inc: { 'plan.addons.whatsapp.used': 1 } }
+                      );
+                      console.log(`📊 WhatsApp quota incremented for business: ${business._id}`);
+                    } catch (quotaError) {
+                      console.error('❌ Error incrementing WhatsApp quota:', quotaError);
+                      // Don't fail the receipt if quota increment fails
+                    }
+                    
                     console.log(`✅ Receipt WhatsApp sent to client: ${client.phone}`);
                   } else {
                     console.error(`❌ Failed to send receipt WhatsApp to ${client.phone}:`, result.error);
@@ -6375,10 +6484,12 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           });
           
           // Access WhatsApp settings from plain object (accessible with lean())
-          const whatsappSettings = business?.settings?.whatsappNotificationSettings;
-          const businessWhatsappEnabled = whatsappSettings?.enabled === true;
-          const receiptNotificationsEnabled = whatsappSettings?.receiptNotifications?.enabled === true;
-          const autoSendEnabled = whatsappSettings?.receiptNotifications?.autoSendToClients === true;
+          // Apply defaults if settings don't exist
+          const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
+          const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
+          const businessWhatsappEnabled = whatsappSettings.enabled === true;
+          const receiptNotificationsEnabled = whatsappSettings.receiptNotifications?.enabled === true;
+          const autoSendEnabled = whatsappSettings.receiptNotifications?.autoSendToClients === true;
           
           console.log('📱 [WhatsApp] Business settings:', {
             businessWhatsappEnabled,
@@ -6438,8 +6549,32 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                   });
                   
                   if (result.success) {
-                    console.log(`✅ Sale receipt WhatsApp sent to client: ${customerPhone}`);
-                    whatsappStatus.sent = true;
+                    // Increment WhatsApp quota usage
+                    try {
+                      const mainConnection = await databaseManager.getMainConnection();
+                      const Business = mainConnection.model('Business', require('./models/Business').schema);
+                      await Business.updateOne(
+                        { _id: business._id },
+                        { $inc: { 'plan.addons.whatsapp.used': 1 } }
+                      );
+                      console.log(`📊 WhatsApp quota incremented for business: ${business._id}`);
+                    } catch (quotaError) {
+                      console.error('❌ Error incrementing WhatsApp quota:', quotaError);
+                      // Don't fail the sale if quota increment fails
+                    }
+                    
+                    if (result.queued) {
+                      console.log(`⏳ Sale receipt WhatsApp queued for delivery to client: ${customerPhone}`);
+                      console.log(`📱 Request ID: ${result.requestId || 'N/A'}`);
+                      console.log(`⚠️ Message is queued. Check MSG91 dashboard for delivery status.`);
+                      whatsappStatus.sent = true;
+                      whatsappStatus.queued = true;
+                      whatsappStatus.requestId = result.requestId;
+                      whatsappStatus.message = 'Message queued for delivery. Check MSG91 dashboard for status.';
+                    } else {
+                      console.log(`✅ Sale receipt WhatsApp sent to client: ${customerPhone}`);
+                      whatsappStatus.sent = true;
+                    }
                   } else {
                     console.error(`❌ Failed to send sale receipt WhatsApp to ${customerPhone}:`, result.error);
                     whatsappStatus.error = result.error;

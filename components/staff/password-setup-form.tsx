@@ -180,3 +180,4 @@ export function PasswordSetupForm({ staff, onSuccess, onCancel }: PasswordSetupF
   )
 }
 
+
