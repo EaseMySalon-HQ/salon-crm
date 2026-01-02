@@ -233,22 +233,38 @@ class WhatsAppService {
             value: String(variables[key] || '')
           };
         } else if (key.startsWith('button_')) {
-          // Button variables - MSG91 format: { "subtype": "url", "type": "text", "value": "url" }
+          // Button variables - MSG91 format: { "subtype": "url", "type": "text", "value": "path_or_url" }
           const buttonValue = String(variables[key] || '');
-          // If value looks like a URL or contains http/https, treat as URL button
-          if (buttonValue.startsWith('http://') || buttonValue.startsWith('https://')) {
-            components[key] = {
-              subtype: 'url',
-              type: 'text',
-              value: buttonValue
-            };
+          
+          // CRITICAL: MSG91 template configuration shows button type is "Visit website"
+          // Template URL: https://www.easemysalon.in/receipt/public/{{1}}
+          // This means button_1 should contain just the path part (e.g., INV-000056/abc123)
+          // But the button component MUST still be formatted as subtype "url" in the API payload
+          // MSG91 will combine the template base URL + button value
+          
+          if (buttonValue.trim() !== '') {
+            // Check if it's a full URL or just a path
+            if (buttonValue.startsWith('http://') || buttonValue.startsWith('https://')) {
+              // Full URL - use as is
+              components[key] = {
+                subtype: 'url',
+                type: 'text',
+                value: buttonValue
+              };
+              console.log(`📱 [MSG91] Button ${key} formatted as URL button with full URL: ${buttonValue.substring(0, 50)}...`);
+            } else {
+              // Path only (e.g., INV-000056/abc123) - template includes base URL
+              // Still format as URL button type since template button type is "Visit website"
+              components[key] = {
+                subtype: 'url',
+                type: 'text',
+                value: buttonValue
+              };
+              console.log(`📱 [MSG91] Button ${key} formatted as URL button with path (template includes base URL): ${buttonValue}`);
+            }
           } else {
-            // Regular button text (quick reply)
-            components[key] = {
-              subtype: 'quick_reply',
-              type: 'text',
-              value: buttonValue
-            };
+            // Empty button value - skip it
+            console.warn(`⚠️ [MSG91] Button ${key} has empty value, skipping`);
           }
         }
       });
@@ -298,6 +314,14 @@ class WhatsAppService {
     };
 
     try {
+      console.log('📱 [MSG91] Sending WhatsApp message:', {
+        to,
+        templateName,
+        integratedNumber,
+        hasApiKey: !!apiKey,
+        variablesCount: Object.keys(variables).length
+      });
+      
       const response = await axios.post(url, payload, {
         headers: {
           'Content-Type': 'application/json',
@@ -306,19 +330,71 @@ class WhatsAppService {
         timeout: 10000
       });
 
-      if (response.status === 200 || response.data?.success) {
-        return { success: true, data: response.data };
+      console.log('📱 [MSG91] API Response Status:', response.status);
+      console.log('📱 [MSG91] API Response Data:', JSON.stringify(response.data, null, 2));
+
+      // MSG91 API can return 200 with error details in response.data
+      // Check for actual success indicators in the response
+      const responseData = response.data || {};
+      
+      // MSG91 returns different response formats:
+      // 1. Success: { status: "success", hasError: false, data: "message", request_id: "..." }
+      // 2. Error: { status: "error", hasError: true, errors: [...] }
+      // 3. Some APIs return: { success: true/false, message: "..." }
+      
+      const hasError = responseData.hasError === true || 
+                       responseData.status === 'error' ||
+                       (responseData.errors && responseData.errors.length > 0);
+      
+      const isSuccess = response.status === 200 && !hasError && (
+        responseData.success === true ||
+        responseData.status === 'success' ||
+        (responseData.data && typeof responseData.data === 'string' && responseData.data.includes('in process'))
+      );
+
+      if (isSuccess) {
+        const requestId = responseData.request_id || 'N/A';
+        console.log('✅ [MSG91] WhatsApp message accepted by MSG91');
+        console.log('📱 [MSG91] Request ID:', requestId);
+        console.log('📱 [MSG91] Note: Message is queued for delivery. Check MSG91 dashboard for delivery status.');
+        
+        // Log warning if message is just queued (not immediately delivered)
+        if (responseData.data && responseData.data.includes('in process')) {
+          console.warn('⚠️ [MSG91] Message queued for delivery. Possible reasons:');
+          console.warn('   - Template may not be approved/active in MSG91');
+          console.warn('   - Phone number may not be registered/verified');
+          console.warn('   - Template variables may not match approved template');
+          console.warn('   - Check MSG91 dashboard for delivery status using request_id:', requestId);
+        }
+        
+        return { 
+          success: true, 
+          data: responseData,
+          requestId: requestId,
+          queued: responseData.data && responseData.data.includes('in process')
+        };
       } else {
-        return { success: false, error: response.data?.message || 'Failed to send message' };
+        const errorMsg = responseData.message || 
+                        responseData.error || 
+                        (responseData.errors && responseData.errors.length > 0 ? JSON.stringify(responseData.errors) : null) ||
+                        'Failed to send message';
+        console.error('❌ [MSG91] WhatsApp message failed:', errorMsg);
+        console.error('❌ [MSG91] Full response:', JSON.stringify(responseData, null, 2));
+        return { success: false, error: errorMsg, responseData };
       }
     } catch (error) {
       if (error.response) {
         const errorMessage = error.response.data?.message || 
                             error.response.data?.error || 
                             error.message;
-        console.error('MSG91 API Error:', error.response.data);
-        return { success: false, error: errorMessage };
+        console.error('❌ [MSG91] API Error Response:', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: JSON.stringify(error.response.data, null, 2)
+        });
+        return { success: false, error: errorMessage, responseData: error.response.data };
       }
+      console.error('❌ [MSG91] Network/Request Error:', error.message);
       return { success: false, error: error.message };
     }
   }
@@ -426,48 +502,89 @@ class WhatsAppService {
   }
 
   async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink }) {
+    console.log('📱 [sendReceipt] Starting receipt send:', {
+      to,
+      clientName,
+      receiptNumber,
+      businessName: receiptData?.businessName,
+      receiptLink,
+      templateId: this.getTemplateId('receipt'),
+      hasConfig: !!this.config
+    });
+    
     // Check if template already includes base URL (from config or environment)
     // If template has base URL, extract just the path variables
     const templateIncludesBaseUrl = this.config?.templateIncludesBaseUrl !== false; // Default to true for production safety
     
-    let processedReceiptLink = receiptLink || '';
+    // CRITICAL: Based on MSG91 template configuration:
+    // - Template URL: https://www.easemysalon.in/receipt/public/{{1}}
+    // - button_1 should contain just the path part (e.g., INV-000056/abc123)
+    // - MSG91 will combine template base URL + button_1 value
+    // - But button component must still be formatted as type "url" in API payload
+    let processedReceiptLinkForBody = receiptLink || '';
+    let processedReceiptLinkForButton = receiptLink || '';
     
     // If template includes base URL and we have a full URL, extract just the path
     if (templateIncludesBaseUrl && receiptLink) {
-      processedReceiptLink = this.extractReceiptPath(receiptLink);
-      console.log(`📱 [WhatsApp] Template includes base URL, extracted path: ${processedReceiptLink}`);
+      processedReceiptLinkForBody = this.extractReceiptPath(receiptLink);
+      processedReceiptLinkForButton = this.extractReceiptPath(receiptLink); // Use path for button too
+      console.log(`📱 [sendReceipt] Template includes base URL, extracted path: ${processedReceiptLinkForButton}`);
+      console.log(`📱 [sendReceipt] Template will combine base URL + path: https://www.easemysalon.in/receipt/public/${processedReceiptLinkForButton}`);
     }
     
     const data = {
       clientName: clientName || 'Customer',
       businessName: receiptData?.businessName || 'Business',
-      receiptLink: processedReceiptLink
+      receiptLink: processedReceiptLinkForBody // Use extracted path for body variables
     };
+    
+    console.log('📱 [sendReceipt] Data object:', data);
     
     const variables = this.mapDataToTemplateVariables('receipt', data);
     
+    console.log('📱 [sendReceipt] Mapped variables:', variables);
+    console.log('📱 [sendReceipt] Variable mapping config:', this.getTemplateVariableMapping('receipt'));
+    
     // If no mapping configured, use default mapping
     if (Object.keys(variables).length === 0) {
+      console.log('📱 [sendReceipt] No variable mapping found, using defaults');
       variables.body_1 = data.clientName;
       variables.body_2 = data.businessName;
-      variables.body_3 = data.receiptLink;
-      // Also add button_1 for receipt link if template uses buttons
-      variables.button_1 = data.receiptLink;
+      variables.body_3 = processedReceiptLinkForBody; // Use extracted path for body
+      // CRITICAL: Use extracted path for button since template includes base URL
+      // Template URL: https://www.easemysalon.in/receipt/public/{{1}}
+      // button_1 value: INV-000056/abc123 (just the path part)
+      variables.button_1 = processedReceiptLinkForButton;
     } else {
       // Check if button variables are mapped and add receiptLink
+      // CRITICAL: Use full URL for button variables, extracted path for body variables
       const variableMapping = this.getTemplateVariableMapping('receipt');
       Object.keys(variableMapping).forEach(varName => {
         if (varName.startsWith('button_') && variableMapping[varName] === 'receiptLink') {
-          variables[varName] = data.receiptLink;
+          // Template includes base URL, so send just the path part
+          // Template URL: https://www.easemysalon.in/receipt/public/{{1}}
+          // button_1 value: INV-000056/abc123 (just the path)
+          variables[varName] = processedReceiptLinkForButton;
+          console.log(`📱 [sendReceipt] Setting ${varName} to path (template includes base URL): ${processedReceiptLinkForButton}`);
+        } else if (varName.startsWith('body_') && variableMapping[varName] === 'receiptLink') {
+          // Use extracted path for body variables if template includes base URL
+          variables[varName] = processedReceiptLinkForBody;
         }
       });
     }
 
-    return await this.sendMessage({
+    console.log('📱 [sendReceipt] Final variables before send:', variables);
+    console.log('📱 [sendReceipt] Template ID:', this.getTemplateId('receipt'));
+
+    const result = await this.sendMessage({
       to,
       templateId: this.getTemplateId('receipt'),
       variables
     });
+    
+    console.log('📱 [sendReceipt] Send result:', result);
+    
+    return result;
   }
 
   /**

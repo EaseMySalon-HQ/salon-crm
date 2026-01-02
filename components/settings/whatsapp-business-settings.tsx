@@ -10,27 +10,36 @@ import { Badge } from "@/components/ui/badge"
 import { 
   MessageCircle,
   Info,
-  BarChart3,
-  Clock,
   Receipt,
   Calendar,
-  AlertTriangle
+  AlertTriangle,
+  CheckCircle2,
+  XCircle
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
-import { WhatsAppAPI } from "@/lib/api"
 import { EmailNotificationsAPI } from "@/lib/api"
+import { useAddon } from "@/hooks/use-entitlements"
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
 export function WhatsAppBusinessSettings() {
   const { user } = useAuth()
   const { toast } = useToast()
+  const { canUse: addonCanUse, status: addonStatus, isLoading: addonLoading } = useAddon('whatsapp')
   const [isLoading, setIsLoading] = useState(false)
-  const [trackingData, setTrackingData] = useState<any>(null)
-  const [isLoadingTracking, setIsLoadingTracking] = useState(false)
+  const [isLoadingStatus, setIsLoadingStatus] = useState(true)
+  const [adminConfig, setAdminConfig] = useState<{
+    adminConfigured: boolean
+    adminEnabled: boolean
+    addonEnabled: boolean
+    canUse: boolean
+    provider: string
+  } | null>(null)
   const isAdmin = user?.role === 'admin' || user?.role === 'manager'
 
   const [settings, setSettings] = useState({
-    enabled: true,
+    enabled: false,
     receiptNotifications: {
       enabled: true,
       autoSendToClients: true,
@@ -51,449 +60,371 @@ export function WhatsAppBusinessSettings() {
   })
 
   useEffect(() => {
+    loadStatus()
     loadSettings()
-    loadTrackingData()
   }, [])
+
+  const loadStatus = async () => {
+    try {
+      setIsLoadingStatus(true)
+      const response = await fetch(`${API_URL}/email-notifications/whatsapp/status`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('salon-auth-token')}`,
+        },
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success) {
+          setAdminConfig(data.data)
+        }
+      }
+    } catch (error) {
+      console.error('Error loading WhatsApp status:', error)
+    } finally {
+      setIsLoadingStatus(false)
+    }
+  }
 
   const loadSettings = async () => {
     try {
       const response = await EmailNotificationsAPI.getSettings()
-      console.log('📥 [Frontend] Loaded settings response:', response)
       if (response.success && response.data) {
-        // Map email notification settings structure to WhatsApp
-        // WhatsApp settings are stored in the same structure
-        const whatsappSettings = response.data.whatsappNotificationSettings || settings
-        console.log('📥 [Frontend] WhatsApp settings from response:', {
-          enabled: whatsappSettings?.enabled,
-          receiptNotificationsEnabled: whatsappSettings?.receiptNotifications?.enabled,
-          fullSettings: JSON.stringify(whatsappSettings, null, 2)
-        })
-        setSettings(whatsappSettings)
-      } else {
-        console.warn('📥 [Frontend] No WhatsApp settings in response, using defaults')
+        const whatsappSettings = response.data.whatsappNotificationSettings
+        if (whatsappSettings) {
+          // Ensure we preserve the enabled value even if it's false
+          // Merge with current state to preserve any nested defaults
+          setSettings(prev => ({
+            ...prev,
+            ...whatsappSettings,
+            // Explicitly set enabled to preserve false values
+            enabled: whatsappSettings.enabled !== undefined ? whatsappSettings.enabled : prev.enabled,
+            // Merge nested objects while preserving their enabled states
+            receiptNotifications: {
+              ...prev.receiptNotifications,
+              ...whatsappSettings.receiptNotifications,
+              enabled: whatsappSettings.receiptNotifications?.enabled !== undefined 
+                ? whatsappSettings.receiptNotifications.enabled 
+                : prev.receiptNotifications.enabled
+            },
+            appointmentNotifications: {
+              ...prev.appointmentNotifications,
+              ...whatsappSettings.appointmentNotifications,
+              enabled: whatsappSettings.appointmentNotifications?.enabled !== undefined 
+                ? whatsappSettings.appointmentNotifications.enabled 
+                : prev.appointmentNotifications.enabled
+            },
+            systemAlerts: {
+              ...prev.systemAlerts,
+              ...whatsappSettings.systemAlerts,
+              enabled: whatsappSettings.systemAlerts?.enabled !== undefined 
+                ? whatsappSettings.systemAlerts.enabled 
+                : prev.systemAlerts.enabled
+            }
+          }))
+          console.log('📱 [Frontend] Loaded WhatsApp settings - enabled:', whatsappSettings.enabled)
+          console.log('📱 [Frontend] Loaded WhatsApp settings - type:', typeof whatsappSettings.enabled)
+          console.log('📱 [Frontend] Loaded WhatsApp settings - isFalse:', whatsappSettings.enabled === false)
+          console.log('📱 [Frontend] Loaded WhatsApp settings - isTrue:', whatsappSettings.enabled === true)
+          console.log('📱 [Frontend] Loaded WhatsApp settings - full:', whatsappSettings)
+        }
       }
     } catch (error) {
       console.error('Error loading WhatsApp settings:', error)
     }
   }
 
-  const loadTrackingData = async () => {
-    setIsLoadingTracking(true)
-    try {
-      const result = await WhatsAppAPI.getBusinessTracking()
-      if (result.success) {
-        setTrackingData(result.data)
-      } else {
-        // If API returns error, set empty data instead of showing error
-        setTrackingData(null)
-      }
-    } catch (error: any) {
-      console.error('Error loading tracking data:', error)
-      // Don't show error toast for 404 - route might not be available yet
-      if (error?.response?.status !== 404) {
-        toast({
-          title: "Error",
-          description: "Failed to load WhatsApp tracking data",
-          variant: "destructive",
-        })
-      }
-      setTrackingData(null)
-    } finally {
-      setIsLoadingTracking(false)
-    }
-  }
-
   const handleSave = async () => {
     if (!isAdmin) {
       toast({
-        title: "Unauthorized",
-        description: "Only admin/manager can manage WhatsApp notifications",
-        variant: "destructive",
+        title: "Access Denied",
+        description: "Only admin/manager can save settings",
+        variant: "destructive"
       })
       return
     }
 
-    setIsLoading(true)
+    // Allow saving settings even if WhatsApp isn't fully configured
+    // The settings determine IF WhatsApp should be used when it IS configured
+    // Removed the adminConfig.canUse check to allow toggling the setting
+
     try {
-      console.log('📤 [Frontend] Sending WhatsApp settings to save:', {
-        enabled: settings.enabled,
-        receiptNotificationsEnabled: settings.receiptNotifications?.enabled,
-        fullSettings: JSON.stringify(settings, null, 2)
-      });
-      
-      // Update via email notifications API (same endpoint structure)
+      setIsLoading(true)
+      console.log('📱 [Frontend] Saving WhatsApp - enabled:', settings.enabled)
+      console.log('📱 [Frontend] Saving WhatsApp - type:', typeof settings.enabled)
+      console.log('📱 [Frontend] Saving WhatsApp - isFalse:', settings.enabled === false)
+      console.log('📱 [Frontend] Saving WhatsApp - full:', settings)
       const response = await EmailNotificationsAPI.updateSettings({
         whatsappNotificationSettings: settings
       })
-      
-      console.log('📥 [Frontend] Save response:', {
-        success: response.success,
-        hasData: !!response.data?.whatsappNotificationSettings,
-        enabled: response.data?.whatsappNotificationSettings?.enabled,
-        receiptNotificationsEnabled: response.data?.whatsappNotificationSettings?.receiptNotifications?.enabled
-      });
-      
+      console.log('📱 [Frontend] Save response - success:', response.success)
+      console.log('📱 [Frontend] Save response - enabled:', response.data?.whatsappNotificationSettings?.enabled)
+      console.log('📱 [Frontend] Save response - type:', typeof response.data?.whatsappNotificationSettings?.enabled)
+      console.log('📱 [Frontend] Save response - full data:', response.data)
+
       if (response.success) {
-        // Update local state with the saved data from server
-        if (response.data?.whatsappNotificationSettings) {
-          console.log('📥 Received saved WhatsApp settings from server:', response.data.whatsappNotificationSettings)
-          setSettings(response.data.whatsappNotificationSettings)
-        } else {
-          // If response doesn't include the data, reload from server
-          console.log('📥 No data in response, reloading from server...')
-          await loadSettings()
-        }
         toast({
-          title: "Settings saved",
-          description: "WhatsApp notification settings have been updated successfully.",
+          title: "Settings Saved",
+          description: "WhatsApp notification settings have been updated successfully",
         })
       } else {
         throw new Error(response.error || 'Failed to save settings')
       }
     } catch (error: any) {
+      console.error('Error saving WhatsApp settings:', error)
       toast({
         title: "Error",
-        description: error.message || "Failed to save WhatsApp notification settings. Please try again.",
-        variant: "destructive",
+        description: error.message || "Failed to save WhatsApp settings",
+        variant: "destructive"
       })
     } finally {
       setIsLoading(false)
     }
   }
 
-  const handleSettingChange = (path: string, value: any) => {
-    setSettings(prev => {
-      const newSettings = { ...prev }
-      const keys = path.split('.')
-      let current = newSettings
-      
-      for (let i = 0; i < keys.length - 1; i++) {
-        if (!current[keys[i]]) {
-          current[keys[i]] = {}
-        }
-        current = current[keys[i]]
-      }
-      
-      current[keys[keys.length - 1]] = value
-      return newSettings
-    })
-  }
-
-  if (!isAdmin) {
-    return (
-      <div className="p-6 text-center">
-        <p className="text-slate-600">Only admin/manager can manage WhatsApp notifications</p>
-      </div>
-    )
-  }
+  const canUseWhatsApp = adminConfig?.canUse && !isLoadingStatus
 
   return (
     <div className="space-y-6">
-      {/* Info Banner */}
-      <Card className="bg-blue-50 border-blue-200">
-        <CardContent className="pt-6">
-          <div className="flex items-start gap-3">
-            <Info className="h-5 w-5 text-blue-600 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-blue-900">WhatsApp Configuration</p>
-              <p className="text-xs text-blue-700 mt-1">
-                WhatsApp is configured by the system administrator. You can enable or disable notifications for your business here.
+      {/* Status Banner */}
+      {!isLoadingStatus && (
+        <Card className={adminConfig?.adminConfigured ? "border-green-200 bg-green-50" : "border-yellow-200 bg-yellow-50"}>
+          <CardContent className="pt-6">
+            <div className="flex items-start space-x-3">
+              {adminConfig?.adminConfigured ? (
+                <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5" />
+              ) : (
+                <AlertTriangle className="h-5 w-5 text-yellow-600 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <p className="text-sm font-medium">
+                  {adminConfig?.adminConfigured 
+                    ? "WhatsApp is configured by the system administrator."
+                    : "WhatsApp is not configured. Please contact your administrator."}
+                </p>
+                {adminConfig && (
+                  <div className="mt-2 space-y-1 text-xs text-gray-600">
+                    <p>Admin Configuration: {adminConfig.adminEnabled ? "✅ Enabled" : "❌ Disabled"}</p>
+                    <p>Business Addon: {adminConfig.addonEnabled ? "✅ Enabled" : "❌ Disabled"}</p>
+                    {adminConfig.addonEnabled && (
+                      <p>Quota: {addonStatus.used || 0} / {addonStatus.quota === Infinity ? "Unlimited" : addonStatus.quota} messages used</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {!canUseWhatsApp && !isLoadingStatus && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center py-8">
+              <XCircle className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+              <p className="text-lg font-medium mb-2 text-gray-600">WhatsApp Not Available</p>
+              <p className="text-sm text-gray-500">
+                {!adminConfig?.adminConfigured 
+                  ? "WhatsApp must be configured by the system administrator before you can use it."
+                  : !adminConfig?.addonEnabled
+                  ? "WhatsApp addon is not enabled for your business. Please contact support to enable it."
+                  : "WhatsApp quota has been exhausted. Please contact support."}
               </p>
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Enable WhatsApp */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <MessageCircle className="h-5 w-5 text-green-600" />
-            <span>Enable WhatsApp Notifications</span>
-          </CardTitle>
-          <CardDescription>
-            Enable WhatsApp notifications for this business
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
-              <Label className="text-sm font-medium">Enable WhatsApp</Label>
-              <p className="text-xs text-gray-500">
-                Turn on WhatsApp notifications for your business
-              </p>
-            </div>
-            <Switch
-              checked={settings.enabled}
-              onCheckedChange={(checked) => handleSettingChange('enabled', checked)}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {settings.enabled && (
+      {canUseWhatsApp && (
         <>
-          {/* Receipt Notifications */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Receipt className="h-5 w-5 text-blue-600" />
-                  <CardTitle>Receipt Notifications</CardTitle>
-                </div>
-                <Switch
-                  checked={settings.receiptNotifications.enabled}
-                  onCheckedChange={(checked) =>
-                    handleSettingChange('receiptNotifications.enabled', checked)
-                  }
-                />
-              </div>
-              <CardDescription>
-                Send receipt links via WhatsApp to clients
-              </CardDescription>
-            </CardHeader>
-            {settings.receiptNotifications.enabled && (
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label>Auto-send to Clients</Label>
-                    <p className="text-xs text-gray-500">
-                      Automatically send receipts when created
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.receiptNotifications.autoSendToClients}
-                    onCheckedChange={(checked) =>
-                      handleSettingChange('receiptNotifications.autoSendToClients', checked)
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="highValueThreshold">High Value Threshold (₹)</Label>
-                  <Input
-                    id="highValueThreshold"
-                    type="number"
-                    min="0"
-                    value={settings.receiptNotifications.highValueThreshold}
-                    onChange={(e) =>
-                      handleSettingChange('receiptNotifications.highValueThreshold', parseFloat(e.target.value) || 0)
-                    }
-                    className="w-full"
-                    placeholder="0"
-                  />
-                  <p className="text-xs text-gray-500">
-                    Only send WhatsApp for receipts above this amount (0 = all receipts)
-                  </p>
-                </div>
-              </CardContent>
-            )}
-          </Card>
-
-          {/* Appointment Notifications */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Calendar className="h-5 w-5 text-blue-600" />
-                  <CardTitle>Appointment Notifications</CardTitle>
-                </div>
-                <Switch
-                  checked={settings.appointmentNotifications.enabled}
-                  onCheckedChange={(checked) =>
-                    handleSettingChange('appointmentNotifications.enabled', checked)
-                  }
-                />
-              </div>
-              <CardDescription>
-                Send appointment updates via WhatsApp
-              </CardDescription>
-            </CardHeader>
-            {settings.appointmentNotifications.enabled && (
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label>New Appointments</Label>
-                    <p className="text-xs text-gray-500">
-                      Notify when new appointments are created
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.appointmentNotifications.newAppointments}
-                    onCheckedChange={(checked) =>
-                      handleSettingChange('appointmentNotifications.newAppointments', checked)
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label>Confirmations</Label>
-                    <p className="text-xs text-gray-500">
-                      Send appointment confirmation messages
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.appointmentNotifications.confirmations}
-                    onCheckedChange={(checked) =>
-                      handleSettingChange('appointmentNotifications.confirmations', checked)
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label>Reminders</Label>
-                    <p className="text-xs text-gray-500">
-                      Send appointment reminders
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.appointmentNotifications.reminders}
-                    onCheckedChange={(checked) =>
-                      handleSettingChange('appointmentNotifications.reminders', checked)
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label>Cancellations</Label>
-                    <p className="text-xs text-gray-500">
-                      Notify when appointments are cancelled
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.appointmentNotifications.cancellations}
-                    onCheckedChange={(checked) =>
-                      handleSettingChange('appointmentNotifications.cancellations', checked)
-                    }
-                  />
-                </div>
-              </CardContent>
-            )}
-          </Card>
-
-          {/* System Alerts */}
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-5 w-5 text-red-600" />
-                  <CardTitle>System Alerts</CardTitle>
-                </div>
-                <Switch
-                  checked={settings.systemAlerts.enabled}
-                  onCheckedChange={(checked) =>
-                    handleSettingChange('systemAlerts.enabled', checked)
-                  }
-                />
-              </div>
-              <CardDescription>
-                Receive system alerts via WhatsApp
-              </CardDescription>
-            </CardHeader>
-            {settings.systemAlerts.enabled && (
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label>Low Inventory</Label>
-                    <p className="text-xs text-gray-500">
-                      Alert when inventory is low
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.systemAlerts.lowInventory}
-                    onCheckedChange={(checked) =>
-                      handleSettingChange('systemAlerts.lowInventory', checked)
-                    }
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label>Payment Failures</Label>
-                    <p className="text-xs text-gray-500">
-                      Alert on payment processing failures
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.systemAlerts.paymentFailures}
-                    onCheckedChange={(checked) =>
-                      handleSettingChange('systemAlerts.paymentFailures', checked)
-                    }
-                  />
-                </div>
-              </CardContent>
-            )}
-          </Card>
-
-          {/* Activity Tracking */}
-          <Card>
+          {/* Enable WhatsApp Notifications */}
+          <Card className={settings.enabled ? "" : "border-gray-200 bg-gray-50"}>
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
-                <BarChart3 className="h-5 w-5 text-purple-600" />
-                <span>WhatsApp Activity</span>
+                <MessageCircle className={`h-5 w-5 ${settings.enabled ? "text-green-600" : "text-gray-400"}`} />
+                <span>WhatsApp Notifications</span>
+                {!settings.enabled && (
+                  <Badge variant="secondary" className="ml-2">Disabled</Badge>
+                )}
               </CardTitle>
               <CardDescription>
-                View WhatsApp message statistics for this business
+                {settings.enabled 
+                  ? "WhatsApp notifications are currently enabled for this business."
+                  : "Turn on WhatsApp notifications to send receipts, appointment updates, and system alerts via WhatsApp."}
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              {isLoadingTracking ? (
-                <div className="text-center py-8 text-gray-500">
-                  <Clock className="h-8 w-8 mx-auto mb-2 animate-spin" />
-                  <p>Loading tracking data...</p>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label>Enable WhatsApp Notifications</Label>
+                  <p className="text-sm text-gray-500">
+                    {settings.enabled 
+                      ? "WhatsApp notifications are active. Toggle off to disable all WhatsApp notifications."
+                      : "Toggle on to enable WhatsApp notifications for your business."}
+                  </p>
                 </div>
-              ) : trackingData ? (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="p-4 bg-blue-50 rounded-lg">
-                      <p className="text-sm text-gray-600">Messages Sent</p>
-                      <p className="text-2xl font-bold text-blue-600">{trackingData.totalMessages || 0}</p>
-                    </div>
-                    <div className="p-4 bg-green-50 rounded-lg">
-                      <p className="text-sm text-gray-600">Success Rate</p>
-                      <p className="text-2xl font-bold text-green-600">{trackingData.successRate || 0}%</p>
-                    </div>
-                    <div className="p-4 bg-red-50 rounded-lg">
-                      <p className="text-sm text-gray-600">Failed</p>
-                      <p className="text-2xl font-bold text-red-600">{trackingData.failedMessages || 0}</p>
-                    </div>
-                  </div>
-
-                  {trackingData.recentMessages && trackingData.recentMessages.length > 0 && (
-                    <div className="mt-6">
-                      <h4 className="font-semibold mb-3">Recent Activity</h4>
-                      <div className="space-y-2">
-                        {trackingData.recentMessages.slice(0, 10).map((msg: any, index: number) => (
-                          <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                            <div className="flex items-center gap-3">
-                              <span className="text-sm font-medium">{msg.recipientPhone}</span>
-                              <Badge variant={msg.status === 'sent' ? 'default' : 'destructive'}>
-                                {msg.status}
-                              </Badge>
-                              <span className="text-xs text-gray-500">{msg.messageType}</span>
-                            </div>
-                            <span className="text-xs text-gray-500">
-                              {new Date(msg.timestamp).toLocaleString()}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-center py-8 text-gray-500">
-                  <BarChart3 className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p>No tracking data available</p>
+                <Switch
+                  checked={settings.enabled}
+                  onCheckedChange={(checked) => 
+                    setSettings(prev => ({ ...prev, enabled: checked }))
+                  }
+                  disabled={!isAdmin}
+                />
+              </div>
+              {!settings.enabled && (
+                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                  <p className="text-sm text-yellow-800">
+                    <strong>Note:</strong> When WhatsApp notifications are disabled, no WhatsApp messages will be sent, even if individual notification types are configured below.
+                  </p>
                 </div>
               )}
             </CardContent>
           </Card>
 
+          {/* Receipt Notifications */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Receipt className="h-5 w-5 text-blue-600" />
+                <span>Receipt Notifications</span>
+              </CardTitle>
+              <CardDescription>
+                Send receipt links via WhatsApp to clients.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label>Auto-send to Clients</Label>
+                  <p className="text-sm text-gray-500">
+                    Automatically send receipts when created.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.receiptNotifications.autoSendToClients}
+                  onCheckedChange={(checked) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      receiptNotifications: {
+                        ...prev.receiptNotifications,
+                        autoSendToClients: checked
+                      }
+                    }))
+                  }
+                  disabled={!isAdmin || !settings.enabled}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="highValueThreshold">High Value Threshold (₹)</Label>
+                <Input
+                  id="highValueThreshold"
+                  type="number"
+                  value={settings.receiptNotifications.highValueThreshold}
+                  onChange={(e) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      receiptNotifications: {
+                        ...prev.receiptNotifications,
+                        highValueThreshold: parseFloat(e.target.value) || 0
+                      }
+                    }))
+                  }
+                  disabled={!isAdmin || !settings.enabled}
+                  min="0"
+                  step="0.01"
+                />
+                <p className="text-xs text-gray-500">
+                  Only send WhatsApp for receipts above this amount (0 = all receipts).
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Appointment Notifications */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Calendar className="h-5 w-5 text-blue-600" />
+                <span>Appointment Notifications</span>
+              </CardTitle>
+              <CardDescription>
+                Send appointment updates via WhatsApp.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label>Enable Appointment Notifications</Label>
+                  <p className="text-sm text-gray-500">
+                    Send appointment confirmations, reminders, and cancellations via WhatsApp.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.appointmentNotifications.enabled}
+                  onCheckedChange={(checked) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      appointmentNotifications: {
+                        ...prev.appointmentNotifications,
+                        enabled: checked
+                      }
+                    }))
+                  }
+                  disabled={!isAdmin || !settings.enabled}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* System Alerts */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+                <span>System Alerts</span>
+              </CardTitle>
+              <CardDescription>
+                Receive system alerts via WhatsApp.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label>Enable System Alerts</Label>
+                  <p className="text-sm text-gray-500">
+                    Receive alerts for low inventory, payment failures, and system errors.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.systemAlerts.enabled}
+                  onCheckedChange={(checked) => 
+                    setSettings(prev => ({
+                      ...prev,
+                      systemAlerts: {
+                        ...prev.systemAlerts,
+                        enabled: checked
+                      }
+                    }))
+                  }
+                  disabled={!isAdmin || !settings.enabled}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Save Button */}
-          <div className="flex justify-end">
-            <Button onClick={handleSave} disabled={isLoading}>
-              {isLoading ? 'Saving...' : 'Save Settings'}
-            </Button>
-          </div>
+          {isAdmin && (
+            <div className="flex justify-end">
+              <Button 
+                onClick={handleSave} 
+                disabled={isLoading}
+                className="bg-indigo-600 hover:bg-indigo-700"
+              >
+                {isLoading ? "Saving..." : "Save Settings"}
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>

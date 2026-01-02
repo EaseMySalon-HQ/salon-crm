@@ -275,3 +275,4 @@ After setting up Resend:
 - **Resend Support:** support@resend.com
 - **Resend Status:** https://status.resend.com
 
+

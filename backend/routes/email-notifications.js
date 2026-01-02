@@ -23,15 +23,24 @@ function requireAdminOrManager(req, res, next) {
  */
 router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) => {
   try {
-    const { Business } = req.mainModels;
+    const { Business, AdminSettings } = req.mainModels;
+
+    // Resolve businessId: prefer the authenticated user's branchId, otherwise fall back to the first business
+    let businessId = req.user.branchId;
+    if (!businessId) {
+      const firstBusiness = await Business.findOne({}).select('_id').lean();
+      businessId = firstBusiness?._id;
+      console.log('📱 [GET Settings] branchId missing, using fallback businessId:', businessId);
+    }
+
     // Use lean() to get plain object - this ensures nested objects are accessible
-    const business = await Business.findById(req.user.branchId).lean();
+    const business = businessId ? await Business.findById(businessId).lean() : null;
+
+    // Fallback: if no business found, use AdminSettings.notifications.whatsapp as the storage
+    const useAdminSettings = !business;
     
     if (!business) {
-      return res.status(404).json({
-        success: false,
-        error: 'Business not found'
-      });
+      console.warn('⚠️ [GET Settings] No business found. Falling back to AdminSettings.notifications.whatsapp');
     }
     
     console.log('📱 [GET Settings] Business ID:', req.user.branchId);
@@ -119,9 +128,90 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
       }
     };
 
+    // CRITICAL: Query the database directly to get the raw value
+    // This bypasses any potential Mongoose default application
+    const directBusiness = useAdminSettings
+      ? null
+      : await Business.findById(businessId)
+          .select('settings.whatsappNotificationSettings')
+          .lean();
+
+    let adminSettings = null;
+    if (useAdminSettings) {
+      adminSettings = await AdminSettings.getSettings();
+      console.log('📱 [GET Settings] Loaded AdminSettings for fallback:', {
+        hasNotifications: !!adminSettings.notifications,
+        hasWhatsapp: !!adminSettings.notifications?.whatsapp,
+        whatsappEnabled: adminSettings.notifications?.whatsapp?.enabled
+      });
+    }
+    
     // Get WhatsApp settings from database
     // business is already a plain object (from .lean()), so we can access nested objects directly
-    const dbWhatsappSettings = business.settings?.whatsappNotificationSettings;
+    // CRITICAL: ALWAYS use the correct location (settings.whatsappNotificationSettings)
+    // Ignore any duplicate in the old location (settings.emailNotificationSettings.whatsappNotificationSettings)
+    // Use the direct query result instead of the original business object
+    let dbWhatsappSettings = directBusiness?.settings?.whatsappNotificationSettings || business.settings?.whatsappNotificationSettings;
+    
+    // CRITICAL: If settings object exists but whatsappNotificationSettings is undefined,
+    // it means it was never saved, so we should use defaults
+    // But if it's an empty object {}, we should still check for enabled key
+    if (business?.settings && dbWhatsappSettings === undefined) {
+      dbWhatsappSettings = null; // Explicitly set to null to indicate no saved settings
+    }
+
+    // Admin fallback: read from adminSettings.notifications.whatsapp
+    if (useAdminSettings) {
+      dbWhatsappSettings = adminSettings?.notifications?.whatsapp || null;
+      console.log('📱 [GET Settings] Using admin fallback settings:', {
+        enabled: dbWhatsappSettings?.enabled,
+        hasEnabled: dbWhatsappSettings ? ('enabled' in dbWhatsappSettings) : false
+      });
+    }
+    
+    // CRITICAL: Log the direct database value
+    console.log('📱 [GET Settings] Direct DB query result:', {
+      hasDirectBusiness: !!directBusiness,
+      hasSettings: !!directBusiness?.settings,
+      hasWhatsappSettings: !!directBusiness?.settings?.whatsappNotificationSettings,
+      directEnabled: directBusiness?.settings?.whatsappNotificationSettings?.enabled,
+      directEnabledType: typeof directBusiness?.settings?.whatsappNotificationSettings?.enabled,
+      directIsFalse: directBusiness?.settings?.whatsappNotificationSettings?.enabled === false,
+      fullDirect: JSON.stringify(directBusiness?.settings?.whatsappNotificationSettings, null, 2)
+    });
+    
+    // Check if there's a duplicate in the old location (for logging/migration purposes)
+    const oldLocationSettings = business.settings?.emailNotificationSettings?.whatsappNotificationSettings;
+    if (oldLocationSettings && dbWhatsappSettings) {
+      console.warn('⚠️ [GET Settings] Found WhatsApp settings in BOTH locations (duplicate detected)');
+      console.warn('   Correct location enabled:', dbWhatsappSettings?.enabled);
+      console.warn('   Old location enabled:', oldLocationSettings?.enabled);
+      console.warn('   Using correct location: settings.whatsappNotificationSettings');
+      console.warn('   Ignoring old location: settings.emailNotificationSettings.whatsappNotificationSettings');
+      // The old location will be cleaned up on next save
+    } else if (oldLocationSettings && !dbWhatsappSettings) {
+      // Only use old location if correct location doesn't exist
+      console.warn('⚠️ [GET Settings] Found WhatsApp settings ONLY in OLD location');
+      console.warn('   Migrating from: settings.emailNotificationSettings.whatsappNotificationSettings');
+      console.warn('   Should migrate to: settings.whatsappNotificationSettings');
+      dbWhatsappSettings = oldLocationSettings;
+    }
+    
+    // CRITICAL: Use the direct database value if available
+    if (directBusiness?.settings?.whatsappNotificationSettings) {
+      dbWhatsappSettings = directBusiness.settings.whatsappNotificationSettings;
+      console.log('📱 [GET Settings] Using direct DB query result instead of merged business object');
+    }
+    
+    // CRITICAL: Log the raw database value before any processing
+    console.log('📱 [GET Settings] Raw database value (before any processing):', {
+      enabled: dbWhatsappSettings?.enabled,
+      enabledType: typeof dbWhatsappSettings?.enabled,
+      enabledIsFalse: dbWhatsappSettings?.enabled === false,
+      enabledIsTrue: dbWhatsappSettings?.enabled === true,
+      hasEnabled: dbWhatsappSettings ? ('enabled' in dbWhatsappSettings) : false,
+      fullRaw: JSON.stringify(dbWhatsappSettings, null, 2)
+    });
     
     // Debug logging
     console.log('📱 [GET Settings] WhatsApp settings from DB:', {
@@ -137,12 +227,16 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
     
     // If we have saved settings, use them directly (only merge missing nested properties)
     // Check if settings exist and are not just an empty object
-    // Use hasOwnProperty to properly check for boolean false values
+    // NOTE: When using .lean(), we get a plain object, so we need to check for 'enabled' key differently
+    // Use 'enabled' in dbWhatsappSettings or check if the key exists
+    // CRITICAL: Even if only {enabled: false} is saved, we should treat it as saved settings
     const hasSavedSettings = dbWhatsappSettings && 
                              typeof dbWhatsappSettings === 'object' && 
                              !Array.isArray(dbWhatsappSettings) &&
-                             (dbWhatsappSettings.hasOwnProperty('enabled') || 
-                              dbWhatsappSettings.hasOwnProperty('receiptNotifications') ||
+                             (('enabled' in dbWhatsappSettings) || 
+                              ('receiptNotifications' in dbWhatsappSettings) ||
+                              ('appointmentNotifications' in dbWhatsappSettings) ||
+                              ('systemAlerts' in dbWhatsappSettings) ||
                               Object.keys(dbWhatsappSettings).length > 0);
     
     console.log('📱 [GET Settings] hasSavedSettings check:', {
@@ -151,56 +245,207 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
       dbWhatsappSettingsType: typeof dbWhatsappSettings,
       dbWhatsappSettingsIsArray: Array.isArray(dbWhatsappSettings),
       dbEnabled: dbWhatsappSettings?.enabled,
+      dbEnabledType: typeof dbWhatsappSettings?.enabled,
       dbKeys: dbWhatsappSettings ? Object.keys(dbWhatsappSettings) : []
     });
     
     let mergedWhatsappSettings;
+    
+    // CRITICAL: First, check if we have a direct database value for enabled
+    // This takes priority over everything else
+    const directEnabledValue = directBusiness?.settings?.whatsappNotificationSettings?.enabled;
+    const hasDirectEnabled = directEnabledValue !== undefined;
+    
+    console.log('📱 [GET Settings] Direct enabled check:', {
+      hasDirectEnabled,
+      directEnabledValue,
+      directEnabledType: typeof directEnabledValue,
+      directIsFalse: directEnabledValue === false,
+      directIsTrue: directEnabledValue === true
+    });
+    
     if (hasSavedSettings) {
       console.log('📱 [GET Settings] ✅ Using saved settings from database');
       console.log('📱 [GET Settings] dbWhatsappSettings.enabled:', dbWhatsappSettings.enabled);
+      console.log('📱 [GET Settings] dbWhatsappSettings.enabled type:', typeof dbWhatsappSettings.enabled);
+      console.log('📱 [GET Settings] dbWhatsappSettings.enabled === false:', dbWhatsappSettings.enabled === false);
       console.log('📱 [GET Settings] dbWhatsappSettings.hasOwnProperty("enabled"):', dbWhatsappSettings.hasOwnProperty('enabled'));
       
+      // CRITICAL: Use direct database value if available, otherwise use dbWhatsappSettings
+      // This ensures we get the actual stored value, not a merged/default value
+      const dbEnabledValue = hasDirectEnabled 
+        ? directEnabledValue 
+        : (('enabled' in dbWhatsappSettings) 
+            ? dbWhatsappSettings.enabled 
+            : defaultWhatsappSettings.enabled);
+      
+      console.log('📱 [GET Settings] Extracted enabled value from DB:', {
+        dbEnabledValue,
+        dbEnabledType: typeof dbEnabledValue,
+        isFalse: dbEnabledValue === false,
+        isTrue: dbEnabledValue === true,
+        rawDbValue: dbWhatsappSettings.enabled,
+        rawDbValueType: typeof dbWhatsappSettings.enabled
+      });
+      
       // We have saved settings - use saved values as base, only fill in missing nested properties
-      // Explicitly preserve enabled field from saved settings (even if false)
+      // CRITICAL: Start with saved settings FIRST, then only add defaults for missing properties
+      // This ensures saved values (including false) are preserved
+      // CRITICAL: Build merged settings carefully to preserve false values
+      // Start with database values FIRST, then only add defaults for missing nested properties
+      // IMPORTANT: Build the object step by step to ensure enabled is set correctly
       mergedWhatsappSettings = {
-        // Start with defaults first
-        ...defaultWhatsappSettings,
-        // Then override with saved settings (this preserves enabled: true/false from DB)
-        ...dbWhatsappSettings,
-        // Explicitly set enabled from saved settings if it exists
-        enabled: dbWhatsappSettings.hasOwnProperty('enabled') ? dbWhatsappSettings.enabled : defaultWhatsappSettings.enabled,
-        // Only merge nested objects if they exist in saved settings, otherwise use defaults
-        receiptNotifications: dbWhatsappSettings.receiptNotifications ? {
-          ...defaultWhatsappSettings.receiptNotifications,
-          ...dbWhatsappSettings.receiptNotifications
-        } : defaultWhatsappSettings.receiptNotifications,
-        appointmentNotifications: dbWhatsappSettings.appointmentNotifications ? {
-          ...defaultWhatsappSettings.appointmentNotifications,
-          ...dbWhatsappSettings.appointmentNotifications
-        } : defaultWhatsappSettings.appointmentNotifications,
-        systemAlerts: dbWhatsappSettings.systemAlerts ? {
-          ...defaultWhatsappSettings.systemAlerts,
-          ...dbWhatsappSettings.systemAlerts
-        } : defaultWhatsappSettings.systemAlerts
+        // Start with ALL saved settings from database (preserves everything including false)
+        ...dbWhatsappSettings
       };
+      
+      // CRITICAL: Set enabled EXPLICITLY after the spread, using the direct DB value if available
+      // This MUST be done separately to ensure false values are preserved
+      mergedWhatsappSettings.enabled = hasDirectEnabled 
+        ? directEnabledValue 
+        : dbEnabledValue;
+      
+      console.log('📱 [GET Settings] Set enabled in mergedWhatsappSettings:', {
+        enabled: mergedWhatsappSettings.enabled,
+        enabledType: typeof mergedWhatsappSettings.enabled,
+        isFalse: mergedWhatsappSettings.enabled === false,
+        source: hasDirectEnabled ? 'direct' : 'dbWhatsappSettings'
+      });
+      
+      // Now merge nested objects, but preserve their enabled states if they exist in DB
+      if (dbWhatsappSettings.receiptNotifications) {
+        mergedWhatsappSettings.receiptNotifications = {
+          ...defaultWhatsappSettings.receiptNotifications,
+          ...dbWhatsappSettings.receiptNotifications,
+          // Preserve enabled state from DB if it exists (even if false)
+          enabled: ('enabled' in dbWhatsappSettings.receiptNotifications)
+            ? dbWhatsappSettings.receiptNotifications.enabled
+            : defaultWhatsappSettings.receiptNotifications.enabled
+        };
+      } else {
+        mergedWhatsappSettings.receiptNotifications = defaultWhatsappSettings.receiptNotifications;
+      }
+      
+      if (dbWhatsappSettings.appointmentNotifications) {
+        mergedWhatsappSettings.appointmentNotifications = {
+          ...defaultWhatsappSettings.appointmentNotifications,
+          ...dbWhatsappSettings.appointmentNotifications,
+          enabled: ('enabled' in dbWhatsappSettings.appointmentNotifications)
+            ? dbWhatsappSettings.appointmentNotifications.enabled
+            : defaultWhatsappSettings.appointmentNotifications.enabled
+        };
+      } else {
+        mergedWhatsappSettings.appointmentNotifications = defaultWhatsappSettings.appointmentNotifications;
+      }
+      
+      if (dbWhatsappSettings.systemAlerts) {
+        mergedWhatsappSettings.systemAlerts = {
+          ...defaultWhatsappSettings.systemAlerts,
+          ...dbWhatsappSettings.systemAlerts,
+          enabled: ('enabled' in dbWhatsappSettings.systemAlerts)
+            ? dbWhatsappSettings.systemAlerts.enabled
+            : defaultWhatsappSettings.systemAlerts.enabled
+        };
+      } else {
+        mergedWhatsappSettings.systemAlerts = defaultWhatsappSettings.systemAlerts;
+      }
+      
+      // FINAL CHECK: Ensure enabled is exactly what's in the database
+      if (('enabled' in dbWhatsappSettings) && mergedWhatsappSettings.enabled !== dbWhatsappSettings.enabled) {
+        console.warn('⚠️ [GET Settings] Enabled value mismatch after merge! Forcing to DB value.');
+        mergedWhatsappSettings.enabled = dbWhatsappSettings.enabled;
+      }
       console.log('📱 [GET Settings] After merge - enabled:', mergedWhatsappSettings.enabled);
+      console.log('📱 [GET Settings] After merge - enabled type:', typeof mergedWhatsappSettings.enabled);
+      console.log('📱 [GET Settings] After merge - enabled === false:', mergedWhatsappSettings.enabled === false);
       console.log('📱 [GET Settings] After merge - receiptNotifications.enabled:', mergedWhatsappSettings.receiptNotifications?.enabled);
+      
+      // FINAL VERIFICATION: Ensure enabled value is preserved correctly
+      // Use 'in' operator for plain objects from .lean()
+      if (('enabled' in dbWhatsappSettings) && mergedWhatsappSettings.enabled !== dbWhatsappSettings.enabled) {
+        console.warn('⚠️ [GET Settings] WARNING: Enabled value was not preserved correctly!');
+        console.warn('   DB value:', dbWhatsappSettings.enabled, '(type:', typeof dbWhatsappSettings.enabled, ')');
+        console.warn('   Merged value:', mergedWhatsappSettings.enabled, '(type:', typeof mergedWhatsappSettings.enabled, ')');
+        console.warn('   Correcting to DB value...');
+        mergedWhatsappSettings.enabled = dbWhatsappSettings.enabled;
+        console.log('✅ [GET Settings] Corrected enabled value to:', mergedWhatsappSettings.enabled);
+      }
     } else {
       console.log('📱 [GET Settings] ❌ No saved settings found, using defaults');
       console.log('📱 [GET Settings] hasSavedSettings check failed. dbWhatsappSettings:', dbWhatsappSettings);
-      // No saved settings - use defaults
-      mergedWhatsappSettings = defaultWhatsappSettings;
+      console.log('📱 [GET Settings] dbWhatsappSettings type:', typeof dbWhatsappSettings);
+      console.log('📱 [GET Settings] dbWhatsappSettings is array:', Array.isArray(dbWhatsappSettings));
+      console.log('📱 [GET Settings] dbWhatsappSettings keys:', dbWhatsappSettings ? Object.keys(dbWhatsappSettings) : 'null/undefined');
+      console.log('📱 [GET Settings] has enabled key:', dbWhatsappSettings ? ('enabled' in dbWhatsappSettings) : false);
+      
+      // CRITICAL: Even if hasSavedSettings is false, check if enabled exists
+      // This handles the case where only {enabled: false} was saved
+      // Also check the direct database query result
+      if (hasDirectEnabled) {
+        console.log('📱 [GET Settings] ⚠️ Found enabled in direct DB query even though hasSavedSettings was false. Using direct DB enabled value.');
+        mergedWhatsappSettings = {
+          ...defaultWhatsappSettings,
+          enabled: directEnabledValue  // Use the direct database value
+        };
+      } else if (dbWhatsappSettings && typeof dbWhatsappSettings === 'object' && !Array.isArray(dbWhatsappSettings) && ('enabled' in dbWhatsappSettings)) {
+        console.log('📱 [GET Settings] ⚠️ Found enabled key even though hasSavedSettings was false. Using DB enabled value.');
+        mergedWhatsappSettings = {
+          ...defaultWhatsappSettings,
+          enabled: dbWhatsappSettings.enabled  // Use the saved enabled value
+        };
+      } else {
+        // No saved settings - use defaults
+        mergedWhatsappSettings = defaultWhatsappSettings;
+      }
     }
     
     // Debug logging after merge
     console.log('📱 [GET Settings] Merged WhatsApp settings:', {
       enabled: mergedWhatsappSettings.enabled,
+      enabledType: typeof mergedWhatsappSettings.enabled,
+      enabledIsFalse: mergedWhatsappSettings.enabled === false,
       receiptNotificationsEnabled: mergedWhatsappSettings.receiptNotifications?.enabled,
       fullMerged: JSON.stringify(mergedWhatsappSettings, null, 2)
     });
 
+    // Final verification before sending - double check against database value
+    // Use 'in' operator for plain objects from .lean()
+    if (dbWhatsappSettings && ('enabled' in dbWhatsappSettings)) {
+      if (mergedWhatsappSettings.enabled !== dbWhatsappSettings.enabled) {
+        console.error('❌ [GET Settings] CRITICAL: Enabled value mismatch after merge!');
+        console.error('   Database value:', dbWhatsappSettings.enabled, '(type:', typeof dbWhatsappSettings.enabled, ')');
+        console.error('   Merged value:', mergedWhatsappSettings.enabled, '(type:', typeof mergedWhatsappSettings.enabled, ')');
+        console.error('   Forcing to database value...');
+        mergedWhatsappSettings.enabled = dbWhatsappSettings.enabled;
+        console.log('✅ [GET Settings] Forced enabled value to:', mergedWhatsappSettings.enabled);
+      }
+    }
+
+    // Final verification before sending - CRITICAL: One last check to ensure enabled value is correct
+    // Use the direct database value we already queried (no need to query again)
+    if (hasDirectEnabled) {
+      // Use the direct database value - this is the absolute truth
+      mergedWhatsappSettings.enabled = directEnabledValue;
+      console.log('📱 [GET Settings] Final override - using direct DB enabled value:', directEnabledValue);
+      console.log('📱 [GET Settings] Direct DB enabled type:', typeof directEnabledValue);
+      console.log('📱 [GET Settings] Direct DB enabled === false:', directEnabledValue === false);
+    } else if (dbWhatsappSettings && ('enabled' in dbWhatsappSettings)) {
+      // Fallback to the value from the original query
+      mergedWhatsappSettings.enabled = dbWhatsappSettings.enabled;
+      console.log('📱 [GET Settings] Final override - using DB enabled value:', dbWhatsappSettings.enabled);
+    }
+    
     // Final verification before sending
     console.log('📱 [GET Settings] Final response - whatsappNotificationSettings.enabled:', mergedWhatsappSettings.enabled);
+    console.log('📱 [GET Settings] Final response - enabled type:', typeof mergedWhatsappSettings.enabled);
+    console.log('📱 [GET Settings] Final response - enabled === false:', mergedWhatsappSettings.enabled === false);
+    console.log('📱 [GET Settings] Final response - DB enabled value:', dbWhatsappSettings?.enabled);
+    console.log('📱 [GET Settings] Final response - DB enabled type:', typeof dbWhatsappSettings?.enabled);
+    
+    // Disable caching for this endpoint to ensure fresh data is always returned
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     
     res.json({
       success: true,
@@ -223,117 +468,278 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
  * Update email notification settings for business
  */
 router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrManager, async (req, res) => {
+  console.log('🚨 [PUT Settings] ========== ENDPOINT HIT ==========');
+  console.log('🚨 [PUT Settings] Body:', JSON.stringify(req.body, null, 2));
+  
   try {
-    const { Business } = req.mainModels;
-    const business = await Business.findById(req.user.branchId);
-    
-    if (!business) {
-      return res.status(404).json({
-        success: false,
-        error: 'Business not found'
-      });
+    const { Business, AdminSettings } = req.mainModels;
+
+    console.log('📱 [PUT Settings] Request received:', {
+      userEmail: req.user.email,
+      branchId: req.user.branchId,
+      hasWhatsappSettings: !!req.body.whatsappNotificationSettings,
+      whatsappEnabled: req.body.whatsappNotificationSettings?.enabled
+    });
+
+    // Resolve businessId: prefer the authenticated user's branchId, otherwise fall back to the first business
+    let businessId = req.user.branchId;
+    if (!businessId) {
+      const firstBusiness = await Business.findOne({}).select('_id').lean();
+      businessId = firstBusiness?._id;
+      console.log('📱 [PUT Settings] branchId missing, using fallback businessId:', businessId);
     }
 
-    // Update email notification settings
-    if (!business.settings) {
-      business.settings = {};
+    console.log('📱 [PUT Settings] Resolved businessId:', businessId);
+    const business = businessId ? await Business.findById(businessId) : null;
+    console.log('📱 [PUT Settings] Business found:', !!business);
+
+    // Fallback: if no business found, use AdminSettings.notifications.whatsapp as the storage
+    const useAdminSettings = !business;
+    let adminSettings = null;
+    if (useAdminSettings) {
+      adminSettings = await AdminSettings.getSettings();
+      console.log('📱 [PUT Settings] Using AdminSettings fallback for saving WhatsApp settings');
     }
     
-    // Handle email notification settings
-    if (req.body.emailNotificationSettings || Object.keys(req.body).some(key => !key.includes('whatsapp'))) {
-      if (!business.settings.emailNotificationSettings) {
-        business.settings.emailNotificationSettings = {};
-      }
-      business.settings.emailNotificationSettings = {
-        ...business.settings.emailNotificationSettings,
-        ...(req.body.emailNotificationSettings || req.body)
-      };
+    if (!business) {
+      console.warn('⚠️ [PUT Settings] No business found. Falling back to AdminSettings.notifications.whatsapp');
     }
-    
+
     // Handle WhatsApp notification settings
+    let newWhatsappSettings = null; // Declare outside if block to fix scope issue
     if (req.body.whatsappNotificationSettings) {
-      console.log('📱 [PUT Settings] Received WhatsApp settings to save:', JSON.stringify(req.body.whatsappNotificationSettings, null, 2));
-      
-      if (!business.settings.whatsappNotificationSettings) {
-        business.settings.whatsappNotificationSettings = {};
-      }
-      
-      // Deep merge for nested objects first
-      const newWhatsappSettings = {
-        ...business.settings.whatsappNotificationSettings,
-        ...req.body.whatsappNotificationSettings,
-        // Explicitly set enabled field if it exists in request (even if false)
-        enabled: req.body.whatsappNotificationSettings.hasOwnProperty('enabled') 
-          ? req.body.whatsappNotificationSettings.enabled 
-          : business.settings.whatsappNotificationSettings.enabled
-      };
-      
-      // Deep merge nested objects
-      if (req.body.whatsappNotificationSettings.receiptNotifications) {
-        newWhatsappSettings.receiptNotifications = {
-          ...(business.settings.whatsappNotificationSettings.receiptNotifications || {}),
-          ...req.body.whatsappNotificationSettings.receiptNotifications,
-          // Explicitly preserve enabled field if it exists in request (even if false)
-          enabled: req.body.whatsappNotificationSettings.receiptNotifications.hasOwnProperty('enabled')
-            ? req.body.whatsappNotificationSettings.receiptNotifications.enabled
-            : (business.settings.whatsappNotificationSettings.receiptNotifications?.enabled ?? true)
+      try {
+        console.log('📱 [PUT Settings] Received WhatsApp settings to save:', JSON.stringify(req.body.whatsappNotificationSettings, null, 2));
+        
+        // Only process business settings if we have a business
+        if (business) {
+          // Ensure settings object exists
+          if (!business.settings) {
+            business.settings = {};
+          }
+          if (!business.settings.whatsappNotificationSettings) {
+            business.settings.whatsappNotificationSettings = {};
+          }
+        }
+        
+        const existingSettings = business?.settings?.whatsappNotificationSettings || adminSettings?.notifications?.whatsapp || {};
+        const incomingSettings = req.body.whatsappNotificationSettings || {};
+        
+        console.log('📱 [PUT Settings] Before merge:', {
+          existingEnabled: existingSettings?.enabled,
+          incomingEnabled: incomingSettings?.enabled,
+          incomingHasEnabled: incomingSettings.hasOwnProperty('enabled'),
+          incomingEnabledType: typeof incomingSettings?.enabled,
+          fullIncoming: JSON.stringify(incomingSettings, null, 2)
+        });
+        
+        // CRITICAL: Extract enabled value FIRST before any spreads
+        // This ensures we capture the exact value from the request (including false)
+        const enabledValue = incomingSettings.hasOwnProperty('enabled') 
+          ? incomingSettings.enabled 
+          : (existingSettings?.hasOwnProperty('enabled') ? existingSettings.enabled : true);
+        
+        console.log('📱 [PUT Settings] Extracted enabled value:', {
+          enabledValue,
+          enabledType: typeof enabledValue,
+          isFalse: enabledValue === false,
+          isTrue: enabledValue === true
+        });
+        
+        // Deep merge for nested objects - but explicitly set enabled AFTER all spreads
+        newWhatsappSettings = {
+          ...existingSettings,
+          ...incomingSettings,
+          // CRITICAL: Explicitly set enabled field LAST to ensure it overrides everything
+          enabled: enabledValue
         };
+        
+        console.log('📱 [PUT Settings] After merge (before nested):', {
+          enabled: newWhatsappSettings.enabled,
+          enabledType: typeof newWhatsappSettings.enabled,
+          isFalse: newWhatsappSettings.enabled === false,
+          isTrue: newWhatsappSettings.enabled === true,
+          hasEnabled: newWhatsappSettings.hasOwnProperty('enabled')
+        });
+      
+        // Deep merge nested objects
+        if (incomingSettings.receiptNotifications) {
+          newWhatsappSettings.receiptNotifications = {
+            // Start with existing or defaults
+            ...(existingSettings.receiptNotifications || {
+              enabled: true,
+              autoSendToClients: true,
+              highValueThreshold: 0
+            }),
+            // Override with incoming settings
+            ...incomingSettings.receiptNotifications,
+            // CRITICAL: Explicitly preserve enabled field if it exists in request (even if false)
+            // This must come AFTER the spread to ensure false values override defaults
+            enabled: incomingSettings.receiptNotifications.hasOwnProperty('enabled')
+              ? incomingSettings.receiptNotifications.enabled
+              : (existingSettings.receiptNotifications?.enabled ?? true)
+          };
+        } else {
+          // Ensure receiptNotifications exists with existing values or defaults if not provided
+          newWhatsappSettings.receiptNotifications = {
+            ...(existingSettings.receiptNotifications || {
+              enabled: true,
+              autoSendToClients: true,
+              highValueThreshold: 0
+            })
+          };
+        }
+        
+        if (incomingSettings.appointmentNotifications) {
+          newWhatsappSettings.appointmentNotifications = {
+            ...(existingSettings.appointmentNotifications || {}),
+            ...incomingSettings.appointmentNotifications
+          };
+        } else {
+          newWhatsappSettings.appointmentNotifications = {
+            ...(existingSettings.appointmentNotifications || {
+              enabled: false,
+              newAppointments: false,
+              confirmations: false,
+              reminders: false,
+              cancellations: false
+            })
+          };
+        }
+        
+        if (incomingSettings.systemAlerts) {
+          newWhatsappSettings.systemAlerts = {
+            ...(existingSettings.systemAlerts || {}),
+            ...incomingSettings.systemAlerts
+          };
+        } else {
+          newWhatsappSettings.systemAlerts = {
+            ...(existingSettings.systemAlerts || {
+              enabled: false,
+              lowInventory: false,
+              paymentFailures: false
+            })
+          };
+        }
+      
+        // Set the entire object (only if we have a business)
+        if (business) {
+          business.settings.whatsappNotificationSettings = newWhatsappSettings;
+        }
+        
+        console.log('📱 [PUT Settings] WhatsApp settings after merge (before save):', {
+          enabled: newWhatsappSettings.enabled,
+          enabledType: typeof newWhatsappSettings.enabled,
+          enabledValue: newWhatsappSettings.enabled === false ? 'FALSE' : newWhatsappSettings.enabled === true ? 'TRUE' : 'OTHER',
+          hasEnabled: newWhatsappSettings.hasOwnProperty('enabled'),
+          fullSettings: JSON.stringify(newWhatsappSettings, null, 2)
+        });
+        
+        // Mark nested object as modified for Mongoose - mark both the nested path and parent (only if business exists)
+        if (business) {
+          business.markModified('settings');
+          business.markModified('settings.whatsappNotificationSettings');
+          
+          // Also try using set() to ensure Mongoose tracks the change
+          business.set('settings.whatsappNotificationSettings', newWhatsappSettings);
+        }
+      } catch (whatsappError) {
+        console.error('❌ [PUT Settings] Error processing WhatsApp settings:', whatsappError);
+        console.error('❌ [PUT Settings] Error stack:', whatsappError.stack);
+        throw whatsappError; // Re-throw to be caught by outer try-catch
       }
-      if (req.body.whatsappNotificationSettings.appointmentNotifications) {
-        newWhatsappSettings.appointmentNotifications = {
-          ...(business.settings.whatsappNotificationSettings.appointmentNotifications || {}),
-          ...req.body.whatsappNotificationSettings.appointmentNotifications
-        };
-      }
-      if (req.body.whatsappNotificationSettings.systemAlerts) {
-        newWhatsappSettings.systemAlerts = {
-          ...(business.settings.whatsappNotificationSettings.systemAlerts || {}),
-          ...req.body.whatsappNotificationSettings.systemAlerts
-        };
-      }
-      
-      // Set the entire object
-      business.settings.whatsappNotificationSettings = newWhatsappSettings;
-      
-      console.log('📱 [PUT Settings] WhatsApp settings after merge (before save):', {
-        enabled: business.settings.whatsappNotificationSettings.enabled,
-        enabledType: typeof business.settings.whatsappNotificationSettings.enabled,
-        hasEnabled: business.settings.whatsappNotificationSettings.hasOwnProperty('enabled'),
-        fullSettings: JSON.stringify(business.settings.whatsappNotificationSettings, null, 2)
-      });
-      
-      // Mark nested object as modified for Mongoose - mark both the nested path and parent
-      business.markModified('settings');
-      business.markModified('settings.whatsappNotificationSettings');
-      
-      // Also try using set() to ensure Mongoose tracks the change
-      business.set('settings.whatsappNotificationSettings', business.settings.whatsappNotificationSettings);
     }
 
     // CRITICAL: Use updateOne as PRIMARY method for saving nested objects
     // Mongoose save() sometimes doesn't detect changes to deeply nested objects in production
     // updateOne with $set is more reliable for nested object updates
     let updateResult;
-    if (req.body.whatsappNotificationSettings) {
+    if (req.body.whatsappNotificationSettings && newWhatsappSettings) {
       // Build the update object - ensure both parent and nested objects are set
       const updateData = {};
       
-      // Always set the nested whatsappNotificationSettings
-      updateData['settings.whatsappNotificationSettings'] = newWhatsappSettings;
+      // CRITICAL: Log what we're about to save
+      console.log('📱 [PUT Settings] About to save to database:', {
+        enabled: newWhatsappSettings.enabled,
+        enabledType: typeof newWhatsappSettings.enabled,
+        isFalse: newWhatsappSettings.enabled === false,
+        isTrue: newWhatsappSettings.enabled === true,
+        fullSettings: JSON.stringify(newWhatsappSettings, null, 2)
+      });
       
-      // If settings object doesn't exist, we need to ensure it's created
-      // MongoDB will create the nested path automatically with $set, but let's be explicit
-      if (!business.settings || Object.keys(business.settings).length === 0) {
-        // Initialize settings object if it doesn't exist
-        updateData['settings'] = {
-          whatsappNotificationSettings: newWhatsappSettings
+      // CRITICAL: Use a completely fresh object to avoid any reference issues
+      // Deep clone to ensure we're saving exactly what we want
+      const settingsToSave = JSON.parse(JSON.stringify(newWhatsappSettings));
+      
+      // CRITICAL: Explicitly ensure enabled is set (works for both true and false)
+      // This prevents Mongoose from applying schema defaults
+      settingsToSave.enabled = newWhatsappSettings.enabled;
+      
+      console.log('📱 [PUT Settings] settingsToSave.enabled before MongoDB update:', {
+        enabled: settingsToSave.enabled,
+        enabledType: typeof settingsToSave.enabled,
+        isFalse: settingsToSave.enabled === false,
+        isTrue: settingsToSave.enabled === true,
+        originalEnabled: newWhatsappSettings.enabled,
+        fullSettingsToSave: JSON.stringify(settingsToSave, null, 2)
+      });
+      
+      // Build the update - replace the entire nested object
+      updateData['settings.whatsappNotificationSettings'] = settingsToSave;
+      
+      console.log('📱 [PUT Settings] Update data being sent to MongoDB:', {
+        updateDataKeys: Object.keys(updateData),
+        enabledInUpdateData: updateData['settings.whatsappNotificationSettings']?.enabled,
+        enabledType: typeof updateData['settings.whatsappNotificationSettings']?.enabled,
+        isFalse: updateData['settings.whatsappNotificationSettings']?.enabled === false,
+        isTrue: updateData['settings.whatsappNotificationSettings']?.enabled === true,
+        fullUpdateData: JSON.stringify(updateData['settings.whatsappNotificationSettings'], null, 2)
+      });
+      
+      if (useAdminSettings) {
+        // Save into AdminSettings.notifications.whatsapp
+        if (!adminSettings.notifications) adminSettings.notifications = {};
+        if (!adminSettings.notifications.whatsapp) adminSettings.notifications.whatsapp = {};
+        adminSettings.notifications.whatsapp = {
+          ...adminSettings.notifications.whatsapp,
+          ...settingsToSave,
         };
+        adminSettings.markModified('notifications.whatsapp');
+        await adminSettings.save();
+        updateResult = { matchedCount: 1, modifiedCount: 1, acknowledged: true };
+        console.log('📱 [PUT Settings] Saved to AdminSettings (fallback)');
+      } else {
+        // CRITICAL: Use direct MongoDB update to bypass Mongoose defaults
+        // Just set the entire object - MongoDB will save it as-is
+        const updateQuery = {
+          $set: {
+            'settings.whatsappNotificationSettings': settingsToSave
+          }
+        };
+        
+        // Only add $unset if the old location might exist
+        if (business.settings?.emailNotificationSettings?.whatsappNotificationSettings) {
+          updateQuery.$unset = { 'settings.emailNotificationSettings.whatsappNotificationSettings': '' };
+        }
+        
+        console.log('📱 [PUT Settings] Using explicit dot notation for enabled:', {
+          dotNotationEnabled: settingsToSave.enabled,
+          fullUpdateQuery: JSON.stringify(updateQuery, null, 2)
+        });
+        
+        // CRITICAL: Use direct MongoDB collection to bypass Mongoose defaults
+        const BusinessCollection = Business.collection;
+        updateResult = await BusinessCollection.updateOne(
+          { _id: businessId },
+          updateQuery
+        );
+        
+        console.log('📱 [PUT Settings] Direct MongoDB update result:', {
+          matched: updateResult.matchedCount,
+          modified: updateResult.modifiedCount,
+          acknowledged: updateResult.acknowledged
+        });
       }
-      
-      updateResult = await Business.updateOne(
-        { _id: req.user.branchId },
-        { $set: updateData }
-      );
       
       console.log('📱 [PUT Settings] updateOne result:', {
         matched: updateResult.matchedCount,
@@ -358,54 +764,155 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
         console.warn('⚠️ [PUT Settings] Update matched but no documents were modified. This might indicate the data is already the same.');
         // This is not necessarily an error - the data might already be correct
       }
+      
+      // CRITICAL: Verify the value was actually saved to the database
+      // Query directly to ensure we get the actual saved value
+      // Wait a tiny bit to ensure write is committed
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      if (!useAdminSettings) {
+        const verificationBusiness = await Business.findById(businessId)
+          .select('settings.whatsappNotificationSettings settings.emailNotificationSettings.whatsappNotificationSettings')
+          .lean();
+        
+        const verifiedEnabled = verificationBusiness?.settings?.whatsappNotificationSettings?.enabled;
+        const oldLocationEnabled = verificationBusiness?.settings?.emailNotificationSettings?.whatsappNotificationSettings?.enabled;
+        
+        console.log('📱 [PUT Settings] Database verification after updateOne:', {
+          verifiedEnabled,
+          verifiedEnabledType: typeof verifiedEnabled,
+          verifiedIsFalse: verifiedEnabled === false,
+          verifiedIsTrue: verifiedEnabled === true,
+          oldLocationEnabled,
+          oldLocationExists: !!verificationBusiness?.settings?.emailNotificationSettings?.whatsappNotificationSettings,
+          expectedEnabled: newWhatsappSettings.enabled,
+          match: verifiedEnabled === newWhatsappSettings.enabled,
+          fullVerified: JSON.stringify(verificationBusiness?.settings?.whatsappNotificationSettings, null, 2),
+          fullOldLocation: JSON.stringify(verificationBusiness?.settings?.emailNotificationSettings?.whatsappNotificationSettings, null, 2)
+        });
+        
+        if (verifiedEnabled !== newWhatsappSettings.enabled) {
+          console.error('❌ [PUT Settings] CRITICAL: Database value does not match what we tried to save!');
+          console.error('   Expected:', newWhatsappSettings.enabled, '(type:', typeof newWhatsappSettings.enabled, ')');
+          console.error('   Actual in DB:', verifiedEnabled, '(type:', typeof verifiedEnabled, ')');
+          console.error('   Old location value:', oldLocationEnabled);
+          
+          // Try to fix it with a direct update to the enabled field
+          const fixResult = await Business.updateOne(
+            { _id: businessId },
+            { 
+              $set: { 'settings.whatsappNotificationSettings.enabled': newWhatsappSettings.enabled },
+              $unset: { 'settings.emailNotificationSettings.whatsappNotificationSettings': '' }
+            }
+          );
+          console.log('📱 [PUT Settings] Fix attempt result:', {
+            matched: fixResult.matchedCount,
+            modified: fixResult.modifiedCount
+          });
+          
+          // Verify again after fix
+          const recheck = await Business.findById(businessId)
+            .select('settings.whatsappNotificationSettings')
+            .lean();
+          console.log('📱 [PUT Settings] Recheck after fix:', {
+            enabled: recheck?.settings?.whatsappNotificationSettings?.enabled
+          });
+        }
+      }
     }
     
-    // Also try save() as a backup (but updateOne is primary)
-    try {
-      const saveResult = await business.save();
-      console.log('📱 [PUT Settings] Save result (backup):', {
-        saved: !!saveResult,
-        enabled: saveResult.settings?.whatsappNotificationSettings?.enabled,
-        isNew: saveResult.isNew
-      });
-    } catch (saveError) {
-      console.warn('⚠️ [PUT Settings] Save() failed (but updateOne should have worked):', saveError.message);
-      // Don't fail the request if save() fails, updateOne is the primary method
-    }
+    // NOTE: We don't call business.save() here because:
+    // 1. updateOne is the primary method and has already saved the data
+    // 2. The business object in memory still has old values, so save() would overwrite our updateOne changes
+    // 3. We reload from database below to get the latest data
     
     // Reload business to ensure we have the latest data (use lean() to get plain object)
-    const savedBusiness = await Business.findById(req.user.branchId).lean();
+    const savedBusiness = useAdminSettings
+      ? null
+      : await Business.findById(businessId).lean();
     console.log('📱 [PUT Settings] WhatsApp settings after save (from DB):', {
-      enabled: savedBusiness.settings?.whatsappNotificationSettings?.enabled,
-      receiptNotificationsEnabled: savedBusiness.settings?.whatsappNotificationSettings?.receiptNotifications?.enabled,
-      hasSettings: !!savedBusiness.settings,
-      hasWhatsappSettings: !!savedBusiness.settings?.whatsappNotificationSettings,
-      fullSettings: JSON.stringify(savedBusiness.settings?.whatsappNotificationSettings, null, 2)
+      enabled: savedBusiness?.settings?.whatsappNotificationSettings?.enabled,
+      enabledType: typeof savedBusiness?.settings?.whatsappNotificationSettings?.enabled,
+      enabledIsFalse: savedBusiness?.settings?.whatsappNotificationSettings?.enabled === false,
+      receiptNotificationsEnabled: savedBusiness?.settings?.whatsappNotificationSettings?.receiptNotifications?.enabled,
+      hasSettings: !!savedBusiness?.settings,
+      hasWhatsappSettings: !!savedBusiness?.settings?.whatsappNotificationSettings,
+      fullSettings: JSON.stringify(savedBusiness?.settings?.whatsappNotificationSettings, null, 2)
     });
 
     // Use savedBusiness to ensure we return the latest data
-    // Ensure we return the saved WhatsApp settings, or the ones we just set
-    const returnedWhatsappSettings = savedBusiness.settings?.whatsappNotificationSettings || business.settings?.whatsappNotificationSettings;
+    // BUT: If we just saved newWhatsappSettings, prefer that to ensure we return exactly what was saved
+    // This is important because the database might not have the latest data immediately after save
+    let returnedWhatsappSettings;
+    if (newWhatsappSettings) {
+      // Use the settings we just saved (most reliable)
+      // CRITICAL: Create a fresh object to ensure no reference issues
+      returnedWhatsappSettings = JSON.parse(JSON.stringify(newWhatsappSettings));
+      console.log('📱 [PUT Settings] Using newWhatsappSettings for response (most recent)', {
+        enabled: returnedWhatsappSettings.enabled,
+        enabledType: typeof returnedWhatsappSettings.enabled,
+        isFalse: returnedWhatsappSettings.enabled === false
+      });
+    } else {
+      // Fallback to database if no new settings were saved
+      returnedWhatsappSettings = savedBusiness.settings?.whatsappNotificationSettings || business.settings?.whatsappNotificationSettings;
+      console.log('📱 [PUT Settings] Using database settings for response (fallback)');
+    }
+    
+    // FINAL CHECK: Ensure enabled value is exactly what was requested
+    // This is a safety net to guarantee the correct value is returned
+    // CRITICAL: Always use the requested value if it was provided, regardless of what's in the database
+    if (req.body.whatsappNotificationSettings && req.body.whatsappNotificationSettings.hasOwnProperty('enabled')) {
+      const requestedEnabled = req.body.whatsappNotificationSettings.enabled;
+      
+      // ALWAYS use the requested value - don't even check what's currently in returnedWhatsappSettings
+      // This ensures we return exactly what the user requested
+      if (!returnedWhatsappSettings) {
+        returnedWhatsappSettings = {};
+      }
+      
+      const previousValue = returnedWhatsappSettings.enabled;
+      returnedWhatsappSettings.enabled = requestedEnabled;
+      
+      if (previousValue !== requestedEnabled) {
+        console.log('📱 [PUT Settings] Set enabled to requested value:', {
+          previous: previousValue,
+          requested: requestedEnabled,
+          final: returnedWhatsappSettings.enabled
+        });
+      } else {
+        console.log('✅ [PUT Settings] Enabled value already matches requested:', requestedEnabled);
+      }
+    }
     
     console.log('📱 [PUT Settings] Returning WhatsApp settings:', {
       enabled: returnedWhatsappSettings?.enabled,
+      enabledType: typeof returnedWhatsappSettings?.enabled,
+      enabledValue: returnedWhatsappSettings?.enabled === false ? 'FALSE' : returnedWhatsappSettings?.enabled === true ? 'TRUE' : 'OTHER',
       receiptNotificationsEnabled: returnedWhatsappSettings?.receiptNotifications?.enabled,
       fullReturned: JSON.stringify(returnedWhatsappSettings, null, 2)
     });
     
+    // Disable caching to ensure client gets fresh data
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    
     res.json({
       success: true,
       data: {
-        emailNotificationSettings: savedBusiness.settings?.emailNotificationSettings || business.settings?.emailNotificationSettings,
+        emailNotificationSettings: savedBusiness?.settings?.emailNotificationSettings || business?.settings?.emailNotificationSettings,
         whatsappNotificationSettings: returnedWhatsappSettings
       },
       message: 'Notification settings updated successfully'
     });
   } catch (error) {
-    console.error('Error updating email notification settings:', error);
+    console.error('❌ Error updating email notification settings:', error);
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({
       success: false,
-      error: 'Failed to update email notification settings'
+      error: 'Failed to update email notification settings',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
@@ -1039,6 +1546,57 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
     res.status(500).json({
       success: false,
       error: 'Failed to send daily summary'
+    });
+  }
+});
+
+/**
+ * GET /api/email-notifications/whatsapp/status
+ * Get WhatsApp configuration status (admin config + business addon)
+ */
+router.get('/whatsapp/status', authenticateToken, setupMainDatabase, async (req, res) => {
+  try {
+    const { Business, AdminSettings } = req.mainModels;
+    
+    // Get business to check addon status
+    const business = await Business.findById(req.user.branchId).select('plan.addons.whatsapp').lean();
+    
+    // Get admin WhatsApp configuration
+    const adminSettings = await AdminSettings.getSettings();
+    const whatsappConfig = adminSettings.notifications?.whatsapp || {};
+    
+    // Check if admin has configured WhatsApp
+    const adminConfigured = !!(
+      whatsappConfig.enabled &&
+      whatsappConfig.msg91ApiKey &&
+      Object.values(whatsappConfig.templates || {}).some(t => t && t.trim() !== '')
+    );
+    
+    // Check business addon status
+    const addonStatus = business?.plan?.addons?.whatsapp || {};
+    const addonEnabled = addonStatus.enabled === true;
+    const addonQuota = addonStatus.quota || 0;
+    const addonUsed = addonStatus.used || 0;
+    const addonRemaining = Math.max(0, addonQuota - addonUsed);
+    
+    res.json({
+      success: true,
+      data: {
+        adminConfigured,
+        adminEnabled: whatsappConfig.enabled || false,
+        addonEnabled,
+        addonQuota,
+        addonUsed,
+        addonRemaining,
+        canUse: adminConfigured && addonEnabled && addonRemaining > 0,
+        provider: whatsappConfig.provider || 'msg91'
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching WhatsApp status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch WhatsApp status'
     });
   }
 });
