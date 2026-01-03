@@ -108,7 +108,11 @@ export function LeadForm({ lead, isEditMode = false, onSuccess, onCancel }: Lead
       setLoadingServices(true)
       const response = await ServicesAPI.getAll({ limit: 1000 })
       if (response.success && response.data) {
-        const servicesList = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+        const servicesList = Array.isArray(response.data) 
+          ? response.data 
+          : (response.data && typeof response.data === 'object' && 'data' in response.data 
+              ? (response.data as { data?: any[] }).data || []
+              : [])
         setServices(servicesList)
       }
     } catch (error) {
