@@ -165,13 +165,118 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
     } : defaults.systemAlerts
   };
   
-  console.log('📱 [getWhatsAppSettingsWithDefaults] Merged settings:', {
-    rawEnabled: whatsappSettings?.enabled,
+// Helper function to apply Email settings defaults
+// This ensures that even if settings don't exist in DB, we use defaults
+function getEmailSettingsWithDefaults(emailSettings) {
+  // Default values from email-notifications route
+  const defaults = {
+    enabled: true,
+    recipientStaffIds: [],
+    dailySummary: {
+      enabled: true,
+      time: '21:00'
+    },
+    weeklySummary: {
+      enabled: true,
+      day: 'sunday',
+      time: '20:00'
+    },
+    appointmentNotifications: {
+      enabled: true,
+      newAppointment: true,
+      cancellation: true,
+      noShow: false,
+      reminderTime: 24
+    },
+    receiptNotifications: {
+      enabled: true,
+      sendToClients: true,
+      sendToStaff: true,
+      highValueTransactionThreshold: 10000
+    },
+    exportNotifications: {
+      enabled: true,
+      reportExport: true,
+      dataExport: true
+    },
+    systemAlerts: {
+      enabled: true,
+      lowInventory: true,
+      paymentFailures: true,
+      systemErrors: true
+    }
+  };
+
+  // If no settings exist, return defaults
+  if (!emailSettings || typeof emailSettings !== 'object' || Array.isArray(emailSettings)) {
+    return defaults;
+  }
+
+  // Merge with defaults, preserving existing values (including false)
+  const merged = {
+    ...defaults,
+    ...emailSettings,
+    // Explicitly handle enabled field - use saved value if it exists, otherwise default
+    enabled: emailSettings.hasOwnProperty('enabled') ? emailSettings.enabled : defaults.enabled,
+    // Merge nested objects, explicitly preserving enabled fields
+    dailySummary: emailSettings.dailySummary ? {
+      ...defaults.dailySummary,
+      ...emailSettings.dailySummary,
+      enabled: emailSettings.dailySummary.hasOwnProperty('enabled')
+        ? emailSettings.dailySummary.enabled
+        : defaults.dailySummary.enabled
+    } : defaults.dailySummary,
+    weeklySummary: emailSettings.weeklySummary ? {
+      ...defaults.weeklySummary,
+      ...emailSettings.weeklySummary,
+      enabled: emailSettings.weeklySummary.hasOwnProperty('enabled')
+        ? emailSettings.weeklySummary.enabled
+        : defaults.weeklySummary.enabled
+    } : defaults.weeklySummary,
+    receiptNotifications: emailSettings.receiptNotifications ? {
+      ...defaults.receiptNotifications,
+      ...emailSettings.receiptNotifications,
+      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
+      enabled: emailSettings.receiptNotifications.hasOwnProperty('enabled')
+        ? emailSettings.receiptNotifications.enabled
+        : defaults.receiptNotifications.enabled,
+      // CRITICAL: Explicitly preserve sendToClients if it exists (even if false)
+      sendToClients: emailSettings.receiptNotifications.hasOwnProperty('sendToClients')
+        ? emailSettings.receiptNotifications.sendToClients
+        : defaults.receiptNotifications.sendToClients
+    } : defaults.receiptNotifications,
+    appointmentNotifications: emailSettings.appointmentNotifications ? {
+      ...defaults.appointmentNotifications,
+      ...emailSettings.appointmentNotifications,
+      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
+      enabled: emailSettings.appointmentNotifications.hasOwnProperty('enabled')
+        ? emailSettings.appointmentNotifications.enabled
+        : defaults.appointmentNotifications.enabled
+    } : defaults.appointmentNotifications,
+    exportNotifications: emailSettings.exportNotifications ? {
+      ...defaults.exportNotifications,
+      ...emailSettings.exportNotifications,
+      enabled: emailSettings.exportNotifications.hasOwnProperty('enabled')
+        ? emailSettings.exportNotifications.enabled
+        : defaults.exportNotifications.enabled
+    } : defaults.exportNotifications,
+    systemAlerts: emailSettings.systemAlerts ? {
+      ...defaults.systemAlerts,
+      ...emailSettings.systemAlerts,
+      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
+      enabled: emailSettings.systemAlerts.hasOwnProperty('enabled')
+        ? emailSettings.systemAlerts.enabled
+        : defaults.systemAlerts.enabled
+    } : defaults.systemAlerts
+  };
+  
+  console.log('📧 [getEmailSettingsWithDefaults] Merged settings:', {
+    rawEnabled: emailSettings?.enabled,
     mergedEnabled: merged.enabled,
-    rawReceiptEnabled: whatsappSettings?.receiptNotifications?.enabled,
+    rawReceiptEnabled: emailSettings?.receiptNotifications?.enabled,
     mergedReceiptEnabled: merged.receiptNotifications?.enabled,
-    rawAutoSend: whatsappSettings?.receiptNotifications?.autoSendToClients,
-    mergedAutoSend: merged.receiptNotifications?.autoSendToClients
+    rawSendToClients: emailSettings?.receiptNotifications?.sendToClients,
+    mergedSendToClients: merged.receiptNotifications?.sendToClients
   });
   
   return merged;
@@ -4966,11 +5071,14 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
           console.log('✅ Business found:', business.name);
         }
         
-        const emailSettings = business?.settings?.emailNotificationSettings;
+        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+        
+        // Apply defaults to email settings (similar to WhatsApp)
+        const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
         
         // Debug: Log email settings
         console.log('📧 Email Settings:', {
-          emailSettingsExists: !!emailSettings,
+          emailSettingsExists: !!rawEmailSettings,
           appointmentNotificationsEnabled: emailSettings?.appointmentNotifications?.enabled,
           newAppointmentsEnabled: emailSettings?.appointmentNotifications?.newAppointments
         });
@@ -4978,8 +5086,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         const { Staff, Client } = req.businessModels;
 
         // Check if business has enabled appointment notifications
-        // Strictly respect the database setting - if enabled is false, don't send
-        const appointmentNotificationsEnabled = emailSettings?.appointmentNotifications?.enabled === true;
+        // Use merged settings with defaults - defaults to true if not explicitly set to false
+        const appointmentNotificationsEnabled = emailSettings.appointmentNotifications?.enabled === true;
         
         console.log(`📧 Appointment notifications enabled: ${appointmentNotificationsEnabled}`, {
           enabled: emailSettings?.appointmentNotifications?.enabled,
@@ -5552,11 +5660,14 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         
         const { Staff, Client } = req.businessModels;
         const business = await Business.findById(req.user.branchId);
-        const emailSettings = business?.settings?.emailNotificationSettings;
+        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+        
+        // Apply defaults to email settings (similar to WhatsApp)
+        const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
         
         // Check if business has enabled receipt notifications
-        // Strictly respect the database setting - if enabled is false, don't send
-        const receiptNotificationsEnabled = emailSettings?.receiptNotifications?.enabled === true;
+        // Use merged settings with defaults - defaults to true if not explicitly set to false
+        const receiptNotificationsEnabled = emailSettings.receiptNotifications?.enabled === true;
         
         console.log(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}`, {
           enabled: emailSettings?.receiptNotifications?.enabled,
@@ -5617,30 +5728,30 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
               });
             }
           }
-        }
-        
-        // Send notification to staff if enabled
-        const sendToStaff = emailSettings?.receiptNotifications?.sendToStaff === true;
-        if (sendToStaff) {
-          const recipientStaffIds = emailSettings.receiptNotifications.recipientStaffIds || [];
-          const recipients = await Staff.find({
-            _id: { $in: recipientStaffIds },
-            'emailNotifications.enabled': true,
-            'emailNotifications.preferences.receiptAlerts': true,
-            email: { $exists: true, $ne: '' }
-          }).lean();
           
-          for (const staff of recipients) {
-            try {
-              await emailService.sendSystemAlert({
-                to: staff.email,
-                alertType: 'Receipt Generated',
-                message: `A new receipt ${savedReceipt.receiptNumber} has been generated for ₹${savedReceipt.total}`,
-                businessName: business.name
-              });
-              console.log(`✅ Receipt notification sent to staff: ${staff.email}`);
-            } catch (staffEmailError) {
-              console.error('Error sending receipt notification to staff:', staffEmailError);
+          // Send notification to staff if enabled
+          const sendToStaff = emailSettings?.receiptNotifications?.sendToStaff === true;
+          if (sendToStaff) {
+            const recipientStaffIds = emailSettings.receiptNotifications.recipientStaffIds || [];
+            const recipients = await Staff.find({
+              _id: { $in: recipientStaffIds },
+              'emailNotifications.enabled': true,
+              'emailNotifications.preferences.receiptAlerts': true,
+              email: { $exists: true, $ne: '' }
+            }).lean();
+            
+            for (const staff of recipients) {
+              try {
+                await emailService.sendSystemAlert({
+                  to: staff.email,
+                  alertType: 'Receipt Generated',
+                  message: `A new receipt ${savedReceipt.receiptNumber} has been generated for ₹${savedReceipt.total}`,
+                  businessName: business.name
+                });
+                console.log(`✅ Receipt notification sent to staff: ${staff.email}`);
+              } catch (staffEmailError) {
+                console.error('Error sending receipt notification to staff:', staffEmailError);
+              }
             }
           }
         }
@@ -6337,11 +6448,14 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         const Business = mainConnection.model('Business', require('./models/Business').schema);
         
         const business = await Business.findById(req.user.branchId);
-        const emailSettings = business?.settings?.emailNotificationSettings;
+        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+        
+        // Apply defaults to email settings (similar to WhatsApp)
+        const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
         
         // Check if business has enabled receipt notifications
-        // Strictly respect the database setting - if enabled is false, don't send
-        const receiptNotificationsEnabled = emailSettings?.receiptNotifications?.enabled === true;
+        // Use merged settings with defaults - defaults to true if not explicitly set to false
+        const receiptNotificationsEnabled = emailSettings.receiptNotifications?.enabled === true;
         
         emailStatus.debug.receiptNotificationsEnabled = receiptNotificationsEnabled;
         emailStatus.debug.hasCustomerEmail = !!sale.customerEmail;
@@ -8723,7 +8837,7 @@ app.listen(PORT, '0.0.0.0', async () => {
 });
 
 // Setup inactivity checker cron job
-const setupInactivityChecker = () => {
+function setupInactivityChecker() {
   // Run every day at 2 AM
   cron.schedule('0 2 * * *', async () => {
     console.log('🕐 Running daily inactivity check...');
@@ -8735,4 +8849,5 @@ const setupInactivityChecker = () => {
   });
   
   console.log('⏰ Inactivity checker scheduled to run daily at 2 AM IST');
-}; 
+}
+}
