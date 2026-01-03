@@ -165,6 +165,9 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
     } : defaults.systemAlerts
   };
   
+  return merged;
+}
+
 // Helper function to apply Email settings defaults
 // This ensures that even if settings don't exist in DB, we use defaults
 function getEmailSettingsWithDefaults(emailSettings) {
@@ -8850,4 +8853,4 @@ function setupInactivityChecker() {
   
   console.log('⏰ Inactivity checker scheduled to run daily at 2 AM IST');
 }
-}
+

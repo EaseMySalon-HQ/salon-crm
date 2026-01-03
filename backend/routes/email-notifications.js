@@ -478,7 +478,9 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
       userEmail: req.user.email,
       branchId: req.user.branchId,
       hasWhatsappSettings: !!req.body.whatsappNotificationSettings,
-      whatsappEnabled: req.body.whatsappNotificationSettings?.enabled
+      whatsappEnabled: req.body.whatsappNotificationSettings?.enabled,
+      hasEmailSettings: !!req.body.emailNotificationSettings,
+      emailEnabled: req.body.emailNotificationSettings?.enabled
     });
 
     // Resolve businessId: prefer the authenticated user's branchId, otherwise fall back to the first business
@@ -505,6 +507,116 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
       console.warn('⚠️ [PUT Settings] No business found. Falling back to AdminSettings.notifications.whatsapp');
     }
 
+    // Handle Email notification settings
+    // Frontend sends settings directly (not wrapped in emailNotificationSettings key)
+    // Check if we have email settings in the request (either wrapped or direct)
+    const hasEmailSettings = req.body.emailNotificationSettings || 
+                            (req.body.enabled !== undefined && !req.body.whatsappNotificationSettings) ||
+                            req.body.dailySummary || 
+                            req.body.receiptNotifications ||
+                            req.body.appointmentNotifications;
+    
+    if (hasEmailSettings && business) {
+      try {
+        // Get email settings from request (could be wrapped or direct)
+        const incomingEmailSettings = req.body.emailNotificationSettings || req.body;
+        
+        // Skip if this is WhatsApp settings only (has whatsappNotificationSettings but no email fields)
+        if (req.body.whatsappNotificationSettings && !req.body.emailNotificationSettings && 
+            !req.body.dailySummary && !req.body.receiptNotifications && 
+            !req.body.appointmentNotifications && req.body.enabled === undefined) {
+          console.log('📧 [PUT Settings] Skipping email settings - WhatsApp only request');
+        } else {
+          console.log('📧 [PUT Settings] Received Email settings to save:', JSON.stringify(incomingEmailSettings, null, 2));
+          
+          // Ensure settings object exists
+          if (!business.settings) {
+            business.settings = {};
+          }
+          if (!business.settings.emailNotificationSettings) {
+            business.settings.emailNotificationSettings = {};
+          }
+          
+          const existingEmailSettings = business.settings.emailNotificationSettings || {};
+          
+          // Deep merge email settings
+          const newEmailSettings = {
+            ...existingEmailSettings,
+            ...incomingEmailSettings,
+            // Explicitly preserve enabled field
+            enabled: incomingEmailSettings.hasOwnProperty('enabled') 
+              ? incomingEmailSettings.enabled 
+              : existingEmailSettings.enabled,
+            // Deep merge nested objects
+            dailySummary: {
+              ...(existingEmailSettings.dailySummary || {}),
+              ...(incomingEmailSettings.dailySummary || {}),
+              enabled: incomingEmailSettings.dailySummary?.hasOwnProperty('enabled')
+                ? incomingEmailSettings.dailySummary.enabled
+                : existingEmailSettings.dailySummary?.enabled ?? false
+            },
+            weeklySummary: {
+              ...(existingEmailSettings.weeklySummary || {}),
+              ...(incomingEmailSettings.weeklySummary || {}),
+              enabled: incomingEmailSettings.weeklySummary?.hasOwnProperty('enabled')
+                ? incomingEmailSettings.weeklySummary.enabled
+                : existingEmailSettings.weeklySummary?.enabled ?? false
+            },
+            appointmentNotifications: {
+              ...(existingEmailSettings.appointmentNotifications || {}),
+              ...(incomingEmailSettings.appointmentNotifications || {}),
+              enabled: incomingEmailSettings.appointmentNotifications?.hasOwnProperty('enabled')
+                ? incomingEmailSettings.appointmentNotifications.enabled
+                : existingEmailSettings.appointmentNotifications?.enabled ?? false
+            },
+            receiptNotifications: {
+              ...(existingEmailSettings.receiptNotifications || {}),
+              ...(incomingEmailSettings.receiptNotifications || {}),
+              enabled: incomingEmailSettings.receiptNotifications?.hasOwnProperty('enabled')
+                ? incomingEmailSettings.receiptNotifications.enabled
+                : existingEmailSettings.receiptNotifications?.enabled ?? false
+            },
+            exportNotifications: {
+              ...(existingEmailSettings.exportNotifications || {}),
+              ...(incomingEmailSettings.exportNotifications || {}),
+              enabled: incomingEmailSettings.exportNotifications?.hasOwnProperty('enabled')
+                ? incomingEmailSettings.exportNotifications.enabled
+                : existingEmailSettings.exportNotifications?.enabled ?? false
+            },
+            systemAlerts: {
+              ...(existingEmailSettings.systemAlerts || {}),
+              ...(incomingEmailSettings.systemAlerts || {}),
+              enabled: incomingEmailSettings.systemAlerts?.hasOwnProperty('enabled')
+                ? incomingEmailSettings.systemAlerts.enabled
+                : existingEmailSettings.systemAlerts?.enabled ?? false
+            }
+          };
+          
+          console.log('📧 [PUT Settings] Merged Email settings:', JSON.stringify(newEmailSettings, null, 2));
+          
+          // Save email settings using direct MongoDB update
+          const emailUpdateResult = await Business.collection.updateOne(
+            { _id: businessId },
+            {
+              $set: {
+                'settings.emailNotificationSettings': newEmailSettings
+              }
+            }
+          );
+          
+          console.log('📧 [PUT Settings] Email settings update result:', {
+            matched: emailUpdateResult.matchedCount,
+            modified: emailUpdateResult.modifiedCount,
+            acknowledged: emailUpdateResult.acknowledged
+          });
+        }
+      } catch (emailError) {
+        console.error('❌ [PUT Settings] Error saving email settings:', emailError);
+        console.error('❌ [PUT Settings] Error stack:', emailError.stack);
+        // Don't fail the entire request if email settings save fails
+      }
+    }
+    
     // Handle WhatsApp notification settings
     let newWhatsappSettings = null; // Declare outside if block to fix scope issue
     if (req.body.whatsappNotificationSettings) {
