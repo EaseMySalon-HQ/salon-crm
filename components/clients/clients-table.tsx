@@ -152,9 +152,12 @@ export function ClientsTable({ clients }: ClientsTableProps) {
   // NOTE: This effect is declared later in the file after pageIndex/pageSize are defined
 
   const handleEditClient = (client: Client) => {
+    // Ensure we have a valid client ID - use _id first, then id
     const clientId = client._id || client.id
     if (clientId) {
       router.push(`/clients/${clientId}`)
+    } else {
+      console.error('Client missing ID:', client)
     }
   }
 
@@ -274,6 +277,11 @@ export function ClientsTable({ clients }: ClientsTableProps) {
       header: "Customer",
       cell: ({ row }) => {
         const client = row.original
+        // Ensure we have a valid client ID - use _id first, then id, as a fallback
+        const clientId = client._id || client.id
+        if (!clientId) {
+          console.error('Client missing ID:', client)
+        }
         return (
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center">
@@ -281,7 +289,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
             </div>
             <div className="flex flex-col">
               <Link 
-                href={`/clients/${client._id || client.id}`} 
+                href={`/clients/${clientId}`} 
                 className="font-semibold text-gray-900 hover:text-indigo-600 transition-colors duration-200"
               >
                 {client.name}
@@ -423,12 +431,20 @@ export function ClientsTable({ clients }: ClientsTableProps) {
       header: "Actions",
       cell: ({ row }) => {
         const client = row.original
+        // Ensure we have a valid client ID - use _id first, then id
+        const clientId = client._id || client.id
         return (
           <div className="flex items-center space-x-2">
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => router.push(`/clients/${client._id || client.id}`)}
+              onClick={() => {
+                if (clientId) {
+                  router.push(`/clients/${clientId}`)
+                } else {
+                  console.error('Client missing ID:', client)
+                }
+              }}
               className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
             >
               <Eye className="h-4 w-4" />

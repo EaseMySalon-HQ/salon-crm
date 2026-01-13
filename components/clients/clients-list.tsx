@@ -117,7 +117,11 @@ export function ClientsListPage() {
   }, [])
 
   // Filter clients based on stats filter and search query
+  // Use enrichedClientsForStats when available to match stats cards calculation
   const displayClients = useMemo(() => {
+    // Use enriched clients (with realLastVisit) for filtering to match stats cards
+    const clientsToFilter = enrichedClientsForStats.length > 0 ? enrichedClientsForStats : clients
+    
     const isClientActive = (client: Client) => {
       // Calculate active status based ONLY on last visit date (within 3 months)
       // This matches what the table shows - ignore status field completely
@@ -135,13 +139,13 @@ export function ClientsListPage() {
       return false // No last visit or invalid date = inactive
     }
 
-    let filtered = clients
+    let filtered = clientsToFilter
 
     // Apply stats filter (all/active/inactive) using same logic as stats cards
     if (statsFilter === "active") {
-      filtered = clients.filter((client) => isClientActive(client))
+      filtered = clientsToFilter.filter((client) => isClientActive(client))
     } else if (statsFilter === "inactive") {
-      filtered = clients.filter((client) => !isClientActive(client))
+      filtered = clientsToFilter.filter((client) => !isClientActive(client))
     }
 
     // Apply search query
@@ -156,12 +160,12 @@ export function ClientsListPage() {
     }
 
     return filtered
-  }, [clients, statsFilter, searchQuery, threeMonthsAgo])
+  }, [clients, enrichedClientsForStats, statsFilter, searchQuery, threeMonthsAgo])
 
   // Update filtered clients when displayClients changes
   useEffect(() => {
     setFilteredClients(displayClients)
-  }, [displayClients, statsFilter, clients.length])
+  }, [displayClients])
 
   // Handle filter change from stats cards
   const handleFilterChange = (filter: "all" | "active" | "inactive") => {

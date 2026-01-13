@@ -49,7 +49,16 @@ class ClientStore {
           break
         }
         const batch = resp.data || []
-        const normalized = batch.map((c: any) => ({ ...c, birthdate: c.birthdate || c.dob || undefined }))
+        const normalized = batch.map((c: any) => {
+          // Normalize ID: ensure both id and _id are set to the same value
+          const clientId = c._id || c.id
+          return {
+            ...c,
+            id: clientId,
+            _id: clientId,
+            birthdate: c.birthdate || c.dob || undefined
+          }
+        })
         all = all.concat(normalized)
         
         // Get total from API response - don't update if we already have a valid total
@@ -94,7 +103,14 @@ class ClientStore {
       const apiPayload = { ...client, dob: (client as any).birthdate || (client as any).dob }
       const response = await ClientsAPI.create(apiPayload)
       if (response.success) {
-        this.clients.push(response.data)
+        // Normalize the response data to ensure both id and _id are set
+        const clientId = response.data._id || response.data.id
+        const normalizedClient = {
+          ...response.data,
+          id: clientId,
+          _id: clientId
+        }
+        this.clients.push(normalizedClient)
         this.notifyListeners()
         return true
       }
@@ -128,9 +144,16 @@ class ClientStore {
       const apiPayload = { ...client, dob: (client as any).birthdate || (client as any).dob }
       const response = await ClientsAPI.update(id, apiPayload)
       if (response.success) {
-        const index = this.clients.findIndex(c => c.id === id)
+        const index = this.clients.findIndex(c => c.id === id || c._id === id)
         if (index >= 0) {
-          this.clients[index] = response.data
+          // Normalize the response data to ensure both id and _id are set
+          const clientId = response.data._id || response.data.id || id
+          const normalizedClient = {
+            ...response.data,
+            id: clientId,
+            _id: clientId
+          }
+          this.clients[index] = normalizedClient
           this.notifyListeners()
         }
         return true
@@ -226,7 +249,15 @@ class ClientStore {
       // Try API search first
       const response = await ClientsAPI.search(query)
       if (response.success) {
-        return response.data
+        // Normalize search results to ensure both id and _id are set
+        return response.data.map((c: any) => {
+          const clientId = c._id || c.id
+          return {
+            ...c,
+            id: clientId,
+            _id: clientId
+          }
+        })
       }
       return []
     } catch {
