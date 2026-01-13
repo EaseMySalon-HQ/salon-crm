@@ -2,15 +2,16 @@ import { ProtectedRoute } from "@/components/auth/protected-route"
 import { ClientDetailsPage } from "@/components/clients/client-details"
 
 interface ClientDetailsPageProps {
-  params: {
+  params: Promise<{
     id: string
-  }
+  }>
 }
 
-export default function ClientDetailsRoute({ params }: ClientDetailsPageProps) {
+export default async function ClientDetailsRoute({ params }: ClientDetailsPageProps) {
+  const { id } = await params
   return (
     <ProtectedRoute>
-      <ClientDetailsPage clientId={params.id} />
+      <ClientDetailsPage clientId={id} />
     </ProtectedRoute>
   )
 } 
