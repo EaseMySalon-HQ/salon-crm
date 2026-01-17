@@ -257,3 +257,4 @@ If something isn't working:
 4. Review the detailed testing guide: `docs/EMAIL_CONFIGURATION_TESTING.md`
 
 
+

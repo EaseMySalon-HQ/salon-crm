@@ -400,6 +400,105 @@ class WhatsAppService {
   }
 
   /**
+   * Create a new WhatsApp template via MSG91
+   * @param {Object} templateData - Template configuration
+   * @returns {Promise<Object>} - Result with success status and template info
+   */
+  async createTemplate(templateData) {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    if (!this.enabled || !this.config.msg91ApiKey) {
+      return { success: false, error: 'WhatsApp service not configured' };
+    }
+
+    const apiKey = this.config.msg91ApiKey;
+    const url = 'https://api.msg91.com/api/v5/whatsapp/client-panel-template/';
+
+    // Build the payload according to MSG91 API format
+    const payload = {
+      integrated_number: templateData.integratedNumber || this.config.msg91SenderId,
+      template_name: templateData.templateName,
+      language: templateData.language || 'en',
+      category: templateData.category || 'MARKETING',
+      button_url: templateData.buttonUrl || 'false',
+      components: templateData.components || []
+    };
+
+    try {
+      console.log('📱 [MSG91] Creating template:', {
+        templateName: payload.template_name,
+        language: payload.language,
+        category: payload.category,
+        componentsCount: payload.components.length
+      });
+      console.log('📱 [MSG91] Components payload:', JSON.stringify(payload.components, null, 2));
+
+      const response = await axios.post(url, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'authkey': apiKey
+        },
+        timeout: 30000 // 30 seconds for template creation
+      });
+
+      console.log('📱 [MSG91] Template creation response:', response.status, response.data);
+
+      // MSG91 typically returns success status in response
+      if (response.status === 200 || response.status === 201) {
+        const responseData = response.data || {};
+        
+        // Check for errors in response
+        if (responseData.hasError === true || responseData.status === 'error' || responseData.status === 'fail') {
+          const errorMsg = responseData.message || 
+                          responseData.data ||
+                          (responseData.errors ? (typeof responseData.errors === 'string' ? responseData.errors : JSON.stringify(responseData.errors)) : null) ||
+                          'Template creation failed';
+          console.error('❌ [MSG91] Template creation failed:', {
+            hasError: responseData.hasError,
+            status: responseData.status,
+            message: responseData.message,
+            data: responseData.data,
+            errors: responseData.errors
+          });
+          return { success: false, error: errorMsg, responseData };
+        }
+
+        return {
+          success: true,
+          data: responseData,
+          templateId: responseData.template_id || responseData.id || responseData.templateName,
+          message: responseData.message || 'Template created successfully and submitted for approval'
+        };
+      } else {
+        return {
+          success: false,
+          error: `Unexpected response status: ${response.status}`,
+          responseData: response.data
+        };
+      }
+    } catch (error) {
+      if (error.response) {
+        const errorMessage = error.response.data?.message || 
+                            error.response.data?.error || 
+                            error.message;
+        console.error('❌ [MSG91] Template creation failed:', {
+          status: error.response.status,
+          data: error.response.data
+        });
+        return { 
+          success: false, 
+          error: errorMessage, 
+          responseData: error.response.data 
+        };
+      }
+      console.error('❌ [MSG91] Network error creating template:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
    * Get template ID for a specific notification type
    */
   getTemplateId(templateType) {

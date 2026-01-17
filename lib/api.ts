@@ -147,7 +147,19 @@ apiClient.interceptors.response.use(
         
         if (hasValidProperties) {
           console.error('❌ API Response Interceptor: Error response:', errorDetails)
-        } else if (error?.response?.status) {
+        } else {
+          // Log raw error info if errorDetails is empty
+          console.error('❌ API Response Interceptor: Error (empty details):', {
+            rawError: error,
+            response: error?.response?.data,
+            status: error?.response?.status,
+            statusText: error?.response?.statusText,
+            url: error?.config?.url,
+            method: error?.config?.method
+          })
+        }
+        
+        if (error?.response?.status) {
           // For 401 errors, only log if not on public route (to reduce noise)
           const isPublicRoute = typeof window !== 'undefined' && 
             (window.location.pathname.includes('/receipt/public/') ||
@@ -1144,6 +1156,100 @@ export class EmailNotificationsAPI {
   // Manually trigger daily summary
   static async sendDailySummary(): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/email-notifications/send-daily-summary')
+    return response.data
+  }
+}
+
+// Marketing Templates API
+export class MarketingTemplatesAPI {
+  static async getAll(params?: { status?: string; page?: number; limit?: number }): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/whatsapp/marketing-templates', { params })
+    return response.data
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/whatsapp/marketing-templates/${id}`)
+    return response.data
+  }
+
+  static async create(data: {
+    templateName: string;
+    language?: string;
+    components: any[];
+    description?: string;
+    tags?: string[];
+  }): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.post('/whatsapp/marketing-templates/create', data)
+      return response.data
+    } catch (error: any) {
+      // Return error response in the same format as success
+      if (error.response?.data) {
+        // The backend returns { success: false, error: "...", details: {...} }
+        return error.response.data
+      }
+      // If no response data, create a proper error response
+      return {
+        success: false,
+        error: error.message || 'Failed to create template',
+        details: error
+      }
+    }
+  }
+
+  static async checkStatus(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/whatsapp/marketing-templates/${id}/check-status`)
+    return response.data
+  }
+
+  static async delete(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.delete(`/whatsapp/marketing-templates/${id}`)
+    return response.data
+  }
+}
+
+// Campaigns API
+export class CampaignsAPI {
+  static async getAll(params?: { status?: string; page?: number; limit?: number }): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/campaigns', { params })
+    return response.data
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/campaigns/${id}`)
+    return response.data
+  }
+
+  static async create(data: {
+    name: string;
+    description?: string;
+    templateId: string;
+    recipientType: 'all_clients' | 'segment' | 'custom';
+    recipientFilters?: any;
+    templateVariables?: any;
+    scheduledAt?: string;
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/campaigns', data)
+    return response.data
+  }
+
+  static async send(campaignId: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/campaigns/${campaignId}/send`)
+    return response.data
+  }
+
+  static async getRecipients(campaignId: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/campaigns/${campaignId}/recipients`)
+    return response.data
+  }
+
+  static async getStats(campaignId: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/campaigns/${campaignId}/stats`)
+    return response.data
+  }
+
+  static async cancel(campaignId: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/campaigns/${campaignId}/cancel`)
     return response.data
   }
 }

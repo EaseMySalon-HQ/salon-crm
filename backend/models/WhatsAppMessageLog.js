@@ -14,7 +14,7 @@ const whatsappMessageLogSchema = new mongoose.Schema({
   },
   messageType: {
     type: String,
-    enum: ['receipt', 'appointment', 'system'],
+    enum: ['receipt', 'appointment', 'system', 'campaign'],
     required: true,
     index: true
   },
@@ -37,6 +37,12 @@ const whatsappMessageLogSchema = new mongoose.Schema({
   relatedEntityType: {
     type: String,
     default: null
+  },
+  campaignId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Campaign',
+    default: null,
+    index: true
   },
   error: {
     type: String,
