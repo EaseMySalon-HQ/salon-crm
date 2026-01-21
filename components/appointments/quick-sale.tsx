@@ -25,6 +25,8 @@ import {
   Minus,
   Pencil,
   ChevronDown,
+  Edit,
+  RefreshCw,
 } from "lucide-react"
 import { Calendar as DatePicker } from "@/components/ui/calendar"
 import { Button } from "@/components/ui/button"
@@ -61,6 +63,7 @@ import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, Re
 import { clientStore, type Client } from "@/lib/client-store"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
+import { useRouter } from "next/navigation"
 
 // Mock data for customers
 // const mockCustomers = [
@@ -175,8 +178,16 @@ interface ProductItem {
   total: number
 }
 
-export function QuickSale() {
+type BillingMode = "create" | "edit" | "exchange"
+
+interface QuickSaleProps {
+  mode?: BillingMode
+  initialSale?: any
+}
+
+export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {}) {
   const { toast } = useToast()
+  const router = useRouter()
   const searchParams = useSearchParams()
   const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
@@ -225,6 +236,8 @@ export function QuickSale() {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [showTipModal, setShowTipModal] = useState(false)
   const [tempTipAmount, setTempTipAmount] = useState(0)
+  const [editReason, setEditReason] = useState("")
+  const [isInitialized, setIsInitialized] = useState(false)
 
   // State for services and products from API
   const [services, setServices] = useState<any[]>([])
@@ -465,6 +478,135 @@ export function QuickSale() {
 
     return unsubscribe
   }, [])
+
+  // Initialize from initialSale when in edit/exchange mode
+  useEffect(() => {
+    if ((mode === "edit" || mode === "exchange") && initialSale && !isInitialized && services.length > 0 && products.length > 0 && staff.length > 0 && clients.length > 0) {
+      console.log("Initializing QuickSale from initialSale:", initialSale)
+      
+      // Set customer
+      if (initialSale.customerId || initialSale.customerName) {
+        const customer = clients.find(c => 
+          (c._id || c.id) === initialSale.customerId ||
+          c.name === initialSale.customerName
+        )
+        if (customer) {
+          setSelectedCustomer(customer)
+          setCustomerSearch(customer.name)
+
+          // Fetch and populate real stats (visits, revenue, last visit, dues)
+          const customerId = getCustomerId(customer)
+          if (customerId) {
+            fetchCustomerStats(customerId)
+          }
+        } else if (initialSale.customerName) {
+          // Create a temporary client object if not found
+          setSelectedCustomer({
+            _id: initialSale.customerId || "",
+            id: initialSale.customerId || "",
+            name: initialSale.customerName,
+            phone: initialSale.customerPhone || "",
+            email: initialSale.customerEmail || "",
+          } as Client)
+          setCustomerSearch(initialSale.customerName)
+        }
+      }
+
+      // Set date
+      if (initialSale.date) {
+        setSelectedDate(new Date(initialSale.date))
+      }
+
+      // Set items
+      const serviceItemsData: ServiceItem[] = []
+      const productItemsData: ProductItem[] = []
+
+      if (initialSale.items && Array.isArray(initialSale.items)) {
+        initialSale.items.forEach((item: any, index: number) => {
+          if (item.type === "service") {
+            const service = services.find(s => 
+              (s._id || s.id) === item.serviceId ||
+              s.name === item.name
+            )
+            if (service) {
+              serviceItemsData.push({
+                id: `service-${index}`,
+                serviceId: service._id || service.id,
+                staffId: item.staffId || "",
+                staffContributions: item.staffContributions || [],
+                quantity: item.quantity || 1,
+                price: item.price || 0,
+                discount: item.discount || 0,
+                total: item.total || (item.price || 0) * (item.quantity || 1),
+              })
+            }
+          } else if (item.type === "product") {
+            const product = products.find(p => 
+              (p._id || p.id) === item.productId ||
+              p.name === item.name
+            )
+            if (product) {
+              productItemsData.push({
+                id: `product-${index}`,
+                productId: product._id || product.id,
+                staffId: item.staffId || "",
+                quantity: item.quantity || 1,
+                price: item.price || 0,
+                discount: item.discount || 0,
+                total: item.total || (item.price || 0) * (item.quantity || 1),
+              })
+            }
+          }
+        })
+      }
+
+      setServiceItems(serviceItemsData)
+      setProductItems(productItemsData)
+
+      // Set discount
+      if (initialSale.discount) {
+        if (initialSale.discountType === "percentage") {
+          setDiscountPercentage(initialSale.discount)
+          setIsGlobalDiscountActive(true)
+        } else {
+          setDiscountValue(initialSale.discount)
+          setIsValueDiscountActive(true)
+        }
+      }
+
+      // Set notes
+      if (initialSale.notes) {
+        setRemarks(initialSale.notes)
+      }
+
+      // Set payment amounts (if any)
+      if (initialSale.payments && Array.isArray(initialSale.payments)) {
+        let cash = 0
+        let card = 0
+        let online = 0
+        
+        initialSale.payments.forEach((payment: any) => {
+          const mode = (payment.mode || payment.type || "").toLowerCase()
+          const amount = payment.amount || 0
+          if (mode.includes("cash")) cash += amount
+          else if (mode.includes("card")) card += amount
+          else if (mode.includes("online") || mode.includes("upi")) online += amount
+        })
+        
+        setCashAmount(cash)
+        setCardAmount(card)
+        setOnlineAmount(online)
+      }
+
+      // Set linked appointment
+      if (initialSale.appointmentId) {
+        setLinkedAppointmentId(initialSale.appointmentId)
+      }
+
+      setIsInitialized(true)
+      console.log("QuickSale initialized from initialSale")
+    }
+  }, [mode, initialSale, isInitialized, services, products, staff, clients])
 
   // Pre-fill form from appointment data in URL
   useEffect(() => {
@@ -1750,6 +1892,7 @@ export function QuickSale() {
   // Handle checkout
   const handleCheckout = async () => {
     console.log('🚀 handleCheckout function called!')
+    console.log('🚀 Mode:', mode)
     console.log('🚀 selectedCustomer:', selectedCustomer)
     console.log('🚀 customerSearch:', customerSearch)
     console.log('🚀 isProcessing:', isProcessing)
@@ -1757,6 +1900,16 @@ export function QuickSale() {
     // Prevent multiple simultaneous checkouts
     if (isProcessing) {
       console.log('❌ Checkout already in progress, ignoring')
+      return
+    }
+    
+    // Validate edit reason for edit mode
+    if (mode === "edit" && !editReason.trim()) {
+      toast({
+        title: "Edit Reason Required",
+        description: "Please provide a reason for editing this bill",
+        variant: "destructive",
+      })
       return
     }
     
@@ -2077,28 +2230,44 @@ export function QuickSale() {
         }
       })
       
-      // Create sale in backend database for inventory tracking FIRST
-      // Generate receipt number only when we're about to create the sale
+      // Handle different modes: create, edit, exchange
       try {
-      // Generate receipt number first
         let receiptNumber
-        try {
-          receiptNumber = await generateReceiptNumber()
-          if (!receiptNumber) {
-            throw new Error('Failed to generate receipt number')
+        let saleId: string | undefined
+
+        if (mode === "edit" || mode === "exchange") {
+          // For edit/exchange, use existing bill number and ID
+          if (!initialSale) {
+            toast({
+              title: "Error",
+              description: "Original bill data not found",
+              variant: "destructive",
+            })
+            return
           }
-          console.log('✅ Receipt number generated successfully:', receiptNumber)
-        } catch (error) {
-          console.error('❌ Failed to generate receipt number:', error)
-          toast({
-            title: "Receipt Generation Failed",
-            description: "Failed to generate receipt number. Please try again.",
-            variant: "destructive",
-          })
-          return
+          receiptNumber = initialSale.billNo || initialSale.receiptNumber
+          saleId = initialSale._id || initialSale.id
+          console.log('📝 Edit/Exchange mode - Using existing bill:', receiptNumber, saleId)
+        } else {
+          // For create mode, generate new receipt number
+          try {
+            receiptNumber = await generateReceiptNumber()
+            if (!receiptNumber) {
+              throw new Error('Failed to generate receipt number')
+            }
+            console.log('✅ Receipt number generated successfully:', receiptNumber)
+          } catch (error) {
+            console.error('❌ Failed to generate receipt number:', error)
+            toast({
+              title: "Receipt Generation Failed",
+              description: "Failed to generate receipt number. Please try again.",
+              variant: "destructive",
+            })
+            return
+          }
         }
 
-        // Create sale data with the generated receipt number
+        // Create sale data with the receipt number
         const saleData = {
           billNo: receiptNumber,
           customerId: getCustomerId(customer),
@@ -2153,9 +2322,12 @@ export function QuickSale() {
             dueDate: new Date()
           },
           status: totalPaid === 0 ? 'unpaid' : (totalPaid < calculatedTotal ? 'partial' : 'completed'),
-          paymentMode: payments.map(p => p.type).join(', '),
+          paymentMode: payments.map(p => {
+            const capitalized = p.type.charAt(0).toUpperCase() + p.type.slice(1);
+            return capitalized;
+          }).join(', '),
           payments: payments.map(p => ({
-            mode: p.type.charAt(0).toUpperCase() + p.type.slice(1), // Capitalize first letter
+            mode: p.type.charAt(0).toUpperCase() + p.type.slice(1), // Capitalize first letter: "Cash", "Card", "Online"
             amount: p.amount
           })),
           staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
@@ -2186,13 +2358,68 @@ export function QuickSale() {
         
         // Use the SalesAPI for proper authentication and error handling
         try {
-          console.log('🚀 About to call SalesAPI.create with data:', saleData)
-          console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
-          const result = await SalesAPI.create(saleData)
-          console.log('📊 SalesAPI.create response:', result)
+          let result: any
+          
+          if (mode === "edit") {
+            // Update existing sale
+            console.log('🚀 About to call SalesAPI.update with data:', saleData)
+            console.log('💳 Payment details being sent:', {
+              payments: saleData.payments,
+              paymentMode: saleData.paymentMode,
+              cashAmount,
+              cardAmount,
+              onlineAmount,
+              totalPaid
+            })
+            console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
+            result = await SalesAPI.update(saleId!, {
+              ...saleData,
+              editReason: editReason.trim(),
+            })
+            console.log('📊 SalesAPI.update response:', result)
+            console.log('💳 Payment details in response:', {
+              payments: result.data?.payments,
+              paymentMode: result.data?.paymentMode
+            })
+          } else if (mode === "exchange") {
+            // Exchange products
+            console.log('🚀 About to call SalesAPI.exchangeProducts with data:', saleData)
+            console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
+            result = await SalesAPI.exchangeProducts(saleId!, {
+              updatedItems: saleData.items,
+              netTotal: saleData.netTotal,
+              taxAmount: saleData.taxAmount,
+              grossTotal: saleData.grossTotal,
+              discount: saleData.discount,
+              discountType: saleData.discountType,
+              editReason: editReason.trim() || "Product exchange",
+              notes: saleData.notes,
+            })
+            console.log('📊 SalesAPI.exchangeProducts response:', result)
+          } else {
+            // Create new sale
+            console.log('🚀 About to call SalesAPI.create with data:', saleData)
+            console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
+            result = await SalesAPI.create(saleData)
+            console.log('📊 SalesAPI.create response:', result)
+          }
           
           if (result.success) {
-            console.log('✅ Sale created successfully in backend:', result)
+            const actionText = mode === "edit" ? "updated" : mode === "exchange" ? "exchanged" : "created"
+            console.log(`✅ Sale ${actionText} successfully in backend:`, result)
+            
+            // For edit/exchange, show success and redirect
+            if (mode === "edit" || mode === "exchange") {
+              toast({
+                title: `Bill ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
+                description: `Bill ${receiptNumber} has been ${actionText} successfully.`,
+              })
+              // Redirect to reports after a short delay
+              setTimeout(() => {
+                router.push("/reports")
+              }, 1500)
+              return
+            }
             
             // Check email status if available
             if (result.emailStatus) {
@@ -2927,16 +3154,58 @@ export function QuickSale() {
           <div className="flex items-center justify-between">
             <div className="space-y-2">
               <h2 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                Quick Sale
+                {mode === "edit" ? "Edit Bill" : mode === "exchange" ? "Exchange Products" : "Quick Sale"}
               </h2>
-              <p className="text-muted-foreground">Create and process sales quickly and efficiently</p>
+              <p className="text-muted-foreground">
+                {mode === "edit" ? "Edit existing bill details" : mode === "exchange" ? "Exchange products in this bill" : "Create and process sales quickly and efficiently"}
+              </p>
             </div>
           </div>
+
+          {/* Edit Mode Banner */}
+          {(mode === "edit" || mode === "exchange") && initialSale && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center gap-3">
+              <div className="p-2 bg-amber-100 rounded-lg">
+                <Edit className="h-5 w-5 text-amber-700" />
+              </div>
+              <div className="flex-1">
+                <p className="font-semibold text-amber-900">
+                  {mode === "edit" ? "Editing Bill" : "Exchanging Products"}: {initialSale.billNo || initialSale.receiptNumber}
+                  {initialSale.isEdited && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
+                </p>
+                <p className="text-sm text-amber-700">
+                  Original Date: {initialSale.date ? format(new Date(initialSale.date), "dd MMM yyyy") : "N/A"}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Edit Reason Field (Required for Edit Mode) */}
+          {mode === "edit" && (
+            <div className="space-y-2">
+              <Label htmlFor="editReason" className="text-sm font-semibold text-gray-700">
+                Edit Reason <span className="text-red-500">*</span>
+              </Label>
+              <Textarea
+                id="editReason"
+                placeholder="Please provide a reason for editing this bill (required for audit purposes)..."
+                value={editReason}
+                onChange={(e) => setEditReason(e.target.value)}
+                className="min-h-[80px] border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20"
+                required
+              />
+              {!editReason.trim() && (
+                <p className="text-xs text-red-600">Edit reason is required to save changes</p>
+              )}
+            </div>
+          )}
 
           {/* Customer and Date */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-3 relative" ref={customerSearchRef}>
-              <Label htmlFor="customer" className="text-sm font-semibold text-gray-700">Customer *</Label>
+              <Label htmlFor="customer" className="text-sm font-semibold text-gray-700">
+                Customer * {mode === "edit" && <span className="text-xs text-gray-500 ml-2">(Locked)</span>}
+              </Label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -2944,6 +3213,8 @@ export function QuickSale() {
                   type="tel"
                   placeholder="Search by name, phone (10 digits), or email"
                   value={customerSearch}
+                  disabled={mode === "edit"}
+                  className={mode === "edit" ? "bg-gray-100 cursor-not-allowed" : ""}
                   onChange={(e) => {
                     const value = e.target.value
                     // If it's all digits, restrict immediately to 10 digits
@@ -3104,28 +3375,34 @@ export function QuickSale() {
             </div>
 
             <div className="space-y-3">
-              <Label className="text-sm font-semibold text-gray-700">Date</Label>
+              <Label className="text-sm font-semibold text-gray-700">
+                Date {mode === "edit" && <span className="text-xs text-gray-500 ml-2">(Locked)</span>}
+              </Label>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
+                    disabled={mode === "edit"}
                     className={cn(
                       "w-full justify-start text-left font-normal h-12 border-gray-200 hover:border-indigo-300 focus:border-indigo-500 focus:ring-indigo-500/20 transition-all duration-300",
                       !selectedDate && "text-muted-foreground",
+                      mode === "edit" && "bg-gray-100 cursor-not-allowed",
                     )}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
                     {selectedDate ? format(selectedDate, "dd MMM, yyyy") : <span>Pick a date</span>}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-auto p-0 border-gray-200 shadow-xl" align="start">
-                      <DatePicker
-                        mode="single"
-                        selected={selectedDate}
-                        onSelect={(date: Date | undefined) => { if (date) setSelectedDate(date) }}
-                        initialFocus
-                      />
-                </PopoverContent>
+                {mode !== "edit" && (
+                  <PopoverContent className="w-auto p-0 border-gray-200 shadow-xl" align="start">
+                    <DatePicker
+                      mode="single"
+                      selected={selectedDate}
+                      onSelect={(date: Date | undefined) => { if (date) setSelectedDate(date) }}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                )}
               </Popover>
             </div>
           </div>
@@ -3849,7 +4126,7 @@ export function QuickSale() {
                   handleCheckout()
                 }
               }} 
-              disabled={isProcessing || roundedTotal <= 0} 
+              disabled={isProcessing || roundedTotal <= 0 || (mode === "edit" && !editReason.trim())} 
               className="flex-1 h-10 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isProcessing ? (
@@ -3860,7 +4137,7 @@ export function QuickSale() {
               ) : (
                 <>
                   <Receipt className="h-4 w-4 mr-2" />
-                  Checkout
+                  {mode === "edit" ? "Save Changes" : mode === "exchange" ? "Complete Exchange" : `Checkout - ${formatCurrency(roundedTotal)}`}
                 </>
               )}
             </Button>
@@ -4499,8 +4776,11 @@ export function QuickSale() {
                 {customerBills.map((bill) => (
                   <div key={bill.id} className="border rounded-lg p-4 hover:bg-gray-50">
                     <div className="flex justify-between items-start">
-                      <div>
-                        <h3 className="font-semibold text-lg">Bill #{bill.receiptNumber}</h3>
+                      <div className="flex-1">
+                        <h3 className="font-semibold text-lg">
+                          Bill #{bill.receiptNumber}
+                          {(bill.isEdited === true || bill.editedAt) && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
+                        </h3>
                         <p className="text-sm text-gray-600">
                           {bill.date} at {bill.time}
                         </p>
@@ -4508,13 +4788,48 @@ export function QuickSale() {
                           Staff: {bill.staffName}
                         </p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-green-600">
-                          ₹{bill.total.toFixed(2)}
-                        </p>
-                        <p className="text-sm text-gray-600">
-                          {bill.payments?.[0]?.type || 'Cash'}
-                        </p>
+                      <div className="flex flex-col items-end gap-2">
+                        <div className="text-right">
+                          <p className="text-lg font-bold text-green-600">
+                            ₹{bill.total.toFixed(2)}
+                          </p>
+                          <p className="text-sm text-gray-600">
+                            {bill.payments?.[0]?.type || 'Cash'}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => router.push(`/bills/${bill.receiptNumber || bill.id}/edit`)}
+                            title="Edit Bill"
+                            className="h-8"
+                          >
+                            <Edit className="h-3 w-3" />
+                          </Button>
+                          {bill.items && bill.items.some((item: any) => item.type === 'product') && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                router.push(`/billing/${bill.receiptNumber || bill.billNo || bill.id}?mode=exchange`)
+                              }}
+                              title="Exchange Products"
+                              className="h-8 border-blue-200 text-blue-700 hover:bg-blue-50"
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => router.push(`/receipt/${bill.receiptNumber || bill.id}`)}
+                            title="View Receipt"
+                            className="h-8"
+                          >
+                            <Eye className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -4524,6 +4839,7 @@ export function QuickSale() {
           </div>
         </div>
       )}
+
     </div>
   )
 }

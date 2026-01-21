@@ -306,5 +306,344 @@ router.get('/logs', authenticateToken, setupMainDatabase, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/whatsapp/marketing-templates/create
+ * Create a new marketing template for the logged-in business
+ */
+router.post('/marketing-templates/create', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+  try {
+    console.log('📱 [Template Create] Request received:', {
+      businessId: req.user?.branchId,
+      hasBody: !!req.body,
+      templateName: req.body?.templateName,
+      hasComponents: !!req.body?.components,
+      componentsLength: req.body?.components?.length
+    });
+
+    const businessId = req.user?.branchId;
+    
+    if (!businessId) {
+      console.error('❌ [Template Create] Business ID not found');
+      return res.status(400).json({
+        success: false,
+        error: 'Business ID not found'
+      });
+    }
+
+    const {
+      templateName,
+      language,
+      components,
+      description,
+      tags
+    } = req.body;
+
+    // Validation
+    if (!templateName) {
+      console.error('❌ [Template Create] Template name missing');
+      return res.status(400).json({
+        success: false,
+        error: 'Template name is required'
+      });
+    }
+
+    if (!components || !Array.isArray(components) || components.length === 0) {
+      console.error('❌ [Template Create] Components missing or invalid:', {
+        hasComponents: !!components,
+        isArray: Array.isArray(components),
+        length: components?.length
+      });
+      return res.status(400).json({
+        success: false,
+        error: 'Template components are required'
+      });
+    }
+
+    // Get MSG91 config from AdminSettings (platform-level)
+    const mainConnection = await databaseManager.getMainConnection();
+    const AdminSettings = mainConnection.model('AdminSettings', require('../models/AdminSettings').schema);
+    const settings = await AdminSettings.getSettings();
+    const whatsappConfig = settings.notifications?.whatsapp;
+
+    if (!whatsappConfig?.msg91ApiKey || !whatsappConfig?.msg91SenderId) {
+      console.error('❌ [Template Create] WhatsApp service not configured:', {
+        hasApiKey: !!whatsappConfig?.msg91ApiKey,
+        hasSenderId: !!whatsappConfig?.msg91SenderId
+      });
+      return res.status(400).json({
+        success: false,
+        error: 'WhatsApp service not configured. Please contact administrator.'
+      });
+    }
+
+    // Create template via MSG91 (category is always MARKETING for business users)
+    const templateData = {
+      templateName: `${templateName}_${businessId}`, // Make unique per business
+      language: language || 'en',
+      category: 'MARKETING', // Always MARKETING for business-created templates
+      integratedNumber: whatsappConfig.msg91SenderId,
+      buttonUrl: components.some(c => c.type === 'BUTTONS' && c.buttons?.some(b => b.type === 'URL')) ? 'true' : 'false',
+      components
+    };
+
+    const result = await whatsappService.createTemplate(templateData);
+
+    if (result.success) {
+      // Save template to business database
+      const BusinessMarketingTemplate = mainConnection.model('BusinessMarketingTemplate', require('../models/BusinessMarketingTemplate').schema);
+      
+      const template = new BusinessMarketingTemplate({
+        businessId,
+        templateName,
+        msg91TemplateId: result.templateId,
+        language: templateData.language,
+        category: 'MARKETING',
+        components,
+        status: 'pending',
+        msg91Response: result.data,
+        description: description || '',
+        tags: tags || [],
+        submittedAt: new Date()
+      });
+
+      await template.save();
+
+      res.json({
+        success: true,
+        message: 'Marketing template created and submitted for approval',
+        data: {
+          templateId: template._id,
+          msg91TemplateId: result.templateId,
+          status: 'pending',
+          note: 'Template will be available for use once approved by MSG91 (typically 10-30 minutes)'
+        }
+      });
+    } else {
+      console.error('❌ [Template Create] MSG91 API returned error:', {
+        error: result.error,
+        responseData: result.responseData
+      });
+      res.status(400).json({
+        success: false,
+        error: result.error || 'Template creation failed',
+        details: result.responseData
+      });
+    }
+  } catch (error) {
+    console.error('Error creating marketing template:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create template'
+    });
+  }
+});
+
+/**
+ * GET /api/whatsapp/marketing-templates
+ * Get all marketing templates for the logged-in business
+ */
+router.get('/marketing-templates', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+  try {
+    const businessId = req.user?.branchId;
+    const { status, page = 1, limit = 50 } = req.query;
+    
+    if (!businessId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Business ID not found'
+      });
+    }
+
+    const mainConnection = await databaseManager.getMainConnection();
+    const BusinessMarketingTemplate = mainConnection.model('BusinessMarketingTemplate', require('../models/BusinessMarketingTemplate').schema);
+
+    // Build filter
+    const filter = { businessId };
+    if (status) {
+      filter.status = status;
+    }
+
+    // Pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const total = await BusinessMarketingTemplate.countDocuments(filter);
+
+    const templates = await BusinessMarketingTemplate.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    res.json({
+      success: true,
+      data: templates,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching marketing templates:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch templates'
+    });
+  }
+});
+
+/**
+ * GET /api/whatsapp/marketing-templates/:templateId
+ * Get a specific marketing template
+ */
+router.get('/marketing-templates/:templateId', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+  try {
+    const businessId = req.user?.branchId;
+    const { templateId } = req.params;
+    
+    if (!businessId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Business ID not found'
+      });
+    }
+
+    const mainConnection = await databaseManager.getMainConnection();
+    const BusinessMarketingTemplate = mainConnection.model('BusinessMarketingTemplate', require('../models/BusinessMarketingTemplate').schema);
+
+    const template = await BusinessMarketingTemplate.findOne({
+      _id: templateId,
+      businessId
+    }).lean();
+
+    if (!template) {
+      return res.status(404).json({
+        success: false,
+        error: 'Template not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: template
+    });
+  } catch (error) {
+    console.error('Error fetching marketing template:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch template'
+    });
+  }
+});
+
+/**
+ * PUT /api/whatsapp/marketing-templates/:templateId/check-status
+ * Check MSG91 template approval status
+ */
+router.put('/marketing-templates/:templateId/check-status', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+  try {
+    const businessId = req.user?.branchId;
+    const { templateId } = req.params;
+    
+    if (!businessId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Business ID not found'
+      });
+    }
+
+    const mainConnection = await databaseManager.getMainConnection();
+    const BusinessMarketingTemplate = mainConnection.model('BusinessMarketingTemplate', require('../models/BusinessMarketingTemplate').schema);
+
+    const template = await BusinessMarketingTemplate.findOne({
+      _id: templateId,
+      businessId
+    });
+
+    if (!template) {
+      return res.status(404).json({
+        success: false,
+        error: 'Template not found'
+      });
+    }
+
+    // Note: MSG91 doesn't provide a direct API to check template status
+    // This endpoint can be used to manually update status if user checks MSG91 dashboard
+    // Or we can implement webhook handling if MSG91 provides webhooks
+    
+    res.json({
+      success: true,
+      message: 'Status check endpoint. Please check MSG91 dashboard for approval status.',
+      data: {
+        templateId: template._id,
+        currentStatus: template.status,
+        msg91TemplateId: template.msg91TemplateId,
+        submittedAt: template.submittedAt
+      }
+    });
+  } catch (error) {
+    console.error('Error checking template status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check template status'
+    });
+  }
+});
+
+/**
+ * DELETE /api/whatsapp/marketing-templates/:templateId
+ * Delete a marketing template
+ */
+router.delete('/marketing-templates/:templateId', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+  try {
+    const businessId = req.user?.branchId;
+    const { templateId } = req.params;
+    
+    if (!businessId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Business ID not found'
+      });
+    }
+
+    const mainConnection = await databaseManager.getMainConnection();
+    const BusinessMarketingTemplate = mainConnection.model('BusinessMarketingTemplate', require('../models/BusinessMarketingTemplate').schema);
+
+    const template = await BusinessMarketingTemplate.findOne({
+      _id: templateId,
+      businessId
+    });
+
+    if (!template) {
+      return res.status(404).json({
+        success: false,
+        error: 'Template not found'
+      });
+    }
+
+    // Only allow deletion if status is 'rejected' or 'pending'
+    // Or if it hasn't been used in any campaigns
+    if (template.status === 'approved' && template.campaignCount > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot delete template that has been used in campaigns'
+      });
+    }
+
+    await BusinessMarketingTemplate.deleteOne({ _id: templateId });
+
+    res.json({
+      success: true,
+      message: 'Template deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting marketing template:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete template'
+    });
+  }
+});
+
 module.exports = router;
 

@@ -34,6 +34,8 @@ const Sale = require('./models/Sale').model;
 const Expense = require('./models/Expense').model;
 const CashRegistry = require('./models/CashRegistry').model;
 const InventoryTransaction = require('./models/InventoryTransaction').model;
+const BillEditHistory = require('./models/BillEditHistory').model;
+const BillArchive = require('./models/BillArchive').model;
 
 // Import Routes
 const cashRegistryRoutes = require('./routes/cashRegistry');
@@ -293,6 +295,7 @@ app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
+app.use('/api/campaigns', require('./routes/campaigns'));
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
@@ -6269,8 +6272,19 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
   try {
     console.log('🔍 Sales request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
-    const { Sale } = req.businessModels;
-    const sales = await Sale.find().sort({ date: -1 });
+    const { Sale, BillEditHistory } = req.businessModels;
+    const sales = await Sale.find().sort({ date: -1 }).lean();
+    
+    // For bills that don't have isEdited set but have edit history, mark them as edited
+    if (BillEditHistory) {
+      const editedBillIds = await BillEditHistory.distinct('saleId');
+      sales.forEach(sale => {
+        const saleIdStr = sale._id.toString();
+        if (editedBillIds.some(id => id.toString() === saleIdStr) && !sale.isEdited) {
+          sale.isEdited = true;
+        }
+      });
+    }
     
     console.log('✅ Sales found:', sales.length);
     res.json({ success: true, data: sales });
@@ -6292,9 +6306,18 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     const { Sale, Product, InventoryTransaction, Appointment } = req.businessModels;
     const saleData = req.body;
     
-    // Process items to handle staff contributions
+    // Process items to handle staff contributions and ensure productId is preserved
     if (saleData.items && Array.isArray(saleData.items)) {
       saleData.items = saleData.items.map(item => {
+        // Ensure productId is preserved and converted to ObjectId if it's a string
+        if (item.type === 'product' && item.productId) {
+          // Convert string productId to ObjectId if needed
+          const mongoose = require('mongoose');
+          if (typeof item.productId === 'string' && mongoose.Types.ObjectId.isValid(item.productId)) {
+            item.productId = new mongoose.Types.ObjectId(item.productId);
+          }
+        }
+        
         // If staffContributions is provided, calculate amounts
         if (item.staffContributions && Array.isArray(item.staffContributions)) {
           item.staffContributions = item.staffContributions.map(contribution => ({
@@ -6783,12 +6806,357 @@ app.get('/api/sales/:id', authenticateToken, setupBusinessDatabase, async (req, 
 });
 
 app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
-  try {
     const { Sale } = req.businessModels;
-    const sale = await Sale.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    if (!sale) return res.status(404).json({ success: false, error: 'Sale not found' });
-    res.json({ success: true, data: sale });
+  
+  // For standalone MongoDB, transactions are not supported
+  // We'll proceed without transactions - operations will still work
+  const session = null;
+  const useTransactions = false;
+  
+  console.log('⚠️ Running PUT /api/sales/:id without transactions (standalone MongoDB)');
+
+  try {
+    const {
+      Sale,
+      Product,
+      InventoryTransaction,
+      BillEditHistory,
+      BillArchive,
+    } = req.businessModels;
+
+    const saleId = req.params.id;
+    const updateData = req.body || {};
+
+    const existingSale = session 
+      ? await Sale.findById(saleId).session(session)
+      : await Sale.findById(saleId);
+    if (!existingSale) {
+      if (useTransactions && session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+
+    // Archive original bill snapshot once per edit
+    try {
+      if (BillArchive) {
+        await BillArchive.create(
+          [
+            {
+              originalBill: existingSale.toObject(),
+              billNo: existingSale.billNo,
+              saleId: existingSale._id,
+              archivedAt: new Date(),
+              archivedBy: req.user?._id || req.user?.id || null,
+              archivedByName: req.user?.name || req.user?.firstName || '',
+              reason: updateData.editReason || 'Bill edited',
+            },
+          ],
+          session ? { session } : {},
+        );
+      }
+    } catch (archiveError) {
+      console.error('⚠️ Failed to archive original bill before edit:', archiveError);
+    }
+
+    // Ensure immutable fields are not changed
+    const immutableFields = ['billNo', 'customerName', 'customerPhone', 'date', 'time', 'branchId', '_id', 'id'];
+    immutableFields.forEach((field) => {
+      if (field in updateData && String(updateData[field]) !== String(existingSale[field])) {
+        updateData[field] = existingSale[field];
+      }
+    });
+
+    const originalItems = existingSale.items || [];
+    const updatedItems = Array.isArray(updateData.items) ? updateData.items : originalItems;
+
+    // Compute per-product quantity differences between original and updated items
+    const productDiffMap = new Map();
+    const addToDiff = (productId, deltaQty, name) => {
+      if (!productId || !deltaQty) return;
+      const key = String(productId);
+      const existing = productDiffMap.get(key) || { productId, quantityDelta: 0, name };
+      existing.quantityDelta += deltaQty;
+      productDiffMap.set(key, existing);
+    };
+
+    // Original items: treat as negative (we will add updated later)
+    originalItems.forEach((item) => {
+      if (item.type === 'product' && item.productId) {
+        addToDiff(item.productId, -Number(item.quantity || 0), item.name);
+      }
+    });
+
+    // Updated items: treat as positive
+    updatedItems.forEach((item) => {
+      if (item.type === 'product' && item.productId) {
+        addToDiff(item.productId, Number(item.quantity || 0), item.name);
+      }
+    });
+
+    const inventoryChangesForHistory = [];
+
+    // Validate and apply inventory changes
+    for (const diff of productDiffMap.values()) {
+      const { productId, quantityDelta } = diff;
+      if (!quantityDelta) continue;
+
+      const product = session
+        ? await Product.findById(productId).session(session)
+        : await Product.findById(productId);
+      if (!product) {
+        // Product was deleted - allow keeping it in the bill but mark as unavailable
+        // Don't fail the edit, but log a warning
+        console.warn(`⚠️ Product ${productId} (${diff.name}) not found - may have been deleted. Keeping in bill but cannot adjust inventory.`);
+        // Skip inventory adjustment for deleted products
+        continue;
+      }
+
+      // Check if product is active
+      if (product.isActive === false) {
+        console.warn(`⚠️ Product ${product.name} is inactive. Proceeding with inventory adjustment.`);
+      }
+
+      const previousStock = Number(product.stock || 0);
+      let newStock = previousStock;
+
+      // quantityDelta > 0 means more units are now part of the bill (stock should decrease)
+      // quantityDelta < 0 means fewer units than before (stock should increase)
+      if (quantityDelta > 0) {
+        if (previousStock < quantityDelta) {
+          if (useTransactions && session) {
+            await session.abortTransaction();
+            session.endSession();
+          }
+          return res.status(400).json({
+            success: false,
+            error: `Insufficient stock for product ${product.name}. Available: ${previousStock}, Required additional: ${quantityDelta}`,
+          });
+        }
+        newStock = previousStock - quantityDelta;
+      } else if (quantityDelta < 0) {
+        newStock = previousStock + Math.abs(quantityDelta);
+      }
+
+      product.stock = newStock;
+      await product.save({ session });
+
+      // Create inventory transaction to record the adjustment
+      const transaction = new InventoryTransaction({
+        productId: product._id,
+        productName: product.name,
+        transactionType: quantityDelta > 0 ? 'sale' : 'return',
+        quantity: quantityDelta > 0 ? -quantityDelta : Math.abs(quantityDelta),
+        previousStock,
+        newStock,
+        unitCost: product.price || 0,
+        totalValue: Math.abs(quantityDelta * (product.price || 0)),
+        referenceType: 'sale',
+        referenceId: existingSale._id.toString(),
+        referenceNumber: existingSale.billNo,
+        processedBy: req.user?.name || req.user?.firstName || existingSale.staffName || 'System',
+        reason: quantityDelta > 0 ? 'Bill edit - additional quantity sold' : 'Bill edit - quantity reduced/returned',
+        notes: updateData.editReason || 'Bill edited',
+        transactionDate: new Date(),
+      });
+
+      const savedTransaction = await transaction.save(session ? { session } : {});
+
+      inventoryChangesForHistory.push({
+        productId: product._id,
+        quantityChange: quantityDelta,
+        previousStock,
+        newStock,
+        transactionIds: [savedTransaction._id],
+      });
+    }
+
+    // Update editable fields on the sale
+    const editableRootFields = [
+      'items',
+      'netTotal',
+      'taxAmount',
+      'grossTotal',
+      'discount',
+      'discountType',
+      'notes',
+      'paymentStatus',
+      // Allow changing how money was paid (cash/card/online) without altering amounts received
+      'payments',
+      'paymentMode',
+      'status', // Allow updating status when payments change
+    ];
+
+    editableRootFields.forEach((field) => {
+      if (field in updateData) {
+        if (field === 'paymentStatus') {
+          // Only allow adjusting dueDate and totalAmount; keep paidAmount as is
+          const currentPaymentStatus = existingSale.paymentStatus || {};
+          const incoming = updateData.paymentStatus || {};
+          existingSale.paymentStatus = {
+            ...currentPaymentStatus,
+            totalAmount: Number(updateData.grossTotal ?? currentPaymentStatus.totalAmount),
+            dueDate: incoming.dueDate || currentPaymentStatus.dueDate,
+          };
+        } else if (field === 'items') {
+          existingSale.items = updatedItems;
+        } else if (field === 'payments') {
+          // Explicitly handle payments array update
+          console.log('💳 Updating payments array:', updateData.payments);
+          if (Array.isArray(updateData.payments)) {
+            existingSale.payments = updateData.payments;
+            // Mark the array as modified for Mongoose to save it
+            existingSale.markModified('payments');
+            console.log('💳 Updated payments on sale:', existingSale.payments);
+          }
+        } else if (field === 'paymentMode') {
+          // Explicitly handle paymentMode update
+          console.log('💳 Updating paymentMode:', updateData.paymentMode);
+          existingSale.paymentMode = updateData.paymentMode || '';
+          console.log('💳 Updated paymentMode on sale:', existingSale.paymentMode);
+        } else {
+          existingSale[field] = updateData[field];
+        }
+      }
+    });
+
+    // Recalculate paidAmount from payments array if payments were updated
+    if (updateData.payments && Array.isArray(updateData.payments)) {
+      console.log('💰 Recalculating payment amounts from payments array:', updateData.payments);
+      const newPaidAmount = updateData.payments.reduce((sum, payment) => {
+        const amount = Number(payment.amount) || 0;
+        console.log(`  - Payment: ${payment.mode || payment.type}, Amount: ${amount}`);
+        return sum + amount;
+      }, 0);
+      
+      console.log('💰 Calculated newPaidAmount:', newPaidAmount);
+      const totalAmount = Number(updateData.grossTotal || existingSale.grossTotal || existingSale.paymentStatus?.totalAmount || 0);
+      console.log('💰 Total amount:', totalAmount);
+      
+      if (!existingSale.paymentStatus) {
+        existingSale.paymentStatus = {
+          totalAmount: totalAmount,
+          paidAmount: newPaidAmount,
+          remainingAmount: totalAmount - newPaidAmount,
+          dueDate: new Date(),
+        };
+      } else {
+        existingSale.paymentStatus.paidAmount = newPaidAmount;
+        existingSale.paymentStatus.totalAmount = totalAmount;
+        existingSale.paymentStatus.remainingAmount = totalAmount - newPaidAmount;
+      }
+      
+      console.log('💰 Updated paymentStatus:', existingSale.paymentStatus);
+      
+      // Update status based on payment
+      if (newPaidAmount === 0) {
+        existingSale.status = 'unpaid';
+      } else if (newPaidAmount >= totalAmount) {
+        existingSale.status = 'completed';
+      } else {
+        existingSale.status = 'partial';
+      }
+      
+      console.log('💰 Updated status:', existingSale.status);
+    } else {
+      // Ensure paymentStatus totalAmount matches grossTotal (when payments not updated)
+      if (!existingSale.paymentStatus) {
+        existingSale.paymentStatus = {
+          totalAmount: Number(existingSale.grossTotal || 0),
+          paidAmount: 0,
+          remainingAmount: Number(existingSale.grossTotal || 0),
+          dueDate: new Date(),
+        };
+      } else {
+        existingSale.paymentStatus.totalAmount = Number(existingSale.grossTotal || existingSale.paymentStatus.totalAmount || 0);
+      }
+    }
+
+    const beforeSnapshot = existingSale.toObject();
+
+    // Mark bill as edited
+    existingSale.isEdited = true;
+    existingSale.editedAt = new Date();
+
+    // Debug: Log what we're about to save
+    console.log('💾 About to save sale with:', {
+      billNo: existingSale.billNo,
+      payments: existingSale.payments,
+      paymentMode: existingSale.paymentMode,
+      paymentStatus: existingSale.paymentStatus,
+      status: existingSale.status
+    });
+
+    const savedSale = await existingSale.save(session ? { session } : {});
+    
+    // Debug: Log what was actually saved
+    console.log('✅ Sale saved with:', {
+      billNo: savedSale.billNo,
+      payments: savedSale.payments,
+      paymentMode: savedSale.paymentMode,
+      paymentStatus: savedSale.paymentStatus,
+      status: savedSale.status
+    });
+
+    // Mark linked appointment as completed if now fully paid
+    if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
+      const { Appointment } = req.businessModels;
+      await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+    }
+
+    // Record edit history
+    try {
+      if (BillEditHistory) {
+        await BillEditHistory.create(
+          [
+            {
+              saleId: savedSale._id,
+              billNo: savedSale.billNo,
+              editedBy: req.user?._id || req.user?.id || null,
+              editedByName: req.user?.name || req.user?.firstName || '',
+              editDate: new Date(),
+              editReason: updateData.editReason || 'Bill edited',
+              changes: {
+                before: beforeSnapshot,
+                after: savedSale.toObject(),
+                diff: {}, // For now we store full snapshots; diff can be computed later if needed
+              },
+              inventoryChanges: inventoryChangesForHistory,
+              paymentAdjustments: {
+                refundAmount: 0,
+                additionalAmount: 0,
+                refundMethods: [],
+              },
+            },
+          ],
+          session ? { session } : {},
+        );
+      }
+    } catch (historyError) {
+      console.error('⚠️ Failed to record bill edit history:', historyError);
+    }
+
+    if (useTransactions && session) {
+      await session.commitTransaction();
+      session.endSession();
+    } else if (session) {
+      session.endSession();
+    }
+
+    res.json({ success: true, data: savedSale });
   } catch (err) {
+    console.error('❌ Error updating sale:', err);
+    if (useTransactions && session) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        // ignore
+      }
+    }
+    if (session) {
+      session.endSession();
+    }
     res.status(400).json({ success: false, error: err.message });
   }
 });
@@ -6995,6 +7363,240 @@ app.get('/api/sales/:id/payment-summary', authenticateToken, setupBusinessDataba
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Exchange products within a sale (bill)
+app.post('/api/sales/:id/exchange', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const { Sale } = req.businessModels;
+  const session = await Sale.startSession();
+  session.startTransaction();
+
+  try {
+    const {
+      Product,
+      InventoryTransaction,
+      BillEditHistory,
+      BillArchive,
+    } = req.businessModels;
+
+    const saleId = req.params.id;
+    const payload = req.body || {};
+
+    const existingSale = await Sale.findById(saleId).session(session);
+    if (!existingSale) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+
+    // Validation: Require edit reason for exchange
+    if (!payload.editReason || payload.editReason.trim() === '') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        error: 'Exchange reason is required. Please provide a reason for this exchange.',
+      });
+    }
+
+    // Validation: Check time limit for exchanges (configurable, default 30 days)
+    const billDate = new Date(existingSale.date);
+    const daysSinceBill = Math.floor((new Date().getTime() - billDate.getTime()) / (1000 * 60 * 60 * 24));
+    const maxExchangeDays = 30; // Can be made configurable per business
+    if (daysSinceBill > maxExchangeDays) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        error: `This bill is ${daysSinceBill} days old. Exchanges are only allowed within ${maxExchangeDays} days of purchase.`,
+      });
+    }
+
+    const updatedItems = Array.isArray(payload.items) ? payload.items : existingSale.items || [];
+
+    // Archive original bill snapshot once per exchange
+    try {
+      if (BillArchive) {
+        await BillArchive.create(
+          [
+            {
+              originalBill: existingSale.toObject(),
+              billNo: existingSale.billNo,
+              saleId: existingSale._id,
+              archivedAt: new Date(),
+              archivedBy: req.user?._id || req.user?.id || null,
+              archivedByName: req.user?.name || req.user?.firstName || '',
+              reason: payload.editReason || 'Bill exchanged',
+            },
+          ],
+          session ? { session } : {},
+        );
+      }
+    } catch (archiveError) {
+      console.error('⚠️ Failed to archive original bill before exchange:', archiveError);
+    }
+
+    const originalItems = existingSale.items || [];
+
+    // Compute product quantity differences
+    const productDiffMap = new Map();
+    const addToDiff = (productId, deltaQty, name) => {
+      if (!productId || !deltaQty) return;
+      const key = String(productId);
+      const existing = productDiffMap.get(key) || { productId, quantityDelta: 0, name };
+      existing.quantityDelta += deltaQty;
+      productDiffMap.set(key, existing);
+    };
+
+    originalItems.forEach((item) => {
+      if (item.type === 'product' && item.productId) {
+        addToDiff(item.productId, -Number(item.quantity || 0), item.name);
+      }
+    });
+
+    updatedItems.forEach((item) => {
+      if (item.type === 'product' && item.productId) {
+        addToDiff(item.productId, Number(item.quantity || 0), item.name);
+      }
+    });
+
+    const inventoryChangesForHistory = [];
+
+    for (const diff of productDiffMap.values()) {
+      const { productId, quantityDelta } = diff;
+      if (!quantityDelta) continue;
+
+      const product = await Product.findById(productId).session(session);
+      if (!product) {
+        // Product was deleted - allow keeping it in the bill but mark as unavailable
+        console.warn(`⚠️ Product ${productId} (${diff.name}) not found during exchange - may have been deleted. Keeping in bill but cannot adjust inventory.`);
+        // Skip inventory adjustment for deleted products
+        continue;
+      }
+
+      // Check if product is active
+      if (product.isActive === false) {
+        console.warn(`⚠️ Product ${product.name} is inactive during exchange. Proceeding with inventory adjustment.`);
+      }
+
+      const previousStock = Number(product.stock || 0);
+      let newStock = previousStock;
+
+      if (quantityDelta > 0) {
+        if (previousStock < quantityDelta) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({
+            success: false,
+            error: `Insufficient stock for product ${product.name}. Available: ${previousStock}, Required additional: ${quantityDelta}`,
+          });
+        }
+        newStock = previousStock - quantityDelta;
+      } else if (quantityDelta < 0) {
+        newStock = previousStock + Math.abs(quantityDelta);
+      }
+
+      product.stock = newStock;
+      await product.save({ session });
+
+      const transaction = new InventoryTransaction({
+        productId: product._id,
+        productName: product.name,
+        transactionType: quantityDelta > 0 ? 'sale' : 'return',
+        quantity: quantityDelta > 0 ? -quantityDelta : Math.abs(quantityDelta),
+        previousStock,
+        newStock,
+        unitCost: product.price || 0,
+        totalValue: Math.abs(quantityDelta * (product.price || 0)),
+        referenceType: 'sale',
+        referenceId: existingSale._id.toString(),
+        referenceNumber: existingSale.billNo,
+        processedBy: req.user?.name || req.user?.firstName || existingSale.staffName || 'System',
+        reason: quantityDelta > 0 ? 'Bill exchange - additional quantity sold' : 'Bill exchange - quantity returned',
+        notes: payload.editReason || 'Bill exchanged',
+        transactionDate: new Date(),
+      });
+
+      const savedTransaction = await transaction.save(session ? { session } : {});
+
+      inventoryChangesForHistory.push({
+        productId: product._id,
+        quantityChange: quantityDelta,
+        previousStock,
+        newStock,
+        transactionIds: [savedTransaction._id],
+      });
+    }
+
+    // Update sale with provided financials (frontend is responsible for recalculation)
+    const beforeSnapshot = existingSale.toObject();
+
+    existingSale.items = updatedItems;
+    if (typeof payload.netTotal === 'number') existingSale.netTotal = payload.netTotal;
+    if (typeof payload.taxAmount === 'number') existingSale.taxAmount = payload.taxAmount;
+    if (typeof payload.grossTotal === 'number') existingSale.grossTotal = payload.grossTotal;
+    if (typeof payload.discount === 'number') existingSale.discount = payload.discount;
+    if (payload.discountType) existingSale.discountType = payload.discountType;
+    if (payload.notes) existingSale.notes = payload.notes;
+
+    if (!existingSale.paymentStatus) {
+      existingSale.paymentStatus = {
+        totalAmount: Number(existingSale.grossTotal || 0),
+        paidAmount: 0,
+        remainingAmount: Number(existingSale.grossTotal || 0),
+        dueDate: new Date(),
+      };
+    } else {
+      existingSale.paymentStatus.totalAmount = Number(existingSale.grossTotal || existingSale.paymentStatus.totalAmount || 0);
+    }
+
+    const savedSale = await existingSale.save(session ? { session } : {});
+
+    try {
+      if (BillEditHistory) {
+        await BillEditHistory.create(
+          [
+            {
+              saleId: savedSale._id,
+              billNo: savedSale.billNo,
+              editedBy: req.user?._id || req.user?.id || null,
+              editedByName: req.user?.name || req.user?.firstName || '',
+              editDate: new Date(),
+              editReason: payload.editReason || 'Bill exchanged',
+              changes: {
+                before: beforeSnapshot,
+                after: savedSale.toObject(),
+                diff: {},
+              },
+              inventoryChanges: inventoryChangesForHistory,
+              paymentAdjustments: {
+                refundAmount: 0,
+                additionalAmount: 0,
+                refundMethods: [],
+              },
+            },
+          ],
+          session ? { session } : {},
+        );
+      }
+    } catch (historyError) {
+      console.error('⚠️ Failed to record bill exchange history:', historyError);
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.json({ success: true, data: savedSale });
+  } catch (err) {
+    console.error('❌ Error exchanging products in sale:', err);
+    try {
+      await session.abortTransaction();
+    } catch {
+      // ignore
+    }
+    session.endSession();
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
@@ -7794,12 +8396,235 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
 });
 
 app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
-  try {
     const { Sale } = req.businessModels;
-    const sale = await Sale.findByIdAndDelete(req.params.id);
-    if (!sale) return res.status(404).json({ success: false, error: 'Sale not found' });
-    res.json({ success: true, data: sale });
+  
+  // For standalone MongoDB, transactions are not supported
+  // We'll proceed without transactions - operations will still work
+  // All operations will execute individually without atomic rollback
+  const session = null;
+  const useTransactions = false;
+  
+  console.log('⚠️ Running DELETE without transactions (standalone MongoDB)');
+
+  try {
+    const {
+      Sale,
+      Product,
+      InventoryTransaction,
+      BillArchive,
+    } = req.businessModels;
+
+    const saleId = req.params.id;
+    console.log(`🗑️ DELETE /api/sales/${saleId} - Starting deletion process`);
+    const sale = session
+      ? await Sale.findById(saleId).session(session)
+      : await Sale.findById(saleId);
+    if (!sale) {
+      console.error(`❌ Sale not found: ${saleId}`);
+      if (useTransactions && session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+    console.log(`✅ Sale found: ${sale.billNo}, items count: ${sale.items?.length || 0}`);
+
+    // Archive bill before deletion
+    try {
+      if (BillArchive) {
+        await BillArchive.create(
+          [
+            {
+              originalBill: sale.toObject(),
+              billNo: sale.billNo,
+              saleId: sale._id,
+              archivedAt: new Date(),
+              archivedBy: req.user?._id || req.user?.id || null,
+              archivedByName: req.user?.name || req.user?.firstName || '',
+              reason: 'Bill deleted',
+            },
+          ],
+          session ? { session } : {},
+        );
+      }
+    } catch (archiveError) {
+      console.error('⚠️ Failed to archive bill before deletion:', archiveError);
+    }
+
+    // Restore inventory for all product items
+    const inventoryChanges = [];
+    const productItems = (sale.items || []).filter(item => item.type === 'product');
+    console.log(`\n🗑️ ========== DELETING BILL ${sale.billNo} ==========`);
+    console.log(`📊 Total items: ${sale.items?.length || 0}, Products: ${productItems.length}`);
+    console.log(`📋 Full bill items structure:`, JSON.stringify(sale.items, null, 2));
+    console.log(`🔍 Sale object keys:`, Object.keys(sale.toObject ? sale.toObject() : sale));
+    
+    for (const item of sale.items || []) {
+      console.log(`  📦 Checking item: ${item.name}, type: ${item.type}, productId: ${item.productId || 'MISSING'}, quantity: ${item.quantity}`);
+      
+      // Skip if not a product or missing required fields
+      if (item.type !== 'product') {
+        console.log(`  ⏭️ Skipping ${item.name} - not a product`);
+        continue;
+      }
+      
+      if (!item.productId) {
+        console.warn(`  ⚠️ Missing productId for ${item.name}. Trying to find by name...`);
+        // Try to find product by name as fallback (case-insensitive, partial match)
+        const productByName = session
+          ? await Product.findOne({ 
+              name: { $regex: new RegExp(`^${item.name}$`, 'i') } 
+            }).session(session)
+          : await Product.findOne({ 
+              name: { $regex: new RegExp(`^${item.name}$`, 'i') } 
+            });
+        
+        if (!productByName) {
+          // Try partial match
+          const productByPartialName = session
+            ? await Product.findOne({ 
+                name: { $regex: item.name, $options: 'i' } 
+              }).session(session)
+            : await Product.findOne({ 
+                name: { $regex: item.name, $options: 'i' } 
+              });
+          
+          if (productByPartialName) {
+            console.log(`  ✅ Found product by partial name match: ${productByPartialName._id} (${productByPartialName.name})`);
+            item.productId = productByPartialName._id;
+          } else {
+            console.warn(`  ❌ Cannot restore inventory for "${item.name}" - product not found by name. Item data:`, JSON.stringify(item, null, 2));
+            console.warn(`  ⚠️ Available products in database:`, await Product.find({}).select('name _id').limit(10).lean());
+            continue;
+          }
+        } else {
+          console.log(`  ✅ Found product by exact name: ${productByName._id} (${productByName.name})`);
+          item.productId = productByName._id;
+        }
+      }
+      
+      if (!item.quantity || item.quantity <= 0) {
+        console.log(`  ⏭️ Skipping ${item.name} - invalid quantity: ${item.quantity}`);
+        continue;
+      }
+
+      // Convert productId to ObjectId if it's a string
+      const mongoose = require('mongoose');
+      let productIdToFind = item.productId;
+      if (typeof productIdToFind === 'string') {
+        if (mongoose.Types.ObjectId.isValid(productIdToFind)) {
+          productIdToFind = new mongoose.Types.ObjectId(productIdToFind);
+        } else {
+          console.error(`  ❌ Invalid productId format: ${productIdToFind} for item ${item.name}`);
+          // Try to find by name as fallback
+          const productByName = session
+            ? await Product.findOne({ name: item.name }).session(session)
+            : await Product.findOne({ name: item.name });
+          if (productByName) {
+            console.log(`  ✅ Found product by name as fallback: ${productByName._id}`);
+            productIdToFind = productByName._id;
+          } else {
+            console.warn(`  ❌ Cannot restore inventory for ${item.name} - invalid productId and product not found by name`);
+            continue;
+          }
+        }
+      }
+
+      const product = session
+        ? await Product.findById(productIdToFind).session(session)
+        : await Product.findById(productIdToFind);
+      if (!product) {
+        console.error(`  ❌ Product not found: ${productIdToFind} for item ${item.name}`);
+        // Don't abort transaction, just skip this item and continue with others
+        console.warn(`  ⚠️ Skipping inventory restoration for ${item.name} - product not found, continuing with other items`);
+        continue;
+      }
+      
+      console.log(`  ✅ Found product: ${product.name}, current stock: ${product.stock}`);
+
+      const previousStock = Number(product.stock || 0);
+      const restoreQty = Number(item.quantity || 0);
+      const newStock = previousStock + restoreQty;
+
+      console.log(`  📈 Restoring ${restoreQty} units: ${previousStock} → ${newStock}`);
+
+      product.stock = newStock;
+      await product.save(session ? { session } : {});
+      
+      console.log(`  ✅ Stock updated for ${product.name}`);
+
+      const transaction = new InventoryTransaction({
+        productId: product._id,
+        productName: product.name,
+        transactionType: 'return',
+        quantity: restoreQty,
+        previousStock,
+        newStock,
+        unitCost: product.price || 0,
+        totalValue: restoreQty * (product.price || 0),
+        referenceType: 'sale',
+        referenceId: sale._id.toString(),
+        referenceNumber: sale.billNo,
+        processedBy: req.user?.name || req.user?.firstName || sale.staffName || 'System',
+        reason: 'Bill deleted - stock restored',
+        notes: 'Bill deleted by admin, inventory restored',
+        transactionDate: new Date(),
+      });
+
+      const savedTxn = await transaction.save(session ? { session } : {});
+      inventoryChanges.push({
+        productId: product._id,
+        quantityChange: -restoreQty,
+        previousStock,
+        newStock,
+        transactionIds: [savedTxn._id],
+      });
+    }
+
+    if (session) {
+      await Sale.findByIdAndDelete(saleId).session(session);
+    } else {
+      await Sale.findByIdAndDelete(saleId);
+    }
+
+    if (useTransactions && session) {
+      await session.commitTransaction();
+      session.endSession();
+    } else if (session) {
+      session.endSession();
+    }
+
+    console.log(`\n✅ ========== BILL ${sale.billNo} DELETED SUCCESSFULLY ==========`);
+    console.log(`📦 Inventory restored for ${inventoryChanges.length} product(s)`);
+    if (inventoryChanges.length > 0) {
+      console.log(`📋 Restored products:`, inventoryChanges.map(ic => ({
+        productId: ic.productId,
+        quantityRestored: Math.abs(ic.quantityChange),
+        stockChange: `${ic.previousStock} → ${ic.newStock}`
+      })));
+    } else {
+      console.warn(`⚠️ WARNING: No inventory was restored! Check if items have productId or if products exist.`);
+    }
+    console.log(`==========================================\n`);
+
+    res.json({ 
+      success: true, 
+      data: sale,
+      inventoryRestored: inventoryChanges.length,
+      message: `Bill deleted. Inventory restored for ${inventoryChanges.length} product(s).`
+    });
   } catch (err) {
+    console.error('❌ Error deleting sale:', err);
+    if (useTransactions && session) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        // ignore
+      }
+    }
+    if (session) {
+      session.endSession();
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });

@@ -13,6 +13,8 @@ const itemSchema = new mongoose.Schema({
   quantity: { type: Number, required: true },
   price: { type: Number, required: true },
   total: { type: Number, required: true },
+  // Product reference for inventory tracking
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' }, // For products only
   // Legacy fields for backward compatibility
   staffId: { type: String, default: '' },
   staffName: { type: String, default: '' },
@@ -76,6 +78,9 @@ const saleSchema = new mongoose.Schema({
   // Additional fields
   notes: { type: String, default: '' },
   customerAddress: { type: String, default: '' },
+  // Track if bill has been edited
+  isEdited: { type: Boolean, default: false },
+  editedAt: { type: Date },
   customerEmail: { type: String, default: '' },
   branchId: {
     type: mongoose.Schema.Types.ObjectId,

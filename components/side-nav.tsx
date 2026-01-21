@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
-import { CalendarDays, Home, PieChart, Settings, Users, Receipt, Scissors, Package, Wrench, DollarSign, Banknote, ChevronLeft, ChevronRight, Phone } from "lucide-react"
+import { CalendarDays, Home, PieChart, Settings, Users, Receipt, Scissors, Package, Wrench, DollarSign, Banknote, ChevronLeft, ChevronRight, Phone, Megaphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context"
@@ -57,6 +57,12 @@ export function SideNav() {
       title: "Leads",
       href: "/leads",
       icon: Phone,
+      requiredRole: "manager", // Manager and above
+    },
+    {
+      title: "Campaigns",
+      href: "/campaigns",
+      icon: Megaphone,
       requiredRole: "manager", // Manager and above
     },
     {

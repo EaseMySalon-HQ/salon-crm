@@ -63,6 +63,12 @@ class ModelFactory {
       
       // InventoryTransaction model
       InventoryTransaction: this.getModel('InventoryTransaction', require('./InventoryTransaction').schema, connection),
+
+      // Bill edit history model
+      BillEditHistory: this.getModel('BillEditHistory', require('./BillEditHistory').schema, connection),
+
+      // Bill archive model
+      BillArchive: this.getModel('BillArchive', require('./BillArchive').schema, connection),
       
       // BusinessSettings model
       BusinessSettings: this.getModel('BusinessSettings', require('./BusinessSettings').schema, connection),
