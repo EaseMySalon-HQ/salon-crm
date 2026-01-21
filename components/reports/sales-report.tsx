@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Search, Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown } from "lucide-react"
+import { Search, Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -36,6 +36,7 @@ interface SalesRecord {
   grossTotal: number
   status: "completed" | "partial" | "unpaid" | "cancelled"
   staffName: string
+  isEdited?: boolean // Track if bill has been edited
 }
 
 type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "all"
@@ -61,6 +62,15 @@ export function SalesReport() {
   const handleViewReceipt = (sale: SalesRecord) => {
     router.push(`/receipt/${sale.billNo}`)
   }
+
+  const handleEditBill = (sale: SalesRecord) => {
+    router.push(`/billing/${sale.billNo}?mode=edit`)
+  }
+
+  const handleExchangeBill = (sale: SalesRecord) => {
+    router.push(`/billing/${sale.billNo}?mode=exchange`)
+  }
+
 
   // Mock data - replace with actual API call
   useEffect(() => {
@@ -92,11 +102,16 @@ export function SalesReport() {
             status: sale.status,
             staffName: sale.staffName,
             items: sale.items || [],
+            isEdited: sale.isEdited === true || !!sale.editedAt, // Track if bill has been edited
+            editedAt: sale.editedAt, // Include editedAt for fallback check
           }
           console.log(`📋 Mapped sale ${sale.billNo}:`, {
             paymentMode: mappedSale.paymentMode,
             payments: mappedSale.payments,
-            hasPayments: !!mappedSale.payments.length
+            hasPayments: !!mappedSale.payments.length,
+            isEdited: mappedSale.isEdited,
+            rawIsEdited: sale.isEdited,
+            allSaleFields: Object.keys(sale)
           })
           return mappedSale
         })
@@ -379,8 +394,7 @@ export function SalesReport() {
   }
 
   const handleEditSale = (sale: SalesRecord) => {
-    setSelectedSale(sale)
-    setIsEditDialogOpen(true)
+    router.push(`/billing/${sale.billNo}?mode=edit`)
   }
 
   const handleDeleteSale = (sale: SalesRecord) => {
@@ -814,6 +828,7 @@ export function SalesReport() {
                           onClick={() => handleViewReceipt(sale)}
                         >
                           {sale.billNo}
+                          {(sale.isEdited === true || sale.editedAt) && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
                         </Button>
                       </TableCell>
                       <TableCell className="py-4 font-medium text-slate-800">{sale.customerName}</TableCell>
@@ -846,10 +861,16 @@ export function SalesReport() {
                               <Eye className="mr-2 h-4 w-4 text-blue-600" />
                               <span className="text-slate-700">View Bill Details</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleEditSale(sale)} className="hover:bg-amber-50">
-                              <Pencil className="mr-2 h-4 w-4 text-amber-600" />
-                              <span className="text-slate-700">Edit</span>
+                            <DropdownMenuItem onClick={() => handleEditBill(sale)} className="hover:bg-amber-50">
+                              <Edit className="mr-2 h-4 w-4 text-amber-600" />
+                              <span className="text-slate-700">Edit Bill</span>
                             </DropdownMenuItem>
+                            {sale.items && sale.items.some((item: any) => item.type === 'product') && (
+                              <DropdownMenuItem onClick={() => handleExchangeBill(sale)} className="hover:bg-blue-50">
+                                <RefreshCw className="mr-2 h-4 w-4 text-blue-600" />
+                                <span className="text-slate-700">Exchange Products</span>
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem 
                               onClick={() => handleDeleteSale(sale)}
                               className="text-red-600 hover:bg-red-50"
@@ -964,6 +985,7 @@ export function SalesReport() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
     </div>
   )
 }

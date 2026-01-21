@@ -18,7 +18,9 @@ import {
   Filter, 
   TrendingUp,
   Eye,
-  Receipt
+  Receipt,
+  Edit,
+  RefreshCw
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 
@@ -40,6 +42,7 @@ interface UnpaidBill {
     isOverdue: boolean
   }
   staffName: string
+  isEdited?: boolean // Track if bill has been edited
 }
 
 export default function UnpaidBillsPage() {
@@ -104,6 +107,20 @@ export default function UnpaidBillsPage() {
 
   const handleViewReceipt = (bill: UnpaidBill) => {
     router.push(`/receipt/${bill.billNo}`)
+  }
+
+  const handleEditBill = (bill: UnpaidBill) => {
+    router.push(`/billing/${bill.billNo}?mode=edit`)
+  }
+
+  const handleExchangeBill = (bill: UnpaidBill) => {
+    router.push(`/billing/${bill.billNo}?mode=exchange`)
+  }
+
+  const handleExchangeComplete = () => {
+    setIsExchangeDialogOpen(false)
+    setBillForExchange(null)
+    loadUnpaidBills() // Refresh the list
   }
 
   const getStatusBadge = (status: string, isOverdue: boolean) => {
@@ -279,6 +296,7 @@ export default function UnpaidBillsPage() {
                             onClick={() => handleViewReceipt(bill)}
                           >
                             {bill.billNo}
+                            {(bill.isEdited === true || bill.editedAt) && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
                           </Button>
                         </TableCell>
                         <TableCell className="py-4">
@@ -326,6 +344,25 @@ export default function UnpaidBillsPage() {
                             <Button
                               size="sm"
                               variant="outline"
+                              onClick={() => handleEditBill(bill)}
+                              title="Edit Bill"
+                            >
+                              <Edit className="h-4 w-4 mr-1" />
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleExchangeBill(bill)}
+                              title="Exchange Products"
+                              className="border-blue-200 text-blue-700 hover:bg-blue-50"
+                            >
+                              <RefreshCw className="h-4 w-4 mr-1" />
+                              Exchange
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
                               onClick={() => handleViewReceipt(bill)}
                             >
                               <Receipt className="h-4 w-4 mr-1" />
@@ -353,6 +390,7 @@ export default function UnpaidBillsPage() {
         sale={selectedBill}
         onPaymentCollected={handlePaymentCollected}
       />
+
     </div>
   )
 }

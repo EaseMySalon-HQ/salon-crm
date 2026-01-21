@@ -659,6 +659,22 @@ export class SalesAPI {
     return response.data
   }
 
+  // Exchange products within a sale (bill)
+  static async exchangeProducts(
+    saleId: string,
+    data: any
+  ): Promise<ApiResponse<any>> {
+    if (!saleId || saleId.trim() === '') {
+      return {
+        success: false,
+        error: 'Sale ID is required for product exchange'
+      }
+    }
+    console.log(`Calling POST /sales/${saleId}/exchange`)
+    const response = await apiClient.post(`/sales/${saleId}/exchange`, data)
+    return response.data
+  }
+
   // Add payment to a sale
   static async addPayment(saleId: string, paymentData: {
     amount: number

@@ -9,7 +9,7 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from "@tanstack/react-table"
-import { MoreHorizontal, Pencil, Trash2, User, Phone, Mail, Calendar, TrendingUp, Eye, Receipt, Upload } from "lucide-react"
+import { MoreHorizontal, Pencil, Trash2, User, Phone, Mail, Calendar, TrendingUp, Eye, Receipt, Upload, Edit, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -721,6 +721,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
                           <div>
                             <h4 className="font-semibold text-gray-900">
                               Bill #{bill.billNo || bill._id?.slice(-6) || 'N/A'}
+                              {(bill.isEdited === true || bill.editedAt) && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
                             </h4>
                             <p className="text-sm text-gray-600">
                               {bill.date ? new Date(bill.date).toLocaleDateString('en-US', {
@@ -785,6 +786,35 @@ export function ClientsTable({ clients }: ClientsTableProps) {
                         >
                           {bill.status || 'completed'}
                         </Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => router.push(`/billing/${bill.billNo || bill._id}?mode=edit`)}
+                          title="Edit Bill"
+                          className="h-8"
+                        >
+                          <Edit className="h-3 w-3" />
+                        </Button>
+                        {bill.items && bill.items.some((item: any) => item.type === 'product') && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => router.push(`/billing/${bill.billNo || bill._id}?mode=exchange`)}
+                            title="Exchange Products"
+                            className="h-8 border-blue-200 text-blue-700 hover:bg-blue-50"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => router.push(`/receipt/${bill.billNo || bill._id}`)}
+                          title="View Receipt"
+                          className="h-8"
+                        >
+                          <Eye className="h-3 w-3" />
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -826,6 +856,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
           window.dispatchEvent(new Event('client-added'))
         }}
       />
+
     </div>
   )
 }
