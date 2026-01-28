@@ -20,7 +20,7 @@ export function OrganizationSchema() {
     ],
     "contactPoint": {
       "@type": "ContactPoint",
-      "telephone": "+91-7091140602",
+      "telephone": "+91-6360019041",
       "contactType": "Customer Service",
       "areaServed": "IN",
       "availableLanguage": ["en", "hi"]
