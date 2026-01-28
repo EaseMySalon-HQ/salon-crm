@@ -8,8 +8,26 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
-  title: "About | Ease My Salon",
-  description: "Learn why we built Ease My Salon, our mission to digitize every Indian salon, and the team behind the platform.",
+  title: "About Us - Built for Indian Salons | Ease My Salon",
+  description: "Learn why we built Ease My Salon, our mission to digitize every Indian salon, and the team behind the platform. Built by industry leaders from Accenture and SaaS unicorns.",
+  keywords: [
+    "about salon software",
+    "salon management company",
+    "salon software team",
+    "salon software company India",
+    "about Ease My Salon",
+    "salon software founders",
+    "salon management platform team",
+    "salon software mission",
+    "salon software vision"
+  ],
+  openGraph: {
+    title: "About Ease My Salon - Our Mission & Team",
+    description: "Built by product leaders, designers & engineers obsessed with salons. Learn our mission to digitize every Indian salon.",
+  },
+  alternates: {
+    canonical: '/about',
+  },
 }
 
 const values = [

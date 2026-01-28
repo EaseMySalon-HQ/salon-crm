@@ -370,7 +370,7 @@ export default function PricingPage() {
                 asChild
                 className="bg-white text-[#25D366] hover:bg-emerald-50 px-8 py-6 h-auto text-lg font-semibold shadow-2xl"
               >
-                <a href="https://wa.me/917091140602" target="_blank" rel="noreferrer">
+                <a href="https://wa.me/916360019041" target="_blank" rel="noreferrer">
                   Chat on WhatsApp
                 </a>
               </Button>

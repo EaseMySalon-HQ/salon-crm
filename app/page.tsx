@@ -1,3 +1,4 @@
+import type { Metadata } from "next"
 import Link from "next/link"
 import Image from "next/image"
 import { ArrowRight, CheckCircle2, Shield, Sparkles, TrendingUp, Users, BarChart3, Calendar, Receipt, MessageCircle, Star, Zap, Award, Clock, DollarSign, Target, ChevronDown } from "lucide-react"
@@ -6,6 +7,31 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { PublicShell } from "@/components/layout/public-shell"
+
+export const metadata: Metadata = {
+  title: "India's #1 Salon Management Software | Reduce No-Shows by 40%",
+  description: "Stop losing money. Start growing your salon business. Ease My Salon reduces no-shows by 40%, cuts billing time by 70%, and increases revenue by 35%. Complete salon POS, CRM, appointments, inventory & analytics platform. 14-day free trial, no credit card required.",
+  keywords: [
+    "salon management software",
+    "salon POS system",
+    "salon CRM software",
+    "salon appointment booking",
+    "salon inventory management",
+    "best salon management software India",
+    "salon software free trial",
+    "reduce salon no-shows software",
+    "salon revenue management software",
+    "cloud-based salon management system"
+  ],
+  openGraph: {
+    title: "India's #1 Salon Management Software | Ease My Salon",
+    description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics platform.",
+    images: ['/images/dashboard.png'],
+  },
+  alternates: {
+    canonical: '/',
+  },
+}
 
 const coreFeatures = [
   { 
@@ -278,7 +304,7 @@ export default function MarketingHome() {
                 <CardContent>
                   <Button asChild variant="ghost" className="w-full justify-start text-[#7C3AED] hover:text-[#6D28D9]">
                     <Link href="/features">
-                      Learn more <ArrowRight className="ml-2 h-4 w-4" />
+                      Learn more about salon management features <ArrowRight className="ml-2 h-4 w-4" />
                     </Link>
                   </Button>
                 </CardContent>
@@ -289,8 +315,8 @@ export default function MarketingHome() {
           {/* CTA after features */}
           <div className="mt-12 text-center">
             <Button size="lg" asChild className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white px-8">
-              <Link href="/contact">
-                See All Features
+              <Link href="/features">
+                See All Salon Management Features
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
@@ -333,7 +359,7 @@ export default function MarketingHome() {
               <p className="text-sm font-semibold text-[#7C3AED] uppercase tracking-wide">Product preview</p>
               <h3 className="text-2xl font-semibold mt-2">Designed for the front desk, built for the CEO</h3>
             </div>
-            <Image src="/images/dashboard.png" alt="Ease My Salon dashboard preview" width={1200} height={675} className="rounded-2xl border border-slate-100" />
+            <Image src="/images/dashboard.png" alt="Ease My Salon salon management software dashboard showing POS, appointments, CRM, inventory and analytics features" width={1200} height={675} className="rounded-2xl border border-slate-100" />
             <p className="text-sm text-slate-500">Go from Excel chaos to live dashboards and smart workflows—without retraining your teams.</p>
           </div>
         </div>
