@@ -12,10 +12,28 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
+import { FAQSchema } from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
-  title: "FAQ | Ease My Salon",
-  description: "Answers to common questions about Ease My Salon’s platform, onboarding, pricing and support.",
+  title: "Salon Software FAQ | Common Questions Answered",
+  description: "Answers to common questions about Ease My Salon's salon management software platform, onboarding, pricing, features, and support. Get all your questions answered.",
+  keywords: [
+    "salon software FAQ",
+    "salon management questions",
+    "salon software help",
+    "salon POS FAQ",
+    "salon CRM questions",
+    "salon software support",
+    "salon management software FAQ",
+    "salon software answers"
+  ],
+  openGraph: {
+    title: "Salon Software FAQ | Ease My Salon",
+    description: "Get answers to common questions about salon management software, pricing, features, and support.",
+  },
+  alternates: {
+    canonical: '/faq',
+  },
 }
 
 const faqs = [
@@ -30,6 +48,7 @@ const faqs = [
 export default function FAQPage() {
   return (
     <PublicShell>
+      <FAQSchema faqs={faqs.map(({ q, a }) => ({ question: q, answer: a }))} />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
@@ -85,7 +104,7 @@ export default function FAQPage() {
                 </Link>
               </Button>
               <Button size="lg" asChild className="bg-white text-[#25D366] hover:bg-emerald-50 px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
-                <a href="https://wa.me/917091140602" target="_blank" rel="noreferrer">
+                <a href="https://wa.me/916360019041" target="_blank" rel="noreferrer">
                   Chat on WhatsApp
                 </a>
               </Button>

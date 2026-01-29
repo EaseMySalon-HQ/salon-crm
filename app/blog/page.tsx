@@ -6,8 +6,29 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
-  title: "Blog | Ease My Salon",
-  description: "Insights, playbooks and best practices for Indian salons, spas and grooming brands.",
+  title: "Salon Management Blog | Tips, Strategies & Best Practices",
+  description: "Insights, playbooks and best practices for Indian salons, spas and grooming brands. Learn how to grow your salon business, reduce no-shows, manage inventory, and increase revenue.",
+  keywords: [
+    "salon management tips",
+    "salon business blog",
+    "salon growth strategies",
+    "salon management best practices",
+    "salon business advice",
+    "salon marketing tips",
+    "salon operations guide",
+    "salon management insights",
+    "salon industry trends",
+    "salon business growth",
+    "salon management playbooks",
+    "salon success stories"
+  ],
+  openGraph: {
+    title: "Salon Management Blog | Ease My Salon",
+    description: "Insights, playbooks and best practices for Indian salons, spas and grooming brands.",
+  },
+  alternates: {
+    canonical: '/blog',
+  },
 }
 
 const articles = [

@@ -70,7 +70,7 @@ import { useRouter } from "next/navigation"
 //   {
 //     id: "1",
 //     name: "Shubham Anand",
-//     phone: "7091140602",
+//     phone: "6360019041",
 //     email: "shubham@example.com",
 //     status: "active",
 //     visits: 12,
@@ -3214,7 +3214,10 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                   placeholder="Search by name, phone (10 digits), or email"
                   value={customerSearch}
                   disabled={mode === "edit"}
-                  className={mode === "edit" ? "bg-gray-100 cursor-not-allowed" : ""}
+                  className={cn(
+                    "pl-10 h-12 border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20 transition-all duration-300",
+                    mode === "edit" ? "bg-gray-100 cursor-not-allowed" : ""
+                  )}
                   onChange={(e) => {
                     const value = e.target.value
                     // If it's all digits, restrict immediately to 10 digits
@@ -3245,7 +3248,6 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                     }
                   }}
                   onFocus={() => setShowCustomerDropdown(true)}
-                  className="pl-10 h-12 border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20 transition-all duration-300"
                 />
               </div>
 
