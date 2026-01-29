@@ -108,15 +108,15 @@ export function FloatingCTA() {
             </div>
             <div className="space-y-3 pt-2">
               <Button asChild className="w-full bg-[#25D366] hover:bg-[#20BA5A] text-white font-semibold shadow-lg">
-                <a href="https://wa.me/916360019041?text=Hi%20Ease%20My%20Salon!%20I%27d%20love%20to%20book%20a%20free%20demo." target="_blank" rel="noreferrer">
+                <a href="https://wa.me/917091140602?text=Hi%20Ease%20My%20Salon!%20I%27d%20love%20to%20book%20a%20free%20demo." target="_blank" rel="noreferrer">
                   <MessageCircle className="mr-2 h-4 w-4" />
                   Chat on WhatsApp Now
                 </a>
               </Button>
               <Button asChild variant="outline" className="w-full border-2">
-                <a href="tel:+916360019041">
+                <a href="tel:+917091140602">
                   <PhoneCall className="mr-2 h-4 w-4" />
-                  Call: +91 63600 19041
+                  Call: +91 70911 40602
                 </a>
               </Button>
             </div>

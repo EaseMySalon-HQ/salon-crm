@@ -8,34 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
-  title: "Salon Software Solutions | Boutiques, Spas, Barbershops & Multi-Location Chains",
-  description: "Complete salon management software solutions for boutique salons, premium spas, barbershops, and multi-location chains. Custom workflows and proven playbooks for every salon type.",
-  keywords: [
-    "salon software for boutiques",
-    "spa management software",
-    "barbershop software",
-    "multi-location salon software",
-    "salon chain management",
-    "franchise salon software",
-    "boutique salon software",
-    "premium spa software",
-    "barbershop management system",
-    "salon franchise management",
-    "multi-branch salon software",
-    "salon chain software",
-    "salon network management",
-    "salon group software",
-    "enterprise salon software",
-    "salon software for chains",
-    "salon management for franchises"
-  ],
-  openGraph: {
-    title: "Salon Software Solutions for Every Business Type | Ease My Salon",
-    description: "Custom solutions for boutiques, spas, barbershops, and multi-location chains. Built for every salon type.",
-  },
-  alternates: {
-    canonical: '/solutions',
-  },
+  title: "Solutions | Ease My Salon",
+  description: "Playbooks for boutique salons, premium spas, barbershops and multi-location chains.",
 }
 
 const solutions = [

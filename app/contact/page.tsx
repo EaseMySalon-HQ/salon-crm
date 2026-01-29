@@ -9,27 +9,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
-  title: "Contact & Book Demo | Salon Software Consultation",
-  description: "Book a free personalized demo of Ease My Salon. Talk to our team, schedule a consultation, or chat on WhatsApp. Get started with India's #1 salon management software.",
-  keywords: [
-    "salon software demo",
-    "contact salon software",
-    "book salon software demo",
-    "salon software consultation",
-    "salon software support",
-    "salon software contact",
-    "salon management demo",
-    "salon POS demo",
-    "salon CRM demo",
-    "salon software trial"
-  ],
-  openGraph: {
-    title: "Contact Ease My Salon | Book a Free Demo",
-    description: "Schedule a personalized demo and see how Ease My Salon can transform your salon operations. Free consultation available.",
-  },
-  alternates: {
-    canonical: '/contact',
-  },
+  title: "Contact & Demo | Ease My Salon",
+  description: "Talk to our team, schedule a personalised demo or download the Ease My Salon brochure.",
 }
 
 const contactHighlights = [
@@ -121,7 +102,7 @@ export default function ContactPage() {
                 </CardHeader>
                 <CardContent>
                   <Button asChild className="w-full bg-[#25D366] hover:bg-[#1FB55B] text-white">
-                    <a href="https://wa.me/916360019041?text=Hi%20Ease%20My%20Salon!%20We%20would%20like%20a%20demo." target="_blank" rel="noreferrer">
+                    <a href="https://wa.me/917091140602?text=Hi%20Ease%20My%20Salon!%20We%20would%20like%20a%20demo." target="_blank" rel="noreferrer">
                       Start WhatsApp chat
                     </a>
                   </Button>
@@ -137,7 +118,7 @@ export default function ContactPage() {
                     <Phone className="h-5 w-5 text-[#7C3AED] mt-0.5" />
                     <div>
                       <p className="text-sm font-semibold text-slate-900">Phone</p>
-                      <a href="tel:+916360019041" className="text-sm text-slate-600 hover:text-[#7C3AED]">+91 63600 19041</a>
+                      <a href="tel:+917091140602" className="text-sm text-slate-600 hover:text-[#7C3AED]">+91 70911 40602</a>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">

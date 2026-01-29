@@ -8,37 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
-  title: "Salon Management Software Features | POS, CRM, Appointments & Analytics",
-  description: "Complete salon management software features: POS system with GST, appointment booking, CRM & client management, inventory tracking, staff management, commission tracking, salon analytics, and multi-location support. Built for Indian salons.",
-  keywords: [
-    "salon POS features",
-    "salon CRM features",
-    "salon appointment features",
-    "salon inventory features",
-    "salon staff management features",
-    "salon analytics features",
-    "salon billing software features",
-    "salon management system features",
-    "salon software capabilities",
-    "salon POS with GST",
-    "WhatsApp salon booking",
-    "salon commission tracking",
-    "salon inventory management",
-    "salon client management",
-    "salon reports and analytics",
-    "multi-location salon software",
-    "salon cash registry",
-    "salon receipt software",
-    "salon membership management",
-    "salon package management"
-  ],
-  openGraph: {
-    title: "Complete Salon Management Software Features | Ease My Salon",
-    description: "Explore all features: POS with GST, appointment booking, CRM, inventory, staff management, analytics, and more. Built for Indian salons.",
-  },
-  alternates: {
-    canonical: '/features',
-  },
+  title: "Features | Ease My Salon",
+  description: "Deep dive into POS, appointments, CRM, inventory, staff, reports, receipts, cash registry, admin & security modules.",
 }
 
 const featureSections = [
@@ -107,7 +78,7 @@ export default function FeaturesPage() {
               </Link>
             </Button>
             <Button size="lg" variant="outline" asChild className="border-2 border-white/60 bg-white/10 text-white hover:bg-white/20 backdrop-blur-sm px-8 py-6 h-auto text-lg font-semibold">
-              <Link href="/pricing">View Salon Software Pricing Plans</Link>
+              <Link href="/pricing">View Pricing</Link>
             </Button>
           </div>
         </div>
@@ -158,13 +129,13 @@ export default function FeaturesPage() {
               Book a personalized demo and see exactly how Ease My Salon can transform your salon operations.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Button
-                  size="lg"
-                  asChild
-                  className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl"
-                >
-                  <Link href="/pricing">View Salon Management Software Pricing</Link>
-                </Button>
+              <Button
+                size="lg"
+                asChild
+                className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl"
+              >
+                <Link href="/pricing">View Pricing Plans</Link>
+              </Button>
             </div>
           </div>
         </div>
