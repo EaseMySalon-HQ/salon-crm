@@ -35,6 +35,7 @@ const planCards = [
       "Cash Register Management",
       "Email and Phone Support",
     ],
+    popular: false,
   },
   {
     title: "Professional",
@@ -54,6 +55,7 @@ const planCards = [
       "More features On the way",
     ],
     comingSoon: true,
+    popular: true,
   },
   {
     title: "Enterprise",
@@ -71,6 +73,7 @@ const planCards = [
       "24/7 Priority Phone Support",
       "Custom Feature Development",
     ],
+    popular: false,
   },
 ]
 
