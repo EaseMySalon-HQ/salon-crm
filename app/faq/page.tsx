@@ -48,7 +48,7 @@ const faqs = [
 export default function FAQPage() {
   return (
     <PublicShell>
-      <FAQSchema faqs={faqs} />
+      <FAQSchema faqs={faqs.map(({ q, a }) => ({ question: q, answer: a }))} />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
