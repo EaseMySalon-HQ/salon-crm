@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -32,26 +32,17 @@ import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
 import { ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI } from "@/lib/api"
 
-// Time slots for appointments
+// Time slots for appointments (15-min intervals to match calendar grid)
 const timeSlots = [
-  "9:00 AM",
-  "9:30 AM",
-  "10:00 AM",
-  "10:30 AM",
-  "11:00 AM",
-  "11:30 AM",
-  "12:00 PM",
-  "12:30 PM",
-  "1:00 PM",
-  "1:30 PM",
-  "2:00 PM",
-  "2:30 PM",
-  "3:00 PM",
-  "3:30 PM",
-  "4:00 PM",
-  "4:30 PM",
-  "5:00 PM",
-  "5:30 PM",
+  "9:00 AM", "9:15 AM", "9:30 AM", "9:45 AM",
+  "10:00 AM", "10:15 AM", "10:30 AM", "10:45 AM",
+  "11:00 AM", "11:15 AM", "11:30 AM", "11:45 AM",
+  "12:00 PM", "12:15 PM", "12:30 PM", "12:45 PM",
+  "1:00 PM", "1:15 PM", "1:30 PM", "1:45 PM",
+  "2:00 PM", "2:15 PM", "2:30 PM", "2:45 PM",
+  "3:00 PM", "3:15 PM", "3:30 PM", "3:45 PM",
+  "4:00 PM", "4:15 PM", "4:30 PM", "4:45 PM",
+  "5:00 PM", "5:15 PM", "5:30 PM", "5:45 PM",
 ]
 
 const formSchema = z.object({
@@ -80,27 +71,55 @@ interface ServiceDropdownState {
   }
 }
 
-export function AppointmentForm() {
+export interface AppointmentFormProps {
+  /** Pre-fill date (YYYY-MM-DD), e.g. from calendar slot click */
+  initialDate?: string
+  /** Pre-fill time (e.g. "9:00 AM", "9:15 AM") */
+  initialTime?: string
+  /** Pre-fill staff for first service when added (staff id) */
+  initialStaffId?: string
+}
+
+export function AppointmentForm({ initialDate, initialTime, initialStaffId }: AppointmentFormProps = {}) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
-  
+
+  // Prefer URL params (from calendar slot) over props so time is correct on first paint
+  const urlDate = searchParams?.get("date") ?? initialDate
+  const urlTime = searchParams?.get("time") ?? initialTime
+  const urlStaffId = searchParams?.get("staffId") ?? initialStaffId
+
+  // Normalize time to match a form timeSlot exactly so the Select displays it
+  const defaultTime = useMemo(() => {
+    if (!urlTime) return ""
+    return timeSlots.find((t) => t.toLowerCase() === urlTime.toLowerCase()) ?? urlTime
+  }, [urlTime])
+
+  const defaultDate = useMemo(() => {
+    if (!urlDate) return undefined
+    const parts = urlDate.split("-").map(Number)
+    if (parts.length < 3) return undefined
+    return new Date(parts[0], parts[1] - 1, parts[2])
+  }, [urlDate])
+
   // Client search state
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [clients, setClients] = useState<Client[]>([])
-  
+
   // Services and staff state
   const [services, setServices] = useState<any[]>([])
   const [staff, setStaff] = useState<any[]>([])
   const [loadingServices, setLoadingServices] = useState(true)
   const [loadingStaff, setLoadingStaff] = useState(true)
-  
+
   // Service dropdown search state
   const [serviceDropdowns, setServiceDropdowns] = useState<ServiceDropdownState>({})
-  
+
   // New client dialog
   const [showNewClientDialog, setShowNewClientDialog] = useState(false)
   const [newClient, setNewClient] = useState({
@@ -112,18 +131,35 @@ export function AppointmentForm() {
 
   // Date picker popover state
   const [datePickerOpen, setDatePickerOpen] = useState(false)
-  
+
   // Today's date for date picker (calculated once)
   const today = useMemo(() => startOfDay(new Date()), [])
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      date: undefined,
-      time: "",
+      date: defaultDate,
+      time: defaultTime,
       notes: "",
     },
   })
+
+  // Sync URL params into form when they appear (e.g. client nav from calendar)
+  useEffect(() => {
+    if (urlDate || urlTime) {
+      const date = urlDate
+        ? (() => {
+            const parts = urlDate.split("-").map(Number)
+            return new Date(parts[0], parts[1] - 1, parts[2])
+          })()
+        : form.getValues("date")
+      form.reset({
+        ...form.getValues(),
+        ...(date && { date }),
+        ...(defaultTime && { time: defaultTime }),
+      })
+    }
+  }, [urlDate, urlTime, defaultTime])
 
   // Load services and staff on component mount
   useEffect(() => {
@@ -339,12 +375,13 @@ export function AppointmentForm() {
     }
   }
 
-  // Add a service to the appointment
+  // Add a service to the appointment (pre-fill staff when coming from calendar slot)
   const addService = () => {
+    const isFirstService = selectedServices.length === 0
     const newService: SelectedService = {
       id: Date.now().toString(),
       serviceId: "",
-      staffId: "",
+      staffId: isFirstService && urlStaffId ? urlStaffId : "",
       name: "",
       duration: 0,
       price: 0,
@@ -728,7 +765,7 @@ export function AppointmentForm() {
                 render={({ field }) => (
                   <FormItem className="flex flex-col space-y-2">
                     <FormLabel className="text-sm font-semibold text-slate-700">Time *</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value || undefined}>
                       <FormControl>
                         <SelectTrigger className="h-12 px-4 border-slate-200 hover:border-slate-400 focus:border-slate-500 focus:ring-slate-500 rounded-xl font-medium text-slate-700 bg-white shadow-sm transition-all duration-200">
                           <SelectValue placeholder="Select a time" />
