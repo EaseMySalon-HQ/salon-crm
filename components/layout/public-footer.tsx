@@ -93,10 +93,22 @@ export function PublicFooter() {
               </li>
             </ul>
             <div className="flex gap-3 text-slate-400 pt-4">
-              {[Linkedin, Instagram, Facebook, MessageCircle].map((Icon, idx) => (
-                <button key={idx} className="h-10 w-10 rounded-full border border-white/10 flex items-center justify-center hover:bg-white/10 hover:border-white/20 transition-all transform hover:scale-110">
+              {[
+                { Icon: Linkedin, href: "https://www.linkedin.com/company/easemysalon/", label: "LinkedIn" },
+                { Icon: Instagram, href: "https://www.instagram.com/easemysalon_official/", label: "Instagram" },
+                { Icon: Facebook, href: "#", label: "Facebook" },
+                { Icon: MessageCircle, href: "https://wa.me/916360019041?text=Hi%20Ease%20My%20Salon!%20We%20would%20like%20a%20demo.", label: "WhatsApp" },
+              ].map(({ Icon, href, label }) => (
+                <a
+                  key={label}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={label}
+                  className="h-10 w-10 rounded-full border border-white/10 flex items-center justify-center hover:bg-white/10 hover:border-white/20 transition-all transform hover:scale-110"
+                >
                   <Icon className="h-4 w-4" />
-                </button>
+                </a>
               ))}
             </div>
           </div>

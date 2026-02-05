@@ -86,7 +86,10 @@ class ModelFactory {
       Lead: this.getModel('Lead', require('./Lead').schema, connection),
       
       // LeadActivity model
-      LeadActivity: this.getModel('LeadActivity', require('./LeadActivity').schema, connection)
+      LeadActivity: this.getModel('LeadActivity', require('./LeadActivity').schema, connection),
+
+      // BlockTime model
+      BlockTime: this.getModel('BlockTime', require('./BlockTime').schema, connection)
     };
   }
 

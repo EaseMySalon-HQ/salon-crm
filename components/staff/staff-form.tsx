@@ -13,14 +13,22 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command"
-import { Check, ChevronsUpDown } from "lucide-react"
+import { Check, ChevronsUpDown, ChevronDown, ChevronUp } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { useToast } from "@/hooks/use-toast"
 import { StaffAPI, CommissionProfileAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
+
+const workScheduleDaySchema = z.object({
+  day: z.number().min(0).max(6),
+  enabled: z.boolean(),
+  startTime: z.string(),
+  endTime: z.string(),
+})
 
 const staffSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
@@ -36,15 +44,7 @@ const staffSchema = z.object({
   allowAppointmentScheduling: z.boolean().optional(),
   password: z.string().optional(),
   notes: z.string().optional(),
-}).refine((data) => {
-  // If login access is enabled, password is required
-  if (data.hasLoginAccess && (!data.password || data.password.trim() === '')) {
-    return false;
-  }
-  return true;
-}, {
-  message: "Password is required when login access is enabled",
-  path: ["password"],
+  workSchedule: z.array(workScheduleDaySchema).optional(),
 }).refine((data) => {
   // If appointment scheduling is enabled, specialties are required
   if (data.allowAppointmentScheduling && (!data.specialties || data.specialties.length === 0)) {
@@ -55,6 +55,33 @@ const staffSchema = z.object({
   message: "Please select at least one specialty when appointment scheduling is enabled",
   path: ["specialties"],
 })
+
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+function getDefaultWorkSchedule(existing?: Array<{ day: number; enabled?: boolean; startTime?: string; endTime?: string }>) {
+  const defaultRow = (day: number) => ({
+    day,
+    enabled: true,
+    startTime: "09:00",
+    endTime: "21:00",
+  })
+  if (!existing || !Array.isArray(existing) || existing.length === 0) {
+    return DAY_NAMES.map((_, day) => defaultRow(day))
+  }
+  const byDay = new Map<number, { day: number; enabled: boolean; startTime: string; endTime: string }>()
+  for (const r of existing) {
+    const d = typeof r.day === "number" ? r.day : parseInt(String(r.day), 10)
+    if (d >= 0 && d <= 6) {
+      byDay.set(d, {
+        day: d,
+        enabled: r.enabled !== false,
+        startTime: typeof r.startTime === "string" ? r.startTime : "09:00",
+        endTime: typeof r.endTime === "string" ? r.endTime : "21:00",
+      })
+    }
+  }
+  return DAY_NAMES.map((_, day) => byDay.get(day) ?? defaultRow(day))
+}
 
 const specialtyOptions = [
   "Haircut",
@@ -72,9 +99,11 @@ const specialtyOptions = [
 interface StaffFormProps {
   staff?: any
   onSuccess?: () => void
+  /** When editing a staff who already has login access, call this to open the reset-password flow (e.g. from staff directory dialog) */
+  onResetPassword?: () => void
 }
 
-export function StaffForm({ staff, onSuccess }: StaffFormProps) {
+export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps) {
   const { getSymbol } = useCurrency()
   const router = useRouter()
   const { toast } = useToast()
@@ -82,6 +111,7 @@ export function StaffForm({ staff, onSuccess }: StaffFormProps) {
   const [commissionProfiles, setCommissionProfiles] = useState<any[]>([])
   const [loadingProfiles, setLoadingProfiles] = useState(true)
   const [commissionDropdownOpen, setCommissionDropdownOpen] = useState(false)
+  const [workScheduleOpen, setWorkScheduleOpen] = useState(false)
 
   const form = useForm<z.infer<typeof staffSchema>>({
     resolver: zodResolver(staffSchema),
@@ -97,6 +127,7 @@ export function StaffForm({ staff, onSuccess }: StaffFormProps) {
       allowAppointmentScheduling: staff?.allowAppointmentScheduling || false,
       password: "",
       notes: staff?.notes || "",
+      workSchedule: getDefaultWorkSchedule(staff?.workSchedule),
     },
   })
 
@@ -125,6 +156,11 @@ export function StaffForm({ staff, onSuccess }: StaffFormProps) {
   }, [toast])
 
   async function onSubmit(values: z.infer<typeof staffSchema>) {
+    // Require password only when enabling login for the first time (new staff or staff who didn't have login)
+    if (values.hasLoginAccess && (!staff || !staff.hasLoginAccess) && (!values.password || values.password.trim() === "")) {
+      form.setError("password", { type: "manual", message: "Enter a new password when enabling login access for the first time." })
+      return
+    }
     setIsSubmitting(true)
 
     try {
@@ -140,7 +176,15 @@ export function StaffForm({ staff, onSuccess }: StaffFormProps) {
         allowAppointmentScheduling: values.allowAppointmentScheduling || false,
         password: values.password || undefined,
         notes: values.notes,
-        isActive: staff?.isActive ?? true
+        isActive: staff?.isActive ?? true,
+        workSchedule: values.workSchedule && values.workSchedule.length === 7
+          ? values.workSchedule.map((ws) => ({
+              day: ws.day,
+              enabled: ws.enabled,
+              startTime: ws.startTime,
+              endTime: ws.endTime,
+            }))
+          : undefined,
       }
 
       console.log("Submitting staff data:", staffData)
@@ -372,26 +416,48 @@ export function StaffForm({ staff, onSuccess }: StaffFormProps) {
             )}
           />
 
-          {/* Password field - only show when login access is enabled */}
+          {/* Password: show "Enter new password" only when enabling login for the first time; otherwise show "Reset password" option */}
           {form.watch("hasLoginAccess") && (
-            <FormField
-              control={form.control}
-              name="password"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Password *</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="password"
-                      placeholder="Enter password for login access"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          )}
+            (staff?.hasLoginAccess ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+                <p className="text-sm text-slate-700">
+                  Password is already set for this staff member.
+                </p>
+                <p className="text-sm text-slate-600 mt-1">
+                  Use <strong>Reset password</strong> from the staff directory menu to change it.
+                </p>
+                {onResetPassword && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={onResetPassword}
+                  >
+                    Reset password
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Enter new password *</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="password"
+                        placeholder="Enter new password for login access (min. 6 characters)"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )
+          ))}
 
           <FormField
             control={form.control}
@@ -417,6 +483,102 @@ export function StaffForm({ staff, onSuccess }: StaffFormProps) {
             )}
           />
         </div>
+
+        {/* Work Schedule - Collapsible */}
+        <Collapsible open={workScheduleOpen} onOpenChange={setWorkScheduleOpen}>
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between py-3 px-4 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
+              >
+                <div>
+                  <h3 className="text-lg font-medium text-slate-800">Work Schedule</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Set working days and hours for this staff member
+                  </p>
+                </div>
+                {workScheduleOpen ? (
+                  <ChevronUp className="h-5 w-5 text-slate-500 shrink-0 ml-2" />
+                ) : (
+                  <ChevronDown className="h-5 w-5 text-slate-500 shrink-0 ml-2" />
+                )}
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="p-4 pt-0">
+                <FormField
+                  control={form.control}
+                  name="workSchedule"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="rounded-lg border border-slate-200 overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                              <th className="text-left font-semibold text-slate-700 py-3 px-4 w-[140px]">Day</th>
+                              <th className="text-left font-semibold text-slate-700 py-3 px-4">Start Time</th>
+                              <th className="text-left font-semibold text-slate-700 py-3 px-4">End Time</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(field.value || []).map((row) => (
+                              <tr key={row.day} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50">
+                                <td className="py-2.5 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <Checkbox
+                                      checked={row.enabled}
+                                      onCheckedChange={(checked) => {
+                                        const next = (field.value || []).map((r) =>
+                                          r.day === row.day ? { ...r, enabled: !!checked } : r
+                                        )
+                                        field.onChange(next)
+                                      }}
+                                    />
+                                    <span className={row.enabled ? "text-slate-800" : "text-slate-400"}>{DAY_NAMES[row.day]}</span>
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-4">
+                                  <Input
+                                    type="time"
+                                    value={row.startTime}
+                                    disabled={!row.enabled}
+                                    className="w-full max-w-[140px] bg-white"
+                                    onChange={(e) => {
+                                      const next = (field.value || []).map((r) =>
+                                        r.day === row.day ? { ...r, startTime: e.target.value } : r
+                                      )
+                                      field.onChange(next)
+                                    }}
+                                  />
+                                </td>
+                                <td className="py-2.5 px-4">
+                                  <Input
+                                    type="time"
+                                    value={row.endTime}
+                                    disabled={!row.enabled}
+                                    className="w-full max-w-[140px] bg-white"
+                                    onChange={(e) => {
+                                      const next = (field.value || []).map((r) =>
+                                        r.day === row.day ? { ...r, endTime: e.target.value } : r
+                                      )
+                                      field.onChange(next)
+                                    }}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+            </CollapsibleContent>
+          </div>
+        </Collapsible>
 
         {/* Specialties - only show when appointment scheduling is enabled */}
         {form.watch("allowAppointmentScheduling") && (

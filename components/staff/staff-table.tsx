@@ -211,14 +211,38 @@ export function StaffTable() {
       return
     }
 
-    // Allow admins to manage their own appointment scheduling
-    // Only protect owner accounts (if owner is not an admin)
-    if (staff.isOwner && staff.role !== 'admin') {
-      toast({
-        title: "Cannot Modify",
-        description: "Business owner permissions cannot be modified",
-        variant: "destructive",
-      })
+    // Business owner lives in main User DB; update via UsersAPI with required user fields.
+    if (staff.isOwner) {
+      try {
+        const nameParts = (staff.name || "").trim().split(/\s+/)
+        const firstName = nameParts[0] || staff.name || ""
+        const lastName = nameParts.slice(1).join(" ") || ""
+        const response = await UsersAPI.update(staff._id, {
+          firstName,
+          lastName,
+          email: staff.email || "",
+          mobile: staff.phone || (staff as any).mobile || "",
+          hasLoginAccess: staff.hasLoginAccess !== false,
+          allowAppointmentScheduling: enabled,
+        })
+        if (response.success) {
+          toast({
+            title: "Success",
+            description: `Appointment scheduling ${enabled ? "enabled" : "disabled"} for ${staff.name}`,
+          })
+          fetchStaff()
+        } else {
+          throw new Error(response.error || "Failed to update")
+        }
+      } catch (error: any) {
+        console.error("Error toggling owner appointment scheduling:", error)
+        toast({
+          title: "Error",
+          description: error.response?.data?.error || error.message || "Failed to update appointment scheduling",
+          variant: "destructive",
+        })
+        fetchStaff()
+      }
       return
     }
 
@@ -263,6 +287,16 @@ export function StaffTable() {
       toast({
         title: "Unauthorized",
         description: "Only admin/manager can manage login access",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Business owner is in main User DB; StaffAPI.update only works for business Staff collection.
+    if (staff.isOwner) {
+      toast({
+        title: "Cannot Modify",
+        description: "Business owner settings are managed in profile or account settings.",
         variant: "destructive",
       })
       return
@@ -454,10 +488,20 @@ export function StaffTable() {
           <h3 className="text-lg font-semibold text-slate-800">Staff Members</h3>
           <p className="text-sm text-slate-600">Manage your team members and their roles</p>
         </div>
-        <Button onClick={handleAddStaff} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Staff
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            className="border-slate-300 text-slate-700"
+            onClick={() => router.push("/staff/working-hours")}
+          >
+            Working Hours
+          </Button>
+          <Button onClick={handleAddStaff} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Staff
+          </Button>
+        </div>
       </div>
 
       {/* Search */}
@@ -655,7 +699,7 @@ export function StaffTable() {
                             className="flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50 cursor-pointer"
                           >
                             <Lock className="h-4 w-4 text-slate-600" />
-                            <span className="font-medium">Change Password</span>
+                            <span className="font-medium">Reset password</span>
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuItem
@@ -720,8 +764,8 @@ export function StaffTable() {
         setIsEditDialogOpen(open)
         if (!open) setSelectedStaff(null)
       }}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle>
               {selectedStaff ? 'Edit Staff Member' : 'Add New Staff Member'}
             </DialogTitle>
@@ -729,6 +773,7 @@ export function StaffTable() {
               {selectedStaff ? 'Update staff member information' : 'Add a new staff member to your team'}
             </DialogDescription>
           </DialogHeader>
+          <div className="overflow-y-auto min-h-0 flex-1 pr-2 -mr-2">
           <StaffForm 
             staff={selectedStaff}
             onSuccess={() => {
@@ -737,7 +782,13 @@ export function StaffTable() {
               setIsEditDialogOpen(false)
               setSelectedStaff(null)
             }}
+            onResetPassword={selectedStaff?.hasLoginAccess ? () => {
+              setIsAddDialogOpen(false)
+              setIsEditDialogOpen(false)
+              setIsPasswordDialogOpen(true)
+            } : undefined}
           />
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -905,9 +956,9 @@ export function StaffTable() {
       <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Change Password</DialogTitle>
+            <DialogTitle>Reset password</DialogTitle>
             <DialogDescription>
-              Change password for {selectedStaff?.name}
+              Set a new password for {selectedStaff?.name}
             </DialogDescription>
           </DialogHeader>
           <PasswordChangeForm 

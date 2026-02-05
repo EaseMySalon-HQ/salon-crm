@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { PlusCircle, CalendarDays, List, Calendar } from "lucide-react"
+import { PlusCircle, List, Calendar } from "lucide-react"
 import { useRef, Suspense, useState, useEffect } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 
@@ -66,14 +66,6 @@ function AppointmentsContent() {
     }
   }
 
-  const showCancelled = () => {
-    if (view === "list") {
-      calendarRef.current?.showCancelledModal()
-    } else {
-      gridRef.current?.showCancelledModal()
-    }
-  }
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 px-12 py-8">
       <div className="max-w-8xl mx-auto">
@@ -114,13 +106,6 @@ function AppointmentsContent() {
                   Calendar
                 </Button>
               </div>
-              <Button
-                className="bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 text-white rounded-xl px-6 py-3 font-semibold shadow-lg"
-                onClick={showCancelled}
-              >
-                <CalendarDays className="mr-2 h-5 w-5" />
-                View Cancelled
-              </Button>
               <Button asChild className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl px-6 py-3 font-semibold shadow-lg">
                 <Link href="/appointments/new">
                   <PlusCircle className="mr-2 h-5 w-5" />

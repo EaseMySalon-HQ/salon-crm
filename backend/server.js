@@ -4650,7 +4650,7 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
           notes: businessOwner.notes || 'Business Owner',
           isActive: businessOwner.isActive,
           hasLoginAccess: businessOwner.hasLoginAccess || true, // Business owner always has login access
-          allowAppointmentScheduling: businessOwner.allowAppointmentScheduling || true, // Business owner always has appointment access
+          allowAppointmentScheduling: businessOwner.allowAppointmentScheduling !== false, // Respect owner's choice; default true for legacy
           permissions: businessOwner.permissions || [],
           createdAt: businessOwner.createdAt,
           updatedAt: businessOwner.updatedAt,
@@ -4692,7 +4692,7 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
 app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
   try {
     const { Staff } = req.businessModels;
-    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive } = req.body;
+    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, workSchedule } = req.body;
 
     if (!name || !email || !phone || !role) {
       return res.status(400).json({
@@ -4731,6 +4731,14 @@ app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, a
       isActive: isActive !== undefined ? isActive : true,
       branchId: req.user.branchId
     };
+    if (Array.isArray(workSchedule) && workSchedule.length > 0) {
+      staffData.workSchedule = workSchedule.map(ws => ({
+        day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
+        enabled: ws.enabled !== false,
+        startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
+        endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
+      }));
+    }
 
     // Add password if provided
     if (password && password.trim() !== '') {
@@ -4777,6 +4785,25 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
         success: false,
         error: 'Unauthorized: You can only update your own profile'
       });
+    }
+
+    // Admin work-schedule-only update (e.g. from Working Hours page)
+    if (isAdmin && Array.isArray(req.body.workSchedule) && req.body.workSchedule.length > 0 && req.body.name === undefined) {
+      const workSchedule = req.body.workSchedule.map(ws => ({
+        day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
+        enabled: ws.enabled !== false,
+        startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
+        endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
+      }));
+      const updatedStaff = await Staff.findByIdAndUpdate(
+        req.params.id,
+        { workSchedule },
+        { new: true }
+      );
+      if (!updatedStaff) {
+        return res.status(404).json({ success: false, error: 'Staff member not found' });
+      }
+      return res.json({ success: true, data: updatedStaff });
     }
 
     // For self-updates, only allow updating name, email, phone (not role, salary, etc.)
@@ -4850,6 +4877,15 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       allowAppointmentScheduling: allowAppointmentScheduling !== undefined ? allowAppointmentScheduling : false,
       isActive: isActive !== undefined ? isActive : true,
     };
+    const { workSchedule } = req.body;
+    if (Array.isArray(workSchedule)) {
+      updateData.workSchedule = workSchedule.map(ws => ({
+        day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
+        enabled: ws.enabled !== false,
+        startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
+        endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
+      }));
+    }
 
     // Add password if provided
     if (password && password.trim() !== '') {
@@ -4908,6 +4944,120 @@ app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAd
   }
 });
 
+// Block Time (staff unavailability / blocked slots)
+app.get('/api/block-time', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { BlockTime } = req.businessModels;
+    const { staffId, startDate, endDate } = req.query;
+    const query = { branchId: req.user.branchId };
+    if (staffId) query.staffId = staffId;
+    if (startDate && endDate) {
+      query.$or = [
+        { recurringFrequency: 'none', startDate: { $gte: startDate, $lte: endDate } },
+        {
+          recurringFrequency: { $in: ['daily', 'weekly', 'monthly'] },
+          startDate: { $lte: endDate },
+          endDate: { $gte: startDate, $ne: null }
+        }
+      ];
+    } else if (startDate) {
+      query.$or = [
+        { recurringFrequency: 'none', startDate: { $gte: startDate } },
+        { recurringFrequency: { $in: ['daily', 'weekly', 'monthly'] }, endDate: { $gte: startDate, $ne: null } }
+      ];
+    } else if (endDate) {
+      query.$or = [
+        { recurringFrequency: 'none', startDate: { $lte: endDate } },
+        { recurringFrequency: { $in: ['daily', 'weekly', 'monthly'] }, startDate: { $lte: endDate } }
+      ];
+    }
+    const blocks = await BlockTime.find(query).sort({ startDate: 1, startTime: 1 }).lean();
+    const populated = await Promise.all(blocks.map(async (b) => {
+      const staff = await req.businessModels.Staff.findById(b.staffId).select('name').lean();
+      return { ...b, staffId: { _id: b.staffId, name: staff?.name || 'Staff' } };
+    }));
+    res.json({ success: true, data: populated });
+  } catch (error) {
+    console.error('Error fetching block time:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { BlockTime } = req.businessModels;
+    const { staffId, title, startDate, startTime, endTime, recurringFrequency, endDate, description } = req.body;
+    if (!staffId || !title || !startDate || !startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        error: 'Staff, title, start date, start time, and end time are required'
+      });
+    }
+    const doc = {
+      staffId,
+      title: String(title).trim(),
+      startDate: String(startDate),
+      startTime: String(startTime),
+      endTime: String(endTime),
+      recurringFrequency: ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none',
+      endDate: endDate && ['daily', 'weekly', 'monthly'].includes(recurringFrequency) ? String(endDate) : null,
+      description: description ? String(description).slice(0, 200) : '',
+      branchId: req.user.branchId
+    };
+    const created = await BlockTime.create(doc);
+    const populated = await BlockTime.findById(created._id).lean();
+    const staff = await req.businessModels.Staff.findById(created.staffId).select('name').lean();
+    const data = { ...populated, staffId: { _id: created.staffId, name: staff?.name || 'Staff' } };
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    console.error('Error creating block time:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { BlockTime } = req.businessModels;
+    const existing = await BlockTime.findOne({ _id: req.params.id, branchId: req.user.branchId });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Block time not found' });
+    }
+    const { title, startDate, startTime, endTime, recurringFrequency, endDate, description } = req.body;
+    const updateData = {};
+    if (title !== undefined) updateData.title = String(title).trim();
+    if (startDate !== undefined) updateData.startDate = String(startDate);
+    if (startTime !== undefined) updateData.startTime = String(startTime);
+    if (endTime !== undefined) updateData.endTime = String(endTime);
+    if (recurringFrequency !== undefined) updateData.recurringFrequency = ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none';
+    if (endDate !== undefined) {
+      const rec = updateData.recurringFrequency !== undefined ? updateData.recurringFrequency : existing.recurringFrequency;
+      updateData.endDate = (rec === 'daily' || rec === 'weekly' || rec === 'monthly') ? String(endDate) : null;
+    }
+    if (description !== undefined) updateData.description = String(description).slice(0, 200) || '';
+    const updated = await BlockTime.findByIdAndUpdate(req.params.id, { $set: updateData }, { new: true }).lean();
+    const staff = await req.businessModels.Staff.findById(updated.staffId).select('name').lean();
+    const data = { ...updated, staffId: { _id: updated.staffId, name: staff?.name || 'Staff' } };
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error updating block time:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { BlockTime } = req.businessModels;
+    const deleted = await BlockTime.findOneAndDelete({ _id: req.params.id, branchId: req.user.branchId });
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Block time not found' });
+    }
+    res.json({ success: true, message: 'Block time deleted' });
+  } catch (error) {
+    console.error('Error deleting block time:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
   if (!AppointmentModel || !appointmentId) return;
   try {
@@ -4933,7 +5083,7 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
 app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment } = req.businessModels;
-    const { page = 1, limit = 10, date, status } = req.query;
+    const { page = 1, limit = 10, date, status, clientId } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
@@ -4945,6 +5095,10 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 
     if (status) {
       query.status = status;
+    }
+
+    if (clientId) {
+      query.clientId = clientId;
     }
 
     const totalAppointments = await Appointment.countDocuments(query);
