@@ -1490,16 +1490,16 @@ app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requ
   }
 });
 
-// Change user password with old password verification
+// Change user password (no current password required; admin or self can reset)
 app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
   try {
-    const { oldPassword, newPassword } = req.body;
+    const { newPassword } = req.body;
     const { User } = req.mainModels;
 
-    if (!oldPassword || !newPassword) {
+    if (!newPassword) {
       return res.status(400).json({
         success: false,
-        error: 'Old password and new password are required'
+        error: 'New password is required'
       });
     }
 
@@ -1509,15 +1509,6 @@ app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase,
       return res.status(404).json({
         success: false,
         error: 'User not found'
-      });
-    }
-
-    // Verify old password
-    const isOldPasswordValid = await comparePassword(oldPassword, user.password);
-    if (!isOldPasswordValid) {
-      return res.status(400).json({
-        success: false,
-        error: 'Current password is incorrect'
       });
     }
 

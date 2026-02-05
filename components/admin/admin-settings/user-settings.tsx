@@ -357,7 +357,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse">
                   <thead>
-                    <tr className="border-b">
+                    <tr className="bg-slate-50 border-b border-slate-200">
                       <th className="text-left p-2 font-medium">Module</th>
                       {features.map(feature => (
                         <th key={feature.id} className="text-center p-2 font-medium text-xs">

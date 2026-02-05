@@ -4,7 +4,6 @@ import { useState, useEffect } from "react"
 import { Plus, Edit, Trash2, MoreHorizontal, Target, Award, Package } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -188,12 +187,7 @@ export function CommissionProfileList() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Commission Profiles</h2>
-          <p className="text-gray-600">Manage commission structures and target-based incentives</p>
-        </div>
+      <div className="flex items-center justify-end">
         <Button onClick={handleAddProfile} className="bg-blue-600 hover:bg-blue-700">
           <Plus className="h-4 w-4 mr-2" />
           Add Commission Profile
@@ -201,89 +195,85 @@ export function CommissionProfileList() {
       </div>
 
       {/* Profiles Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Commission Profile List</CardTitle>
-          <CardDescription>
-            Configure different commission structures for your staff members
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Profile Name</TableHead>
-                  <TableHead>Profile Type</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="w-[50px]">Actions</TableHead>
+      <div className="border rounded-lg overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-slate-50 border-b border-slate-200">
+              <TableHead className="font-semibold text-slate-700 py-4 px-6">Profile Name</TableHead>
+              <TableHead className="font-semibold text-slate-700 py-4 px-6">Profile Type</TableHead>
+              <TableHead className="font-semibold text-slate-700 py-4 px-6">Description</TableHead>
+              <TableHead className="font-semibold text-slate-700 py-4 px-6">Status</TableHead>
+              <TableHead className="font-semibold text-slate-700 py-4 px-6">Created</TableHead>
+              <TableHead className="text-right font-semibold text-slate-700 py-4 px-6">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center py-12 text-slate-500">
+                  Loading commission profiles...
+                </TableCell>
+              </TableRow>
+            ) : profiles.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center py-12">
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center">
+                      <Award className="h-8 w-8 text-slate-400" />
+                    </div>
+                    <p className="text-slate-600 font-medium">No commission profiles yet</p>
+                    <p className="text-slate-500 text-sm">Create one to start tracking commissions.</p>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : (
+              profiles.map((profile) => (
+                <TableRow key={profile.id} className="hover:bg-slate-50/50 border-b border-slate-100 transition-colors duration-200">
+                  <TableCell className="py-4 px-6 font-medium text-slate-800">{profile.name}</TableCell>
+                  <TableCell className="py-4 px-6">
+                    {getProfileTypeBadge(profile.type)}
+                  </TableCell>
+                  <TableCell className="py-4 px-6 text-slate-600">
+                    {profile.description || "No description"}
+                  </TableCell>
+                  <TableCell className="py-4 px-6">
+                    <Badge variant={profile.isActive ? "default" : "secondary"}>
+                      {profile.isActive ? "Active" : "Inactive"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="py-4 px-6 text-slate-600">
+                    {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : "—"}
+                  </TableCell>
+                  <TableCell className="text-right py-4 px-6">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" className="h-9 w-9 p-0 hover:bg-slate-100 rounded-lg transition-all duration-200">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                        <DropdownMenuItem onClick={() => handleEditProfile(profile)}>
+                          <Edit className="h-4 w-4 mr-2" />
+                          Edit Profile
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem 
+                          onClick={() => handleDeleteProfile(profile)}
+                          className="text-red-600"
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          Delete Profile
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {isLoading ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center text-gray-500 py-10">
-                      Loading commission profiles...
-                    </TableCell>
-                  </TableRow>
-                ) : profiles.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center text-gray-500 py-10">
-                      No commission profiles yet. Create one to start tracking commissions.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  profiles.map((profile) => (
-                  <TableRow key={profile.id}>
-                    <TableCell className="font-medium">{profile.name}</TableCell>
-                    <TableCell>
-                      {getProfileTypeBadge(profile.type)}
-                    </TableCell>
-                    <TableCell className="text-gray-600">
-                      {profile.description || "No description"}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={profile.isActive ? "default" : "secondary"}>
-                        {profile.isActive ? "Active" : "Inactive"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-gray-600">
-                        {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : "—"}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" className="h-8 w-8 p-0">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                          <DropdownMenuItem onClick={() => handleEditProfile(profile)}>
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Profile
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem 
-                            onClick={() => handleDeleteProfile(profile)}
-                            className="text-red-600"
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete Profile
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
 
       {/* Delete Confirmation Modal */}
       <Dialog open={isDeleteModalOpen} onOpenChange={setIsDeleteModalOpen}>

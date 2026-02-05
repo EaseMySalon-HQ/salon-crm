@@ -482,44 +482,28 @@ export function StaffTable() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h3 className="text-lg font-semibold text-slate-800">Staff Members</h3>
-          <p className="text-sm text-slate-600">Manage your team members and their roles</p>
+      {/* Search + Add Staff in one row */}
+      <div className="flex flex-col sm:flex-row gap-4 sm:items-center">
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+          <Input
+            placeholder="Search staff by name, email, or role..."
+            value={searchTerm}
+            onChange={(e) => handleSearch(e.target.value)}
+            className="pl-10"
+          />
         </div>
-        <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            className="border-slate-300 text-slate-700"
-            onClick={() => router.push("/staff/working-hours")}
-          >
-            Working Hours
-          </Button>
-          <Button onClick={handleAddStaff} className="bg-blue-600 hover:bg-blue-700">
-            <Plus className="h-4 w-4 mr-2" />
-            Add Staff
-          </Button>
-        </div>
-      </div>
-
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-        <Input
-          placeholder="Search staff by name, email, or role..."
-          value={searchTerm}
-          onChange={(e) => handleSearch(e.target.value)}
-          className="pl-10"
-        />
+        <Button onClick={handleAddStaff} className="bg-blue-600 hover:bg-blue-700 shrink-0">
+          <Plus className="h-4 w-4 mr-2" />
+          Add Staff
+        </Button>
       </div>
 
       {/* Staff Table */}
       <div className="border rounded-lg overflow-hidden">
         <Table>
           <TableHeader>
-            <TableRow className="bg-gradient-to-r from-slate-50 to-blue-50 border-b border-slate-200">
+            <TableRow className="bg-slate-50 border-b border-slate-200">
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Staff Name</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Mobile</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Email</TableHead>

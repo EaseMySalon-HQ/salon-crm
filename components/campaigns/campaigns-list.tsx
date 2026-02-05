@@ -282,7 +282,7 @@ export function CampaignsListPage() {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow>
+                <TableRow className="bg-slate-50 border-b border-slate-200">
                   <TableHead>Name</TableHead>
                   <TableHead>Template</TableHead>
                   <TableHead>Status</TableHead>

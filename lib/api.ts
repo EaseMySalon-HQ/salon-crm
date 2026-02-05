@@ -805,8 +805,8 @@ export class UsersAPI {
     return response.data
   }
 
-  static async changePassword(id: string, oldPassword: string, newPassword: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`/users/${id}/change-password`, { oldPassword, newPassword })
+  static async changePassword(id: string, newPassword: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/users/${id}/change-password`, { newPassword })
     return response.data
   }
 

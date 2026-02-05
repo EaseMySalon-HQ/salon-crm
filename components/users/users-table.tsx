@@ -258,7 +258,7 @@ export function UsersTable() {
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <Table>
           <TableHeader>
-            <TableRow className="bg-gradient-to-r from-slate-50 to-blue-50 border-b border-slate-200">
+            <TableRow className="bg-slate-50 border-b border-slate-200">
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Staff Name</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Mobile</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Email</TableHead>

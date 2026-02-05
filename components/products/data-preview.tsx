@@ -82,7 +82,7 @@ export function DataPreview({ data, onNext, onBack }: DataPreviewProps) {
           <div className="border rounded-lg overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
+                <TableRow className="bg-slate-50 border-b border-slate-200">
                   {headers.map((header, index) => (
                     <TableHead key={index} className="font-semibold text-gray-700 whitespace-nowrap">
                       {header || `Column ${index + 1}`}

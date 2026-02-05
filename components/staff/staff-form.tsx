@@ -423,9 +423,6 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
                 <p className="text-sm text-slate-700">
                   Password is already set for this staff member.
                 </p>
-                <p className="text-sm text-slate-600 mt-1">
-                  Use <strong>Reset password</strong> from the staff directory menu to change it.
-                </p>
                 {onResetPassword && (
                   <Button
                     type="button"

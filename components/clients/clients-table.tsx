@@ -574,7 +574,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id} className="bg-gray-50/50 hover:bg-gray-50">
+              <TableRow key={headerGroup.id} className="bg-slate-50 border-b border-slate-200">
                 {headerGroup.headers.map((header) => (
                   <TableHead key={header.id} className="px-6 py-4 text-left font-semibold text-gray-700">
                     <div className="flex items-center gap-2">

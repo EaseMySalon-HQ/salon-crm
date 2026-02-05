@@ -13,7 +13,6 @@ import { useToast } from "@/hooks/use-toast"
 import { UsersAPI } from "@/lib/api"
 
 const passwordChangeSchema = z.object({
-  oldPassword: z.string().min(1, "Current password is required"),
   newPassword: z.string().min(6, "New password must be at least 6 characters"),
   confirmPassword: z.string().min(1, "Please confirm your new password"),
 }).refine((data) => data.newPassword === data.confirmPassword, {
@@ -29,7 +28,6 @@ interface PasswordChangeFormProps {
 
 export function PasswordChangeForm({ staff, onSuccess, onCancel }: PasswordChangeFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [showOldPassword, setShowOldPassword] = useState(false)
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const { toast } = useToast()
@@ -37,7 +35,6 @@ export function PasswordChangeForm({ staff, onSuccess, onCancel }: PasswordChang
   const form = useForm<z.infer<typeof passwordChangeSchema>>({
     resolver: zodResolver(passwordChangeSchema),
     defaultValues: {
-      oldPassword: "",
       newPassword: "",
       confirmPassword: "",
     },
@@ -48,11 +45,7 @@ export function PasswordChangeForm({ staff, onSuccess, onCancel }: PasswordChang
 
     setIsSubmitting(true)
     try {
-      const response = await UsersAPI.changePassword(
-        staff._id,
-        values.oldPassword,
-        values.newPassword
-      )
+      const response = await UsersAPI.changePassword(staff._id, values.newPassword)
 
       if (response.success) {
         onSuccess()
@@ -79,39 +72,6 @@ export function PasswordChangeForm({ staff, onSuccess, onCancel }: PasswordChang
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-        <FormField
-          control={form.control}
-          name="oldPassword"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Current Password</FormLabel>
-              <FormControl>
-                <div className="relative">
-                  <Input
-                    type={showOldPassword ? "text" : "password"}
-                    placeholder="Enter current password"
-                    {...field}
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                    onClick={() => setShowOldPassword(!showOldPassword)}
-                  >
-                    {showOldPassword ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
         <FormField
           control={form.control}
           name="newPassword"
