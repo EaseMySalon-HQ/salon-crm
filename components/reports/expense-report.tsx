@@ -546,7 +546,7 @@ export function ExpenseReport() {
             <div className="overflow-hidden rounded-lg border border-slate-200">
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-gradient-to-r from-slate-50 to-red-50 hover:bg-gradient-to-r hover:from-slate-100 hover:to-red-100">
+                  <TableRow className="bg-slate-50 border-b border-slate-200">
                     <TableHead className="py-4 text-slate-700 font-semibold">Category</TableHead>
                     <TableHead className="py-4 text-slate-700 font-semibold">Description</TableHead>
                     <TableHead className="py-4 text-slate-700 font-semibold">Amount</TableHead>

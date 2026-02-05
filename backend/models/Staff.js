@@ -50,6 +50,12 @@ const staffSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  workSchedule: [{
+    day: { type: Number, required: true, min: 0, max: 6 }, // 0 = Sunday, 6 = Saturday
+    enabled: { type: Boolean, default: true },
+    startTime: { type: String, default: '09:00' }, // 24h "HH:mm"
+    endTime: { type: String, default: '21:00' }    // 24h "HH:mm"
+  }],
   branchId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Business',

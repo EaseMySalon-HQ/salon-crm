@@ -338,7 +338,7 @@ export default function EditBillPage() {
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="bg-slate-50 border-b border-slate-200">
                     <TableHead className="w-1/3">Item</TableHead>
                     <TableHead>Type</TableHead>
                     <TableHead className="w-24">Quantity</TableHead>

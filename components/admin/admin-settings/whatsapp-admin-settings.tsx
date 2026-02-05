@@ -848,7 +848,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                 <div className="border rounded-lg overflow-hidden">
                   <Table>
                     <TableHeader>
-                      <TableRow>
+                      <TableRow className="bg-slate-50 border-b border-slate-200">
                         <TableHead className="w-[200px]">Template Name</TableHead>
                         <TableHead className="w-[200px]">Template ID</TableHead>
                         <TableHead className="w-[300px]">Code (JavaScript)</TableHead>

@@ -323,7 +323,7 @@ export function ProductExchangeDialog({
             <div className="border rounded-md overflow-hidden">
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="bg-slate-50 border-b border-slate-200">
                     <TableHead>Item</TableHead>
                     <TableHead className="w-16 text-right">Qty</TableHead>
                     <TableHead className="w-24 text-right">Total</TableHead>

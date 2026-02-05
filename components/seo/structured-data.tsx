@@ -13,10 +13,8 @@ export function OrganizationSchema() {
       "addressCountry": "IN"
     },
     "sameAs": [
-      // Add social media links when available
-      // "https://twitter.com/easemysalon",
-      // "https://facebook.com/easemysalon",
-      // "https://linkedin.com/company/easemysalon"
+      "https://www.linkedin.com/company/easemysalon/",
+      "https://www.instagram.com/easemysalon_official/"
     ],
     "contactPoint": {
       "@type": "ContactPoint",

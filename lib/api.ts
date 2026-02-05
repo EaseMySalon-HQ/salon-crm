@@ -455,7 +455,7 @@ export class InventoryAPI {
 }
 
 export class AppointmentsAPI {
-  static async getAll(params?: { page?: number; limit?: number; date?: string; status?: string }): Promise<PaginatedResponse<any>> {
+  static async getAll(params?: { page?: number; limit?: number; date?: string; status?: string; clientId?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/appointments', { params })
     return response.data
   }
@@ -577,6 +577,48 @@ export class StaffDirectoryAPI {
   }
 }
 
+export class BlockTimeAPI {
+  static async getAll(params?: { staffId?: string; startDate?: string; endDate?: string }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/block-time', { params })
+    return response.data
+  }
+
+  static async create(data: {
+    staffId: string
+    title: string
+    startDate: string
+    startTime: string
+    endTime: string
+    recurringFrequency?: string
+    endDate?: string | null
+    description?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/block-time', data)
+    return response.data
+  }
+
+  static async update(
+    id: string,
+    data: {
+      title?: string
+      startDate?: string
+      startTime?: string
+      endTime?: string
+      recurringFrequency?: string
+      endDate?: string | null
+      description?: string
+    }
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/block-time/${id}`, data)
+    return response.data
+  }
+
+  static async delete(id: string): Promise<ApiResponse<void>> {
+    const response = await apiClient.delete(`/block-time/${id}`)
+    return response.data
+  }
+}
+
 export class ReceiptsAPI {
   static async getAll(params?: { page?: number; limit?: number; clientId?: string; date?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/receipts', { params })
@@ -621,7 +663,8 @@ export class SalesAPI {
   }
 
   static async getByClient(clientName: string): Promise<ApiResponse<any[]>> {
-    const response = await apiClient.get(`/sales/client/${clientName}`)
+    const encoded = encodeURIComponent(clientName)
+    const response = await apiClient.get(`/sales/client/${encoded}`)
     return response.data
   }
 
@@ -762,8 +805,8 @@ export class UsersAPI {
     return response.data
   }
 
-  static async changePassword(id: string, oldPassword: string, newPassword: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`/users/${id}/change-password`, { oldPassword, newPassword })
+  static async changePassword(id: string, newPassword: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/users/${id}/change-password`, { newPassword })
     return response.data
   }
 

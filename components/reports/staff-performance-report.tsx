@@ -903,25 +903,11 @@ export function StaffPerformanceReport() {
 
       {/* Performance Table */}
       <Card className="border-0 shadow-lg">
-        <CardHeader className="bg-gradient-to-r from-slate-50 to-blue-50/50 border-b">
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-xl font-bold text-gray-800">Staff Performance Details</CardTitle>
-              <CardDescription className="text-gray-600 mt-1">
-                Comprehensive performance metrics and commission tracking for each staff member
-              </CardDescription>
-            </div>
-            <Badge variant="outline" className="px-3 py-1">
-              <BarChart3 className="h-3 w-3 mr-1" />
-              Analytics
-            </Badge>
-          </div>
-        </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50/50 hover:bg-gray-50">
+                <TableRow className="bg-slate-50 border-b border-slate-200">
                   <TableHead className="font-semibold text-gray-700">Staff Member</TableHead>
                   <TableHead className="font-semibold text-gray-700">Total Revenue</TableHead>
                   <TableHead className="font-semibold text-gray-700">Service Revenue</TableHead>

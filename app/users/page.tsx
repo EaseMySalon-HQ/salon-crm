@@ -1,3 +1,6 @@
+import Link from "next/link"
+import { Award } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { UsersTable } from "@/components/users/users-table"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 
@@ -12,6 +15,12 @@ export default function UsersPage() {
               Manage staff accounts and their access permissions
             </p>
           </div>
+          <Button variant="outline" asChild>
+            <Link href="/staff/commission">
+              <Award className="h-4 w-4 mr-2" />
+              Commission Management
+            </Link>
+          </Button>
         </div>
         <UsersTable />
       </div>

@@ -401,7 +401,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
-              <TableRow className="bg-gray-50/50 hover:bg-gray-50">
+              <TableRow className="bg-slate-50 border-b border-slate-200">
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Product Name</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Category</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Product Type</TableHead>

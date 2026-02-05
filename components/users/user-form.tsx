@@ -69,7 +69,6 @@ const createUserEditSchema = (mode: string, user: any) => z.object({
 });
 
 const passwordChangeSchema = z.object({
-  oldPassword: z.string().min(1, "Old password is required"),
   newPassword: z.string().min(6, "New password must be at least 6 characters"),
   confirmPassword: z.string().min(1, "Please confirm your password"),
 }).refine((data) => data.newPassword === data.confirmPassword, {
@@ -148,7 +147,6 @@ export function UserForm({ user, onSubmit, mode = "add" }: UserFormProps) {
   const passwordForm = useForm<PasswordChangeData>({
     resolver: zodResolver(passwordChangeSchema),
     defaultValues: {
-      oldPassword: "",
       newPassword: "",
       confirmPassword: "",
     },
@@ -234,7 +232,7 @@ export function UserForm({ user, onSubmit, mode = "add" }: UserFormProps) {
     setIsPasswordSubmitting(true)
     try {
       // Call API to change password using the centralized API client
-      const result = await UsersAPI.changePassword(user._id, data.oldPassword, data.newPassword)
+      const result = await UsersAPI.changePassword(user._id, data.newPassword)
 
       if (result.success) {
         toast({
@@ -550,21 +548,6 @@ export function UserForm({ user, onSubmit, mode = "add" }: UserFormProps) {
             <DialogTitle>Change Password</DialogTitle>
           </DialogHeader>
           <form onSubmit={passwordForm.handleSubmit(handlePasswordChange)} className="space-y-4">
-            <div>
-              <Label htmlFor="oldPassword">Current Password</Label>
-              <Input
-                id="oldPassword"
-                type="password"
-                {...passwordForm.register("oldPassword")}
-                placeholder="Enter current password"
-              />
-              {passwordForm.formState.errors.oldPassword && (
-                <p className="text-sm text-red-500 mt-1">
-                  {passwordForm.formState.errors.oldPassword.message}
-                </p>
-              )}
-            </div>
-
             <div>
               <Label htmlFor="newPassword">New Password</Label>
               <Input
