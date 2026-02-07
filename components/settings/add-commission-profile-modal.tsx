@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Plus, Trash2, Target, Package } from "lucide-react"
+import { Plus, Trash2, Target, Package, HelpCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { CommissionProfileFormData, CALCULATION_INTERVALS, QUALIFYING_ITEMS } from "@/lib/commission-profile-types"
 
 interface AddCommissionProfileModalProps {
@@ -108,8 +109,8 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
         if (tier.to <= tier.from) {
           newErrors[`tier_${index}_to`] = "To amount must be greater than From amount"
         }
-        if (tier.value <= 0) {
-          newErrors[`tier_${index}_value`] = "Value must be greater than 0"
+        if (tier.value < 0) {
+          newErrors[`tier_${index}_value`] = "Value cannot be negative"
         }
       })
     }
@@ -306,6 +307,21 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
                   onCheckedChange={(checked) => handleInputChange("cascadingCommission", checked)}
                 />
                 <Label htmlFor="cascadingCommission">Cascading Commission</Label>
+                <TooltipProvider delayDuration={0}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button type="button" className="text-muted-foreground hover:text-foreground focus:outline-none" aria-label="Cascading Commission help">
+                        <HelpCircle className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-sm p-3 text-sm">
+                      <p className="font-medium mb-1">Cascading Commission (enabled):</p>
+                      <p className="text-muted-foreground mb-2">Commission is calculated slab-wise. Each target slab applies its own commission percentage only to the revenue within that slab.</p>
+                      <p className="font-medium mb-1">Non-Cascading Commission (disabled):</p>
+                      <p className="text-muted-foreground">The commission percentage of the highest target slab achieved is applied to the entire eligible amount.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
 
               {/* Target Tiers */}

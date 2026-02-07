@@ -66,12 +66,16 @@ export class CommissionProfileCalculator {
   static calculateSaleCommission(
     sale: Sale,
     staffCommissionProfiles: CommissionProfile[],
-    staffId: string
+    staffId: string,
+    staffName?: string
   ): StaffCommissionResult | null {
-    // Filter items for this staff member
-    const staffItems = sale.items.filter(item => 
-      item.staffId === staffId || item.staffName === staffId
-    )
+    // Filter items for this staff member (match by id or name so both old and new data work)
+    const staffItems = sale.items.filter(item => {
+      const idMatch = item.staffId != null && String(item.staffId) === String(staffId)
+      const nameMatchAsId = item.staffName != null && item.staffName === staffId
+      const nameMatch = staffName != null && item.staffName != null && item.staffName === staffName
+      return idMatch || nameMatchAsId || nameMatch
+    })
 
     if (staffItems.length === 0) {
       return null
@@ -184,10 +188,11 @@ export class CommissionProfileCalculator {
   static calculateMultipleSalesCommission(
     sales: Sale[],
     staffCommissionProfiles: CommissionProfile[],
-    staffId: string
+    staffId: string,
+    staffName?: string
   ): StaffCommissionResult | null {
     const results = sales
-      .map(sale => this.calculateSaleCommission(sale, staffCommissionProfiles, staffId))
+      .map(sale => this.calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffName))
       .filter(result => result !== null) as StaffCommissionResult[]
 
     if (results.length === 0) {
@@ -258,13 +263,15 @@ export class CommissionProfileCalculator {
     const results: StaffCommissionResult[] = []
 
     for (const staff of staffMembers) {
-      const staffProfiles = commissionProfiles.filter(profile => 
-        staff.commissionProfileIds.includes(profile.id)
-      )
+      const profileIdMatch = (profile: CommissionProfile) => {
+        const id = profile.id ?? profile._id
+        return id != null && staff.commissionProfileIds.includes(id)
+      }
+      const staffProfiles = commissionProfiles.filter(profileIdMatch)
 
       if (staffProfiles.length === 0) continue
 
-      const result = this.calculateMultipleSalesCommission(sales, staffProfiles, staff._id)
+      const result = this.calculateMultipleSalesCommission(sales, staffProfiles, staff._id, staff.name)
       if (result) {
         results.push(result)
       }
