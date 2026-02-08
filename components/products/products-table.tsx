@@ -122,8 +122,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
     (product) => {
       // Search filter
       const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        product.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (product.supplier && product.supplier.toLowerCase().includes(searchTerm.toLowerCase()))
+        product.category.toLowerCase().includes(searchTerm.toLowerCase())
       
       // Product type filter
       const matchesType = productTypeFilter === "all" || 
@@ -408,15 +407,14 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Tax Category</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Stock</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Price</TableHead>
-                <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Supplier</TableHead>
-                <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">SKU</TableHead>
+                <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">SKU/Barcode</TableHead>
                 {canManageProducts && <TableHead className="px-4 py-3 text-center font-semibold text-gray-700 w-[70px]">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow key="loading">
-                  <TableCell colSpan={canManageProducts ? 9 : 8} className="text-center py-8">
+                  <TableCell colSpan={canManageProducts ? 8 : 7} className="text-center py-8">
                     <div className="flex flex-col items-center space-y-2">
                       <div className="w-6 h-6 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
                       <p className="text-gray-600 text-sm">Loading products...</p>
@@ -425,7 +423,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                 </TableRow>
               ) : filteredProducts.length === 0 ? (
                 <TableRow key="empty">
-                  <TableCell colSpan={canManageProducts ? 9 : 8} className="text-center py-8">
+                  <TableCell colSpan={canManageProducts ? 8 : 7} className="text-center py-8">
                     <div className="flex flex-col items-center space-y-2">
                       <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
                         <Package className="h-6 w-6 text-gray-400" />
@@ -506,18 +504,11 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                       </div>
                     </TableCell>
                     <TableCell className="px-4 py-3">
-                      <div className="font-semibold text-emerald-600">{formatAmount(product.price)}</div>
-                    </TableCell>
-                    <TableCell className="px-4 py-3">
-                      <div className="text-sm text-gray-600">
-                        {product.supplier || (
-                          <span className="text-gray-400 italic">Not specified</span>
-                        )}
-                      </div>
+                      <div className="font-semibold text-emerald-600">{formatAmount(product.offerPrice != null && product.offerPrice !== '' ? product.offerPrice : product.price)}</div>
                     </TableCell>
                     <TableCell className="px-4 py-3">
                       <div className="font-mono text-xs bg-gray-100 px-2 py-1 rounded text-gray-700">
-                        {product.sku}
+                        {product.barcode || product.sku || '—'}
                       </div>
                     </TableCell>
                     {canManageProducts && (

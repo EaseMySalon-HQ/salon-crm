@@ -1,17 +1,23 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
-import { ServicesAPI } from "@/lib/api"
+import { ServicesAPI, ConsumptionRulesAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
 import { CategoryCombobox } from "../products/category-combobox"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { HelpCircle } from "lucide-react"
+import {
+  ServiceConsumptionRulesSection,
+  type PendingConsumptionRule,
+} from "./service-consumption-rules-section"
 
 interface ServiceFormProps {
   onClose?: () => void
@@ -25,13 +31,32 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
     description: service?.description || "",
     category: service?.category || "",
     duration: service?.duration?.toString() || "",
-    price: service?.price?.toString() || "",
+    fullPrice: (service?.fullPrice ?? service?.price)?.toString() ?? "",
+    offerPrice: service?.offerPrice?.toString() ?? "",
+    taxApplicable: !!service?.taxApplicable,
+    hsnSacCode: service?.hsnSacCode ?? "",
+    isAutoConsumptionEnabled: !!service?.isAutoConsumptionEnabled,
   })
+  const [pendingConsumptionRules, setPendingConsumptionRules] = useState<PendingConsumptionRule[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const { toast } = useToast()
 
+  const effectivePrice = formData.offerPrice
+    ? parseFloat(formData.offerPrice)
+    : formData.fullPrice
+      ? parseFloat(formData.fullPrice)
+      : null
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!formData.name || !formData.category || !formData.duration || effectivePrice == null || isNaN(effectivePrice)) {
+      toast({
+        title: "Missing fields",
+        description: "Name, category, duration, and full price are required.",
+        variant: "destructive",
+      })
+      return
+    }
     setIsLoading(true)
 
     try {
@@ -40,18 +65,18 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
         description: formData.description,
         category: formData.category,
         duration: parseInt(formData.duration),
-        price: parseFloat(formData.price),
-        isActive: true
+        price: effectivePrice,
+        fullPrice: formData.fullPrice ? parseFloat(formData.fullPrice) : undefined,
+        offerPrice: formData.offerPrice ? parseFloat(formData.offerPrice) : undefined,
+        taxApplicable: formData.taxApplicable,
+        hsnSacCode: formData.hsnSacCode || undefined,
+        isActive: true,
+        isAutoConsumptionEnabled: formData.isAutoConsumptionEnabled,
       }
-
-      console.log('Submitting service data:', serviceData)
 
       let response
       if (service) {
-        // Edit mode
-        console.log('Updating service with ID:', service.id)
         response = await ServicesAPI.update(service._id || service.id, serviceData)
-        console.log('Update response:', response)
         if (response.success) {
           toast({
             title: "Service updated",
@@ -59,40 +84,54 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
           })
         }
       } else {
-        // Create mode
-        console.log('Creating new service')
         response = await ServicesAPI.create(serviceData)
-        console.log('Create response:', response)
         if (response.success) {
           toast({
             title: "Service created",
             description: "The service has been added successfully.",
           })
-
-          // Reset form only for create mode
+          const newId = response.data?._id || response.data?.id
+          if (newId && pendingConsumptionRules.length > 0) {
+            const bulkRes = await ConsumptionRulesAPI.bulkCreate(
+              newId,
+              pendingConsumptionRules.map((r) => ({
+                productId: r.productId,
+                quantityUsed: r.quantityUsed,
+                unit: r.unit,
+                isAdjustable: r.isAdjustable,
+                maxAdjustmentPercent: r.maxAdjustmentPercent,
+              }))
+            )
+            if (bulkRes.success) {
+              toast({ title: "Consumption rules added", description: `${pendingConsumptionRules.length} rule(s) created.` })
+            }
+          }
           setFormData({
             name: "",
             description: "",
             category: "",
             duration: "",
-            price: "",
+            fullPrice: "",
+            offerPrice: "",
+            taxApplicable: false,
+            hsnSacCode: "",
+            isAutoConsumptionEnabled: false,
           })
+          setPendingConsumptionRules([])
         }
       }
-      
-      if (response.success) {
+
+      if (response?.success) {
         onClose?.()
-        
-        // Dispatch custom event to refresh stats
-        window.dispatchEvent(new CustomEvent('service-added'))
+        window.dispatchEvent(new CustomEvent("service-added"))
       } else {
-        throw new Error(response.error || `Failed to ${service ? 'update' : 'create'} service`)
+        throw new Error(response?.error || `Failed to ${service ? "update" : "create"} service`)
       }
     } catch (error) {
-      console.error(`Error ${service ? 'updating' : 'creating'} service:`, error)
+      console.error(`Error ${service ? "updating" : "creating"} service:`, error)
       toast({
         title: "Error",
-        description: `Failed to ${service ? 'update' : 'create'} service. Please try again.`,
+        description: `Failed to ${service ? "update" : "create"} service. Please try again.`,
         variant: "destructive",
       })
     } finally {
@@ -100,7 +139,10 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
     }
   }
 
+  const serviceId = service ? (service._id || service.id) : null
+
   return (
+    <TooltipProvider delayDuration={300}>
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="name">Service Name</Label>
@@ -120,7 +162,7 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
           value={formData.description}
           onChange={(e) => setFormData({ ...formData, description: e.target.value })}
           placeholder="Enter service description"
-          rows={3}
+          rows={2}
         />
       </div>
 
@@ -133,9 +175,8 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
             type="service"
           />
         </div>
-
         <div className="space-y-2">
-          <Label htmlFor="duration">Duration (minutes)</Label>
+          <Label htmlFor="duration">Service Duration (minutes)</Label>
           <Input
             id="duration"
             type="number"
@@ -148,21 +189,110 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
         </div>
       </div>
 
-      <div className="space-y-2">
-                        <Label htmlFor="price">Price ({getSymbol()})</Label>
-        <Input
-          id="price"
-          type="number"
-          step="0.01"
-          value={formData.price}
-          onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-          placeholder="0.00"
-          min="0"
-          required
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="fullPrice">Full Price ({getSymbol()})</Label>
+          <Input
+            id="fullPrice"
+            type="number"
+            step="0.01"
+            value={formData.fullPrice}
+            onChange={(e) => setFormData({ ...formData, fullPrice: e.target.value })}
+            placeholder="0.00"
+            min="0"
+            required
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="offerPrice">Offer Price ({getSymbol()})</Label>
+          <Input
+            id="offerPrice"
+            type="number"
+            step="0.01"
+            value={formData.offerPrice}
+            onChange={(e) => setFormData({ ...formData, offerPrice: e.target.value })}
+            placeholder="Optional"
+            min="0"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
+        <div className="flex items-center gap-1.5">
+          <Label htmlFor="tax-applicable">Tax Applicable</Label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
+                <HelpCircle className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-xs">
+              <p>Whether tax applies to this service.</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <Switch
+          id="tax-applicable"
+          checked={formData.taxApplicable}
+          onCheckedChange={(checked) => setFormData({ ...formData, taxApplicable: !!checked })}
         />
       </div>
 
-      <div className="flex justify-end gap-2">
+      {formData.taxApplicable && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="hsnSacCode">HSN/SAC Code</Label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
+                  <HelpCircle className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" className="max-w-xs">
+                <p>Tax code for invoicing (optional).</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          <Input
+            id="hsnSacCode"
+            value={formData.hsnSacCode}
+            onChange={(e) => setFormData({ ...formData, hsnSacCode: e.target.value })}
+            placeholder="e.g. 998313 (optional)"
+          />
+        </div>
+      )}
+
+      <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
+        <div className="flex items-center gap-1.5">
+          <Label htmlFor="auto-consumption">Auto Consumption</Label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
+                <HelpCircle className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-xs">
+              <p>Deduct inventory when this service is completed.</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <Switch
+          id="auto-consumption"
+          checked={formData.isAutoConsumptionEnabled}
+          onCheckedChange={(checked) => setFormData({ ...formData, isAutoConsumptionEnabled: !!checked })}
+        />
+      </div>
+
+      {formData.isAutoConsumptionEnabled && (
+        <ServiceConsumptionRulesSection
+          serviceId={serviceId}
+          pendingRules={pendingConsumptionRules}
+          onPendingRulesChange={setPendingConsumptionRules}
+          disabled={isLoading}
+        />
+      )}
+
+      <div className="flex justify-end gap-2 pt-2">
         {onClose && (
           <Button type="button" variant="outline" onClick={onClose}>
             Cancel
@@ -173,5 +303,6 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
         </Button>
       </div>
     </form>
+    </TooltipProvider>
   )
 }
