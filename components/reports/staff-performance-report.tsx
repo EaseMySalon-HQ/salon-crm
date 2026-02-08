@@ -14,6 +14,7 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { StaffServiceDetailDrawer } from "@/components/reports/staff-service-detail-drawer"
 import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI } from "@/lib/api"
 import { CommissionProfileCalculator, StaffCommissionResult } from "@/lib/commission-profile-calculator"
 import { CommissionProfile } from "@/lib/commission-profile-types"
@@ -129,6 +130,10 @@ export function StaffPerformanceReport() {
   })
   const [paymentSettings, setPaymentSettings] = useState<any>(null)
   const [currencySymbol, setCurrencySymbol] = useState("$")
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerStaffId, setDrawerStaffId] = useState<string | null>(null)
+  const [drawerStaffName, setDrawerStaffName] = useState("")
+  const [drawerStaffRole, setDrawerStaffRole] = useState<string | undefined>(undefined)
 
   // Load staff members and payment settings
   useEffect(() => {
@@ -362,21 +367,28 @@ export function StaffPerformanceReport() {
             // Calculate commission using commission profiles
             const staff = staffMembers.find(s => (s._id || s.id) === staffId)
             if (staff && staff.commissionProfileIds && staff.commissionProfileIds.length > 0) {
-              const staffProfiles = commissionProfiles.filter(profile => 
-                staff.commissionProfileIds?.includes(profile.id)
-              )
+              const staffProfiles = commissionProfiles.filter(profile => {
+                const profileId = profile.id ?? profile._id
+                return profileId != null && staff.commissionProfileIds?.includes(profileId)
+              })
               
               if (staffProfiles.length > 0) {
-                // Get sales for this staff member
-                const staffSales = filteredSales.filter(sale => 
-                  sale.staffId === staffId || 
-                  sale.items.some((item: any) => item.staffId === staffId || item.staffName === staffId)
-                )
+                // Get sales for this staff member (match by id or name so both old and new data work)
+                const staffSales = filteredSales.filter((sale: any) => {
+                  const saleStaffMatch = sale.staffId === staffId || sale.staffName === staff.name
+                  const itemMatch = sale.items?.some((item: any) =>
+                    item.staffId != null && String(item.staffId) === String(staffId) ||
+                    item.staffName === staffId ||
+                    item.staffName === staff.name
+                  )
+                  return saleStaffMatch || itemMatch
+                })
                 
                 const commissionResult = CommissionProfileCalculator.calculateMultipleSalesCommission(
                   staffSales,
                   staffProfiles,
-                  staffId
+                  staffId,
+                  staff.name
                 )
                 
                 if (commissionResult) {
@@ -679,6 +691,35 @@ export function StaffPerformanceReport() {
     }
   }
 
+  // Effective date range for drawer (derived from report filters)
+  const getEffectiveDrawerDateRange = (): DateRange | undefined => {
+    const now = new Date()
+    if (datePeriod === "customRange" && dateRange?.from && dateRange?.to) {
+      return dateRange
+    }
+    if (datePeriod === "currentMonth") {
+      return {
+        from: new Date(now.getFullYear(), now.getMonth(), 1),
+        to: new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      }
+    }
+    if (datePeriod === "previousMonth") {
+      return {
+        from: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+        to: new Date(now.getFullYear(), now.getMonth(), 0)
+      }
+    }
+    return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0) }
+  }
+
+  const openStaffDetailDrawer = (staffId: string, staffName: string) => {
+    setDrawerStaffId(staffId)
+    setDrawerStaffName(staffName)
+    const staff = staffMembers.find(s => (s._id || s.id) === staffId)
+    setDrawerStaffRole(staff?.role)
+    setDrawerOpen(true)
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50/30 flex items-center justify-center">
@@ -745,7 +786,7 @@ export function StaffPerformanceReport() {
 
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Avg. Performance</CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-900">Average Performance Score</CardTitle>
             <div className="p-2 bg-gray-100 rounded-lg">
               <Target className="h-4 w-4 text-gray-600" />
             </div>
@@ -908,16 +949,16 @@ export function StaffPerformanceReport() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-slate-50 border-b border-slate-200">
-                  <TableHead className="font-semibold text-gray-700">Staff Member</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Total Revenue</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Service Revenue</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Product Revenue</TableHead>
+                  <TableHead className="font-semibold text-gray-700">Staff Name</TableHead>
+                  <TableHead className="font-semibold text-gray-700 text-right">Total Revenue</TableHead>
+                  <TableHead className="font-semibold text-gray-700 text-right">Service Revenue</TableHead>
+                  <TableHead className="font-semibold text-gray-700 text-right">Product Revenue</TableHead>
                   <TableHead className="font-semibold text-gray-700">Transactions</TableHead>
                   <TableHead className="font-semibold text-gray-700">Services</TableHead>
                   <TableHead className="font-semibold text-gray-700">Products</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Service Commission</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Product Commission</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Total Commission</TableHead>
+                  <TableHead className="font-semibold text-gray-700 text-right">Service Commission</TableHead>
+                  <TableHead className="font-semibold text-gray-700 text-right">Product Commission</TableHead>
+                  <TableHead className="font-semibold text-gray-700 text-right">Total Commission</TableHead>
                   <TableHead className="font-semibold text-gray-700">Customers</TableHead>
                   <TableHead className="font-semibold text-gray-700">Performance Trend</TableHead>
                   <TableHead className="font-semibold text-gray-700">Actions</TableHead>
@@ -941,16 +982,22 @@ export function StaffPerformanceReport() {
                 ) : (
                   filteredPerformanceData.map((data, index) => (
                   <TableRow key={data.staffId} className="hover:bg-blue-50/30 transition-colors group">
-                    <TableCell className="font-semibold text-gray-800 group-hover:text-blue-700">
-                      {data.staffName}
+                    <TableCell className="font-semibold">
+                      <button
+                        type="button"
+                        onClick={() => openStaffDetailDrawer(data.staffId, data.staffName)}
+                        className="text-left text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded px-1 -mx-1"
+                      >
+                        {data.staffName}
+                      </button>
                     </TableCell>
-                    <TableCell className="font-semibold text-emerald-700">
+                    <TableCell className="font-semibold text-emerald-700 text-right">
                       {formatCurrency(data.totalRevenue, currencySymbol)}
                     </TableCell>
-                    <TableCell className="text-blue-600 font-medium">
+                    <TableCell className="text-blue-600 font-medium text-right">
                       {formatCurrency(data.serviceRevenue, currencySymbol)}
                     </TableCell>
-                    <TableCell className="text-purple-600 font-medium">
+                    <TableCell className="text-purple-600 font-medium text-right">
                       {formatCurrency(data.productRevenue, currencySymbol)}
                     </TableCell>
                     <TableCell className="text-center">
@@ -968,13 +1015,13 @@ export function StaffPerformanceReport() {
                         {data.productCount}
                       </Badge>
                     </TableCell>
-                    <TableCell className="font-semibold text-amber-600">
+                    <TableCell className="font-semibold text-amber-600 text-right">
                       {formatCurrency(data.serviceCommission, currencySymbol)}
                     </TableCell>
-                    <TableCell className="font-semibold text-amber-600">
+                    <TableCell className="font-semibold text-amber-600 text-right">
                       {formatCurrency(data.productCommission, currencySymbol)}
                     </TableCell>
-                    <TableCell className="font-bold text-amber-700 text-lg">
+                    <TableCell className="font-bold text-amber-700 text-lg text-right">
                       {formatCurrency(data.totalCommission, currencySymbol)}
                     </TableCell>
                     <TableCell>
@@ -1034,7 +1081,10 @@ export function StaffPerformanceReport() {
                             <Award className="h-4 w-4 mr-2" />
                             Manage Commission
                           </DropdownMenuItem>
-                          <DropdownMenuItem className="cursor-pointer hover:bg-blue-50">
+                          <DropdownMenuItem 
+                            onClick={() => openStaffDetailDrawer(data.staffId, data.staffName)}
+                            className="cursor-pointer hover:bg-blue-50"
+                          >
                             <Eye className="h-4 w-4 mr-2" />
                             View Details
                           </DropdownMenuItem>
@@ -1089,6 +1139,17 @@ export function StaffPerformanceReport() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Staff Service Detail Drawer */}
+      <StaffServiceDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        staffId={drawerStaffId ?? ""}
+        staffName={drawerStaffName}
+        staffRole={drawerStaffRole}
+        dateRange={getEffectiveDrawerDateRange()}
+        currencySymbol={currencySymbol}
+      />
       </div>
     </div>
   )

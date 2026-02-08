@@ -35,6 +35,32 @@ interface WhatsAppAdminSettingsProps {
   onSettingsChange: (settings: any) => void
 }
 
+/** Result of parsing template JSON/JS code for variable detection */
+interface ParseTemplateResult {
+  variableCount: number
+  error?: string
+  bodyCount?: number
+  buttonCount?: number
+  allVariables?: string[]
+}
+
+/** Shape of WhatsApp settings state */
+interface WhatsAppSettingsState {
+  enabled: boolean
+  provider: string
+  msg91ApiKey: string
+  msg91SenderId: string
+  templates: Record<string, string>
+  templateVariables: Record<string, Record<string, string>>
+  templateJavaScriptCodes: Record<string, string>
+  msg91TemplateId?: string
+  receiptNotifications?: boolean
+  appointmentNotifications?: boolean
+  systemAlerts?: boolean
+  quietHours?: { enabled: boolean; start: string; end: string }
+  [key: string]: unknown
+}
+
 export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange }: WhatsAppAdminSettingsProps) {
   const { toast } = useToast()
   const [testPhone, setTestPhone] = useState('')
@@ -49,7 +75,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
   const [editJsonCode, setEditJsonCode] = useState('')
   const isInitialMount = useRef(true)
 
-  const [settings, setSettings] = useState(propSettings || {
+  const [settings, setSettings] = useState<WhatsAppSettingsState>(propSettings || {
     enabled: false,
     provider: "msg91",
     msg91ApiKey: "",
@@ -248,7 +274,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
    * Parse MSG91 template JavaScript code to extract variable count
    * Handles JavaScript code examples (fetch, var assignments, etc.)
    */
-  const parseTemplateJson = (codeString: string): { variableCount: number; error?: string } => {
+  const parseTemplateJson = (codeString: string): ParseTemplateResult => {
     try {
       // Always treat input as JavaScript code and extract JSON object
       let jsonToParse = codeString.trim();
@@ -470,7 +496,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
     
     // If we have detected all variables (body + button), use them
     if (result.allVariables && result.allVariables.length > 0) {
-      result.allVariables.forEach((varName, index) => {
+      result.allVariables.forEach((varName: string, index: number) => {
         if (varName.startsWith('body_')) {
           // Map body variables to data fields
           const bodyIndex = parseInt(varName.replace('body_', '')) - 1;
@@ -561,7 +587,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
         
         // If we have detected all variables (body + button), use them
         if (result.allVariables && result.allVariables.length > 0) {
-          result.allVariables.forEach((varName) => {
+          result.allVariables.forEach((varName: string) => {
             if (varName.startsWith('body_')) {
               // Map body variables to data fields
               const bodyIndex = parseInt(varName.replace('body_', '')) - 1;
@@ -1360,7 +1386,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                       
                       // If we have detected all variables (body + button), use them
                       if (result.allVariables && result.allVariables.length > 0) {
-                        result.allVariables.forEach((varName, index) => {
+                        result.allVariables.forEach((varName: string, index: number) => {
                           if (varName.startsWith('body_')) {
                             // Map body variables to data fields
                             const bodyIndex = parseInt(varName.replace('body_', '')) - 1;
