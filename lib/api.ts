@@ -347,6 +347,36 @@ export class ServicesAPI {
   }
 }
 
+export class ConsumptionRulesAPI {
+  static async list(params?: { serviceId?: string }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/consumption-rules', { params })
+    return response.data
+  }
+  static async create(data: { serviceId: string; productId: string; quantityUsed: number; unit: string; isAdjustable?: boolean; maxAdjustmentPercent?: number; variantKey?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/consumption-rules', data)
+    return response.data
+  }
+  static async update(id: string, data: { quantityUsed?: number; unit?: string; isAdjustable?: boolean; maxAdjustmentPercent?: number; variantKey?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/consumption-rules/${id}`, data)
+    return response.data
+  }
+  static async delete(id: string): Promise<ApiResponse> {
+    const response = await apiClient.delete(`/consumption-rules/${id}`)
+    return response.data
+  }
+  static async bulkCreate(serviceId: string, rules: { productId: string; quantityUsed: number; unit: string; isAdjustable?: boolean; maxAdjustmentPercent?: number; variantKey?: string }[]): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.post('/consumption-rules/bulk', { serviceId, rules })
+    return response.data
+  }
+}
+
+export class ConsumptionLogsAPI {
+  static async list(params?: { productId?: string; serviceId?: string; billId?: string; fromDate?: string; toDate?: string; limit?: number }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/consumption-logs', { params })
+    return response.data
+  }
+}
+
 export class ProductsAPI {
   static async getAll(params?: { page?: number; limit?: number; search?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/products', { params })

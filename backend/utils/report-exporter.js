@@ -193,6 +193,7 @@ async function exportProductsReport({ branchId, format = 'xlsx', filters = {} })
           "Price": parseFloat(product.price) || 0,
           "Stock": parseInt(product.stock) || 0,
           "Minimum Stock": parseInt(product.minimumStock || product.minStock) || 0,
+          "SKU/Barcode": product.barcode || product.sku || "",
           "Supplier": product.supplier || "",
           "Description": product.description || "",
           "Status": status

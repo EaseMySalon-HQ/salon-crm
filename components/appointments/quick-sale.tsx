@@ -1233,7 +1233,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       const serviceItemsWithGST = serviceItems.map(item => {
         const baseAmount = item.price * item.quantity
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * serviceTaxRate) / 100 : 0
+        const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
         return { ...item, totalWithGST: baseAmount + gstAmount }
       })
       
@@ -1261,7 +1261,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         setServiceItems(prev => prev.map((item, index) => {
           const baseAmount = item.price * item.quantity
           const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-          const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * serviceTaxRate) / 100 : 0
+          const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
           const totalWithGST = baseAmount + gstAmount
           const proportionalDiscountValue = (totalWithGST / totalPayableAmount) * discountValue
           const proportionalDiscountPercentage = (proportionalDiscountValue / totalWithGST) * 100
@@ -1312,7 +1312,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       const serviceItemsWithGST = serviceItems.map(item => {
         const baseAmount = item.price * item.quantity
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * serviceTaxRate) / 100 : 0
+        const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
         return { ...item, totalWithGST: baseAmount + gstAmount }
       })
       
@@ -1341,7 +1341,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       setServiceItems(prev => prev.map(item => {
         const baseAmount = item.price * item.quantity
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * serviceTaxRate) / 100 : 0
+        const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
         const totalWithGST = baseAmount + gstAmount
         const proportionalDiscountValue = (totalWithGST / totalPayableAmount) * totalDiscountAmount
         const proportionalDiscountPercentage = (proportionalDiscountValue / totalWithGST) * 100
@@ -1381,11 +1381,11 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         return { ...item, discount: proportionalDiscountPercentage, total: finalTotal }
       }))
     } else {
-      // No discount - reset to GST-inclusive amounts (only if tax is enabled)
+      // No discount - reset to GST-inclusive amounts (service tax only when Tax Applicable ON)
       setServiceItems(prev => prev.map(item => {
         const baseAmount = item.price * item.quantity
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * serviceTaxRate) / 100 : 0
+        const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
         return { ...item, discount: 0, total: baseAmount + gstAmount }
       }))
       
@@ -1514,22 +1514,23 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             }
           }
 
-          // Calculate total with GST for services
+          // Calculate total with GST for services (only when global tax ON and service Tax Applicable ON)
           const baseAmount = updatedItem.price * updatedItem.quantity
           const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+          const applyTax = isServiceTaxable(updatedItem)
           // If item-level discount edited, apply it immediately to this row
           if (field === 'discount') {
             const itemDiscountPct = Number(value) || 0
             const discountedAmount = baseAmount - (baseAmount * itemDiscountPct) / 100
-            const gstAmount = (taxSettings?.enableTax !== false) ? (discountedAmount * serviceTaxRate) / 100 : 0
+            const gstAmount = applyTax ? (discountedAmount * serviceTaxRate) / 100 : 0
             updatedItem.total = discountedAmount + gstAmount
           } else {
-            const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * serviceTaxRate) / 100 : 0
+            const gstAmount = applyTax ? (baseAmount * serviceTaxRate) / 100 : 0
             // Only update total if no GLOBAL discount is active, otherwise let global discount logic handle it
             if (discountValue === 0 && discountPercentage === 0) {
               // Respect item discount even when global is off
               const discountedAmount = baseAmount - (baseAmount * (updatedItem.discount || 0)) / 100
-              updatedItem.total = discountedAmount + ((taxSettings?.enableTax !== false) ? (discountedAmount * serviceTaxRate) / 100 : 0)
+              updatedItem.total = discountedAmount + (applyTax ? (discountedAmount * serviceTaxRate) / 100 : 0)
             }
           }
 
@@ -1626,11 +1627,11 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       return baseAmount
     }
     
-    // Calculate total payable amount (original prices + GST, only if tax is enabled)
+    // Calculate total payable amount (original prices + GST; service GST only when global tax ON and service Tax Applicable ON)
     const totalPayableAmount = serviceItems.reduce((total, serviceItem) => {
       const serviceBaseAmount = serviceItem.price * serviceItem.quantity
       const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-      const serviceGstAmount = (taxSettings?.enableTax !== false) ? (serviceBaseAmount * serviceTaxRate) / 100 : 0
+      const serviceGstAmount = isServiceTaxable(serviceItem) ? (serviceBaseAmount * serviceTaxRate) / 100 : 0
       return total + serviceBaseAmount + serviceGstAmount
     }, 0) + productItems.reduce((total, productItem) => {
       const productBaseAmount = productItem.price * productItem.quantity
@@ -1666,9 +1667,17 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     }
     return calculateDiscountedAmount(baseAmount, taxRate)
   }
+
+  // Only apply service tax when global tax is ON and this service has Tax Applicable = ON
+  const isServiceTaxable = (serviceItem: { serviceId?: string }) => {
+    if (taxSettings?.enableTax === false) return false
+    const service = services.find((s) => (s._id || s.id) === serviceItem.serviceId)
+    return service?.taxApplicable === true
+  }
   
-  // Calculate service tax on discounted amounts (only if tax is enabled)
+  // Calculate service tax on discounted amounts (global tax ON + only services with Tax Applicable = ON)
   const serviceTax = (taxSettings?.enableTax !== false) ? serviceItems.reduce((sum, item) => {
+    if (!isServiceTaxable(item)) return sum
     const baseAmount = item.price * item.quantity
     const serviceTaxRate = taxSettings?.serviceTaxRate || 5
     const discountedAmount = getDiscountedBase(baseAmount, item.discount, serviceTaxRate)
@@ -2137,8 +2146,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       let calculatedTotal = roundedTotal
       let taxBreakdown = { cgst: 0, sgst: 0, igst: 0 }
 
-      // Calculate tax breakdown from individual items (only if tax is enabled)
+      // Calculate tax breakdown from individual items (service tax only when global tax ON and service Tax Applicable ON)
         const serviceTax = (taxSettings?.enableTax !== false) ? serviceItems.reduce((sum, item) => {
+        if (!isServiceTaxable(item)) return sum
         const baseAmount = item.price * item.quantity
         const discountAmount = (baseAmount * item.discount) / 100
         const discountedAmount = baseAmount - discountAmount
@@ -2181,14 +2191,14 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
           productTaxByRate
         } as any
 
-      // Update receipt items with tax information (only if tax is enabled)
+      // Update receipt items with tax information (service tax only when Tax Applicable ON)
       receiptItems.forEach((item) => {
         if (item.type === 'service') {
           const baseAmount = item.price * item.quantity
           const discountAmount = (baseAmount * item.discount) / 100
           const discountedAmount = baseAmount - discountAmount
           
-          if (taxSettings?.enableTax !== false) {
+          if (isServiceTaxable(item)) {
             const serviceTaxRate = taxSettings?.serviceTaxRate || 5
             const gstAmount = (discountedAmount * serviceTaxRate) / 100
             item.taxAmount = gstAmount

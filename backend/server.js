@@ -3069,12 +3069,16 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
 app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Service } = req.businessModels;
-    const { name, category, duration, price, description } = req.body;
+    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isAutoConsumptionEnabled } = req.body;
 
-    if (!name || !category || !duration || !price) {
+    const full = fullPrice != null ? parseFloat(fullPrice) : (price != null ? parseFloat(price) : null);
+    const offer = offerPrice != null ? parseFloat(offerPrice) : null;
+    const effectivePrice = (offer != null && !isNaN(offer)) ? offer : (full != null && !isNaN(full) ? full : null);
+
+    if (!name || !category || !duration || (effectivePrice == null || isNaN(effectivePrice))) {
       return res.status(400).json({
         success: false,
-        error: 'Name, category, duration, and price are required'
+        error: 'Name, category, duration, and price (or full price) are required'
       });
     }
 
@@ -3082,9 +3086,14 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
       name,
       category,
       duration: parseInt(duration),
-      price: parseFloat(price),
+      price: effectivePrice,
+      fullPrice: full != null && !isNaN(full) ? full : undefined,
+      offerPrice: offer != null && !isNaN(offer) ? offer : undefined,
+      taxApplicable: !!taxApplicable,
+      hsnSacCode: hsnSacCode || '',
       description: description || '',
       isActive: true,
+      isAutoConsumptionEnabled: !!isAutoConsumptionEnabled,
       branchId: req.user.branchId
     });
 
@@ -3106,25 +3115,36 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
 app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Service } = req.businessModels;
-    const { name, category, duration, price, description, isActive } = req.body;
+    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isActive, isAutoConsumptionEnabled } = req.body;
 
-    if (!name || !category || !duration || !price) {
+    const full = fullPrice != null ? parseFloat(fullPrice) : (price != null ? parseFloat(price) : null);
+    const offer = offerPrice != null ? parseFloat(offerPrice) : null;
+    const effectivePrice = (offer != null && !isNaN(offer)) ? offer : (full != null && !isNaN(full) ? full : null);
+
+    if (!name || !category || !duration || (effectivePrice == null || isNaN(effectivePrice))) {
       return res.status(400).json({
         success: false,
-        error: 'Name, category, duration, and price are required'
+        error: 'Name, category, duration, and price (or full price) are required'
       });
     }
 
+    const updatePayload = {
+      name,
+      category,
+      duration: parseInt(duration),
+      price: effectivePrice,
+      fullPrice: full != null && !isNaN(full) ? full : undefined,
+      offerPrice: offer != null && !isNaN(offer) ? offer : undefined,
+      taxApplicable: !!taxApplicable,
+      hsnSacCode: hsnSacCode || '',
+      description: description || '',
+      isActive: isActive !== undefined ? isActive : true,
+    };
+    if (isAutoConsumptionEnabled !== undefined) updatePayload.isAutoConsumptionEnabled = !!isAutoConsumptionEnabled;
+
     const updatedService = await Service.findByIdAndUpdate(
       req.params.id,
-      {
-        name,
-        category,
-        duration: parseInt(duration),
-        price: parseFloat(price),
-        description: description || '',
-        isActive: isActive !== undefined ? isActive : true,
-      },
+      updatePayload,
       { new: true }
     );
 
@@ -3402,10 +3422,10 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
 app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Product, InventoryTransaction } = req.businessModels;
-    const { name, category, price, stock, minimumStock, sku, supplier, description, taxCategory, productType, transactionType } = req.body;
+    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
 
     console.log('🔍 Product creation request body:', req.body);
-    console.log('🔍 Extracted fields:', { name, category, price, stock, minimumStock, sku, supplier, description, taxCategory, productType });
+    console.log('🔍 Extracted fields:', { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType });
 
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
@@ -3432,10 +3452,16 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
     const newProduct = new Product({
       name,
       category,
-      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0
+      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0 (selling price)
+      cost: cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined,
+      offerPrice: offerPrice !== undefined && offerPrice !== null && offerPrice !== '' ? parseFloat(offerPrice) : undefined,
       stock: parseInt(stock),
       minimumStock: minimumStock !== undefined ? parseInt(minimumStock) : undefined,
       sku: sku || `SKU-${Date.now()}`,
+      barcode: barcode || '',
+      hsnSacCode: hsnSacCode || '',
+      volume: volume !== undefined && volume !== null && volume !== '' ? parseFloat(volume) : undefined,
+      volumeUnit: volumeUnit && ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'].includes(volumeUnit) ? volumeUnit : undefined,
       supplier,
       description,
       taxCategory: taxCategory || 'standard',
@@ -3488,7 +3514,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
     console.log('🔍 Request body:', req.body);
     
     const { Product, InventoryTransaction } = req.businessModels;
-    const { name, category, price, stock, minimumStock, sku, supplier, description, isActive, taxCategory, productType, transactionType } = req.body;
+    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, isActive, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
 
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
@@ -3520,9 +3546,15 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
     const updateData = {
       name,
       category,
-      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0
+      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0 (selling price)
+      cost: cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined,
+      offerPrice: offerPrice !== undefined && offerPrice !== null && offerPrice !== '' ? parseFloat(offerPrice) : undefined,
       stock: newStock,
       sku: sku || `SKU-${Date.now()}`,
+      barcode: barcode || '',
+      hsnSacCode: hsnSacCode || '',
+      volume: volume !== undefined && volume !== null && volume !== '' ? parseFloat(volume) : undefined,
+      volumeUnit: volumeUnit && ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'].includes(volumeUnit) ? volumeUnit : undefined,
       supplier,
       description,
       taxCategory: taxCategory || 'standard',
@@ -3758,17 +3790,25 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
           continue;
         }
 
-        // Prepare product data
+        // Prepare product data (align with Add Product form fields)
+        const priceVal = mappedData.price != null && mappedData.price !== '' ? parseFloat(mappedData.price) : (normalizedProductType === 'service' ? 0 : 0);
         const productToCreate = {
           name: mappedData.name,
           category: mappedData.category,
-          price: mappedData.price ? parseFloat(mappedData.price) : (normalizedProductType === 'service' ? 0 : 0),
-          stock: mappedData.stock ? parseInt(mappedData.stock) : 0,
-          sku: mappedData.sku && mappedData.sku.trim() !== '' ? mappedData.sku.trim() : undefined,
+          price: priceVal,
+          cost: (mappedData.cost != null && mappedData.cost !== '') || (mappedData.costPrice != null && mappedData.costPrice !== '') ? parseFloat(mappedData.cost ?? mappedData.costPrice) : undefined,
+          offerPrice: mappedData.offerPrice != null && mappedData.offerPrice !== '' ? parseFloat(mappedData.offerPrice) : undefined,
+          stock: mappedData.stock != null && mappedData.stock !== '' ? parseInt(mappedData.stock) : 0,
+          minimumStock: mappedData.minimumStock != null && mappedData.minimumStock !== '' ? parseInt(mappedData.minimumStock) : 5,
+          sku: mappedData.sku && String(mappedData.sku).trim() !== '' ? String(mappedData.sku).trim() : undefined,
+          barcode: mappedData.barcode && String(mappedData.barcode).trim() !== '' ? String(mappedData.barcode).trim() : '',
+          hsnSacCode: mappedData.hsnSacCode && String(mappedData.hsnSacCode).trim() !== '' ? String(mappedData.hsnSacCode).trim() : '',
+          volume: mappedData.volume != null && mappedData.volume !== '' ? parseFloat(mappedData.volume) : undefined,
+          volumeUnit: mappedData.volumeUnit && ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'].includes(String(mappedData.volumeUnit).toLowerCase()) ? String(mappedData.volumeUnit).toLowerCase() : undefined,
           supplier: mappedData.supplier || '',
           description: mappedData.description || '',
           taxCategory: mappedData.taxCategory || 'standard',
-          productType: normalizedProductType, // Use normalized productType from above
+          productType: normalizedProductType,
           branchId: req.user.branchId,
           isActive: true
         };
@@ -6451,17 +6491,23 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     const { Sale, Product, InventoryTransaction, Appointment } = req.businessModels;
     const saleData = req.body;
     
-    // Process items to handle staff contributions and ensure productId is preserved
+    // Process items to handle staff contributions and preserve productId/serviceId
+    const mongoose = require('mongoose');
     if (saleData.items && Array.isArray(saleData.items)) {
       saleData.items = saleData.items.map(item => {
         // Ensure productId is preserved and converted to ObjectId if it's a string
         if (item.type === 'product' && item.productId) {
-          // Convert string productId to ObjectId if needed
-          const mongoose = require('mongoose');
           if (typeof item.productId === 'string' && mongoose.Types.ObjectId.isValid(item.productId)) {
             item.productId = new mongoose.Types.ObjectId(item.productId);
           }
         }
+        // Preserve serviceId for auto consumption (type === 'service')
+        if (item.type === 'service' && item.serviceId) {
+          if (typeof item.serviceId === 'string' && mongoose.Types.ObjectId.isValid(item.serviceId)) {
+            item.serviceId = new mongoose.Types.ObjectId(item.serviceId);
+          }
+        }
+        if (item.variantKey !== undefined) item.variantKey = item.variantKey || '';
         
         // If staffContributions is provided, calculate amounts
         if (item.staffContributions && Array.isArray(item.staffContributions)) {
@@ -6502,6 +6548,20 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
 
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+    }
+
+    // Auto consumption: deduct inventory for completed service lines (only when bill status is completed)
+    if (String(savedSale.status).toLowerCase() === 'completed') {
+      try {
+        const autoConsumption = require('./services/auto-consumption');
+        const { runAutoConsumptionForSale } = autoConsumption;
+        const { processedCount, warnings } = await runAutoConsumptionForSale(savedSale, req.businessModels, { user: req.user });
+        console.log('[AutoConsumption] Sale create result:', { billNo: savedSale.billNo, processedCount, warnings: warnings.length });
+        if (warnings.length) console.warn('[AutoConsumption] Warnings:', warnings);
+      } catch (autoConsumptionErr) {
+        console.error('Auto consumption on sale create failed:', autoConsumptionErr);
+        // Don't fail the sale; consumption can be reviewed
+      }
     }
 
     // Track products that had stock updated for low inventory check
@@ -6983,6 +7043,8 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       return res.status(404).json({ success: false, error: 'Sale not found' });
     }
 
+    const previousStatus = String(existingSale.status || '').toLowerCase();
+
     // Archive original bill snapshot once per edit
     try {
       if (BillArchive) {
@@ -7014,7 +7076,19 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     });
 
     const originalItems = existingSale.items || [];
-    const updatedItems = Array.isArray(updateData.items) ? updateData.items : originalItems;
+    let updatedItems = Array.isArray(updateData.items) ? updateData.items : originalItems;
+    // Preserve serviceId and variantKey on service items when updating
+    const mongooseSales = require('mongoose');
+    if (Array.isArray(updatedItems)) {
+      updatedItems = updatedItems.map((item) => {
+        const plain = item && typeof item.toObject === 'function' ? item.toObject() : { ...item };
+        if (plain.type === 'service' && plain.serviceId && typeof plain.serviceId === 'string' && mongooseSales.Types.ObjectId.isValid(plain.serviceId)) {
+          plain.serviceId = new mongooseSales.Types.ObjectId(plain.serviceId);
+        }
+        if (plain.variantKey !== undefined) plain.variantKey = plain.variantKey || '';
+        return plain;
+      });
+    }
 
     // Compute per-product quantity differences between original and updated items
     const productDiffMap = new Map();
@@ -7250,6 +7324,24 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       await markAppointmentCompleted(Appointment, savedSale.appointmentId);
     }
 
+    const newStatus = String(savedSale.status || '').toLowerCase();
+    if (newStatus === 'completed' && previousStatus !== 'completed') {
+      try {
+        const autoConsumption = require('./services/auto-consumption');
+        await autoConsumption.runAutoConsumptionForSale(savedSale, req.businessModels, { user: req.user });
+      } catch (autoConsumptionErr) {
+        console.error('Auto consumption on sale update failed:', autoConsumptionErr);
+      }
+    }
+    if (newStatus === 'cancelled' && previousStatus === 'completed') {
+      try {
+        const autoConsumption = require('./services/auto-consumption');
+        await autoConsumption.reverseConsumptionForBill(savedSale._id, req.businessModels);
+      } catch (reversalErr) {
+        console.error('Auto consumption reversal on bill cancel failed:', reversalErr);
+      }
+    }
+
     // Record edit history
     try {
       if (BillEditHistory) {
@@ -7303,6 +7395,172 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       session.endSession();
     }
     res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// ==================== AUTO CONSUMPTION (Service consumption rules & logs) ====================
+
+// List consumption rules (by serviceId or all for branch)
+app.get('/api/consumption-rules', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule } = req.businessModels;
+    const { serviceId } = req.query;
+    const branchId = req.user.branchId;
+    const query = { branchId };
+    if (serviceId) query.serviceId = serviceId;
+    const rules = await ServiceConsumptionRule.find(query).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
+    res.json({ success: true, data: rules });
+  } catch (err) {
+    console.error('Error listing consumption rules:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Create consumption rule
+app.post('/api/consumption-rules', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule, Product, Service } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { serviceId, productId, quantityUsed, unit, isAdjustable, maxAdjustmentPercent, variantKey } = req.body;
+    if (!serviceId || !productId || quantityUsed == null || !unit) {
+      return res.status(400).json({ success: false, error: 'serviceId, productId, quantityUsed, and unit are required' });
+    }
+    const product = await Product.findById(productId);
+    if (!product || String(product.branchId) !== String(branchId)) {
+      return res.status(400).json({ success: false, error: 'Product not found or wrong branch' });
+    }
+    const service = await Service.findById(serviceId);
+    if (!service || String(service.branchId) !== String(branchId)) {
+      return res.status(400).json({ success: false, error: 'Service not found or wrong branch' });
+    }
+    const unitNorm = String(unit).toLowerCase();
+    const allowedUnits = ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'];
+    if (!allowedUnits.includes(unitNorm)) {
+      return res.status(400).json({ success: false, error: `unit must be one of: ${allowedUnits.join(', ')}` });
+    }
+    const rule = await ServiceConsumptionRule.create({
+      serviceId,
+      productId,
+      quantityUsed: Number(quantityUsed),
+      unit: unitNorm,
+      isAdjustable: !!isAdjustable,
+      maxAdjustmentPercent: maxAdjustmentPercent != null ? Number(maxAdjustmentPercent) : 20,
+      variantKey: (variantKey || '').trim(),
+      branchId
+    });
+    const populated = await ServiceConsumptionRule.findById(rule._id).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
+    res.status(201).json({ success: true, data: populated });
+  } catch (err) {
+    console.error('Error creating consumption rule:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Update consumption rule
+app.put('/api/consumption-rules/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule, Product } = req.businessModels;
+    const branchId = req.user.branchId;
+    const rule = await ServiceConsumptionRule.findOne({ _id: req.params.id, branchId });
+    if (!rule) return res.status(404).json({ success: false, error: 'Rule not found' });
+    const { quantityUsed, unit, isAdjustable, maxAdjustmentPercent, variantKey } = req.body;
+    if (quantityUsed != null) rule.quantityUsed = Number(quantityUsed);
+    if (unit != null) {
+      const unitNorm = String(unit).toLowerCase();
+      const allowedUnits = ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'];
+      if (!allowedUnits.includes(unitNorm)) {
+        return res.status(400).json({ success: false, error: `unit must be one of: ${allowedUnits.join(', ')}` });
+      }
+      rule.unit = unitNorm;
+    }
+    if (isAdjustable !== undefined) rule.isAdjustable = !!isAdjustable;
+    if (maxAdjustmentPercent != null) rule.maxAdjustmentPercent = Number(maxAdjustmentPercent);
+    if (variantKey !== undefined) rule.variantKey = (variantKey || '').trim();
+    await rule.save();
+    const populated = await ServiceConsumptionRule.findById(rule._id).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
+    res.json({ success: true, data: populated });
+  } catch (err) {
+    console.error('Error updating consumption rule:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Delete consumption rule
+app.delete('/api/consumption-rules/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule } = req.businessModels;
+    const branchId = req.user.branchId;
+    const rule = await ServiceConsumptionRule.findOneAndDelete({ _id: req.params.id, branchId });
+    if (!rule) return res.status(404).json({ success: false, error: 'Rule not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting consumption rule:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Bulk create consumption rules for a service
+app.post('/api/consumption-rules/bulk', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule, Product, Service } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { serviceId, rules } = req.body; // rules: [{ productId, quantityUsed, unit, isAdjustable?, maxAdjustmentPercent?, variantKey? }]
+    if (!serviceId || !Array.isArray(rules) || rules.length === 0) {
+      return res.status(400).json({ success: false, error: 'serviceId and non-empty rules array required' });
+    }
+    const service = await Service.findById(serviceId);
+    if (!service || String(service.branchId) !== String(branchId)) {
+      return res.status(400).json({ success: false, error: 'Service not found or wrong branch' });
+    }
+    const created = [];
+    for (const r of rules) {
+      const { productId, quantityUsed, unit, isAdjustable, maxAdjustmentPercent, variantKey } = r;
+      if (!productId || quantityUsed == null || !unit) continue;
+      const product = await Product.findById(productId);
+      if (!product || String(product.branchId) !== String(branchId)) continue;
+      const unitNorm = String(unit).toLowerCase();
+      const allowedUnits = ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'];
+      if (!allowedUnits.includes(unitNorm)) continue;
+      const rule = await ServiceConsumptionRule.create({
+        serviceId,
+        productId,
+        quantityUsed: Number(quantityUsed),
+        unit: unitNorm,
+        isAdjustable: !!isAdjustable,
+        maxAdjustmentPercent: maxAdjustmentPercent != null ? Number(maxAdjustmentPercent) : 20,
+        variantKey: (variantKey || '').trim(),
+        branchId
+      });
+      created.push(rule);
+    }
+    res.status(201).json({ success: true, data: created });
+  } catch (err) {
+    console.error('Error bulk creating consumption rules:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get inventory consumption logs (filtered)
+app.get('/api/consumption-logs', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { InventoryConsumptionLog } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { productId, serviceId, billId, fromDate, toDate, limit } = req.query;
+    const query = { branchId };
+    if (productId) query.productId = productId;
+    if (serviceId) query.serviceId = serviceId;
+    if (billId) query.billId = billId;
+    if (fromDate || toDate) {
+      query.createdAt = {};
+      if (fromDate) query.createdAt.$gte = new Date(fromDate);
+      if (toDate) query.createdAt.$lte = new Date(toDate);
+    }
+    const limitNum = Math.min(parseInt(limit, 10) || 100, 500);
+    const logs = await InventoryConsumptionLog.find(query).sort({ createdAt: -1 }).limit(limitNum).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
+    res.json({ success: true, data: logs });
+  } catch (err) {
+    console.error('Error listing consumption logs:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

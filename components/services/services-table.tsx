@@ -221,7 +221,7 @@ export function ServicesTable() {
                     Add Service
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-md">
+                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Add New Service</DialogTitle>
                   </DialogHeader>
@@ -355,7 +355,7 @@ export function ServicesTable() {
       {/* Edit Service Dialog */}
       {canManageServices && (
         <Dialog open={isEditServiceOpen} onOpenChange={setIsEditServiceOpen}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit Service</DialogTitle>
             </DialogHeader>
@@ -379,6 +379,7 @@ export function ServicesTable() {
           setIsImportDialogOpen(false)
         }}
       />
+
     </div>
   )
 }
