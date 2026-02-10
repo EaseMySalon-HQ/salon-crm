@@ -95,7 +95,10 @@ class ModelFactory {
       ServiceConsumptionRule: this.getModel('ServiceConsumptionRule', require('./ServiceConsumptionRule').schema, connection),
 
       // InventoryConsumptionLog model (auto consumption audit)
-      InventoryConsumptionLog: this.getModel('InventoryConsumptionLog', require('./InventoryConsumptionLog').schema, connection)
+      InventoryConsumptionLog: this.getModel('InventoryConsumptionLog', require('./InventoryConsumptionLog').schema, connection),
+
+      // TipPayout model (staff tip payouts)
+      TipPayout: this.getModel('TipPayout', require('./TipPayout').schema, connection)
     };
   }
 

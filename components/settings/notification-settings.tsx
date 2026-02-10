@@ -54,6 +54,7 @@ export function NotificationSettings() {
     recipientStaffIds: [] as string[],
     dailySummary: {
       enabled: false,
+      mode: "fixedTime" as "fixedTime" | "afterClosing",
       time: "21:00",
       recipientStaffIds: [] as string[]
     },
@@ -145,6 +146,7 @@ export function NotificationSettings() {
           recipientStaffIds: response.data.recipientStaffIds || [],
           dailySummary: {
             enabled: response.data.dailySummary?.enabled || false,
+            mode: (response.data.dailySummary?.mode as "fixedTime" | "afterClosing") || "fixedTime",
             time: response.data.dailySummary?.time || "21:00",
             recipientStaffIds: response.data.dailySummary?.recipientStaffIds || []
           },
@@ -386,32 +388,61 @@ export function NotificationSettings() {
           </CardHeader>
           {settings.dailySummary.enabled && (
             <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <Label>Send Time</Label>
+              <div className="flex flex-col gap-2">
+                <Label>When to send</Label>
                 <Select
-                  value={settings.dailySummary.time}
+                  value={settings.dailySummary.mode}
                   onValueChange={(value) =>
                     setSettings(prev => ({
                       ...prev,
-                      dailySummary: { ...prev.dailySummary, time: value }
+                      dailySummary: { ...prev.dailySummary, mode: value as "fixedTime" | "afterClosing" }
                     }))
                   }
                 >
-                  <SelectTrigger className="w-32">
+                  <SelectTrigger className="w-56">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 24 }, (_, i) => {
-                      const hour = i.toString().padStart(2, '0');
-                      return (
-                        <SelectItem key={hour} value={`${hour}:00`}>
-                          {hour}:00
-                        </SelectItem>
-                      );
-                    })}
+                    <SelectItem value="fixedTime">At a fixed time every day</SelectItem>
+                    <SelectItem value="afterClosing">After day closing / cash registry close</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+
+              {settings.dailySummary.mode === "fixedTime" && (
+                <div className="flex items-center justify-between">
+                  <Label>Send Time</Label>
+                  <Select
+                    value={settings.dailySummary.time}
+                    onValueChange={(value) =>
+                      setSettings(prev => ({
+                        ...prev,
+                        dailySummary: { ...prev.dailySummary, time: value }
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Array.from({ length: 24 }, (_, i) => {
+                        const hour = i.toString().padStart(2, '0');
+                        return (
+                          <SelectItem key={hour} value={`${hour}:00`}>
+                            {hour}:00
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {settings.dailySummary.mode === "afterClosing" && (
+                <p className="text-sm text-slate-500">
+                  Daily summary will be sent when you close the day / cash registry, instead of at a fixed time.
+                </p>
+              )}
             </CardContent>
           )}
         </Card>

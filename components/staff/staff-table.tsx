@@ -184,7 +184,12 @@ export function StaffTable() {
           title: "Success",
           description: `Email notifications ${enabled ? 'enabled' : 'disabled'} for ${staff.name}`,
         })
-        fetchStaff()
+        try {
+          await fetchStaff()
+        } catch (refetchError) {
+          // Toggle succeeded; refetch failure is non-fatal — avoid error toast and unhandled rejection
+          console.warn('Staff list refetch after notification toggle failed:', refetchError)
+        }
       } else {
         throw new Error(response.error || 'Failed to update email notifications')
       }

@@ -90,10 +90,17 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
     }
   })
 
-  // Update settings when propSettings change
+  // Update settings when propSettings change (merge so nested objects always exist)
   useEffect(() => {
     if (propSettings) {
-      setSettings(propSettings)
+      setSettings(prev => {
+        const next = { ...prev, ...propSettings }
+        if (!next.defaults || typeof next.defaults !== 'object') next.defaults = { timezone: 'Asia/Kolkata', currency: 'INR', currencySymbol: '₹', taxRate: 18, dateFormat: 'DD/MM/YYYY', timeFormat: '12', businessType: 'salon', gstNumber: '', businessLicense: '', ...(prev?.defaults || {}), ...(propSettings?.defaults || {}) }
+        if (!next.operatingHours || typeof next.operatingHours !== 'object') next.operatingHours = prev?.operatingHours || {}
+        if (!next.appointmentSettings || typeof next.appointmentSettings !== 'object') next.appointmentSettings = prev?.appointmentSettings || {}
+        if (!next.creationRules || typeof next.creationRules !== 'object') next.creationRules = prev?.creationRules || {}
+        return next
+      })
     }
   }, [propSettings])
 
@@ -101,12 +108,12 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
     setSettings(prev => {
       const newSettings = { ...prev }
       const keys = path.split('.')
-      let current = newSettings
-      
+      let current: any = newSettings
       for (let i = 0; i < keys.length - 1; i++) {
-        current = current[keys[i]]
+        const k = keys[i]
+        if (current[k] == null || typeof current[k] !== 'object') current[k] = {}
+        current = current[k]
       }
-      
       current[keys[keys.length - 1]] = value
       onSettingsChange(newSettings)
       return newSettings
@@ -155,7 +162,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
             <div className="space-y-2">
               <Label htmlFor="timezone">Default Timezone</Label>
               <Select
-                value={settings.defaults.timezone}
+                value={settings?.defaults?.timezone ?? 'Asia/Kolkata'}
                 onValueChange={(value) => handleSettingChange('defaults.timezone', value)}
               >
                 <SelectTrigger>
@@ -174,7 +181,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
             <div className="space-y-2">
               <Label htmlFor="currency">Default Currency</Label>
               <Select
-                value={settings.defaults.currency}
+                value={settings?.defaults?.currency ?? 'INR'}
                 onValueChange={(value) => handleSettingChange('defaults.currency', value)}
               >
                 <SelectTrigger>
@@ -198,7 +205,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 min="0"
                 max="50"
                 step="0.01"
-                value={settings.defaults.taxRate}
+                value={settings?.defaults?.taxRate ?? 18}
                 onChange={(e) => handleSettingChange('defaults.taxRate', parseFloat(e.target.value))}
                 className="w-full"
               />
@@ -207,7 +214,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
             <div className="space-y-2">
               <Label htmlFor="businessType">Default Business Type</Label>
               <Select
-                value={settings.defaults.businessType}
+                value={settings?.defaults?.businessType ?? 'salon'}
                 onValueChange={(value) => handleSettingChange('defaults.businessType', value)}
               >
                 <SelectTrigger>
@@ -226,7 +233,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
             <div className="space-y-2">
               <Label htmlFor="dateFormat">Date Format</Label>
               <Select
-                value={settings.defaults.dateFormat}
+                value={settings?.defaults?.dateFormat ?? 'DD/MM/YYYY'}
                 onValueChange={(value) => handleSettingChange('defaults.dateFormat', value)}
               >
                 <SelectTrigger>
@@ -244,7 +251,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
             <div className="space-y-2">
               <Label htmlFor="timeFormat">Time Format</Label>
               <Select
-                value={settings.defaults.timeFormat}
+                value={settings?.defaults?.timeFormat ?? '12'}
                 onValueChange={(value) => handleSettingChange('defaults.timeFormat', value)}
               >
                 <SelectTrigger>
@@ -280,26 +287,26 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
               
               <div className="flex items-center space-x-2">
                 <Switch
-                  checked={!settings.operatingHours[day.key].closed}
+                  checked={!settings?.operatingHours?.[day.key]?.closed}
                   onCheckedChange={(checked) => handleOperatingHoursChange(day.key, 'closed', !checked)}
                 />
                 <span className="text-sm text-gray-600">
-                  {settings.operatingHours[day.key].closed ? 'Closed' : 'Open'}
+                  {settings?.operatingHours?.[day.key]?.closed ? 'Closed' : 'Open'}
                 </span>
               </div>
 
-              {!settings.operatingHours[day.key].closed && (
+              {!settings?.operatingHours?.[day.key]?.closed && (
                 <div className="flex items-center space-x-2">
                   <Input
                     type="time"
-                    value={settings.operatingHours[day.key].open}
+                    value={settings?.operatingHours?.[day.key]?.open ?? '09:00'}
                     onChange={(e) => handleOperatingHoursChange(day.key, 'open', e.target.value)}
                     className="w-32"
                   />
                   <span className="text-gray-500">to</span>
                   <Input
                     type="time"
-                    value={settings.operatingHours[day.key].close}
+                    value={settings?.operatingHours?.[day.key]?.close ?? '18:00'}
                     onChange={(e) => handleOperatingHoursChange(day.key, 'close', e.target.value)}
                     className="w-32"
                   />

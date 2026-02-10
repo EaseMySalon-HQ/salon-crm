@@ -6452,6 +6452,102 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
+// Summary report (same metrics as daily summary email)
+app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Sale, Receipt, CashRegistry, Expense } = req.businessModels;
+    const branchId = req.user.branchId;
+    let dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom) : null;
+    let dateTo = req.query.dateTo ? new Date(req.query.dateTo) : null;
+    if (!dateFrom || !dateTo) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      dateFrom = dateFrom || today;
+      dateTo = dateTo || new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1);
+    } else {
+      dateTo.setHours(23, 59, 59, 999);
+    }
+    const todayDateString = dateFrom.toISOString().split('T')[0];
+    const tomorrowDateString = new Date(dateTo.getTime() + 1).toISOString().split('T')[0];
+
+    const sales = await Sale.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      status: { $nin: ['cancelled', 'Cancelled'] }
+    }).lean();
+
+    const receipts = await Receipt.find({
+      branchId,
+      date: { $gte: todayDateString, $lte: tomorrowDateString }
+    }).lean();
+
+    const closingRegistry = await CashRegistry.findOne({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      shiftType: 'closing'
+    }).sort({ date: -1 }).lean();
+
+    const cashExpenses = await Expense.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      paymentMode: 'Cash',
+      status: { $in: ['approved', 'pending'] }
+    }).lean();
+
+    const totalBillCount = sales.length;
+    const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
+    const totalCustomerCount = uniqueCustomers.size || totalBillCount;
+    const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
+    let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
+    sales.forEach(s => {
+      (s.payments || []).forEach(p => {
+        const amt = p.amount || 0;
+        if (p.mode === 'Cash') totalSalesCash += amt;
+        else if (p.mode === 'Online') totalSalesOnline += amt;
+        else if (p.mode === 'Card') totalSalesCard += amt;
+      });
+      if (!(s.payments && s.payments.length)) {
+        const amt = s.grossTotal || s.netTotal || 0;
+        if (s.paymentMode === 'Cash') totalSalesCash += amt;
+        else if (s.paymentMode === 'Online') totalSalesOnline += amt;
+        else if (s.paymentMode === 'Card') totalSalesCard += amt;
+      }
+    });
+    let duesCollected = 0;
+    sales.forEach(s => {
+      (s.paymentHistory || []).forEach(ph => {
+        const d = ph.date ? new Date(ph.date) : null;
+        if (d && d >= dateFrom && d <= dateTo) duesCollected += ph.amount || 0;
+      });
+    });
+    const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    const cashBalance = closingRegistry?.cashBalance ?? 0;
+
+    res.json({
+      success: true,
+      data: {
+        totalBillCount,
+        totalCustomerCount,
+        totalSales,
+        totalSalesCash,
+        totalSalesOnline,
+        totalSalesCard,
+        duesCollected,
+        cashExpense,
+        tipCollected,
+        cashBalance
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching summary report:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch summary'
+    });
+  }
+});
+
 // --- SALES API ---
 app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
@@ -9578,6 +9674,118 @@ app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, 
       success: false,
       error: error.message || 'Failed to export sales report'
     });
+  }
+});
+
+// Export summary report (emailed to admin)
+app.post('/api/reports/export/summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportSummaryReport } = require('./utils/report-exporter');
+    const result = await exportSummaryReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Summary report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting summary report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export summary report'
+    });
+  }
+});
+
+// Export staff performance report (emailed to admin)
+app.post('/api/reports/export/staff-performance', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {}, data = [] } = req.body;
+    const { exportStaffPerformanceReport } = require('./utils/report-exporter');
+    const result = await exportStaffPerformanceReport({
+      branchId: req.user.branchId,
+      format,
+      filters,
+      data: Array.isArray(data) ? data : []
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Staff performance report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting staff performance report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export staff performance report'
+    });
+  }
+});
+
+// Export service list report (emailed to admin)
+app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportServiceListReport } = require('./utils/report-exporter');
+    const result = await exportServiceListReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Service list report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting service list report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export service list report'
+    });
+  }
+});
+
+// Tip payouts (for Staff Tip report - Mark as Paid)
+app.get('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { TipPayout } = req.businessModels;
+    const { dateFrom, dateTo } = req.query;
+    const query = {};
+    if (dateFrom || dateTo) {
+      query.paidAt = {};
+      if (dateFrom) query.paidAt.$gte = new Date(dateFrom);
+      if (dateTo) { const d = new Date(dateTo); d.setHours(23, 59, 59, 999); query.paidAt.$lte = d; }
+    }
+    const payouts = await TipPayout.find(query).sort({ paidAt: -1 }).lean();
+    res.json({ success: true, data: payouts });
+  } catch (error) {
+    console.error('Error fetching tip payouts:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to fetch tip payouts' });
+  }
+});
+
+app.post('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { TipPayout } = req.businessModels;
+    const { staffId, staffName, amount, dateFrom, dateTo } = req.body;
+    if (!staffId || !staffName || amount == null || amount < 0) {
+      return res.status(400).json({ success: false, error: 'staffId, staffName and amount (>= 0) are required' });
+    }
+    const branchId = req.user.branchId;
+    const payout = await TipPayout.create({
+      staffId,
+      staffName,
+      amount: Number(amount),
+      dateFrom: dateFrom ? new Date(dateFrom) : undefined,
+      dateTo: dateTo ? new Date(dateTo) : undefined,
+      branchId
+    });
+    res.json({ success: true, data: payout });
+  } catch (error) {
+    console.error('Error creating tip payout:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to create tip payout' });
   }
 });
 

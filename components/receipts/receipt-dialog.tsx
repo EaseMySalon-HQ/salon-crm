@@ -258,7 +258,7 @@ export function ReceiptDialog({ receipt, open, onOpenChange, onReceiptUpdate }: 
                         <span>{formatAmount(editedReceipt.tax)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Tip:</span>
+                        <span>{editedReceipt.tipStaffName ? `Tip (${editedReceipt.tipStaffName}):` : 'Tip:'}</span>
                         <span>{formatAmount(editedReceipt.tip)}</span>
                       </div>
                       <div className="flex justify-between font-semibold border-t pt-1">
