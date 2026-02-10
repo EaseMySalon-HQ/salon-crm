@@ -198,7 +198,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
           )}
           {receipt.tip > 0 && (
             <div className="flex justify-between">
-              <span>Tip:</span>
+              <span>{receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
               <span>{formatAmount(receipt.tip)}</span>
             </div>
           )}

@@ -70,6 +70,10 @@ const businessSchema = new mongoose.Schema({
       // Daily Summary Configuration
       dailySummary: {
         enabled: { type: Boolean, default: false },
+        // When to send daily summary emails:
+        // - 'fixedTime': at a specific time of day (uses scheduler)
+        // - 'afterClosing': when the day/registry is closed (manual trigger)
+        mode: { type: String, enum: ['fixedTime', 'afterClosing'], default: 'fixedTime' },
         time: { type: String, default: '21:00' }, // HH:mm format
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
       },
@@ -110,28 +114,28 @@ const businessSchema = new mongoose.Schema({
         paymentFailures: { type: Boolean, default: false },
         systemErrors: { type: Boolean, default: false },
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      }
+    },
+    
+    // WhatsApp Notification Configuration (separate from email - managed in WhatsApp tab)
+    whatsappNotificationSettings: {
+      enabled: { type: Boolean, default: false },
+      receiptNotifications: {
+        enabled: { type: Boolean, default: true },
+        autoSendToClients: { type: Boolean, default: true },
+        highValueThreshold: { type: Number, default: 0 }
       },
-      
-      // WhatsApp Notification Configuration
-      whatsappNotificationSettings: {
-        enabled: { type: Boolean },
-        receiptNotifications: {
-          enabled: { type: Boolean, default: true },
-          autoSendToClients: { type: Boolean, default: true },
-          highValueThreshold: { type: Number, default: 0 }
-        },
-        appointmentNotifications: {
-          enabled: { type: Boolean, default: false },
-          newAppointments: { type: Boolean, default: false },
-          confirmations: { type: Boolean, default: false },
-          reminders: { type: Boolean, default: false },
-          cancellations: { type: Boolean, default: false }
-        },
-        systemAlerts: {
-          enabled: { type: Boolean, default: false },
-          lowInventory: { type: Boolean, default: false },
-          paymentFailures: { type: Boolean, default: false }
-        }
+      appointmentNotifications: {
+        enabled: { type: Boolean, default: false },
+        newAppointments: { type: Boolean, default: false },
+        confirmations: { type: Boolean, default: false },
+        reminders: { type: Boolean, default: false },
+        cancellations: { type: Boolean, default: false }
+      },
+      systemAlerts: {
+        enabled: { type: Boolean, default: false },
+        lowInventory: { type: Boolean, default: false },
+        paymentFailures: { type: Boolean, default: false }
       }
     },
     

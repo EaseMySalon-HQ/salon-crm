@@ -63,7 +63,7 @@ export default function ReportsPage() {
                     className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
                   >
                     <TrendingUp className="h-4 w-4 mr-2" />
-                    Sales Report
+                    Sales
                   </TabsTrigger>
                   <TabsTrigger 
                     value="expense" 
@@ -83,13 +83,7 @@ export default function ReportsPage() {
 
                 <TabsContent value="sales" className="space-y-6">
                   <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardHeader className="pb-4">
-                      <CardTitle className="text-xl text-slate-800">Sales Report</CardTitle>
-                      <CardDescription className="text-slate-600">
-                        View detailed sales performance and revenue analysis
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
+                    <CardContent className="pt-6">
                       <SalesReport />
                     </CardContent>
                   </Card>
@@ -97,13 +91,7 @@ export default function ReportsPage() {
 
                 <TabsContent value="expense" className="space-y-6">
                   <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardHeader className="pb-4">
-                      <CardTitle className="text-xl text-slate-800">Expense Report</CardTitle>
-                      <CardDescription className="text-slate-600">
-                        Track and analyze business expenses and costs
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
+                    <CardContent className="pt-6">
                       <ExpenseReport />
                     </CardContent>
                   </Card>
@@ -115,13 +103,7 @@ export default function ReportsPage() {
                     upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to track staff commissions and performance analytics."
                   >
                     <Card className="border-0 shadow-sm bg-slate-50/50">
-                      <CardHeader className="pb-4">
-                        <CardTitle className="text-xl text-slate-800">Staff Performance</CardTitle>
-                        <CardDescription className="text-slate-600">
-                          Analyze staff performance, commissions, and sales analytics
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent>
+                      <CardContent className="pt-6">
                         <StaffPerformanceReport />
                       </CardContent>
                     </Card>

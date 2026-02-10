@@ -78,6 +78,7 @@ export interface Receipt {
   items: ReceiptItem[]
   subtotal: number
   tip: number
+  tipStaffName?: string
   discount: number
   tax: number
   roundOff?: number

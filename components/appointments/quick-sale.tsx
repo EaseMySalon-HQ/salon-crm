@@ -200,6 +200,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const [discountPercentage, setDiscountPercentage] = useState(0)
   const [giftVoucher, setGiftVoucher] = useState("")
   const [tip, setTip] = useState(0)
+  const [tipStaffId, setTipStaffId] = useState<string | null>(null)
   const [isGlobalDiscountActive, setIsGlobalDiscountActive] = useState(false)
   const [isValueDiscountActive, setIsValueDiscountActive] = useState(false)
   const [cashAmount, setCashAmount] = useState(0)
@@ -1835,10 +1836,13 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     })
   }
 
-  // Grand total = subtotal + tip (GST already included in subtotal)
-  const grandTotal = subtotal + tip
-  const roundedTotal = Math.round(grandTotal)
-  const roundOff = roundedTotal - grandTotal
+  // Base bill (services/products) total = subtotal - discount (GST already included in subtotal)
+  const baseTotal = subtotal - totalDiscount
+  const baseRounded = Math.round(baseTotal)
+  const roundOff = baseRounded - baseTotal
+  // Amount payable by customer = baseRounded + tip (tip is separate, non-taxable)
+  const grandTotal = baseRounded + tip
+  const roundedTotal = grandTotal
   const totalPaid = cashAmount + cardAmount + onlineAmount
   const change = totalPaid - roundedTotal
 
@@ -2136,14 +2140,15 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         staffName: receiptItems[0].staffName
       } : 'No items')
       
-      // Calculate tax breakdown from individual items (GST already included in totals)
+      // Calculate tax breakdown from individual items (GST already included in item totals)
       // Note: subtotal already includes tax (item.total includes tax)
       let calculatedTax = 0
-      // Grand total = subtotal - discount + tip (tax already included in subtotal)
-      const grandTotal = subtotal - totalDiscount + tip
-      const roundedTotal = Math.round(grandTotal)
-      const roundOff = roundedTotal - grandTotal
-      let calculatedTotal = roundedTotal
+      // Base bill amount (for sales/revenue) = subtotal - discount (tip is separate and non-taxable)
+      const baseTotalForSale = subtotal - totalDiscount
+      const roundedBaseTotalForSale = Math.round(baseTotalForSale)
+      const roundOff = roundedBaseTotalForSale - baseTotalForSale
+      // calculatedTotal = bill amount used for sales/grossTotal (EXCLUDES tip)
+      let calculatedTotal = roundedBaseTotalForSale
       let taxBreakdown = { cgst: 0, sgst: 0, igst: 0 }
 
       // Calculate tax breakdown from individual items (service tax only when global tax ON and service Tax Applicable ON)
@@ -2278,6 +2283,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         }
 
         // Create sale data with the receipt number
+        const tipStaff = tipStaffId
+          ? staff.find((s) => (s._id || s.id) === tipStaffId)
+          : null
         const saleData = {
           billNo: receiptNumber,
           customerId: getCustomerId(customer),
@@ -2322,16 +2330,20 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
           netTotal: subtotal,
           taxAmount: calculatedTax,
           grossTotal: calculatedTotal,
+          tip: tip,
+          tipStaffId: tipStaffId || undefined,
+          tipStaffName: tipStaff?.name || undefined,
           discount: totalDiscount || 0,
           discountType: 'percentage',
           // Payment status tracking
           paymentStatus: {
-            totalAmount: calculatedTotal,
+            // Total amount customer needs to pay = sales amount (calculatedTotal) + tip
+            totalAmount: calculatedTotal + tip,
             paidAmount: totalPaid,
-            remainingAmount: calculatedTotal - totalPaid,
+            remainingAmount: calculatedTotal + tip - totalPaid,
             dueDate: new Date()
           },
-          status: totalPaid === 0 ? 'unpaid' : (totalPaid < calculatedTotal ? 'partial' : 'completed'),
+          status: totalPaid === 0 ? 'unpaid' : (totalPaid < calculatedTotal + tip ? 'partial' : 'completed'),
           paymentMode: payments.map(p => {
             const capitalized = p.type.charAt(0).toUpperCase() + p.type.slice(1);
             return capitalized;
@@ -2460,7 +2472,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             }
             
             // Mark linked appointment as completed if fully paid
-            if (linkedAppointmentId && (totalPaid >= calculatedTotal || result.data?.status === 'completed')) {
+            if (linkedAppointmentId && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
               try {
                 await AppointmentsAPI.update(linkedAppointmentId, { status: "completed" })
                 toast({
@@ -2473,6 +2485,10 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             }
             
             // Now that backend sale is successful, create and store the receipt locally
+      const tipStaff = tipStaffId
+        ? staff.find((s) => (s._id || s.id) === tipStaffId)
+        : null
+
       const receipt: any = {
         id: Date.now().toString(),
         receiptNumber: receiptNumber,
@@ -2487,11 +2503,14 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         discount: totalDiscount,
         tax: calculatedTax,
         roundOff: roundOff,
-        total: calculatedTotal,
+        // Receipt total = bill amount (calculatedTotal) + tip (what customer pays)
+        total: calculatedTotal + tip,
         taxBreakdown: taxBreakdown,
         payments: payments,
         staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
         staffName: primaryStaff?.staffName || staff[0]?.name || "Unassigned Staff",
+        tipStaffId: tipStaffId || undefined,
+        tipStaffName: tipStaff?.name || undefined,
         notes: remarks,
       }
 
@@ -2630,6 +2649,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     setCardAmount(0)
     setOnlineAmount(0)
     setRemarks("")
+    setTipStaffId(null)
     setConfirmUnpaid(false)
     setShowTipModal(false)
     setTempTipAmount(0)
@@ -2647,10 +2667,19 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   }
 
   const handleTipOk = () => {
+    if (tempTipAmount > 0 && !tipStaffId) {
+      toast({
+        title: "Select Staff",
+        description: "Please select the staff member receiving the tip.",
+        variant: "destructive",
+      })
+      return
+    }
     if (tempTipAmount > 0) {
       setTip(tempTipAmount)
     } else {
       setTip(0)
+      setTipStaffId(null)
     }
     setShowTipModal(false)
   }
@@ -4031,41 +4060,77 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 <h4 className="text-sm font-semibold text-gray-700">Payment Methods</h4>
                 
                 <div className="grid grid-cols-3 gap-3">
-                  {/* Cash */}
-                  <div className="flex flex-col items-center gap-1 p-2 bg-green-50/50 rounded-xl border border-green-200 hover:bg-green-50 transition-colors">
+                  {/* Cash - click to fill payable amount; darker background when selected (amount > 0) */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setCashAmount(roundedTotal)
+                      setCardAmount(0)
+                      setOnlineAmount(0)
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCashAmount(roundedTotal); setCardAmount(0); setOnlineAmount(0); } }}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-colors cursor-pointer ${cashAmount > 0 ? 'bg-green-200 border-green-400 hover:bg-green-300' : 'bg-green-50/50 border-green-200 hover:bg-green-50'}`}
+                  >
                     <span className="text-sm font-medium text-green-700">Cash</span>
                     <Input
                       type="number"
                       value={cashAmount}
                       onChange={(e) => setCashAmount(Number(e.target.value))}
                       onFocus={(e) => e.target.select()}
-                      className="w-full h-8 text-sm border-green-300 text-center rounded-lg focus:border-green-400 focus:ring-green-200"
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full h-8 text-sm border-green-300 text-center rounded-lg focus:border-green-400 focus:ring-green-200 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      style={{ textAlign: 'center' }}
                       placeholder="0"
                     />
                   </div>
 
-                  {/* Card */}
-                  <div className="flex flex-col items-center gap-1 p-2 bg-blue-50/50 rounded-xl border border-blue-200 hover:bg-blue-50 transition-colors">
+                  {/* Card - click to fill payable amount; darker background when selected (amount > 0) */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setCardAmount(roundedTotal)
+                      setCashAmount(0)
+                      setOnlineAmount(0)
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCardAmount(roundedTotal); setCashAmount(0); setOnlineAmount(0); } }}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-colors cursor-pointer ${cardAmount > 0 ? 'bg-blue-200 border-blue-400 hover:bg-blue-300' : 'bg-blue-50/50 border-blue-200 hover:bg-blue-50'}`}
+                  >
                     <span className="text-sm font-medium text-blue-700">Card</span>
                     <Input
                       type="number"
                       value={cardAmount}
                       onChange={(e) => setCardAmount(Number(e.target.value))}
                       onFocus={(e) => e.target.select()}
-                      className="w-full h-8 text-sm border-blue-300 text-center rounded-lg focus:border-blue-400 focus:ring-blue-200"
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full h-8 text-sm border-blue-300 text-center rounded-lg focus:border-blue-400 focus:ring-blue-200 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      style={{ textAlign: 'center' }}
                       placeholder="0"
                     />
                   </div>
 
-                  {/* Online */}
-                  <div className="flex flex-col items-center gap-1 p-2 bg-purple-50/50 rounded-xl border border-purple-200 hover:bg-purple-50 transition-colors">
+                  {/* Online - click to fill payable amount; darker background when selected (amount > 0) */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setOnlineAmount(roundedTotal)
+                      setCashAmount(0)
+                      setCardAmount(0)
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOnlineAmount(roundedTotal); setCashAmount(0); setCardAmount(0); } }}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-colors cursor-pointer ${onlineAmount > 0 ? 'bg-purple-200 border-purple-400 hover:bg-purple-300' : 'bg-purple-50/50 border-purple-200 hover:bg-purple-50'}`}
+                  >
                     <span className="text-sm font-medium text-purple-700">Online</span>
                     <Input
                       type="number"
                       value={onlineAmount}
                       onChange={(e) => setOnlineAmount(Number(e.target.value))}
                       onFocus={(e) => e.target.select()}
-                      className="w-full h-8 text-sm border-purple-300 text-center rounded-lg focus:border-purple-400 focus:ring-purple-200"
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full h-8 text-sm border-purple-300 text-center rounded-lg focus:border-purple-400 focus:ring-purple-200 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      style={{ textAlign: 'center' }}
                       placeholder="0"
                     />
                   </div>
@@ -4190,6 +4255,35 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 className="text-lg"
                 autoFocus
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="tip-staff" className="text-sm font-medium">
+                Staff for Tip
+              </Label>
+              <Select
+                value={tipStaffId || ""}
+                onValueChange={(value) => setTipStaffId(value || null)}
+              >
+                <SelectTrigger id="tip-staff" className="h-9">
+                  <SelectValue placeholder="Select staff" />
+                </SelectTrigger>
+                <SelectContent>
+                  {staff.length === 0 ? (
+                    <SelectItem value="__no_staff" disabled>
+                      No staff available
+                    </SelectItem>
+                  ) : (
+                    staff.map((s) => {
+                      const id = s._id || s.id
+                      return (
+                        <SelectItem key={id} value={id}>
+                          {s.name || "Unnamed Staff"}
+                        </SelectItem>
+                      )
+                    })
+                  )}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <DialogFooter className="gap-2">

@@ -28,6 +28,8 @@ interface ReceiptData {
   netTotal: number
   taxAmount: number
   grossTotal: number
+  tip: number
+  tipStaffName?: string
   paymentMode: string
   payments: Array<{
     type: string
@@ -112,7 +114,9 @@ export default function ReceiptPage() {
               })),
               netTotal: frontendData.subtotal,
               taxAmount: frontendData.tax,
-              grossTotal: frontendData.total,
+              grossTotal: frontendData.total - (frontendData.tip || 0),
+              tip: frontendData.tip || 0,
+              tipStaffName: frontendData.tipStaffName,
               paymentMode: frontendData.payments?.[0]?.type || 'Cash',
               payments: frontendData.payments || [{ type: 'Cash', amount: frontendData.total }],
               staffName: frontendData.staffName,
@@ -161,6 +165,8 @@ export default function ReceiptPage() {
               netTotal: saleData.netTotal,
               taxAmount: saleData.taxAmount,
               grossTotal: saleData.grossTotal,
+              tip: saleData.tip || 0,
+              tipStaffName: saleData.tipStaffName,
               paymentMode: saleData.paymentMode,
               payments: saleData.payments?.length > 0 ? saleData.payments.map((payment: any) => {
                 // Handle both 'mode' field (from Sale model) and 'type' field (from receipt)
@@ -205,7 +211,7 @@ export default function ReceiptPage() {
     if (!receipt || !businessSettings) return
     
     // Convert receipt data to the format expected by ThermalReceiptGenerator
-    const receiptForThermal = {
+      const receiptForThermal = {
       id: receipt.id,
       receiptNumber: receipt.billNo,
       clientId: receipt.id,
@@ -226,11 +232,12 @@ export default function ReceiptPage() {
         staffName: item.staffName || ""
       })),
       subtotal: receipt.netTotal,
-      tip: 0,
+      tip: receipt.tip || 0,
+      tipStaffName: receipt.tipStaffName,
       discount: 0,
       tax: receipt.taxAmount,
       roundOff: 0,
-      total: receipt.grossTotal,
+      total: receipt.grossTotal + (receipt.tip || 0),
       payments: receipt.payments.map(payment => ({
         type: payment.type as "cash" | "card" | "online",
         amount: payment.amount
@@ -334,10 +341,11 @@ export default function ReceiptPage() {
                 total: item.total
               })) || [],
               subtotal: receipt.netTotal,
-              tip: 0,
+              tip: receipt.tip || 0,
+              tipStaffName: receipt.tipStaffName,
               discount: 0,
               tax: receipt.taxAmount,
-              total: receipt.grossTotal,
+              total: receipt.grossTotal + (receipt.tip || 0),
               payments: receipt.payments?.map(payment => ({
                 type: (payment?.type || 'unknown') as "cash" | "card" | "online",
                 amount: payment?.amount || 0

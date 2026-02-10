@@ -39,12 +39,10 @@ apiClient.interceptors.request.use(
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
   (response: AxiosResponse) => {
-    console.log('✅ API Response Interceptor: Success response:', {
-      url: response.config.url,
-      status: response.status,
-      method: response.config.method,
-      data: response.data
-    })
+    // Log success without full response data to reduce console noise (data can be large)
+    if (process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_LOG_API_SUCCESS !== 'false') {
+      console.log('✅ API:', response.config.method?.toUpperCase(), response.config.url, response.status)
+    }
     return response
   },
   (error: AxiosError | any) => {
@@ -138,42 +136,23 @@ apiClient.interceptors.response.use(
         if (errorInfo.method && errorInfo.method !== 'Unknown method') errorDetails.method = errorInfo.method
         if (errorInfo.data !== undefined && errorInfo.data !== null) errorDetails.data = errorInfo.data
         
-        // Only log if we have at least one meaningful property with a real value
+        // Only log if we have at least one meaningful property (avoid "Error response: {}")
         const hasValidProperties = Object.keys(errorDetails).some(key => {
           const value = errorDetails[key]
-          return value !== undefined && value !== null && value !== '' && 
-                 (typeof value !== 'string' || value.trim() !== '')
+          if (value === undefined || value === null) return false
+          if (typeof value === 'string') return value.trim() !== ''
+          if (typeof value === 'object') return Object.keys(value).length > 0
+          return true
         })
         
         if (hasValidProperties) {
           console.error('❌ API Response Interceptor: Error response:', errorDetails)
         } else {
-          // Log raw error info if errorDetails is empty
-          console.error('❌ API Response Interceptor: Error (empty details):', {
-            rawError: error,
-            response: error?.response?.data,
-            status: error?.response?.status,
-            statusText: error?.response?.statusText,
-            url: error?.config?.url,
-            method: error?.config?.method
-          })
-        }
-        
-        if (error?.response?.status) {
-          // For 401 errors, only log if not on public route (to reduce noise)
-          const isPublicRoute = typeof window !== 'undefined' && 
-            (window.location.pathname.includes('/receipt/public/') ||
-             window.location.pathname.includes('/public/'))
-          
-          if (error.response.status === 401 && isPublicRoute) {
-            // Silently skip 401 errors on public routes
-          } else {
-            // Fallback: log at least the status if errorInfo is empty
-            console.error(`❌ API Response Interceptor: Error ${error.response.status}`, error.response.statusText || 'Unknown error')
-          }
-        } else if (error?.message) {
-          // Fallback: log the error message if available
-          console.error('❌ API Response Interceptor: Error:', error.message)
+          const status = error?.response?.status
+          const statusText = error?.response?.statusText || 'Unknown error'
+          const url = error?.config?.url
+          const method = error?.config?.method?.toUpperCase()
+          console.error('❌ API Response Interceptor:', status ? `${status} ${statusText}` : error?.message || 'Unknown error', url ? `${method} ${url}` : '')
         }
       }
     } catch (logError) {
@@ -863,6 +842,23 @@ export class ReportsAPI {
     return response.data;
   }
 
+  static async exportServiceList(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/service-list', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportStaffPerformance(format: 'pdf' | 'xlsx', filters?: any, data?: any[]): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/staff-performance', {
+      format,
+      filters,
+      data: data || []
+    });
+    return response.data;
+  }
+
   static async exportServices(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/reports/export/services', {
       format,
@@ -900,6 +896,30 @@ export class ReportsAPI {
     return response.data
   }
 
+  static async exportSummary(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/summary', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async getSummary(params?: { dateFrom?: string; dateTo?: string }): Promise<ApiResponse<{
+    totalBillCount: number
+    totalCustomerCount: number
+    totalSales: number
+    totalSalesCash: number
+    totalSalesOnline: number
+    totalSalesCard: number
+    duesCollected: number
+    cashExpense: number
+    tipCollected: number
+    cashBalance: number
+  }>> {
+    const response = await apiClient.get('/reports/summary', { params })
+    return response.data
+  }
+
   static async getServicePopularity(params?: { startDate?: string; endDate?: string }): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/reports/services', { params })
     return response.data
@@ -912,6 +932,16 @@ export class ReportsAPI {
 
   static async getDashboardStats(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/reports/dashboard')
+    return response.data
+  }
+
+  static async getTipPayouts(params?: { dateFrom?: string; dateTo?: string }): Promise<ApiResponse<{ data: any[] }>> {
+    const response = await apiClient.get('/reports/tip-payouts', { params })
+    return response.data
+  }
+
+  static async createTipPayout(body: { staffId: string; staffName: string; amount: number; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/tip-payouts', body)
     return response.data
   }
 }

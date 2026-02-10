@@ -448,15 +448,21 @@ class EmailService {
    * Send daily summary email
    */
   async sendDailySummary({ to, businessName, date, summaryData }) {
+    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
+    const logoUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/images/logo-no-background.png` : '';
+    const dateFormatted = summaryData?.dateFormatted || (date ? new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : date);
+
     const { html, text } = emailTemplates.dailySummary({
       businessName,
       date,
+      dateFormatted,
+      logoUrl,
       ...summaryData,
     });
 
     return this.sendEmail({
       to,
-      subject: `Daily Business Summary - ${date}`,
+      subject: `Daily Summary Report - ${dateFormatted}`,
       html,
       text,
     });

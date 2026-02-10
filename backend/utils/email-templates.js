@@ -3,77 +3,64 @@
  * Generates HTML and plain text email templates
  */
 
-function dailySummary({ businessName, date, totalSales, totalRevenue, appointmentCount, newClients, topServices, topProducts }) {
+function dailySummary({
+  businessName,
+  date,
+  dateFormatted,
+  logoUrl,
+  totalBillCount,
+  totalCustomerCount,
+  totalSales,
+  totalSalesCash,
+  totalSalesOnline,
+  totalSalesCard,
+  duesCollected,
+  cashExpense,
+  tipCollected,
+  cashBalance
+}) {
+  const fmt = (n) => (n != null && Number.isFinite(n) ? Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '0');
+  const fmtInt = (n) => (n != null && Number.isFinite(n) ? String(Math.round(n)) : '0');
+  const displayDate = dateFormatted || date;
+
   const html = `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
       <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
-        .stat-box { background: white; padding: 20px; margin: 15px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .stat-value { font-size: 32px; font-weight: bold; color: #667eea; }
-        .stat-label { color: #666; font-size: 14px; margin-top: 5px; }
-        .section-title { font-size: 18px; font-weight: bold; margin: 20px 0 10px 0; color: #333; }
-        .list-item { padding: 10px; background: white; margin: 5px 0; border-radius: 5px; }
-        .footer { text-align: center; margin-top: 30px; color: #999; font-size: 12px; }
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; }
+        .container { max-width: 600px; margin: 0 auto; padding: 24px; }
+        .logo { max-height: 48px; max-width: 180px; display: block; margin-bottom: 16px; }
+        .branch-name { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 8px; }
+        .report-title { font-size: 20px; font-weight: 700; color: #334155; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #e2e8f0; }
+        .content { background: #f8fafc; padding: 24px; border-radius: 12px; }
+        .row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #fff; margin-bottom: 8px; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        .row:nth-child(even) { background: #f1f5f9; }
+        .label { color: #475569; font-weight: 500; }
+        .value { font-weight: 700; color: #0f172a; }
+        .footer { text-align: center; margin-top: 24px; color: #94a3b8; font-size: 12px; }
       </style>
     </head>
     <body>
       <div class="container">
-        <div class="header">
-          <h1>📊 Daily Business Summary</h1>
-          <p>${date}</p>
-        </div>
+        ${logoUrl ? `<img src="${logoUrl}" alt="EaseMySalon" class="logo" />` : ''}
+        <div class="branch-name">${businessName || 'Branch'}</div>
+        <div class="report-title">Daily Summary Report for ${displayDate}</div>
         <div class="content">
-          <h2>Hello ${businessName},</h2>
-          <p>Here's your daily business summary:</p>
-          
-          <div class="stat-box">
-            <div class="stat-value">₹${totalRevenue?.toLocaleString() || '0'}</div>
-            <div class="stat-label">Total Revenue</div>
-          </div>
-          
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <div class="stat-box">
-              <div class="stat-value">${totalSales || 0}</div>
-              <div class="stat-label">Total Sales</div>
-            </div>
-            <div class="stat-box">
-              <div class="stat-value">${appointmentCount || 0}</div>
-              <div class="stat-label">Appointments</div>
-            </div>
-          </div>
-          
-          <div class="stat-box">
-            <div class="stat-value">${newClients || 0}</div>
-            <div class="stat-label">New Clients</div>
-          </div>
-          
-          ${topServices && topServices.length > 0 ? `
-            <div class="section-title">Top Services Today</div>
-            ${topServices.map(service => `
-              <div class="list-item">
-                <strong>${service.name}</strong> - ${service.count} bookings
-              </div>
-            `).join('')}
-          ` : ''}
-          
-          ${topProducts && topProducts.length > 0 ? `
-            <div class="section-title">Top Products Today</div>
-            ${topProducts.map(product => `
-              <div class="list-item">
-                <strong>${product.name}</strong> - ${product.quantity} sold
-              </div>
-            `).join('')}
-          ` : ''}
-          
-          <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
-          </div>
+          <div class="row"><span class="label">1. Total Bill Count</span><span class="value">${fmtInt(totalBillCount)}</span></div>
+          <div class="row"><span class="label">2. Total Customer Count</span><span class="value">${fmtInt(totalCustomerCount)}</span></div>
+          <div class="row"><span class="label">3. Total Sales</span><span class="value">₹${fmt(totalSales)}</span></div>
+          <div class="row"><span class="label">4. Total Sales (Cash)</span><span class="value">₹${fmt(totalSalesCash)}</span></div>
+          <div class="row"><span class="label">5. Total Sales (Online)</span><span class="value">₹${fmt(totalSalesOnline)}</span></div>
+          <div class="row"><span class="label">6. Total Sales (Card)</span><span class="value">₹${fmt(totalSalesCard)}</span></div>
+          <div class="row"><span class="label">7. Dues Collected</span><span class="value">₹${fmt(duesCollected)}</span></div>
+          <div class="row"><span class="label">8. Cash Expense</span><span class="value">₹${fmt(cashExpense)}</span></div>
+          <div class="row"><span class="label">9. Tip Collected</span><span class="value">₹${fmt(tipCollected)}</span></div>
+          <div class="row"><span class="label">10. Cash Balance</span><span class="value">₹${fmt(cashBalance)}</span></div>
+        </div>
+        <div class="footer">
+          <p>This is an automated email from EaseMySalon</p>
         </div>
       </div>
     </body>
@@ -81,21 +68,22 @@ function dailySummary({ businessName, date, totalSales, totalRevenue, appointmen
   `;
 
   const text = `
-Daily Business Summary - ${date}
+EaseMySalon
+${businessName || 'Branch'}
+Daily Summary Report for ${displayDate}
 
-Hello ${businessName},
+1. Total Bill Count: ${fmtInt(totalBillCount)}
+2. Total Customer Count: ${fmtInt(totalCustomerCount)}
+3. Total Sales: ₹${fmt(totalSales)}
+4. Total Sales (Cash): ₹${fmt(totalSalesCash)}
+5. Total Sales (Online): ₹${fmt(totalSalesOnline)}
+6. Total Sales (Card): ₹${fmt(totalSalesCard)}
+7. Dues Collected: ₹${fmt(duesCollected)}
+8. Cash Expense: ₹${fmt(cashExpense)}
+9. Tip Collected: ₹${fmt(tipCollected)}
+10. Cash Balance: ₹${fmt(cashBalance)}
 
-Here's your daily business summary:
-
-Total Revenue: ₹${totalRevenue?.toLocaleString() || '0'}
-Total Sales: ${totalSales || 0}
-Appointments: ${appointmentCount || 0}
-New Clients: ${newClients || 0}
-
-${topServices && topServices.length > 0 ? `Top Services:\n${topServices.map(s => `- ${s.name}: ${s.count} bookings`).join('\n')}\n` : ''}
-${topProducts && topProducts.length > 0 ? `Top Products:\n${topProducts.map(p => `- ${p.name}: ${p.quantity} sold`).join('\n')}\n` : ''}
-
-This is an automated email from Ease My Salon CRM
+This is an automated email from EaseMySalon
   `;
 
   return { html, text };

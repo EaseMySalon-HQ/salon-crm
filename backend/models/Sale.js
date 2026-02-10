@@ -75,7 +75,10 @@ const saleSchema = new mongoose.Schema({
   grossTotal: { type: Number, required: true },
   discount: { type: Number, default: 0 },
   discountType: { type: String, enum: ['percentage', 'fixed'], default: 'percentage' },
-  
+  tip: { type: Number, default: 0, min: 0 },
+  tipStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff', default: null },
+  tipStaffName: { type: String, default: '' },
+
   staffName: { type: String, required: true },
   items: [itemSchema],
   

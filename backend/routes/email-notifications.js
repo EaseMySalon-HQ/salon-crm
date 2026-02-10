@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/business-db');
@@ -59,6 +60,7 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
       recipientStaffIds: [],
       dailySummary: {
         enabled: true,
+        mode: 'fixedTime',
         time: '21:00'
       },
       weeklySummary: {
@@ -1182,8 +1184,15 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
  */
 router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminOrManager, async (req, res) => {
   try {
+    const staffId = req.params.id;
+    if (!staffId || !mongoose.Types.ObjectId.isValid(staffId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid staff ID'
+      });
+    }
     console.log('📧 Email notification update request:', {
-      staffId: req.params.id,
+      staffId,
       userId: req.user._id,
       branchId: req.user.branchId,
       enabled: req.body.enabled,
@@ -1193,7 +1202,7 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
     const { Staff } = req.businessModels;
     
     // First try to find in business database (Staff collection)
-    let staff = await Staff.findById(req.params.id);
+    let staff = await Staff.findById(staffId);
 
     // If not found in Staff collection, check if it's the business owner (User in main database)
     if (!staff) {
@@ -1202,7 +1211,7 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
       const mainConnection = await require('../config/database-manager').getMainConnection();
       const User = mainConnection.model('User', require('../models/User').schema);
       const businessOwner = await User.findOne({
-        _id: req.params.id,
+        _id: staffId,
         branchId: req.user.branchId
       });
 
@@ -1283,53 +1292,27 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
             generalRecipients.push(businessOwner._id);
           }
           
-          // Update business settings
-          if (!business.settings) {
-            business.settings = {};
-          }
-          if (!business.settings.emailNotificationSettings) {
-            business.settings.emailNotificationSettings = {};
-          }
-          
-          business.settings.emailNotificationSettings = {
-            ...business.settings.emailNotificationSettings,
-            enabled: true, // Always enabled if admin is updating
-            recipientStaffIds: generalRecipients,
-            dailySummary: {
-              ...business.settings.emailNotificationSettings.dailySummary,
-              enabled: dailySummaryRecipients.length > 0,
-              recipientStaffIds: dailySummaryRecipients
-            },
-            weeklySummary: {
-              ...business.settings.emailNotificationSettings.weeklySummary,
-              enabled: weeklySummaryRecipients.length > 0,
-              recipientStaffIds: weeklySummaryRecipients
-            },
-            appointmentNotifications: {
-              ...business.settings.emailNotificationSettings.appointmentNotifications,
-              enabled: appointmentRecipients.length > 0,
-              newAppointments: appointmentRecipients.length > 0,
-              recipientStaffIds: appointmentRecipients
-            },
-            receiptNotifications: {
-              ...business.settings.emailNotificationSettings.receiptNotifications,
-              enabled: receiptRecipients.length > 0,
-              sendToStaff: receiptRecipients.length > 0,
-              recipientStaffIds: receiptRecipients
-            },
-            exportNotifications: {
-              ...business.settings.emailNotificationSettings.exportNotifications,
-              enabled: exportRecipients.length > 0,
-              recipientStaffIds: exportRecipients
-            },
-            systemAlerts: {
-              ...business.settings.emailNotificationSettings.systemAlerts,
-              enabled: systemAlertsRecipients.length > 0,
-              recipientStaffIds: systemAlertsRecipients
+          // Targeted update: only email paths (admin always has email enabled)
+          await Business.findByIdAndUpdate(req.user.branchId, {
+            $set: {
+              'settings.emailNotificationSettings.enabled': true,
+              'settings.emailNotificationSettings.recipientStaffIds': generalRecipients,
+              'settings.emailNotificationSettings.dailySummary.enabled': dailySummaryRecipients.length > 0,
+              'settings.emailNotificationSettings.dailySummary.recipientStaffIds': dailySummaryRecipients,
+              'settings.emailNotificationSettings.weeklySummary.enabled': weeklySummaryRecipients.length > 0,
+              'settings.emailNotificationSettings.weeklySummary.recipientStaffIds': weeklySummaryRecipients,
+              'settings.emailNotificationSettings.appointmentNotifications.enabled': appointmentRecipients.length > 0,
+              'settings.emailNotificationSettings.appointmentNotifications.newAppointments': appointmentRecipients.length > 0,
+              'settings.emailNotificationSettings.appointmentNotifications.recipientStaffIds': appointmentRecipients,
+              'settings.emailNotificationSettings.receiptNotifications.enabled': receiptRecipients.length > 0,
+              'settings.emailNotificationSettings.receiptNotifications.sendToStaff': receiptRecipients.length > 0,
+              'settings.emailNotificationSettings.receiptNotifications.recipientStaffIds': receiptRecipients,
+              'settings.emailNotificationSettings.exportNotifications.enabled': exportRecipients.length > 0,
+              'settings.emailNotificationSettings.exportNotifications.recipientStaffIds': exportRecipients,
+              'settings.emailNotificationSettings.systemAlerts.enabled': systemAlertsRecipients.length > 0,
+              'settings.emailNotificationSettings.systemAlerts.recipientStaffIds': systemAlertsRecipients
             }
-          };
-          
-          await business.save();
+          });
           console.log('✅ Business email notification settings updated for admin user');
         }
         
@@ -1347,7 +1330,7 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
         });
       }
 
-      console.log('❌ Staff not found with ID:', req.params.id);
+      console.log('❌ Staff not found with ID:', staffId);
       return res.status(404).json({
         success: false,
         error: 'Staff member not found'
@@ -1396,97 +1379,57 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
 
     await staff.save();
 
-    // Update business settings recipient lists based on all staff preferences
+    // Update business email notification recipient lists only (Email and WhatsApp are separate)
     const databaseManager = require('../config/database-manager');
     const mainConnection = await databaseManager.getMainConnection();
     const Business = mainConnection.model('Business', require('../models/Business').schema);
-    const business = await Business.findById(req.user.branchId);
+    const allStaff = await Staff.find({ branchId: req.user.branchId }).lean();
     
-    if (business) {
-      // Get all staff with their preferences
-      const allStaff = await Staff.find({ branchId: req.user.branchId }).lean();
-      
-      // Build recipient lists based on enabled preferences
-      const dailySummaryRecipients = allStaff
-        .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.dailySummary && s.email)
-        .map(s => s._id);
-      
-      const weeklySummaryRecipients = allStaff
-        .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.weeklySummary && s.email)
-        .map(s => s._id);
-      
-      const appointmentRecipients = allStaff
-        .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.appointmentAlerts && s.email)
-        .map(s => s._id);
-      
-      const receiptRecipients = allStaff
-        .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.receiptAlerts && s.email)
-        .map(s => s._id);
-      
-      const exportRecipients = allStaff
-        .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.exportAlerts && s.email)
-        .map(s => s._id);
-      
-      const systemAlertsRecipients = allStaff
-        .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.systemAlerts && s.email)
-        .map(s => s._id);
-      
-      const generalRecipients = allStaff
-        .filter(s => s.emailNotifications?.enabled && s.email)
-        .map(s => s._id);
-      
-      // Update business settings
-      if (!business.settings) {
-        business.settings = {};
+    const dailySummaryRecipients = allStaff
+      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.dailySummary && s.email)
+      .map(s => s._id);
+    const weeklySummaryRecipients = allStaff
+      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.weeklySummary && s.email)
+      .map(s => s._id);
+    const appointmentRecipients = allStaff
+      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.appointmentAlerts && s.email)
+      .map(s => s._id);
+    const receiptRecipients = allStaff
+      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.receiptAlerts && s.email)
+      .map(s => s._id);
+    const exportRecipients = allStaff
+      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.exportAlerts && s.email)
+      .map(s => s._id);
+    const systemAlertsRecipients = allStaff
+      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.systemAlerts && s.email)
+      .map(s => s._id);
+    const generalRecipients = allStaff
+      .filter(s => s.emailNotifications?.enabled && s.email)
+      .map(s => s._id);
+    const hasAnyEnabled = allStaff.some(s => s.emailNotifications?.enabled);
+    
+    // Targeted update: only touch email paths, never whatsappNotificationSettings
+    await Business.findByIdAndUpdate(req.user.branchId, {
+      $set: {
+        'settings.emailNotificationSettings.enabled': hasAnyEnabled,
+        'settings.emailNotificationSettings.recipientStaffIds': generalRecipients,
+        'settings.emailNotificationSettings.dailySummary.enabled': dailySummaryRecipients.length > 0,
+        'settings.emailNotificationSettings.dailySummary.recipientStaffIds': dailySummaryRecipients,
+        'settings.emailNotificationSettings.weeklySummary.enabled': weeklySummaryRecipients.length > 0,
+        'settings.emailNotificationSettings.weeklySummary.recipientStaffIds': weeklySummaryRecipients,
+        'settings.emailNotificationSettings.appointmentNotifications.enabled': appointmentRecipients.length > 0,
+        'settings.emailNotificationSettings.appointmentNotifications.newAppointments': appointmentRecipients.length > 0,
+        'settings.emailNotificationSettings.appointmentNotifications.recipientStaffIds': appointmentRecipients,
+        'settings.emailNotificationSettings.receiptNotifications.enabled': receiptRecipients.length > 0,
+        'settings.emailNotificationSettings.receiptNotifications.sendToStaff': receiptRecipients.length > 0,
+        'settings.emailNotificationSettings.receiptNotifications.recipientStaffIds': receiptRecipients,
+        'settings.emailNotificationSettings.exportNotifications.enabled': exportRecipients.length > 0,
+        'settings.emailNotificationSettings.exportNotifications.recipientStaffIds': exportRecipients,
+        'settings.emailNotificationSettings.systemAlerts.enabled': systemAlertsRecipients.length > 0,
+        'settings.emailNotificationSettings.systemAlerts.recipientStaffIds': systemAlertsRecipients
       }
-      if (!business.settings.emailNotificationSettings) {
-        business.settings.emailNotificationSettings = {};
-      }
-      
-      // Enable notifications if any staff have them enabled
-      const hasAnyEnabled = allStaff.some(s => s.emailNotifications?.enabled);
-      
-      business.settings.emailNotificationSettings = {
-        ...business.settings.emailNotificationSettings,
-        enabled: hasAnyEnabled,
-        recipientStaffIds: generalRecipients,
-        dailySummary: {
-          ...business.settings.emailNotificationSettings.dailySummary,
-          enabled: dailySummaryRecipients.length > 0,
-          recipientStaffIds: dailySummaryRecipients
-        },
-        weeklySummary: {
-          ...business.settings.emailNotificationSettings.weeklySummary,
-          enabled: weeklySummaryRecipients.length > 0,
-          recipientStaffIds: weeklySummaryRecipients
-        },
-        appointmentNotifications: {
-          ...business.settings.emailNotificationSettings.appointmentNotifications,
-          enabled: appointmentRecipients.length > 0,
-          newAppointments: appointmentRecipients.length > 0,
-          recipientStaffIds: appointmentRecipients
-        },
-        receiptNotifications: {
-          ...business.settings.emailNotificationSettings.receiptNotifications,
-          enabled: receiptRecipients.length > 0,
-          sendToStaff: receiptRecipients.length > 0,
-          recipientStaffIds: receiptRecipients
-        },
-        exportNotifications: {
-          ...business.settings.emailNotificationSettings.exportNotifications,
-          enabled: exportRecipients.length > 0,
-          recipientStaffIds: exportRecipients
-        },
-        systemAlerts: {
-          ...business.settings.emailNotificationSettings.systemAlerts,
-          enabled: systemAlertsRecipients.length > 0,
-          recipientStaffIds: systemAlertsRecipients
-        }
-      };
-      
-      await business.save();
-      console.log('✅ Business email notification settings updated with recipient lists');
-    }
+    });
+    console.log('✅ Business email notification recipient lists updated');
 
     console.log('✅ Email notifications updated successfully:', {
       enabled: staff.emailNotifications.enabled,
@@ -1501,10 +1444,11 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
   } catch (error) {
     console.error('❌ Error updating staff email notifications:', error);
     console.error('Error stack:', error.stack);
-    res.status(500).json({
+    const message = (error && (error.message || error.reason && error.reason.message)) || 'Failed to update staff email notifications';
+    const status = error.name === 'ValidationError' ? 400 : 500;
+    res.status(status).set('Content-Type', 'application/json').json({
       success: false,
-      error: 'Failed to update staff email notifications',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: String(message)
     });
   }
 });
@@ -1553,7 +1497,7 @@ router.post('/test', authenticateToken, setupBusinessDatabase, requireAdminOrMan
 router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBusinessDatabase, requireAdminOrManager, async (req, res) => {
   try {
     const { Business } = req.mainModels;
-    const { Staff, Receipt, Sale, Appointment, Client } = req.businessModels;
+    const { Staff, Receipt, Sale, CashRegistry, Expense } = req.businessModels;
     const business = await Business.findById(req.user.branchId);
 
     if (!business) {
@@ -1571,56 +1515,67 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
       });
     }
 
-    // Get today's date
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     const todayDateString = today.toISOString().split('T')[0];
+    const dateFormatted = today.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 
-    // Get today's sales (from Sale model - this is the primary sales data)
     const sales = await Sale.find({
       branchId: req.user.branchId,
-      date: {
-        $gte: today,
-        $lt: tomorrow
-      },
-      status: { $nin: ['cancelled', 'Cancelled'] } // Exclude cancelled sales (case variations)
+      date: { $gte: today, $lt: tomorrow },
+      status: { $nin: ['cancelled', 'Cancelled'] }
     }).lean();
 
-    // Also get receipts for backward compatibility (if any exist)
     const receipts = await Receipt.find({
       branchId: req.user.branchId,
-      date: {
-        $gte: todayDateString,
-        $lt: tomorrow.toISOString().split('T')[0]
+      date: { $gte: todayDateString, $lt: tomorrow.toISOString().split('T')[0] }
+    }).lean();
+
+    const closingRegistry = await CashRegistry.findOne({
+      branchId: req.user.branchId,
+      date: { $gte: today, $lt: tomorrow },
+      shiftType: 'closing'
+    }).lean();
+
+    const cashExpenses = await Expense.find({
+      branchId: req.user.branchId,
+      date: { $gte: today, $lt: tomorrow },
+      paymentMode: 'Cash',
+      status: { $in: ['approved', 'pending'] }
+    }).lean();
+
+    const totalBillCount = sales.length;
+    const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
+    const totalCustomerCount = uniqueCustomers.size || totalBillCount;
+    const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
+    let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
+    sales.forEach(s => {
+      (s.payments || []).forEach(p => {
+        const amt = p.amount || 0;
+        if (p.mode === 'Cash') totalSalesCash += amt;
+        else if (p.mode === 'Online') totalSalesOnline += amt;
+        else if (p.mode === 'Card') totalSalesCard += amt;
+      });
+      if (!(s.payments && s.payments.length)) {
+        const amt = s.grossTotal || s.netTotal || 0;
+        if (s.paymentMode === 'Cash') totalSalesCash += amt;
+        else if (s.paymentMode === 'Online') totalSalesOnline += amt;
+        else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
-    }).lean();
+    });
+    let duesCollected = 0;
+    sales.forEach(s => {
+      (s.paymentHistory || []).forEach(ph => {
+        const d = ph.date ? new Date(ph.date) : null;
+        if (d && d >= today && d < tomorrow) duesCollected += ph.amount || 0;
+      });
+    });
+    const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    const cashBalance = closingRegistry?.cashBalance ?? 0;
 
-    const appointments = await Appointment.find({
-      branchId: req.user.branchId,
-      date: todayDateString
-    }).lean();
-
-    const newClients = await Client.find({
-      branchId: req.user.branchId,
-      createdAt: { $gte: today }
-    }).lean();
-
-    // Calculate summary from Sales (primary) and Receipts (backup)
-    const salesRevenue = sales.reduce((sum, s) => {
-      const amount = s.grossTotal || s.totalAmount || s.netTotal || 0;
-      return sum + amount;
-    }, 0);
-    
-    const receiptsRevenue = receipts.reduce((sum, r) => sum + (r.total || 0), 0);
-    
-    const totalRevenue = salesRevenue + receiptsRevenue;
-    const totalSales = sales.length + receipts.length;
-    const appointmentCount = appointments.length;
-    const newClientsCount = newClients.length;
-
-    // Get recipient staff
     const recipientStaffIds = settings.dailySummary.recipientStaffIds || [];
     const recipients = await Staff.find({
       _id: { $in: recipientStaffIds },
@@ -1629,20 +1584,24 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
       email: { $exists: true, $ne: '' }
     }).lean();
 
-    // Send emails
     const results = [];
     for (const staff of recipients) {
       const result = await emailService.sendDailySummary({
         to: staff.email,
         businessName: business.name,
-        date: today.toISOString().split('T')[0],
+        date: todayDateString,
         summaryData: {
+          dateFormatted,
+          totalBillCount,
+          totalCustomerCount,
           totalSales,
-          totalRevenue,
-          appointmentCount,
-          newClients: newClientsCount,
-          topServices: [],
-          topProducts: []
+          totalSalesCash,
+          totalSalesOnline,
+          totalSalesCard,
+          duesCollected,
+          cashExpense,
+          tipCollected,
+          cashBalance
         }
       });
       results.push({ email: staff.email, success: result.success });

@@ -15,14 +15,11 @@ import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { StaffServiceDetailDrawer } from "@/components/reports/staff-service-detail-drawer"
-import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI } from "@/lib/api"
+import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI, ReportsAPI } from "@/lib/api"
 import { CommissionProfileCalculator, StaffCommissionResult } from "@/lib/commission-profile-calculator"
 import { CommissionProfile } from "@/lib/commission-profile-types"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
-import jsPDF from "jspdf"
-import autoTable from "jspdf-autotable"
-import * as XLSX from "xlsx"
 
 interface StaffMember {
   _id: string
@@ -583,80 +580,74 @@ export function StaffPerformanceReport() {
     ? performanceData.reduce((sum, data) => sum + data.performanceScore, 0) / performanceData.length 
     : 0
 
-  const handleExportPDF = () => {
-    const doc = new jsPDF()
-    
-    // Title
-    doc.setFontSize(20)
-    doc.text("Staff Performance Report", 14, 22)
-    
-    // Date range
-    doc.setFontSize(10)
-    const dateRangeText = dateRange?.from && dateRange?.to 
-      ? `${format(dateRange.from, "MMM dd, yyyy")} - ${format(dateRange.to, "MMM dd, yyyy")}`
-      : `Period: ${datePeriod}`
-    doc.text(dateRangeText, 14, 30)
-    
-    // Summary
-    doc.setFontSize(12)
-    doc.text("Summary", 14, 40)
-    doc.setFontSize(10)
-    doc.text(`Total Revenue: ${formatCurrency(totalRevenue, currencySymbol)}`, 14, 50)
-    doc.text(`Total Transactions: ${totalTransactions}`, 14, 58)
-    doc.text(`Total Commission: ${formatCurrency(totalCommission, currencySymbol)}`, 14, 66)
-    doc.text(`Average Performance Score: ${averagePerformanceScore.toFixed(1)}`, 14, 74)
-    
-    // Table
-    const tableData = filteredPerformanceData.map(data => [
-      data.staffName,
-      formatCurrency(data.totalRevenue, currencySymbol),
-      formatCurrency(data.serviceRevenue, currencySymbol),
-      formatCurrency(data.productRevenue, currencySymbol),
-      data.totalTransactions.toString(),
-      data.serviceCount.toString(),
-      data.productCount.toString(),
-      formatCurrency(data.serviceCommission, currencySymbol),
-      formatCurrency(data.productCommission, currencySymbol),
-      formatCurrency(data.totalCommission, currencySymbol),
-      data.customerCount.toString(),
-      data.performanceScore.toFixed(1)
-    ])
-    
-    autoTable(doc, {
-      head: [["Staff", "Total Revenue", "Service Revenue", "Product Revenue", "Transactions", "Services", "Products", "Service Commission", "Product Commission", "Total Commission", "Customers", "Score"]],
-      body: tableData,
-      startY: 85,
-      styles: { fontSize: 7 },
-      headStyles: { fillColor: [59, 130, 246] }
-    })
-    
-    doc.save(`staff-performance-report-${format(new Date(), "yyyy-MM-dd")}.pdf`)
+  function getStaffPerformanceExportFilters(): { dateFrom?: string; dateTo?: string; periodLabel: string; staffId?: string; currencySymbol: string } {
+    const now = new Date()
+    let from: Date
+    let to: Date
+    let periodLabel: string
+    if (datePeriod === "customRange" && dateRange?.from && dateRange?.to) {
+      from = dateRange.from
+      to = dateRange.to
+      periodLabel = `${format(from, "MMM dd, yyyy")} - ${format(to, "MMM dd, yyyy")}`
+    } else if (datePeriod === "currentMonth") {
+      from = new Date(now.getFullYear(), now.getMonth(), 1)
+      to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      periodLabel = "Current Month"
+    } else if (datePeriod === "previousMonth") {
+      from = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      to = new Date(now.getFullYear(), now.getMonth(), 0)
+      periodLabel = "Previous Month"
+    } else {
+      from = new Date(now.getFullYear(), now.getMonth(), 1)
+      to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      periodLabel = "Current Month"
+    }
+    const filters: { dateFrom?: string; dateTo?: string; periodLabel: string; staffId?: string; currencySymbol: string } = {
+      dateFrom: from.toISOString(),
+      dateTo: to.toISOString(),
+      periodLabel,
+      currencySymbol
+    }
+    if (selectedStaff && selectedStaff !== "all") filters.staffId = selectedStaff
+    return filters
   }
 
-  const handleExportExcel = () => {
-    const worksheet = XLSX.utils.json_to_sheet(
-      filteredPerformanceData.map(data => ({
-        "Staff Name": data.staffName,
-        "Total Revenue": data.totalRevenue,
-        "Service Revenue": data.serviceRevenue,
-        "Product Revenue": data.productRevenue,
-        "Total Transactions": data.totalTransactions,
-        "Service Count": data.serviceCount,
-        "Product Count": data.productCount,
-        "Service Commission": data.serviceCommission,
-        "Product Commission": data.productCommission,
-        "Total Commission": data.totalCommission,
-        "Customer Count": data.customerCount,
-        "Repeat Customers": data.repeatCustomers,
-        "Performance Score": data.performanceScore,
-        "Last Activity": data.lastActivity
-      }))
-    )
-    
-    const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Staff Performance")
-    
-    XLSX.writeFile(workbook, `staff-performance-report-${format(new Date(), "yyyy-MM-dd")}.xlsx`)
+  const handleExportPDF = async () => {
+    try {
+      const filters = getStaffPerformanceExportFilters()
+      const result = await ReportsAPI.exportStaffPerformance("pdf", filters, filteredPerformanceData)
+      if (result?.success) {
+        toast({
+          title: "Export successful",
+          description: result.message || "Staff performance report has been generated and sent to admin email(s)."
+        })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (e: any) {
+      toast({
+        title: "Export failed",
+        description: e?.message || "Failed to export PDF. Please try again.",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleExportExcel = async () => {
+    try {
+      const filters = getStaffPerformanceExportFilters()
+      const result = await ReportsAPI.exportStaffPerformance("xlsx", filters, filteredPerformanceData)
+      if (result?.success) {
+        toast({
+          title: "Export successful",
+          description: result.message || "Staff performance report has been generated and sent to admin email(s)."
+        })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (e: any) {
+      toast({
+        title: "Export failed",
+        description: e?.message || "Failed to export Excel. Please try again.",
+        variant: "destructive"
+      })
+    }
   }
 
   const handleSetCommission = (staff: StaffMember) => {
@@ -733,9 +724,140 @@ export function StaffPerformanceReport() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50/30">
-      <div className="space-y-8 p-6">
-        {/* Header Section */}
+    <div className="space-y-8">
+      {/* Filter bar – same position as Sales */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="p-6">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 lg:gap-6">
+              <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+                <Input
+                  placeholder="Search staff members..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-52 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                />
+                <Select value={selectedStaff} onValueChange={setSelectedStaff}>
+                  <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectValue placeholder="All Staff" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Staff</SelectItem>
+                    {staffMembers.map((staff) => {
+                      const staffId = staff._id || staff.id
+                      if (!staffId) return null
+                      return (
+                        <SelectItem key={staffId} value={staffId}>
+                          {staff.name}
+                        </SelectItem>
+                      )
+                    })}
+                  </SelectContent>
+                </Select>
+                <Select value={datePeriod} onValueChange={(value: DatePeriod) => {
+                  setDatePeriod(value)
+                  if (value !== "customRange") {
+                    setDateRange(undefined)
+                  }
+                }}>
+                  <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectValue placeholder="Select period" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="currentMonth">Current Month</SelectItem>
+                    <SelectItem value="previousMonth">Previous Month</SelectItem>
+                    <SelectItem value="customRange">Custom Range</SelectItem>
+                  </SelectContent>
+                </Select>
+                {datePeriod === "customRange" && (
+                  <div className="flex flex-wrap gap-3 items-center">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-40 justify-start text-left font-normal border-slate-200"
+                        >
+                          <Calendar className="mr-2 h-4 w-4" />
+                          {dateRange?.from ? format(dateRange.from, "MMM dd, yyyy") : "From"}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <CalendarComponent
+                          initialFocus
+                          mode="single"
+                          selected={dateRange?.from}
+                          onSelect={(date) => setDateRange(prev => ({ from: date, to: prev?.to }))}
+                          disabled={(date) => date > new Date() || (dateRange?.to ? date > dateRange.to : false)}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-40 justify-start text-left font-normal border-slate-200"
+                        >
+                          <Calendar className="mr-2 h-4 w-4" />
+                          {dateRange?.to ? format(dateRange.to, "MMM dd, yyyy") : "To"}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <CalendarComponent
+                          initialFocus
+                          mode="single"
+                          selected={dateRange?.to}
+                          onSelect={(date) => setDateRange(prev => ({ from: prev?.from, to: date }))}
+                          disabled={(date) => date > new Date() || (dateRange?.from ? date < dateRange.from : false)}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setDateRange(undefined)}
+                      className="border-slate-200"
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {canExport ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium">
+                        <Download className="h-4 w-4 mr-2" />
+                        Export Report
+                        <ChevronDown className="h-4 w-4 ml-2" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel>Export Format</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
+                        <FileText className="h-4 w-4 mr-2" />
+                        Export as PDF
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleExportExcel} className="cursor-pointer">
+                        <FileSpreadsheet className="h-4 w-4 mr-2" />
+                        Export as Excel
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <Button
+                    className="bg-gray-400 cursor-not-allowed text-white px-6 py-2.5 shadow-md rounded-lg font-medium"
+                    disabled
+                    title="Data export requires Professional or Enterprise plan"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Export (Upgrade Required)
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
@@ -800,188 +922,37 @@ export function StaffPerformanceReport() {
         </Card>
       </div>
 
-      {/* Filters Section */}
-      <Card className="border-0 shadow-md">
-        <CardContent className="pt-6">
-          <div className="flex flex-wrap gap-4 items-center justify-between">
-            <div className="flex flex-wrap gap-4 items-center">
-              <div className="w-full sm:w-72">
-                <div className="relative group">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4 group-focus-within:text-blue-500 transition-colors" />
-                  <Input
-                    placeholder="Search staff members..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10 h-11 border-gray-200 focus:border-blue-500 focus:ring-blue-500/20 transition-all"
-                  />
-                </div>
-              </div>
-
-              <Select value={selectedStaff} onValueChange={setSelectedStaff}>
-                <SelectTrigger className="w-full sm:w-52 h-11 border-gray-200 focus:border-blue-500 focus:ring-blue-500/20">
-                  <SelectValue placeholder="All Staff" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Staff</SelectItem>
-                  {staffMembers.map((staff) => {
-                    const staffId = staff._id || staff.id
-                    if (!staffId) return null
-                    return (
-                      <SelectItem key={staffId} value={staffId}>
-                        {staff.name}
-                      </SelectItem>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
-
-              <Select value={datePeriod} onValueChange={(value: DatePeriod) => {
-                setDatePeriod(value)
-                if (value !== "customRange") {
-                  setDateRange(undefined) // Clear custom range when selecting other options
-                }
-              }}>
-                <SelectTrigger className="w-full sm:w-52 h-11 border-gray-200 focus:border-blue-500 focus:ring-blue-500/20">
-                  <SelectValue placeholder="Select period" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="currentMonth">Current Month</SelectItem>
-                  <SelectItem value="previousMonth">Previous Month</SelectItem>
-                  <SelectItem value="customRange">Custom Range</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {datePeriod === "customRange" && (
-                <div className="flex flex-wrap gap-3 items-center">
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className="w-full sm:w-52 justify-start text-left font-normal h-11 border-gray-200 hover:border-blue-500 hover:bg-blue-50 transition-all"
-                      >
-                        <Calendar className="mr-2 h-4 w-4" />
-                        {dateRange?.from ? format(dateRange.from, "MMM dd, yyyy") : "From Date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0 shadow-lg border-gray-200" align="start">
-                      <CalendarComponent
-                        initialFocus
-                        mode="single"
-                        selected={dateRange?.from}
-                        onSelect={(date) => setDateRange(prev => ({ from: date, to: prev?.to }))}
-                        disabled={(date) => date > new Date() || (dateRange?.to ? date > dateRange.to : false)}
-                      />
-                    </PopoverContent>
-                  </Popover>
-
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className="w-full sm:w-52 justify-start text-left font-normal h-11 border-gray-200 hover:border-blue-500 hover:bg-blue-50 transition-all"
-                      >
-                        <Calendar className="mr-2 h-4 w-4" />
-                        {dateRange?.to ? format(dateRange.to, "MMM dd, yyyy") : "To Date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0 shadow-lg border-gray-200" align="start">
-                      <CalendarComponent
-                        initialFocus
-                        mode="single"
-                        selected={dateRange?.to}
-                        onSelect={(date) => setDateRange(prev => ({ from: prev?.from, to: date }))}
-                        disabled={(date) => date > new Date() || (dateRange?.from ? date < dateRange.from : false)}
-                      />
-                    </PopoverContent>
-                  </Popover>
-
-                  <Button 
-                    size="sm" 
-                    onClick={() => setDateRange(undefined)}
-                    variant="outline"
-                    className="h-11 px-4 border-gray-200 hover:border-red-500 hover:bg-red-50 hover:text-red-600 transition-all"
-                  >
-                    Clear
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            {canExport ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="w-full sm:w-auto h-11 border-gray-200 hover:border-green-500 hover:bg-green-50 hover:text-green-600 transition-all">
-                    <Download className="h-4 w-4 mr-2" />
-                    Export Data
-                    <ChevronDown className="h-4 w-4 ml-2" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-48">
-                  <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
-                    <FileText className="h-4 w-4 mr-2" />
-                    Export as PDF
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleExportExcel} className="cursor-pointer">
-                    <FileSpreadsheet className="h-4 w-4 mr-2" />
-                    Export as Excel
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <Button 
-                variant="outline" 
-                className="w-full sm:w-auto h-11 border-gray-200 bg-gray-100 cursor-not-allowed" 
-                disabled
-                title="Data export requires Professional or Enterprise plan"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Export (Upgrade Required)
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Performance Table */}
-      <Card className="border-0 shadow-lg">
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-slate-50 border-b border-slate-200">
-                  <TableHead className="font-semibold text-gray-700">Staff Name</TableHead>
-                  <TableHead className="font-semibold text-gray-700 text-right">Total Revenue</TableHead>
-                  <TableHead className="font-semibold text-gray-700 text-right">Service Revenue</TableHead>
-                  <TableHead className="font-semibold text-gray-700 text-right">Product Revenue</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Transactions</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Services</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Products</TableHead>
-                  <TableHead className="font-semibold text-gray-700 text-right">Service Commission</TableHead>
-                  <TableHead className="font-semibold text-gray-700 text-right">Product Commission</TableHead>
-                  <TableHead className="font-semibold text-gray-700 text-right">Total Commission</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Customers</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Performance Trend</TableHead>
-                  <TableHead className="font-semibold text-gray-700">Actions</TableHead>
+      {/* Performance Table – same layout as Service List / Sales */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-slate-50 border-b border-slate-200">
+                <TableHead className="font-semibold text-slate-800">Staff Name</TableHead>
+                <TableHead className="font-semibold text-slate-800 text-right">Total Revenue</TableHead>
+                <TableHead className="font-semibold text-slate-800 text-right">Service Revenue</TableHead>
+                <TableHead className="font-semibold text-slate-800 text-right">Product Revenue</TableHead>
+                <TableHead className="font-semibold text-slate-800">Transactions</TableHead>
+                <TableHead className="font-semibold text-slate-800">Services</TableHead>
+                <TableHead className="font-semibold text-slate-800">Products</TableHead>
+                <TableHead className="font-semibold text-slate-800 text-right">Service Commission</TableHead>
+                <TableHead className="font-semibold text-slate-800 text-right">Product Commission</TableHead>
+                <TableHead className="font-semibold text-slate-800 text-right">Total Commission</TableHead>
+                <TableHead className="font-semibold text-slate-800">Customers</TableHead>
+                <TableHead className="font-semibold text-slate-800">Performance Trend</TableHead>
+                <TableHead className="font-semibold text-slate-800">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredPerformanceData.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={13} className="text-center py-12 text-slate-500">
+                    No staff performance data found for the selected filters.
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredPerformanceData.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={13} className="text-center py-12">
-                      <div className="flex flex-col items-center gap-4">
-                        <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center">
-                          <BarChart3 className="h-8 w-8 text-gray-400" />
-                        </div>
-                        <div>
-                          <h3 className="text-lg font-semibold text-gray-800 mb-1">No Performance Data</h3>
-                          <p className="text-gray-600">No staff performance data found for the selected criteria.</p>
-                        </div>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  filteredPerformanceData.map((data, index) => (
-                  <TableRow key={data.staffId} className="hover:bg-blue-50/30 transition-colors group">
+              ) : (
+                filteredPerformanceData.map((data, index) => (
+                  <TableRow key={data.staffId} className="border-b border-slate-100 hover:bg-slate-50/50 group">
                     <TableCell className="font-semibold">
                       <button
                         type="button"
@@ -1092,13 +1063,12 @@ export function StaffPerformanceReport() {
                       </DropdownMenu>
                     </TableCell>
                   </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
 
       {/* Commission Modal */}
       <Dialog open={showCommissionModal} onOpenChange={setShowCommissionModal}>
@@ -1150,7 +1120,6 @@ export function StaffPerformanceReport() {
         dateRange={getEffectiveDrawerDateRange()}
         currencySymbol={currencySymbol}
       />
-      </div>
     </div>
   )
 }
