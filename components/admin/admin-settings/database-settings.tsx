@@ -80,10 +80,15 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
     }
   })
 
-  // Update settings when propSettings change
+  // Update settings when propSettings change (merge so nested objects always exist)
   useEffect(() => {
     if (propSettings) {
-      setSettings(propSettings)
+      setSettings(prev => {
+        const next = { ...prev, ...propSettings }
+        if (!next.database || typeof next.database !== 'object') next.database = { connectionString: 'mongodb://localhost:27017/ease_my_salon_main', maxConnections: 10, connectionTimeout: 30000, socketTimeout: 30000, retryWrites: true, readPreference: 'primary', writeConcern: 'majority', ...(prev?.database || {}), ...(propSettings?.database || {}) }
+        if (!next.backup || typeof next.backup !== 'object') next.backup = prev?.backup || {}
+        return next
+      })
     }
   }, [propSettings])
 
@@ -91,12 +96,12 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
     setSettings(prev => {
       const newSettings = { ...prev }
       const keys = path.split('.')
-      let current = newSettings
-      
+      let current: any = newSettings
       for (let i = 0; i < keys.length - 1; i++) {
-        current = current[keys[i]]
+        const k = keys[i]
+        if (current[k] == null || typeof current[k] !== 'object') current[k] = {}
+        current = current[k]
       }
-      
       current[keys[keys.length - 1]] = value
       onSettingsChange(newSettings)
       return newSettings
@@ -136,7 +141,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
             <Label htmlFor="connectionString">Connection String</Label>
             <Input
               id="connectionString"
-              value={settings.database.connectionString}
+              value={settings?.database?.connectionString ?? ''}
               onChange={(e) => handleSettingChange('database.connectionString', e.target.value)}
               className="w-full"
               placeholder="mongodb://localhost:27017/ease_my_salon_main"
@@ -154,7 +159,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="1"
                 max="100"
-                value={settings.database.maxConnections}
+                value={settings?.database?.maxConnections ?? 10}
                 onChange={(e) => handleSettingChange('database.maxConnections', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -167,7 +172,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="1000"
                 max="60000"
-                value={settings.database.connectionTimeout}
+                value={settings?.database?.connectionTimeout ?? 30000}
                 onChange={(e) => handleSettingChange('database.connectionTimeout', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -180,7 +185,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="1000"
                 max="60000"
-                value={settings.database.socketTimeout}
+                value={settings?.database?.socketTimeout ?? 30000}
                 onChange={(e) => handleSettingChange('database.socketTimeout', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -189,7 +194,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
             <div className="space-y-2">
               <Label htmlFor="readPreference">Read Preference</Label>
               <Select
-                value={settings.database.readPreference}
+                value={settings?.database?.readPreference ?? 'primary'}
                 onValueChange={(value) => handleSettingChange('database.readPreference', value)}
               >
                 <SelectTrigger>
@@ -215,7 +220,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 </p>
               </div>
               <Switch
-                checked={settings.database.retryWrites}
+                checked={settings?.database?.retryWrites ?? true}
                 onCheckedChange={(checked) => handleSettingChange('database.retryWrites', checked)}
               />
             </div>
@@ -243,18 +248,18 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
               </p>
             </div>
             <Switch
-              checked={settings.backup.enabled}
+              checked={settings?.backup?.enabled ?? true}
               onCheckedChange={(checked) => handleSettingChange('backup.enabled', checked)}
             />
           </div>
 
-          {settings.backup.enabled && (
+          {settings?.backup?.enabled && (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="frequency">Backup Frequency</Label>
                   <Select
-                    value={settings.backup.frequency}
+                    value={settings?.backup?.frequency ?? 'daily'}
                     onValueChange={(value) => handleSettingChange('backup.frequency', value)}
                   >
                     <SelectTrigger>
@@ -276,7 +281,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                     type="number"
                     min="1"
                     max="3650"
-                    value={settings.backup.retentionDays}
+                    value={settings?.backup?.retentionDays ?? 30}
                     onChange={(e) => handleSettingChange('backup.retentionDays', parseInt(e.target.value))}
                     className="w-full"
                   />
@@ -286,7 +291,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                   <Label htmlFor="backupLocation">Backup Location</Label>
                   <Input
                     id="backupLocation"
-                    value={settings.backup.backupLocation}
+                    value={settings?.backup?.backupLocation ?? '/backups'}
                     onChange={(e) => handleSettingChange('backup.backupLocation', e.target.value)}
                     className="w-full"
                     placeholder="/backups"
@@ -296,7 +301,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 <div className="space-y-2">
                   <Label htmlFor="cloudProvider">Cloud Provider</Label>
                   <Select
-                    value={settings.backup.cloudProvider}
+                    value={settings?.backup?.cloudProvider ?? 'aws'}
                     onValueChange={(value) => handleSettingChange('backup.cloudProvider', value)}
                   >
                     <SelectTrigger>
@@ -321,7 +326,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                     </p>
                   </div>
                   <Switch
-                    checked={settings.backup.compressionEnabled}
+                    checked={settings?.backup?.compressionEnabled ?? true}
                     onCheckedChange={(checked) => handleSettingChange('backup.compressionEnabled', checked)}
                   />
                 </div>
@@ -334,7 +339,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                     </p>
                   </div>
                   <Switch
-                    checked={settings.backup.encryptionEnabled}
+                    checked={settings?.backup?.encryptionEnabled ?? false}
                     onCheckedChange={(checked) => handleSettingChange('backup.encryptionEnabled', checked)}
                   />
                 </div>
@@ -347,7 +352,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                     </p>
                   </div>
                   <Switch
-                    checked={settings.backup.cloudBackup}
+                    checked={settings?.backup?.cloudBackup ?? false}
                     onCheckedChange={(checked) => handleSettingChange('backup.cloudBackup', checked)}
                   />
                 </div>

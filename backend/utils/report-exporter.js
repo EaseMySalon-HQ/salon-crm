@@ -193,6 +193,7 @@ async function exportProductsReport({ branchId, format = 'xlsx', filters = {} })
           "Price": parseFloat(product.price) || 0,
           "Stock": parseInt(product.stock) || 0,
           "Minimum Stock": parseInt(product.minimumStock || product.minStock) || 0,
+          "SKU/Barcode": product.barcode || product.sku || "",
           "Supplier": product.supplier || "",
           "Description": product.description || "",
           "Status": status
@@ -1254,12 +1255,512 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
   }
 }
 
+/**
+ * Generate and email summary report (same 10 metrics as daily summary / Summary Reports UI)
+ */
+async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) {
+  try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const businessDb = await databaseManager.getConnection(branchId, mainConnection);
+    const businessModels = modelFactory.createBusinessModels(businessDb);
+    const { Sale, Receipt, CashRegistry, Expense } = businessModels;
+
+    const emailService = require('../services/email-service');
+    if (!emailService.initialized) {
+      await emailService.initialize();
+    }
+
+    let dateFrom = filters.dateFrom ? new Date(filters.dateFrom) : null;
+    let dateTo = filters.dateTo ? new Date(filters.dateTo) : null;
+    if (!dateFrom || !dateTo) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      dateFrom = dateFrom || today;
+      dateTo = dateTo || new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1);
+    } else {
+      dateTo.setHours(23, 59, 59, 999);
+    }
+    const todayDateString = dateFrom.toISOString().split('T')[0];
+    const tomorrowDateString = new Date(dateTo.getTime() + 1).toISOString().split('T')[0];
+
+    const sales = await Sale.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      status: { $nin: ['cancelled', 'Cancelled'] }
+    }).lean();
+
+    const receipts = await Receipt.find({
+      branchId,
+      date: { $gte: todayDateString, $lte: tomorrowDateString }
+    }).lean();
+
+    const closingRegistry = await CashRegistry.findOne({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      shiftType: 'closing'
+    }).sort({ date: -1 }).lean();
+
+    const cashExpenses = await Expense.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      paymentMode: 'Cash',
+      status: { $in: ['approved', 'pending'] }
+    }).lean();
+
+    const totalBillCount = sales.length;
+    const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
+    const totalCustomerCount = uniqueCustomers.size || totalBillCount;
+    const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
+    let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
+    sales.forEach(s => {
+      (s.payments || []).forEach(p => {
+        const amt = p.amount || 0;
+        if (p.mode === 'Cash') totalSalesCash += amt;
+        else if (p.mode === 'Online') totalSalesOnline += amt;
+        else if (p.mode === 'Card') totalSalesCard += amt;
+      });
+      if (!(s.payments && s.payments.length)) {
+        const amt = s.grossTotal || s.netTotal || 0;
+        if (s.paymentMode === 'Cash') totalSalesCash += amt;
+        else if (s.paymentMode === 'Online') totalSalesOnline += amt;
+        else if (s.paymentMode === 'Card') totalSalesCard += amt;
+      }
+    });
+    let duesCollected = 0;
+    sales.forEach(s => {
+      (s.paymentHistory || []).forEach(ph => {
+        const d = ph.date ? new Date(ph.date) : null;
+        if (d && d >= dateFrom && d <= dateTo) duesCollected += ph.amount || 0;
+      });
+    });
+    const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    const cashBalance = closingRegistry?.cashBalance ?? 0;
+
+    const summaryData = {
+      totalBillCount,
+      totalCustomerCount,
+      totalSales,
+      totalSalesCash,
+      totalSalesOnline,
+      totalSalesCard,
+      duesCollected,
+      cashExpense,
+      tipCollected,
+      cashBalance
+    };
+
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const business = await Business.findById(branchId);
+    const User = mainConnection.model('User', require('../models/User').schema);
+    const adminUsers = await User.find({
+      branchId: branchId,
+      role: 'admin',
+      email: { $exists: true, $ne: '' }
+    }).lean();
+    if (adminUsers.length === 0) {
+      throw new Error('No admin email found to send export to');
+    }
+
+    const periodText = `${dateFrom.toLocaleDateString()} - ${dateTo.toLocaleDateString()}`;
+    let attachment;
+    let fileName;
+    const exportType = 'Summary Report';
+
+    if (format === 'xlsx') {
+      const rows = [
+        ['Metric', 'Value'],
+        ['Total Bill Count', summaryData.totalBillCount],
+        ['Total Customer Count', summaryData.totalCustomerCount],
+        ['Total Sales', summaryData.totalSales],
+        ['Total Sales (Cash)', summaryData.totalSalesCash],
+        ['Total Sales (Online)', summaryData.totalSalesOnline],
+        ['Total Sales (Card)', summaryData.totalSalesCard],
+        ['Dues Collected', summaryData.duesCollected],
+        ['Cash Expense', summaryData.cashExpense],
+        ['Tip Collected', summaryData.tipCollected],
+        ['Cash Balance', summaryData.cashBalance]
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Summary');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      fileName = `summary-report-${new Date().toISOString().split('T')[0]}.xlsx`;
+      attachment = { filename: fileName, content: buffer };
+    } else if (format === 'pdf') {
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks = [];
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('end', () => {});
+      let y = addPDFHeader(doc, 'Summary Report', `Period: ${periodText} | Generated: ${new Date().toLocaleString()}`);
+      y += 20;
+      const metrics = [
+        ['Total Bill Count', String(summaryData.totalBillCount)],
+        ['Total Customer Count', String(summaryData.totalCustomerCount)],
+        ['Total Sales', `₹${Number(summaryData.totalSales).toFixed(2)}`],
+        ['Total Sales (Cash)', `₹${Number(summaryData.totalSalesCash).toFixed(2)}`],
+        ['Total Sales (Online)', `₹${Number(summaryData.totalSalesOnline).toFixed(2)}`],
+        ['Total Sales (Card)', `₹${Number(summaryData.totalSalesCard).toFixed(2)}`],
+        ['Dues Collected', `₹${Number(summaryData.duesCollected).toFixed(2)}`],
+        ['Cash Expense', `₹${Number(summaryData.cashExpense).toFixed(2)}`],
+        ['Tip Collected', `₹${Number(summaryData.tipCollected).toFixed(2)}`],
+        ['Cash Balance', `₹${Number(summaryData.cashBalance).toFixed(2)}`]
+      ];
+      const headers = ['Metric', 'Value'];
+      const tableRows = metrics;
+      const colWidths = [180, 120];
+      y = addTable(doc, y, headers, tableRows, { colWidths });
+      doc.end();
+      await new Promise(resolve => { doc.on('end', resolve); });
+      const buffer = Buffer.concat(chunks);
+      fileName = `summary-report-${new Date().toISOString().split('T')[0]}.pdf`;
+      attachment = { filename: fileName, content: buffer };
+    } else {
+      throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
+    }
+
+    for (const admin of adminUsers) {
+      try {
+        await emailService.sendExportReady({
+          to: admin.email,
+          exportType,
+          businessName: business?.name || 'Business',
+          attachments: [attachment]
+        });
+      } catch (emailError) {
+        console.error('Error sending summary export to', admin.email, emailError);
+      }
+    }
+    return { success: true, message: 'Summary report sent to admin email(s)' };
+  } catch (error) {
+    console.error('Error exporting summary report:', error);
+    throw error;
+  }
+}
+
+/**
+ * Generate and email staff performance report (data provided by frontend)
+ */
+async function exportStaffPerformanceReport({ branchId, format = 'xlsx', filters = {}, data = [] }) {
+  try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const emailService = require('../services/email-service');
+    if (!emailService.initialized) {
+      await emailService.initialize();
+    }
+
+    const { dateFrom, dateTo, periodLabel, currencySymbol = '₹' } = filters;
+    const periodText = periodLabel || (dateFrom && dateTo
+      ? `${new Date(dateFrom).toLocaleDateString()} - ${new Date(dateTo).toLocaleDateString()}`
+      : 'Period: N/A');
+
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const business = await Business.findById(branchId);
+    const User = mainConnection.model('User', require('../models/User').schema);
+    const adminUsers = await User.find({
+      branchId: branchId,
+      role: 'admin',
+      email: { $exists: true, $ne: '' }
+    }).lean();
+    if (adminUsers.length === 0) {
+      throw new Error('No admin email found to send export to');
+    }
+
+    const totalRevenue = data.reduce((sum, r) => sum + (r.totalRevenue || 0), 0);
+    const totalTransactions = data.reduce((sum, r) => sum + (r.totalTransactions || 0), 0);
+    const totalCommission = data.reduce((sum, r) => sum + (r.totalCommission || 0), 0);
+    const avgScore = data.length > 0
+      ? data.reduce((sum, r) => sum + (r.performanceScore || 0), 0) / data.length
+      : 0;
+
+    let attachment;
+    let fileName;
+    const exportType = 'Staff Performance Report';
+
+    const fmt = (amount) => (amount != null ? `${currencySymbol}${Number(amount).toFixed(2)}` : '—');
+
+    if (format === 'xlsx') {
+      const rows = data.map((r) => ({
+        'Staff Name': r.staffName,
+        'Total Revenue': r.totalRevenue,
+        'Service Revenue': r.serviceRevenue,
+        'Product Revenue': r.productRevenue,
+        'Total Transactions': r.totalTransactions,
+        'Service Count': r.serviceCount,
+        'Product Count': r.productCount,
+        'Service Commission': r.serviceCommission,
+        'Product Commission': r.productCommission,
+        'Total Commission': r.totalCommission,
+        'Customer Count': r.customerCount,
+        'Repeat Customers': r.repeatCustomers,
+        'Performance Score': r.performanceScore,
+        'Last Activity': r.lastActivity
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Staff Performance');
+      const summaryWs = XLSX.utils.aoa_to_sheet([
+        ['Metric', 'Value'],
+        ['Total Revenue', totalRevenue],
+        ['Total Transactions', totalTransactions],
+        ['Total Commission', totalCommission],
+        ['Average Performance Score', avgScore.toFixed(1)],
+        ['Generated', new Date().toISOString()]
+      ]);
+      XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      fileName = `staff-performance-report-${new Date().toISOString().split('T')[0]}.xlsx`;
+      attachment = { filename: fileName, content: buffer };
+    } else if (format === 'pdf') {
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => {});
+      let y = addPDFHeader(doc, 'Staff Performance Report', `${periodText} | Generated: ${new Date().toLocaleString()}`);
+      y += 20;
+      doc.fontSize(11).text(`Total Revenue: ${fmt(totalRevenue)}`, 50, y);
+      y += 16;
+      doc.text(`Total Transactions: ${totalTransactions}`, 50, y);
+      y += 16;
+      doc.text(`Total Commission: ${fmt(totalCommission)}`, 50, y);
+      y += 16;
+      doc.text(`Average Performance Score: ${avgScore.toFixed(1)}`, 50, y);
+      y += 24;
+      const headers = ['Staff', 'Total Revenue', 'Service Rev', 'Product Rev', 'Txns', 'Services', 'Products', 'Commission', 'Customers', 'Score'];
+      const tableRows = data.map((r) => [
+        r.staffName || '—',
+        fmt(r.totalRevenue),
+        fmt(r.serviceRevenue),
+        fmt(r.productRevenue),
+        String(r.totalTransactions ?? 0),
+        String(r.serviceCount ?? 0),
+        String(r.productCount ?? 0),
+        fmt(r.totalCommission),
+        String(r.customerCount ?? 0),
+        (r.performanceScore != null ? r.performanceScore.toFixed(1) : '—')
+      ]);
+      const colWidths = [50, 42, 38, 38, 28, 32, 32, 42, 32, 28];
+      y = addTable(doc, y, headers, tableRows, { colWidths });
+      doc.end();
+      await new Promise((resolve) => { doc.on('end', resolve); });
+      const buffer = Buffer.concat(chunks);
+      fileName = `staff-performance-report-${new Date().toISOString().split('T')[0]}.pdf`;
+      attachment = { filename: fileName, content: buffer };
+    } else {
+      throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
+    }
+
+    for (const admin of adminUsers) {
+      try {
+        await emailService.sendExportReady({
+          to: admin.email,
+          exportType,
+          businessName: business?.name || 'Business',
+          attachments: [attachment]
+        });
+      } catch (emailError) {
+        console.error('Error sending staff performance export to', admin.email, emailError);
+      }
+    }
+    return { success: true, message: 'Staff performance report sent to admin email(s)' };
+  } catch (error) {
+    console.error('Error exporting staff performance report:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get date range from period for service list
+ */
+function getServiceListDateRange(rangeFrom, rangeTo) {
+  if (rangeFrom && rangeTo) {
+    return { from: new Date(rangeFrom), to: new Date(rangeTo) };
+  }
+  return { from: undefined, to: undefined };
+}
+
+/**
+ * Generate and email service list report (flattened service line items from sales)
+ */
+async function exportServiceListReport({ branchId, format = 'xlsx', filters = {} }) {
+  try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const businessDb = await databaseManager.getConnection(branchId, mainConnection);
+    const businessModels = modelFactory.createBusinessModels(businessDb);
+    const { Sale, Service } = businessModels;
+
+    const emailService = require('../services/email-service');
+    if (!emailService.initialized) {
+      await emailService.initialize();
+    }
+
+    const { dateFrom, dateTo, serviceId, staffId, status, paymentMode } = filters;
+    const dateRange = getServiceListDateRange(dateFrom, dateTo);
+
+    const query = { };
+    if (dateRange.from && dateRange.to) {
+      query.date = { $gte: dateRange.from, $lte: dateRange.to };
+    }
+    if (status) {
+      query.status = new RegExp(`^${status}$`, 'i');
+    }
+
+    const sales = await Sale.find(query).sort({ date: -1 }).lean();
+
+    const serviceDurationMap = {};
+    if (Service) {
+      const services = await Service.find({}).select('_id duration').lean();
+      services.forEach((s) => {
+        serviceDurationMap[s._id?.toString()] = s.duration || 0;
+      });
+    }
+
+    const rows = [];
+    for (const sale of sales) {
+      const paymentModes = (sale.payments && sale.payments.length > 0)
+        ? [...new Set(sale.payments.map((p) => p.mode))]
+        : (sale.paymentMode ? [sale.paymentMode] : []);
+      if (paymentMode && !paymentModes.includes(paymentMode)) continue;
+
+      const totalAmount = sale.paymentStatus?.totalAmount ?? sale.grossTotal ?? 0;
+      const paidAmount = sale.paymentStatus?.paidAmount ?? 0;
+      const paidStatus = totalAmount <= 0 ? '—' : paidAmount >= totalAmount ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
+      const saleDate = sale.date ? new Date(sale.date) : null;
+      const saleTimeStr = sale.time || '';
+
+      (sale.items || []).forEach((item) => {
+        if (item.type !== 'service') return;
+        const staffName = (item.staffContributions && item.staffContributions[0])
+          ? item.staffContributions[0].staffName
+          : (item.staffName || sale.staffName || '—');
+        const itemStaffId = (item.staffContributions && item.staffContributions[0])
+          ? item.staffContributions[0].staffId
+          : item.staffId;
+        if (staffId && itemStaffId !== staffId) return;
+        const sid = (item.serviceId && item.serviceId.toString) ? item.serviceId.toString() : item.serviceId;
+        if (serviceId && sid !== serviceId) return;
+
+        const duration = (sid ? (serviceDurationMap[sid] || 0) : 0) * (item.quantity || 1);
+        rows.push({
+          billNo: sale.billNo || '—',
+          service: item.name || '—',
+          price: item.price ?? 0,
+          total: item.total ?? 0,
+          quantity: item.quantity ?? 1,
+          staff: staffName,
+          durationMinutes: duration,
+          customer: sale.customerName || '—',
+          date: saleDate ? saleDate.toLocaleDateString() : '—',
+          time: saleTimeStr || '—',
+          status: (sale.status || '—').toLowerCase(),
+          paidStatus,
+          paymentMode: paymentModes.join(', ') || '—'
+        });
+      });
+    }
+
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const business = await Business.findById(branchId);
+    const User = mainConnection.model('User', require('../models/User').schema);
+    const adminUsers = await User.find({
+      branchId: branchId,
+      role: 'admin',
+      email: { $exists: true, $ne: '' }
+    }).lean();
+    if (adminUsers.length === 0) {
+      throw new Error('No admin email found to send export to');
+    }
+
+    let attachment;
+    let fileName;
+    const exportType = 'Service List Report';
+    const periodText = dateRange.from && dateRange.to
+      ? `${dateRange.from.toLocaleDateString()} - ${dateRange.to.toLocaleDateString()}`
+      : 'All time';
+
+    if (format === 'xlsx') {
+      const data = rows.map((r) => ({
+        'Bill No.': r.billNo,
+        'Service': r.service,
+        'Price': r.price,
+        'Total': r.total,
+        'Qty': r.quantity,
+        'Staff': r.staff,
+        'Duration (min)': r.durationMinutes,
+        'Customer': r.customer,
+        'Date': r.date,
+        'Time': r.time,
+        'Status': r.status,
+        'Paid Status': r.paidStatus,
+        'Payment Mode': r.paymentMode
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Service List');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      fileName = `service-list-report-${new Date().toISOString().split('T')[0]}.xlsx`;
+      attachment = { filename: fileName, content: buffer };
+    } else if (format === 'pdf') {
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => {});
+      let y = addPDFHeader(doc, 'Service List Report', `Period: ${periodText} | Generated: ${new Date().toLocaleString()}`);
+      y += 20;
+      const headers = ['Bill No.', 'Service', 'Price', 'Total', 'Qty', 'Staff', 'Duration', 'Customer', 'Date', 'Status', 'Paid', 'Mode'];
+      const tableRows = rows.map((r) => [
+        r.billNo,
+        r.service,
+        `₹${Number(r.price).toFixed(2)}`,
+        `₹${Number(r.total).toFixed(2)}`,
+        String(r.quantity),
+        r.staff,
+        `${r.durationMinutes} min`,
+        r.customer,
+        r.date,
+        r.status,
+        r.paidStatus,
+        r.paymentMode
+      ]);
+      const colWidths = [50, 100, 50, 55, 30, 80, 50, 80, 70, 45, 45, 60];
+      y = addTable(doc, y, headers, tableRows, { colWidths });
+      doc.end();
+      await new Promise((resolve) => { doc.on('end', resolve); });
+      const buffer = Buffer.concat(chunks);
+      fileName = `service-list-report-${new Date().toISOString().split('T')[0]}.pdf`;
+      attachment = { filename: fileName, content: buffer };
+    } else {
+      throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
+    }
+
+    for (const admin of adminUsers) {
+      try {
+        await emailService.sendExportReady({
+          to: admin.email,
+          exportType,
+          businessName: business?.name || 'Business',
+          attachments: [attachment]
+        });
+      } catch (emailError) {
+        console.error('Error sending service list export to', admin.email, emailError);
+      }
+    }
+    return { success: true, message: 'Service list report sent to admin email(s)' };
+  } catch (error) {
+    console.error('Error exporting service list report:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   exportProductsReport,
   exportSalesReport,
   exportServicesReport,
   exportClientsReport,
   exportExpenseReport,
-  exportCashRegistryReport
+  exportCashRegistryReport,
+  exportSummaryReport,
+  exportStaffPerformanceReport,
+  exportServiceListReport
 };
 

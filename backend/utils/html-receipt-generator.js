@@ -283,7 +283,7 @@ function generateReceiptHTML(receipt, businessSettings) {
         ` : ""}
         ${(receipt.tip || 0) > 0 ? `
           <div class="total-line">
-            <span>Tip:</span>
+            <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
             <span>${formatCurrency(receipt.tip, businessSettings)}</span>
           </div>
         ` : ""}

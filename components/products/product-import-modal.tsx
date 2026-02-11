@@ -81,26 +81,34 @@ export function ProductImportModal({ isOpen, onClose, onImportComplete }: Produc
           totalRows: rows.length
         })
         
-        // Auto-map common column names
+        // Auto-map common column names (align with Add Product form)
         const autoMapping: Record<string, string> = {}
         headers.forEach(header => {
           const lowerHeader = header?.toString().toLowerCase() || ''
-          if (lowerHeader.includes('name') && !lowerHeader.includes('category')) {
+          if ((lowerHeader.includes('name') && !lowerHeader.includes('category')) || lowerHeader === 'product name') {
             autoMapping[header] = 'name'
           } else if (lowerHeader.includes('category')) {
             autoMapping[header] = 'category'
-          } else if (lowerHeader.includes('price') && !lowerHeader.includes('cost')) {
-            autoMapping[header] = 'price'
           } else if (lowerHeader.includes('cost') && lowerHeader.includes('price')) {
-            autoMapping[header] = 'costPrice'
+            autoMapping[header] = 'cost'
+          } else if ((lowerHeader.includes('selling') && lowerHeader.includes('price')) || (lowerHeader === 'price' && !lowerHeader.includes('cost') && !lowerHeader.includes('offer'))) {
+            autoMapping[header] = 'price'
+          } else if (lowerHeader.includes('offer') && lowerHeader.includes('price')) {
+            autoMapping[header] = 'offerPrice'
           } else if (lowerHeader.includes('stock') || lowerHeader.includes('quantity')) {
             if (lowerHeader.includes('minimum') || lowerHeader.includes('min')) {
               autoMapping[header] = 'minimumStock'
             } else {
               autoMapping[header] = 'stock'
             }
-          } else if (lowerHeader.includes('sku') || lowerHeader.includes('code')) {
-            autoMapping[header] = 'sku'
+          } else if (lowerHeader === 'volume' && !lowerHeader.includes('unit')) {
+            autoMapping[header] = 'volume'
+          } else if (lowerHeader.includes('volume') && lowerHeader.includes('unit')) {
+            autoMapping[header] = 'volumeUnit'
+          } else if (lowerHeader.includes('sku') || lowerHeader.includes('barcode') || (lowerHeader.includes('code') && !lowerHeader.includes('hsn') && !lowerHeader.includes('sac'))) {
+            autoMapping[header] = 'barcode'
+          } else if (lowerHeader.includes('hsn') || lowerHeader.includes('sac')) {
+            autoMapping[header] = 'hsnSacCode'
           } else if (lowerHeader.includes('supplier')) {
             autoMapping[header] = 'supplier'
           } else if (lowerHeader.includes('description')) {
@@ -109,6 +117,8 @@ export function ProductImportModal({ isOpen, onClose, onImportComplete }: Produc
             autoMapping[header] = 'taxCategory'
           } else if (lowerHeader.includes('type') && lowerHeader.includes('product')) {
             autoMapping[header] = 'productType'
+          } else if (lowerHeader.includes('transaction')) {
+            autoMapping[header] = 'transactionType'
           }
         })
         
@@ -240,13 +250,13 @@ export function ProductImportModal({ isOpen, onClose, onImportComplete }: Produc
     onClose()
   }
 
-  // Download template
+  // Download template (columns match Add Product form)
   const downloadTemplate = () => {
     const templateData = [
-      ['Name', 'Category', 'Price', 'Stock', 'SKU', 'Supplier', 'Description', 'Product Type', 'Tax Category', 'Cost Price', 'Minimum Stock Level'],
-      ['Shampoo', 'Hair Care', '250', '50', 'SH001', 'ABC Corp', 'Premium Shampoo', 'retail', 'standard', '150', '10'],
-      ['Haircut', 'Services', '500', '', '', '', 'Professional Haircut', 'service', 'standard', '', ''],
-      ['Conditioner', 'Hair Care', '300', '30', 'CON001', 'ABC Corp', 'Moisturizing Conditioner', 'retail', 'luxury', '180', '5']
+      ['Product Name', 'Category', 'Cost Price', 'Selling Price', 'Offer Price', 'Current Stock', 'Minimum Stock Level', 'Volume', 'Volume Unit', 'Tax Category', 'Product Type', 'Transaction Type', 'Description', 'SKU/Barcode', 'HSN/SAC Code', 'Supplier'],
+      ['Shampoo', 'Hair Care', '150', '250', '200', '50', '10', '500', 'ml', 'standard', 'retail', 'purchase', 'Premium Shampoo', 'SH001', '998313', 'ABC Corp'],
+      ['Haircut', 'Services', '', '500', '', '', '5', '', 'pcs', 'standard', 'service', 'purchase', 'Professional Haircut', '', '', ''],
+      ['Conditioner', 'Hair Care', '180', '300', '', '30', '5', '250', 'ml', 'luxury', 'retail', 'purchase', 'Moisturizing Conditioner', 'CON001', '998313', 'ABC Corp']
     ]
     
     const ws = XLSX.utils.aoa_to_sheet(templateData)

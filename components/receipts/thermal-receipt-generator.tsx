@@ -217,7 +217,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             ` : ''}
             ${receipt.tip > 0 ? `
               <div class="total-line">
-                <span>Tip:</span>
+                <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
                 <span>₹${receipt.tip.toFixed(2)}</span>
               </div>
             ` : ''}
@@ -474,7 +474,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           ` : ''}
           ${receipt.tip > 0 ? `
             <div class="total-line">
-              <span>Tip:</span>
+              <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
               <span>₹${receipt.tip.toFixed(2)}</span>
             </div>
           ` : ''}

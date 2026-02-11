@@ -39,12 +39,10 @@ apiClient.interceptors.request.use(
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
   (response: AxiosResponse) => {
-    console.log('✅ API Response Interceptor: Success response:', {
-      url: response.config.url,
-      status: response.status,
-      method: response.config.method,
-      data: response.data
-    })
+    // Log success without full response data to reduce console noise (data can be large)
+    if (process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_LOG_API_SUCCESS !== 'false') {
+      console.log('✅ API:', response.config.method?.toUpperCase(), response.config.url, response.status)
+    }
     return response
   },
   (error: AxiosError | any) => {
@@ -138,42 +136,23 @@ apiClient.interceptors.response.use(
         if (errorInfo.method && errorInfo.method !== 'Unknown method') errorDetails.method = errorInfo.method
         if (errorInfo.data !== undefined && errorInfo.data !== null) errorDetails.data = errorInfo.data
         
-        // Only log if we have at least one meaningful property with a real value
+        // Only log if we have at least one meaningful property (avoid "Error response: {}")
         const hasValidProperties = Object.keys(errorDetails).some(key => {
           const value = errorDetails[key]
-          return value !== undefined && value !== null && value !== '' && 
-                 (typeof value !== 'string' || value.trim() !== '')
+          if (value === undefined || value === null) return false
+          if (typeof value === 'string') return value.trim() !== ''
+          if (typeof value === 'object') return Object.keys(value).length > 0
+          return true
         })
         
         if (hasValidProperties) {
           console.error('❌ API Response Interceptor: Error response:', errorDetails)
         } else {
-          // Log raw error info if errorDetails is empty
-          console.error('❌ API Response Interceptor: Error (empty details):', {
-            rawError: error,
-            response: error?.response?.data,
-            status: error?.response?.status,
-            statusText: error?.response?.statusText,
-            url: error?.config?.url,
-            method: error?.config?.method
-          })
-        }
-        
-        if (error?.response?.status) {
-          // For 401 errors, only log if not on public route (to reduce noise)
-          const isPublicRoute = typeof window !== 'undefined' && 
-            (window.location.pathname.includes('/receipt/public/') ||
-             window.location.pathname.includes('/public/'))
-          
-          if (error.response.status === 401 && isPublicRoute) {
-            // Silently skip 401 errors on public routes
-          } else {
-            // Fallback: log at least the status if errorInfo is empty
-            console.error(`❌ API Response Interceptor: Error ${error.response.status}`, error.response.statusText || 'Unknown error')
-          }
-        } else if (error?.message) {
-          // Fallback: log the error message if available
-          console.error('❌ API Response Interceptor: Error:', error.message)
+          const status = error?.response?.status
+          const statusText = error?.response?.statusText || 'Unknown error'
+          const url = error?.config?.url
+          const method = error?.config?.method?.toUpperCase()
+          console.error('❌ API Response Interceptor:', status ? `${status} ${statusText}` : error?.message || 'Unknown error', url ? `${method} ${url}` : '')
         }
       }
     } catch (logError) {
@@ -347,6 +326,36 @@ export class ServicesAPI {
   }
 }
 
+export class ConsumptionRulesAPI {
+  static async list(params?: { serviceId?: string }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/consumption-rules', { params })
+    return response.data
+  }
+  static async create(data: { serviceId: string; productId: string; quantityUsed: number; unit: string; isAdjustable?: boolean; maxAdjustmentPercent?: number; variantKey?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/consumption-rules', data)
+    return response.data
+  }
+  static async update(id: string, data: { quantityUsed?: number; unit?: string; isAdjustable?: boolean; maxAdjustmentPercent?: number; variantKey?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/consumption-rules/${id}`, data)
+    return response.data
+  }
+  static async delete(id: string): Promise<ApiResponse> {
+    const response = await apiClient.delete(`/consumption-rules/${id}`)
+    return response.data
+  }
+  static async bulkCreate(serviceId: string, rules: { productId: string; quantityUsed: number; unit: string; isAdjustable?: boolean; maxAdjustmentPercent?: number; variantKey?: string }[]): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.post('/consumption-rules/bulk', { serviceId, rules })
+    return response.data
+  }
+}
+
+export class ConsumptionLogsAPI {
+  static async list(params?: { productId?: string; serviceId?: string; billId?: string; fromDate?: string; toDate?: string; limit?: number }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/consumption-logs', { params })
+    return response.data
+  }
+}
+
 export class ProductsAPI {
   static async getAll(params?: { page?: number; limit?: number; search?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/products', { params })
@@ -411,7 +420,7 @@ export class SuppliersAPI {
 }
 
 export class CategoriesAPI {
-  static async getAll(params?: { search?: string; type?: 'product' | 'service' | 'both'; activeOnly?: boolean }): Promise<ApiResponse<any[]>> {
+  static async getAll(params?: { search?: string; activeOnly?: boolean }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/categories', { params })
     return response.data
   }
@@ -421,12 +430,12 @@ export class CategoriesAPI {
     return response.data
   }
 
-  static async create(data: { name: string; type?: 'product' | 'service' | 'both'; description?: string }): Promise<ApiResponse<any>> {
+  static async create(data: { name: string; description?: string }): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/categories', data)
     return response.data
   }
 
-  static async update(id: string, data: { name?: string; type?: 'product' | 'service' | 'both'; description?: string; isActive?: boolean }): Promise<ApiResponse<any>> {
+  static async update(id: string, data: { name?: string; description?: string; isActive?: boolean }): Promise<ApiResponse<any>> {
     const response = await apiClient.put(`/categories/${id}`, data)
     return response.data
   }
@@ -455,7 +464,7 @@ export class InventoryAPI {
 }
 
 export class AppointmentsAPI {
-  static async getAll(params?: { page?: number; limit?: number; date?: string; status?: string }): Promise<PaginatedResponse<any>> {
+  static async getAll(params?: { page?: number; limit?: number; date?: string; status?: string; clientId?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/appointments', { params })
     return response.data
   }
@@ -577,6 +586,48 @@ export class StaffDirectoryAPI {
   }
 }
 
+export class BlockTimeAPI {
+  static async getAll(params?: { staffId?: string; startDate?: string; endDate?: string }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/block-time', { params })
+    return response.data
+  }
+
+  static async create(data: {
+    staffId: string
+    title: string
+    startDate: string
+    startTime: string
+    endTime: string
+    recurringFrequency?: string
+    endDate?: string | null
+    description?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/block-time', data)
+    return response.data
+  }
+
+  static async update(
+    id: string,
+    data: {
+      title?: string
+      startDate?: string
+      startTime?: string
+      endTime?: string
+      recurringFrequency?: string
+      endDate?: string | null
+      description?: string
+    }
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/block-time/${id}`, data)
+    return response.data
+  }
+
+  static async delete(id: string): Promise<ApiResponse<void>> {
+    const response = await apiClient.delete(`/block-time/${id}`)
+    return response.data
+  }
+}
+
 export class ReceiptsAPI {
   static async getAll(params?: { page?: number; limit?: number; clientId?: string; date?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/receipts', { params })
@@ -621,7 +672,8 @@ export class SalesAPI {
   }
 
   static async getByClient(clientName: string): Promise<ApiResponse<any[]>> {
-    const response = await apiClient.get(`/sales/client/${clientName}`)
+    const encoded = encodeURIComponent(clientName)
+    const response = await apiClient.get(`/sales/client/${encoded}`)
     return response.data
   }
 
@@ -762,8 +814,8 @@ export class UsersAPI {
     return response.data
   }
 
-  static async changePassword(id: string, oldPassword: string, newPassword: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`/users/${id}/change-password`, { oldPassword, newPassword })
+  static async changePassword(id: string, newPassword: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/users/${id}/change-password`, { newPassword })
     return response.data
   }
 
@@ -786,6 +838,23 @@ export class ReportsAPI {
     const response = await apiClient.post('/reports/export/sales', {
       format,
       filters
+    });
+    return response.data;
+  }
+
+  static async exportServiceList(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/service-list', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportStaffPerformance(format: 'pdf' | 'xlsx', filters?: any, data?: any[]): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/staff-performance', {
+      format,
+      filters,
+      data: data || []
     });
     return response.data;
   }
@@ -827,6 +896,30 @@ export class ReportsAPI {
     return response.data
   }
 
+  static async exportSummary(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/summary', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async getSummary(params?: { dateFrom?: string; dateTo?: string }): Promise<ApiResponse<{
+    totalBillCount: number
+    totalCustomerCount: number
+    totalSales: number
+    totalSalesCash: number
+    totalSalesOnline: number
+    totalSalesCard: number
+    duesCollected: number
+    cashExpense: number
+    tipCollected: number
+    cashBalance: number
+  }>> {
+    const response = await apiClient.get('/reports/summary', { params })
+    return response.data
+  }
+
   static async getServicePopularity(params?: { startDate?: string; endDate?: string }): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/reports/services', { params })
     return response.data
@@ -839,6 +932,16 @@ export class ReportsAPI {
 
   static async getDashboardStats(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/reports/dashboard')
+    return response.data
+  }
+
+  static async getTipPayouts(params?: { dateFrom?: string; dateTo?: string }): Promise<ApiResponse<{ data: any[] }>> {
+    const response = await apiClient.get('/reports/tip-payouts', { params })
+    return response.data
+  }
+
+  static async createTipPayout(body: { staffId: string; staffName: string; amount: number; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/tip-payouts', body)
     return response.data
   }
 }

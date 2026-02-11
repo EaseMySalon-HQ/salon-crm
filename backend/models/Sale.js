@@ -15,6 +15,10 @@ const itemSchema = new mongoose.Schema({
   total: { type: Number, required: true },
   // Product reference for inventory tracking
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' }, // For products only
+  // Service reference for auto consumption (type === 'service')
+  serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
+  variantKey: { type: String, default: '' }, // e.g. 'short'|'medium'|'long' for variant-based rules
+  autoConsumptionProcessedAt: { type: Date }, // Set when consumption run for this line; cleared on reversal
   // Legacy fields for backward compatibility
   staffId: { type: String, default: '' },
   staffName: { type: String, default: '' },
@@ -71,7 +75,10 @@ const saleSchema = new mongoose.Schema({
   grossTotal: { type: Number, required: true },
   discount: { type: Number, default: 0 },
   discountType: { type: String, enum: ['percentage', 'fixed'], default: 'percentage' },
-  
+  tip: { type: Number, default: 0, min: 0 },
+  tipStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff', default: null },
+  tipStaffName: { type: String, default: '' },
+
   staffName: { type: String, required: true },
   items: [itemSchema],
   

@@ -32,13 +32,20 @@ async function sendDailySummaries() {
           console.log(`⏭️  Skipping daily summary for ${business.name} - disabled in settings`);
           continue;
         }
+
+        // Respect delivery mode: skip scheduler-based send when set to "afterClosing"
+        const deliveryMode = emailSettings?.dailySummary?.mode || 'fixedTime';
+        if (deliveryMode === 'afterClosing') {
+          console.log(`⏭️  Skipping daily summary for ${business.name} - mode set to afterClosing (sent on close)`);
+          continue;
+        }
         
         console.log(`📧 Processing daily summary for business: ${business.name}`);
         
         // Get business database connection
         const businessDb = await databaseManager.getConnection(business._id, mainConnection);
         const businessModels = modelFactory.createBusinessModels(businessDb);
-        const { Staff, Receipt, Sale, Appointment, Client } = businessModels;
+        const { Staff, Receipt, Sale, Appointment, Client, CashRegistry, Expense } = businessModels;
         
         // Get today's date
         const today = new Date();
@@ -46,6 +53,7 @@ async function sendDailySummaries() {
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
         const todayDateString = today.toISOString().split('T')[0];
+        const dateFormatted = today.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
         
         // Get today's sales (from Sale model - this is the primary sales data)
         const sales = await Sale.find({
@@ -57,46 +65,67 @@ async function sendDailySummaries() {
           status: { $nin: ['cancelled', 'Cancelled'] } // Exclude cancelled sales (case variations)
         }).lean();
         
-        // Also get receipts for backward compatibility (if any exist)
+        // Also get receipts for backward compatibility (tips, etc.)
         const receipts = await Receipt.find({
           branchId: business._id,
-          date: {
-            $gte: todayDateString,
-            $lt: tomorrow.toISOString().split('T')[0]
+          date: { $gte: todayDateString, $lt: tomorrow.toISOString().split('T')[0] }
+        }).lean();
+        
+        // Today's closing cash registry (for cash balance and cash expense)
+        const closingRegistry = await CashRegistry.findOne({
+          branchId: business._id,
+          date: { $gte: today, $lt: tomorrow },
+          shiftType: 'closing'
+        }).lean();
+        
+        // Today's cash expenses (from Expense model if no registry expenseValue)
+        const cashExpenses = await Expense.find({
+          branchId: business._id,
+          date: { $gte: today, $lt: tomorrow },
+          paymentMode: 'Cash',
+          status: { $in: ['approved', 'pending'] }
+        }).lean();
+        
+        // 1. Total Bill Count
+        const totalBillCount = sales.length;
+        // 2. Total Customer Count (unique customers by name)
+        const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
+        const totalCustomerCount = uniqueCustomers.size || totalBillCount;
+        // 3. Total Sales (gross revenue)
+        const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
+        // 4–6. Sales by payment mode (from payments array)
+        let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
+        sales.forEach(s => {
+          (s.payments || []).forEach(p => {
+            const amt = p.amount || 0;
+            if (p.mode === 'Cash') totalSalesCash += amt;
+            else if (p.mode === 'Online') totalSalesOnline += amt;
+            else if (p.mode === 'Card') totalSalesCard += amt;
+          });
+          // Legacy: single paymentMode
+          if (!(s.payments && s.payments.length)) {
+            const amt = s.grossTotal || s.netTotal || 0;
+            if (s.paymentMode === 'Cash') totalSalesCash += amt;
+            else if (s.paymentMode === 'Online') totalSalesOnline += amt;
+            else if (s.paymentMode === 'Card') totalSalesCard += amt;
           }
-        }).lean();
+        });
+        // 7. Dues collected (payments recorded today via paymentHistory)
+        let duesCollected = 0;
+        sales.forEach(s => {
+          (s.paymentHistory || []).forEach(ph => {
+            const d = ph.date ? new Date(ph.date) : null;
+            if (d && d >= today && d < tomorrow) duesCollected += ph.amount || 0;
+          });
+        });
+        // 8. Cash expense (from closing registry or sum of cash expenses)
+        const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+        // 9. Tip collected (from receipts for today)
+        const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+        // 10. Cash balance (from today's closing registry)
+        const cashBalance = closingRegistry?.cashBalance ?? 0;
         
-        const appointments = await Appointment.find({
-          branchId: business._id,
-          date: todayDateString
-        }).lean();
-        
-        const newClients = await Client.find({
-          branchId: business._id,
-          createdAt: { $gte: today }
-        }).lean();
-        
-        // Calculate summary from Sales (primary) and Receipts (backup)
-        // Sales use grossTotal or totalAmount, Receipts use total
-        const salesRevenue = sales.reduce((sum, s) => {
-          const amount = s.grossTotal || s.totalAmount || s.netTotal || 0;
-          return sum + amount;
-        }, 0);
-        
-        const receiptsRevenue = receipts.reduce((sum, r) => sum + (r.total || 0), 0);
-        
-        const totalRevenue = salesRevenue + receiptsRevenue;
-        const totalSales = sales.length + receipts.length;
-        const appointmentCount = appointments.length;
-        const newClientsCount = newClients.length;
-        
-        console.log(`📊 Daily summary for ${business.name}: ${totalSales} sales, ₹${totalRevenue}, ${appointmentCount} appointments, ${newClientsCount} new clients`);
-        
-        // Get top services (simplified - can be enhanced)
-        const topServices = [];
-        
-        // Get top products (simplified - can be enhanced)
-        const topProducts = [];
+        console.log(`📊 Daily summary for ${business.name}: ${totalBillCount} bills, ₹${totalSales}, cash ₹${totalSalesCash}, card ₹${totalSalesCard}, online ₹${totalSalesOnline}`);
         
         // Get recipient staff
         const recipientStaffIds = emailSettings?.dailySummary?.recipientStaffIds || [];
@@ -158,14 +187,19 @@ async function sendDailySummaries() {
             await emailService.sendDailySummary({
               to: staff.email,
               businessName: business.name,
-              date: today.toISOString().split('T')[0],
+              date: todayDateString,
               summaryData: {
+                dateFormatted,
+                totalBillCount,
+                totalCustomerCount,
                 totalSales,
-                totalRevenue,
-                appointmentCount,
-                newClients: newClientsCount,
-                topServices,
-                topProducts
+                totalSalesCash,
+                totalSalesOnline,
+                totalSalesCard,
+                duesCollected,
+                cashExpense,
+                tipCollected,
+                cashBalance
               }
             });
             console.log(`✅ Daily summary sent to ${staff.email} (${staff.name || staff.role}) for business ${business.name}`);

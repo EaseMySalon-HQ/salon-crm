@@ -370,7 +370,98 @@ export function ExpenseReport() {
 
   return (
     <div className="space-y-8">
-      {/* Enhanced Stats Cards */}
+      {/* Filter bar – same position as Sales */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-6">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 lg:gap-6">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+              <Input
+                placeholder="Search expenses..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-52 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+              />
+              <Select value={datePeriod} onValueChange={handleDatePeriodChange}>
+                <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                  <SelectValue placeholder="Quick periods" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="today">Today</SelectItem>
+                  <SelectItem value="yesterday">Yesterday</SelectItem>
+                  <SelectItem value="last7days">Last 7 days</SelectItem>
+                  <SelectItem value="last30days">Last 30 days</SelectItem>
+                  <SelectItem value="currentMonth">Current month</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                  <SelectValue placeholder="Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Categories</SelectItem>
+                  <SelectItem value="Utilities">Utilities</SelectItem>
+                  <SelectItem value="Rent">Rent</SelectItem>
+                  <SelectItem value="Supplies">Supplies</SelectItem>
+                  <SelectItem value="Marketing">Marketing</SelectItem>
+                  <SelectItem value="Maintenance">Maintenance</SelectItem>
+                  <SelectItem value="Other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={paymentMethodFilter} onValueChange={setPaymentMethodFilter}>
+                <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                  <SelectValue placeholder="Payment" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Methods</SelectItem>
+                  <SelectItem value="Cash">Cash</SelectItem>
+                  <SelectItem value="Card">Card</SelectItem>
+                  <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                  <SelectItem value="Check">Check</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-3">
+              {canExport ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Export Report
+                      <ChevronDown className="h-4 w-4 ml-2" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuLabel>Export Format</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
+                      <FileText className="h-4 w-4 mr-2" />
+                      Export as PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={handleExportXLS} className="cursor-pointer">
+                      <FileSpreadsheet className="h-4 w-4 mr-2" />
+                      Export as Excel
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button
+                  className="bg-gray-400 cursor-not-allowed text-white px-6 py-2.5 shadow-md rounded-lg font-medium"
+                  disabled
+                  title="Data export requires Professional or Enterprise plan"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Export (Upgrade Required)
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
@@ -414,167 +505,47 @@ export function ExpenseReport() {
         </Card>
       </div>
 
-      {/* Enhanced Filters */}
+      {/* Expense Table – same layout as Service List / Sales */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-6">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between space-y-4 lg:space-y-0">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center space-y-3 sm:space-y-0 sm:space-x-4">
-              {/* Search */}
-              <div className="flex items-center space-x-2">
-                <div className="p-2 bg-blue-50 rounded-lg">
-                  <Search className="h-4 w-4 text-blue-600" />
-                </div>
-                <Input
-                  placeholder="Search expenses..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-64 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </div>
-              
-              {/* Date Period Dropdown */}
-              <Select value={datePeriod} onValueChange={handleDatePeriodChange}>
-                <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                  <SelectValue placeholder="Quick periods" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="today">Today</SelectItem>
-                  <SelectItem value="yesterday">Yesterday</SelectItem>
-                  <SelectItem value="last7days">Last 7 days</SelectItem>
-                  <SelectItem value="last30days">Last 30 days</SelectItem>
-                  <SelectItem value="currentMonth">Current month</SelectItem>
-                  <SelectItem value="all">All time</SelectItem>
-                </SelectContent>
-              </Select>
-              
-              {/* Category Filter */}
-              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                  <SelectValue placeholder="Category" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Categories</SelectItem>
-                  <SelectItem value="Utilities">Utilities</SelectItem>
-                  <SelectItem value="Rent">Rent</SelectItem>
-                  <SelectItem value="Supplies">Supplies</SelectItem>
-                  <SelectItem value="Marketing">Marketing</SelectItem>
-                  <SelectItem value="Maintenance">Maintenance</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
-                </SelectContent>
-              </Select>
-              
-              {/* Payment Method Filter */}
-              <Select value={paymentMethodFilter} onValueChange={setPaymentMethodFilter}>
-                <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                  <SelectValue placeholder="Payment" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Methods</SelectItem>
-                  <SelectItem value="Cash">Cash</SelectItem>
-                  <SelectItem value="Card">Card</SelectItem>
-                  <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
-                  <SelectItem value="Check">Check</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="flex items-center space-x-3">
-              {canExport ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
-                    >
-                      <Download className="h-4 w-4 mr-2" />
-                      Export Report
-                      <ChevronDown className="h-4 w-4 ml-2" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuLabel>Export Format</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={handleExportPDF} className="cursor-pointer">
-                      <FileText className="h-4 w-4 mr-2" />
-                      Export as PDF
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={handleExportXLS} className="cursor-pointer">
-                      <FileSpreadsheet className="h-4 w-4 mr-2" />
-                      Export as Excel
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-slate-50 border-b border-slate-200">
+                <TableHead className="font-semibold text-slate-800">Category</TableHead>
+                <TableHead className="font-semibold text-slate-800">Description</TableHead>
+                <TableHead className="font-semibold text-slate-800">Amount</TableHead>
+                <TableHead className="font-semibold text-slate-800">Payment Method</TableHead>
+                <TableHead className="font-semibold text-slate-800">Date</TableHead>
+                <TableHead className="font-semibold text-slate-800">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredData.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center py-12 text-slate-500">
+                    No expenses found for the selected filters.
+                  </TableCell>
+                </TableRow>
               ) : (
-                <Button
-                  className="bg-gray-400 cursor-not-allowed text-white px-6 py-2.5 shadow-md rounded-lg font-medium"
-                  disabled
-                  title="Data export requires Professional or Enterprise plan"
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Export (Upgrade Required)
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Enhanced Expense Table */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h3 className="text-xl font-semibold text-slate-800">Expenses</h3>
-              <p className="text-slate-600 text-sm mt-1">
-                Detailed view of all expenses with filtering and search capabilities
-              </p>
-            </div>
-          </div>
-          
-          {filteredData.length === 0 ? (
-            <div className="text-center py-16">
-              <div className="flex flex-col items-center space-y-4">
-                <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center">
-                  <Receipt className="h-10 w-10 text-slate-400" />
-                </div>
-                <div className="text-center">
-                  <h3 className="text-lg font-medium text-slate-900 mb-2">No expenses found</h3>
-                  <p className="text-slate-500 text-sm">Try adjusting your filters or search terms</p>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-lg border border-slate-200">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-gradient-to-r from-slate-50 to-red-50 hover:bg-gradient-to-r hover:from-slate-100 hover:to-red-100">
-                    <TableHead className="py-4 text-slate-700 font-semibold">Category</TableHead>
-                    <TableHead className="py-4 text-slate-700 font-semibold">Description</TableHead>
-                    <TableHead className="py-4 text-slate-700 font-semibold">Amount</TableHead>
-                    <TableHead className="py-4 text-slate-700 font-semibold">Payment Method</TableHead>
-                    <TableHead className="py-4 text-slate-700 font-semibold">Date</TableHead>
-                    <TableHead className="py-4 text-slate-700 font-semibold">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredData.map((expense) => (
-                    <TableRow key={expense.id} className="hover:bg-gradient-to-r hover:from-slate-50 hover:to-red-50 transition-all duration-200 border-b border-slate-100">
-                      <TableCell className="py-4">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                          {expense.category}
-                        </span>
-                      </TableCell>
-                      <TableCell className="py-4 max-w-[200px] truncate text-slate-800" title={expense.description}>
-                        {expense.description}
-                      </TableCell>
-                      <TableCell className="py-4 font-mono font-semibold text-red-700">{formatAmount(expense.amount)}</TableCell>
-                      <TableCell className="py-4">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {expense.paymentMethod}
-                        </span>
-                      </TableCell>
-                      <TableCell className="py-4 text-slate-600">{format(new Date(expense.date), 'MMM dd, yyyy')}</TableCell>
-                      <TableCell className="py-4">
-                        <DropdownMenu>
+                filteredData.map((expense) => (
+                  <TableRow key={expense.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                    <TableCell>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                        {expense.category}
+                      </span>
+                    </TableCell>
+                    <TableCell className="max-w-[200px] truncate text-slate-800" title={expense.description}>
+                      {expense.description}
+                    </TableCell>
+                    <TableCell className="font-mono font-semibold text-red-700">{formatAmount(expense.amount)}</TableCell>
+                    <TableCell>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                        {expense.paymentMethod}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-slate-600">{format(new Date(expense.date), 'MMM dd, yyyy')}</TableCell>
+                    <TableCell>
+                      <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" className="h-8 w-8 p-0 hover:bg-slate-100 rounded-lg transition-colors duration-200">
                               <span className="sr-only">Open menu</span>
@@ -602,13 +573,12 @@ export function ExpenseReport() {
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
         </div>
       </div>
 

@@ -28,7 +28,9 @@ export interface Product {
   category: string
   price: number
   stock: number
-  sku: string
+  sku?: string
+  barcode?: string
+  hsnSacCode?: string
   supplier?: string
   description?: string
   isActive: boolean
@@ -76,6 +78,7 @@ export interface Receipt {
   items: ReceiptItem[]
   subtotal: number
   tip: number
+  tipStaffName?: string
   discount: number
   tax: number
   roundOff?: number

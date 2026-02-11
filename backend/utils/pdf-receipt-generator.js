@@ -143,7 +143,8 @@ async function generateReceiptPDF(receiptData, businessSettings = {}) {
       }
       
       if (receiptData.tip && receiptData.tip > 0) {
-        doc.text(`Tip:`, { align: 'left', continued: true })
+        const tipLabel = receiptData.tipStaffName ? `Tip (${receiptData.tipStaffName}):` : 'Tip:';
+        doc.text(tipLabel, { align: 'left', continued: true })
            .text(`₹${receiptData.tip.toFixed(2)}`, { align: 'right' });
       }
 
@@ -157,6 +158,7 @@ async function generateReceiptPDF(receiptData, businessSettings = {}) {
          .text(`TOTAL:`, { align: 'left', continued: true })
          .text(`₹${(receiptData.total || 0).toFixed(2)}`, { align: 'right' });
 
+      // Always show payment method
       doc.moveDown(0.5);
       doc.fontSize(9)
          .font('Helvetica')

@@ -13,13 +13,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
 import { CategoriesAPI } from "@/lib/api"
@@ -27,7 +20,6 @@ import { CategoriesAPI } from "@/lib/api"
 interface Category {
   _id: string
   name: string
-  type: 'product' | 'service' | 'both'
   description?: string
   isActive: boolean
 }
@@ -37,43 +29,39 @@ interface CategoryEditDialogProps {
   onOpenChange: (open: boolean) => void
   category?: Category
   onSuccess: () => void
-  defaultType?: 'product' | 'service'
 }
 
 export function CategoryEditDialog({
   open,
   onOpenChange,
   category,
-  onSuccess,
-  defaultType
+  onSuccess
 }: CategoryEditDialogProps) {
   const [formData, setFormData] = React.useState({
     name: '',
-    type: (defaultType || 'both') as 'product' | 'service' | 'both',
     description: '',
     isActive: true
   })
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const { toast } = useToast()
 
-  // Update form data when category changes
+  // Reset/edit form when dialog opens or category changes
   React.useEffect(() => {
+    if (!open) return
     if (category) {
       setFormData({
         name: category.name,
-        type: category.type,
         description: category.description || '',
         isActive: category.isActive
       })
     } else {
       setFormData({
         name: '',
-        type: defaultType || 'both',
         description: '',
         isActive: true
       })
     }
-  }, [category, defaultType])
+  }, [open, category])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -92,7 +80,6 @@ export function CategoryEditDialog({
       
       const categoryData = {
         name: formData.name.trim(),
-        type: formData.type,
         description: formData.description.trim(),
         isActive: formData.isActive
       }
@@ -117,9 +104,14 @@ export function CategoryEditDialog({
       }
     } catch (error: any) {
       console.error(`Error ${category ? 'updating' : 'creating'} category:`, error)
+      const message =
+        error?.response?.data?.error ||
+        error?.responseData?.error ||
+        error?.message ||
+        `Failed to ${category ? 'update' : 'create'} category`
       toast({
         title: "Error",
-        description: error.message || `Failed to ${category ? 'update' : 'create'} category`,
+        description: message,
         variant: "destructive",
       })
     } finally {
@@ -153,29 +145,6 @@ export function CategoryEditDialog({
                 disabled={isSubmitting}
                 required
               />
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="type">
-                Type <span className="text-destructive">*</span>
-              </Label>
-              <Select
-                value={formData.type}
-                onValueChange={(value) => setFormData({ ...formData, type: value as 'product' | 'service' | 'both' })}
-                disabled={isSubmitting}
-              >
-                <SelectTrigger id="type">
-                  <SelectValue placeholder="Select type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="both">Both (Product & Service)</SelectItem>
-                  <SelectItem value="product">Product Only</SelectItem>
-                  <SelectItem value="service">Service Only</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Choose where this category can be used
-              </p>
             </div>
 
             <div className="grid gap-2">

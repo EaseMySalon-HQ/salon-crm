@@ -36,7 +36,6 @@ import { CategoryEditDialog } from "./category-edit-dialog"
 interface Category {
   _id: string
   name: string
-  type: 'product' | 'service' | 'both'
   description?: string
   isActive: boolean
   isManaged?: boolean // True if from Categories API, false if extracted from products/services
@@ -45,13 +44,11 @@ interface Category {
 }
 
 interface CategoryManagementProps {
-  type?: 'product' | 'service' | 'both'
   title?: string
   description?: string
 }
 
 export function CategoryManagement({ 
-  type = 'both',
   title = "Category Management",
   description = "Manage your product and service categories"
 }: CategoryManagementProps) {
@@ -69,10 +66,9 @@ export function CategoryManagement({
       setLoading(true)
       const categoryMap = new Map<string, Category>()
       
-      // First, fetch from the Categories API
+      // Fetch from the Categories API
       try {
         const response = await CategoriesAPI.getAll({ 
-          type,
           search: searchQuery || undefined,
           activeOnly: false 
         })
@@ -91,58 +87,48 @@ export function CategoryManagement({
       }
       
       // Also extract categories from existing products and services
-      if (type === 'product' || type === 'both') {
-        try {
-          const response = await ProductsAPI.getAll({ limit: 10000 })
-          if (response.success && response.data) {
-            const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-            
-            products.forEach((product: any) => {
-              if (product.category && product.category.trim()) {
-                const categoryName = product.category.trim()
-                // Only add if not already in the map (managed categories take precedence)
-                if (!Array.from(categoryMap.values()).some(cat => cat.name.toLowerCase() === categoryName.toLowerCase())) {
-                  categoryMap.set(`extracted-product-${categoryName}`, {
-                    _id: `extracted-product-${categoryName}`,
-                    name: categoryName,
-                    type: 'product',
-                    isActive: true,
-                    isManaged: false // Mark as extracted (not from Categories API)
-                  } as any)
-                }
+      try {
+        const response = await ProductsAPI.getAll({ limit: 10000 })
+        if (response.success && response.data) {
+          const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+          products.forEach((product: any) => {
+            if (product.category && product.category.trim()) {
+              const categoryName = product.category.trim()
+              if (!Array.from(categoryMap.values()).some(cat => cat.name.toLowerCase() === categoryName.toLowerCase())) {
+                categoryMap.set(`extracted-product-${categoryName}`, {
+                  _id: `extracted-product-${categoryName}`,
+                  name: categoryName,
+                  isActive: true,
+                  isManaged: false
+                } as any)
               }
-            })
-          }
-        } catch (error) {
-          console.log('Error fetching products for categories:', error)
+            }
+          })
         }
+      } catch (error) {
+        console.log('Error fetching products for categories:', error)
       }
       
-      if (type === 'service' || type === 'both') {
-        try {
-          const response = await ServicesAPI.getAll({ limit: 10000 })
-          if (response.success && response.data) {
-            const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-            
-            services.forEach((service: any) => {
-              if (service.category && service.category.trim()) {
-                const categoryName = service.category.trim()
-                // Only add if not already in the map
-                if (!Array.from(categoryMap.values()).some(cat => cat.name.toLowerCase() === categoryName.toLowerCase())) {
-                  categoryMap.set(`extracted-service-${categoryName}`, {
-                    _id: `extracted-service-${categoryName}`,
-                    name: categoryName,
-                    type: 'service',
-                    isActive: true,
-                    isManaged: false // Mark as extracted
-                  } as any)
-                }
+      try {
+        const response = await ServicesAPI.getAll({ limit: 10000 })
+        if (response.success && response.data) {
+          const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+          services.forEach((service: any) => {
+            if (service.category && service.category.trim()) {
+              const categoryName = service.category.trim()
+              if (!Array.from(categoryMap.values()).some(cat => cat.name.toLowerCase() === categoryName.toLowerCase())) {
+                categoryMap.set(`extracted-service-${categoryName}`, {
+                  _id: `extracted-service-${categoryName}`,
+                  name: categoryName,
+                  isActive: true,
+                  isManaged: false
+                } as any)
               }
-            })
-          }
-        } catch (error) {
-          console.log('Error fetching services for categories:', error)
+            }
+          })
         }
+      } catch (error) {
+        console.log('Error fetching services for categories:', error)
       }
       
       // Convert map to array and sort
@@ -169,7 +155,7 @@ export function CategoryManagement({
     } finally {
       setLoading(false)
     }
-  }, [type, searchQuery, toast])
+  }, [searchQuery, toast])
 
   // Load categories on mount and when dependencies change
   React.useEffect(() => {
@@ -180,11 +166,11 @@ export function CategoryManagement({
   const handleDelete = async () => {
     if (!deletingCategory) return
 
-    // Check if it's an extracted category (not managed)
+    // Extracted categories (from products) have no API document - require product updates first
     if (!deletingCategory.isManaged) {
       toast({
-        title: "Cannot Delete",
-        description: "This category is used in your products/services. To remove it, you must remove it from all products/services first, or click 'Convert to Managed' to manage it.",
+        title: "Category used in products",
+        description: "Update the category on your products/services to a different value to remove it from this list.",
         variant: "destructive",
       })
       setDeletingCategory(null)
@@ -222,29 +208,27 @@ export function CategoryManagement({
     loadCategories()
   }
 
-  // Convert extracted category to managed
-  const handleConvertToManaged = async (category: Category) => {
+  // Edit: for extracted categories, create via API first so we can edit
+  const handleEditClick = async (category: Category) => {
+    if (category.isManaged) {
+      setEditingCategory(category)
+      return
+    }
     try {
       const response = await CategoriesAPI.create({
         name: category.name,
-        type: category.type,
         description: category.description || ''
       })
-      
-      if (response.success) {
-        toast({
-          title: "Success",
-          description: "Category converted to managed successfully. You can now edit and manage it.",
-        })
+      if (response.success && response.data) {
         loadCategories()
+        setEditingCategory({ ...response.data, isManaged: true } as Category)
       } else {
-        throw new Error(response.error || 'Failed to convert category')
+        throw new Error(response.error || 'Failed to create category')
       }
     } catch (error: any) {
-      console.error('Error converting category:', error)
       toast({
         title: "Error",
-        description: error.message || "Failed to convert category",
+        description: error.response?.data?.error || error.message || "Failed to create category",
         variant: "destructive",
       })
     }
@@ -289,7 +273,6 @@ export function CategoryManagement({
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
               <TableHead>Description</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -298,13 +281,13 @@ export function CategoryManagement({
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8">
+                <TableCell colSpan={4} className="text-center py-8">
                   Loading categories...
                 </TableCell>
               </TableRow>
             ) : filteredCategories.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8">
+                <TableCell colSpan={4} className="text-center py-8">
                   {searchQuery ? "No categories found matching your search." : "No categories yet. Create your first category to get started."}
                 </TableCell>
               </TableRow>
@@ -312,91 +295,52 @@ export function CategoryManagement({
               filteredCategories.map((category) => (
                 <TableRow key={category._id}>
                   <TableCell className="font-medium">{category.name}</TableCell>
-                  <TableCell>
-                    <Badge variant={
-                      category.type === 'both' ? 'default' : 
-                      category.type === 'product' ? 'secondary' : 
-                      'outline'
-                    }>
-                      {category.type}
-                    </Badge>
-                  </TableCell>
                   <TableCell className="max-w-xs truncate">
                     {category.description || <span className="text-muted-foreground">No description</span>}
                   </TableCell>
                   <TableCell>
-                    <div className="flex flex-col gap-1">
-                      <Badge variant={category.isActive ? 'default' : 'secondary'}>
-                        {category.isActive ? 'Active' : 'Inactive'}
-                      </Badge>
-                      {!category.isManaged && (
-                        <Badge variant="outline" className="text-xs">
-                          Auto-detected
-                        </Badge>
-                      )}
-                    </div>
+                    <Badge variant={category.isActive ? 'default' : 'secondary'}>
+                      {category.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      {category.isManaged ? (
-                        <>
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setEditingCategory(category)}
-                                  className="h-8 w-8 p-0"
-                                >
-                                  <Pencil className="h-4 w-4" />
-                                  <span className="sr-only">Edit</span>
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>Edit category</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                          
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setDeletingCategory(category)}
-                                  className="h-8 w-8 p-0 hover:bg-destructive hover:text-destructive-foreground"
-                                >
-                                  <Trash2 className="h-4 w-4 text-destructive" />
-                                  <span className="sr-only">Delete</span>
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>Delete category</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </>
-                      ) : (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="default"
-                                size="sm"
-                                onClick={() => handleConvertToManaged(category)}
-                                className="h-8 text-xs px-3"
-                              >
-                                Convert to Managed
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Convert this category to managed so you can edit/delete it</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleEditClick(category)}
+                              className="h-8 w-8 p-0"
+                            >
+                              <Pencil className="h-4 w-4" />
+                              <span className="sr-only">Edit</span>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Edit category</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setDeletingCategory(category)}
+                              className="h-8 w-8 p-0 hover:bg-destructive hover:text-destructive-foreground"
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                              <span className="sr-only">Delete</span>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Delete category</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -411,7 +355,6 @@ export function CategoryManagement({
         open={showAddDialog}
         onOpenChange={setShowAddDialog}
         onSuccess={handleSaveSuccess}
-        defaultType={type !== 'both' ? type : undefined}
       />
 
       {/* Edit Category Dialog */}

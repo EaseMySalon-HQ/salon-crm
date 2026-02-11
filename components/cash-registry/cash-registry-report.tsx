@@ -1619,7 +1619,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
               <div className="overflow-x-auto p-6">
                 <Table className="w-full">
                 <TableHeader>
-                  <TableRow className="bg-gradient-to-r from-slate-100 to-blue-100/50 hover:from-slate-100 hover:to-blue-100/50 border-0">
+                  <TableRow className="bg-slate-50 border-b border-slate-200">
                     {reportType === "summary" ? (
                       <>
                         <TableHead className="font-semibold text-slate-700 py-4">Date</TableHead>

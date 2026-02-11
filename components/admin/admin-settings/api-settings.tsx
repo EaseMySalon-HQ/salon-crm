@@ -141,10 +141,15 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
     }
   })
 
-  // Update settings when propSettings change
+  // Update settings when propSettings change (merge so nested objects always exist)
   useEffect(() => {
     if (propSettings) {
-      setSettings(propSettings)
+      setSettings(prev => {
+        const next = { ...prev, ...propSettings }
+        if (!next.api || typeof next.api !== 'object') next.api = { version: 'v1', baseUrl: 'https://api.easemysalon.com', timeout: 30000, maxRequestsPerMinute: 100, enableCORS: true, allowedOrigins: [], enableRateLimiting: true, enableLogging: true, enableMetrics: true, ...(prev?.api || {}), ...(propSettings?.api || {}) }
+        if (!next.rateLimiting || typeof next.rateLimiting !== 'object') next.rateLimiting = prev?.rateLimiting || {}
+        return next
+      })
     }
   }, [propSettings])
 
@@ -152,12 +157,12 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
     setSettings(prev => {
       const newSettings = { ...prev }
       const keys = path.split('.')
-      let current = newSettings
-      
+      let current: any = newSettings
       for (let i = 0; i < keys.length - 1; i++) {
-        current = current[keys[i]]
+        const k = keys[i]
+        if (current[k] == null || typeof current[k] !== 'object') current[k] = {}
+        current = current[k]
       }
-      
       current[keys[keys.length - 1]] = value
       onSettingsChange(newSettings)
       return newSettings
@@ -241,7 +246,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
               <Label htmlFor="baseUrl">Base URL</Label>
               <Input
                 id="baseUrl"
-                value={settings.api.baseUrl}
+                value={settings?.api?.baseUrl ?? ''}
                 onChange={(e) => handleSettingChange('api.baseUrl', e.target.value)}
                 className="w-full"
                 placeholder="https://api.easemysalon.com"
@@ -255,7 +260,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 type="number"
                 min="1000"
                 max="300000"
-                value={settings.api.timeout}
+                value={settings?.api?.timeout ?? 30000}
                 onChange={(e) => handleSettingChange('api.timeout', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -268,7 +273,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 type="number"
                 min="1"
                 max="10000"
-                value={settings.api.maxRequestsPerMinute}
+                value={settings?.api?.maxRequestsPerMinute ?? 100}
                 onChange={(e) => handleSettingChange('api.maxRequestsPerMinute', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -279,7 +284,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
             <Label htmlFor="allowedOrigins">Allowed Origins</Label>
             <Textarea
               id="allowedOrigins"
-              value={settings.api.allowedOrigins.join('\n')}
+              value={(settings?.api?.allowedOrigins ?? []).join('\n')}
               onChange={(e) => handleSettingChange('api.allowedOrigins', e.target.value.split('\n').filter(origin => origin.trim()))}
               className="w-full"
               rows={3}
@@ -299,7 +304,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.api.enableCORS}
+                checked={settings?.api?.enableCORS ?? true}
                 onCheckedChange={(checked) => handleSettingChange('api.enableCORS', checked)}
               />
             </div>
@@ -312,7 +317,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.api.enableRateLimiting}
+                checked={settings?.api?.enableRateLimiting ?? true}
                 onCheckedChange={(checked) => handleSettingChange('api.enableRateLimiting', checked)}
               />
             </div>
@@ -325,7 +330,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.api.enableLogging}
+                checked={settings?.api?.enableLogging ?? true}
                 onCheckedChange={(checked) => handleSettingChange('api.enableLogging', checked)}
               />
             </div>
@@ -338,7 +343,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.api.enableMetrics}
+                checked={settings?.api?.enableMetrics ?? true}
                 onCheckedChange={(checked) => handleSettingChange('api.enableMetrics', checked)}
               />
             </div>
@@ -366,12 +371,12 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
               </p>
             </div>
             <Switch
-              checked={settings.rateLimiting.enabled}
+              checked={settings?.rateLimiting?.enabled ?? true}
               onCheckedChange={(checked) => handleSettingChange('rateLimiting.enabled', checked)}
             />
           </div>
 
-          {settings.rateLimiting.enabled && (
+          {settings?.rateLimiting?.enabled && (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -381,7 +386,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                     type="number"
                     min="1000"
                     max="3600000"
-                    value={settings.rateLimiting.windowMs}
+                    value={settings?.rateLimiting?.windowMs ?? 60000}
                     onChange={(e) => handleSettingChange('rateLimiting.windowMs', parseInt(e.target.value))}
                     className="w-full"
                   />
@@ -394,7 +399,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                     type="number"
                     min="1"
                     max="10000"
-                    value={settings.rateLimiting.maxRequests}
+                    value={settings?.rateLimiting?.maxRequests ?? 100}
                     onChange={(e) => handleSettingChange('rateLimiting.maxRequests', parseInt(e.target.value))}
                     className="w-full"
                   />
@@ -403,7 +408,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 <div className="space-y-2">
                   <Label htmlFor="keyGenerator">Key Generator</Label>
                   <Select
-                    value={settings.rateLimiting.keyGenerator}
+                    value={settings?.rateLimiting?.keyGenerator ?? 'ip'}
                     onValueChange={(value) => handleSettingChange('rateLimiting.keyGenerator', value)}
                   >
                     <SelectTrigger>
@@ -424,19 +429,19 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                     type="number"
                     min="400"
                     max="599"
-                    value={settings.rateLimiting.statusCode}
+                    value={settings?.rateLimiting?.statusCode ?? 429}
                     onChange={(e) => handleSettingChange('rateLimiting.statusCode', parseInt(e.target.value))}
                     className="w-full"
                   />
                 </div>
               </div>
 
-              {settings.rateLimiting.keyGenerator === "custom" && (
+              {settings?.rateLimiting?.keyGenerator === "custom" && (
                 <div className="space-y-2">
                   <Label htmlFor="customKeyGenerator">Custom Key Generator Function</Label>
                   <Textarea
                     id="customKeyGenerator"
-                    value={settings.rateLimiting.customKeyGenerator}
+                    value={settings?.rateLimiting?.customKeyGenerator ?? ''}
                     onChange={(e) => handleSettingChange('rateLimiting.customKeyGenerator', e.target.value)}
                     className="w-full"
                     rows={3}
@@ -449,7 +454,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 <Label htmlFor="rateLimitMessage">Rate Limit Message</Label>
                 <Input
                   id="rateLimitMessage"
-                  value={settings.rateLimiting.message}
+                  value={settings?.rateLimiting?.message ?? ''}
                   onChange={(e) => handleSettingChange('rateLimiting.message', e.target.value)}
                   className="w-full"
                   placeholder="Too many requests, please try again later."
@@ -465,7 +470,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                     </p>
                   </div>
                   <Switch
-                    checked={settings.rateLimiting.skipSuccessfulRequests}
+                    checked={settings?.rateLimiting?.skipSuccessfulRequests ?? false}
                     onCheckedChange={(checked) => handleSettingChange('rateLimiting.skipSuccessfulRequests', checked)}
                   />
                 </div>
@@ -478,7 +483,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                     </p>
                   </div>
                   <Switch
-                    checked={settings.rateLimiting.skipFailedRequests}
+                    checked={settings?.rateLimiting?.skipFailedRequests ?? false}
                     onCheckedChange={(checked) => handleSettingChange('rateLimiting.skipFailedRequests', checked)}
                   />
                 </div>

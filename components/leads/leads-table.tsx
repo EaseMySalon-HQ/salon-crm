@@ -371,7 +371,7 @@ export function LeadsTable({ leads, onRefresh, onEdit, onConvert }: LeadsTablePr
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
+              <TableRow key={headerGroup.id} className="bg-slate-50 border-b border-slate-200">
                 {headerGroup.headers.map((header) => (
                   <TableHead key={header.id}>
                     {header.isPlaceholder

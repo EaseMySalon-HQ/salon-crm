@@ -86,7 +86,19 @@ class ModelFactory {
       Lead: this.getModel('Lead', require('./Lead').schema, connection),
       
       // LeadActivity model
-      LeadActivity: this.getModel('LeadActivity', require('./LeadActivity').schema, connection)
+      LeadActivity: this.getModel('LeadActivity', require('./LeadActivity').schema, connection),
+
+      // BlockTime model
+      BlockTime: this.getModel('BlockTime', require('./BlockTime').schema, connection),
+
+      // ServiceConsumptionRule model (auto consumption)
+      ServiceConsumptionRule: this.getModel('ServiceConsumptionRule', require('./ServiceConsumptionRule').schema, connection),
+
+      // InventoryConsumptionLog model (auto consumption audit)
+      InventoryConsumptionLog: this.getModel('InventoryConsumptionLog', require('./InventoryConsumptionLog').schema, connection),
+
+      // TipPayout model (staff tip payouts)
+      TipPayout: this.getModel('TipPayout', require('./TipPayout').schema, connection)
     };
   }
 

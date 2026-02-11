@@ -10,9 +10,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { ProductsAPI, SettingsAPI } from "@/lib/api"
-import { SupplierCombobox } from "./supplier-combobox"
 import { CategoryCombobox } from "./category-combobox"
-import { Search, CheckCircle, AlertCircle } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Search, CheckCircle, AlertCircle, HelpCircle } from "lucide-react"
 
 interface TaxCategory {
   id: string
@@ -35,10 +35,13 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
     category: product?.category || "",
     price: product?.price || "",
     cost: product?.cost || "",
+    offerPrice: product?.offerPrice ?? "",
     stock: product?.stock || "",
     minStock: product?.minimumStock || product?.minStock || "5",
-    supplier: product?.supplier || "",
     sku: product?.sku || "",
+    hsnSacCode: product?.hsnSacCode ?? "",
+    volume: product?.volume ?? "",
+    volumeUnit: product?.volumeUnit || "pcs",
     description: product?.description || "",
     barcode: product?.barcode || "",
     taxCategory: product?.taxCategory || "standard",
@@ -125,10 +128,13 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
         category: product.category || "",
         price: product.price || "",
         cost: product.cost || "",
+        offerPrice: product.offerPrice ?? "",
         stock: product.stock || "",
         minStock: product.minimumStock || product.minStock || "5",
-        supplier: product.supplier || "",
         sku: product.sku || "",
+        hsnSacCode: product.hsnSacCode ?? "",
+        volume: product.volume ?? "",
+        volumeUnit: product.volumeUnit || "pcs",
         description: product.description || "",
         barcode: product.barcode || "",
         taxCategory: product.taxCategory || "standard",
@@ -188,10 +194,13 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
       category: selectedProduct.category || "",
       price: selectedProduct.price || "",
       cost: selectedProduct.cost || "",
+      offerPrice: selectedProduct.offerPrice ?? "",
       stock: selectedProduct.stock || "",
       minStock: selectedProduct.minimumStock || selectedProduct.minStock || "",
-      supplier: selectedProduct.supplier || "",
       sku: selectedProduct.sku || "",
+      hsnSacCode: selectedProduct.hsnSacCode ?? "",
+      volume: selectedProduct.volume ?? "",
+      volumeUnit: selectedProduct.volumeUnit || "pcs",
       description: selectedProduct.description || "",
       barcode: selectedProduct.barcode || "",
       taxCategory: selectedProduct.taxCategory || "standard",
@@ -227,10 +236,15 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
       const productData: any = {
         name: formData.name,
         category: formData.category,
-        price: formData.productType === 'service' ? 0 : parseFloat(formData.price),
+        price: parseFloat(formData.price) || 0,
+        cost: formData.cost !== undefined && formData.cost !== null && formData.cost !== '' ? parseFloat(formData.cost) : undefined,
+        offerPrice: formData.offerPrice !== undefined && formData.offerPrice !== null && formData.offerPrice !== '' ? parseFloat(formData.offerPrice) : undefined,
         stock: parseInt(formData.stock),
         sku: formData.sku || `SKU-${Date.now()}`,
-        supplier: formData.supplier,
+        barcode: formData.barcode || undefined,
+        hsnSacCode: formData.hsnSacCode || undefined,
+        volume: formData.volume !== undefined && formData.volume !== null && formData.volume !== '' ? parseFloat(formData.volume) : undefined,
+        volumeUnit: formData.volumeUnit || undefined,
         description: formData.description,
         taxCategory: formData.taxCategory,
         productType: formData.productType,
@@ -325,6 +339,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
   }
 
   return (
+    <TooltipProvider delayDuration={300}>
     <form onSubmit={handleSubmit} className="space-y-6">
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
@@ -368,11 +383,11 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
                       <div>
                         <p className="font-medium text-gray-900">{product.name}</p>
                         <p className="text-sm text-gray-500">
-                          {product.category} • Stock: {product.stock} • ₹{product.price}
+                          {product.category} • Stock: {product.stock} • ₹{product.offerPrice != null && product.offerPrice !== '' ? product.offerPrice : product.price}
                         </p>
                       </div>
                       <div className="text-xs text-gray-400">
-                        {product.sku}
+                        {product.barcode || product.sku || '—'}
                       </div>
                     </div>
                   </div>
@@ -398,155 +413,269 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
           <CategoryCombobox
             value={formData.category}
             onChange={(value) => handleChange("category", value)}
-            type="product"
           />
         </div>
 
-        {formData.productType !== 'service' && (
-          <div className="space-y-2">
-            <Label htmlFor="price">Selling Price *</Label>
-            <Input
-              id="price"
-              type="number"
-              step="0.01"
-              value={formData.price}
-              onChange={(e) => handleChange("price", e.target.value)}
-              placeholder="0.00"
-              required
-            />
+        {formData.productType === 'service' ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:col-span-2">
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 min-h-[22px]">
+                <Label htmlFor="cost">Cost Price</Label>
+              </div>
+              <Input
+                id="cost"
+                type="number"
+                step="0.01"
+                min="0"
+                value={formData.cost}
+                onChange={(e) => handleChange("cost", e.target.value)}
+                placeholder="0.00"
+                className="h-9"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 min-h-[22px]">
+                <Label htmlFor="price">Selling Price</Label>
+              </div>
+              <Input
+                id="price"
+                type="number"
+                step="0.01"
+                min="0"
+                value={formData.price}
+                onChange={(e) => handleChange("price", e.target.value)}
+                placeholder="0.00"
+                className="h-9"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:col-span-2">
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 min-h-[22px]">
+                <Label htmlFor="cost">Cost Price</Label>
+              </div>
+              <Input
+                id="cost"
+                type="number"
+                step="0.01"
+                value={formData.cost}
+                onChange={(e) => handleChange("cost", e.target.value)}
+                placeholder="0.00"
+                className="h-9"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 min-h-[22px]">
+                <Label htmlFor="price">Selling Price *</Label>
+              </div>
+              <Input
+                id="price"
+                type="number"
+                step="0.01"
+                value={formData.price}
+                onChange={(e) => handleChange("price", e.target.value)}
+                placeholder="0.00"
+                required
+                className="h-9"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 min-h-[22px]">
+                <Label htmlFor="offerPrice">Offer Price</Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
+                      <HelpCircle className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="max-w-xs">
+                    <p>If empty, Selling Price is used.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <Input
+                id="offerPrice"
+                type="number"
+                step="0.01"
+                value={formData.offerPrice}
+                onChange={(e) => handleChange("offerPrice", e.target.value)}
+                placeholder="Optional – else Selling Price"
+                className="h-9"
+              />
+            </div>
           </div>
         )}
 
-        <div className="space-y-2">
-          <Label htmlFor="cost">Cost Price</Label>
-          <Input
-            id="cost"
-            type="number"
-            step="0.01"
-            value={formData.cost}
-            onChange={(e) => handleChange("cost", e.target.value)}
-            placeholder="0.00"
-          />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:col-span-2">
+          <div className="space-y-2">
+            <Label htmlFor="stock">Current Stock *</Label>
+            <Input
+              id="stock"
+              type="number"
+              value={formData.stock}
+              onChange={(e) => handleChange("stock", e.target.value)}
+              placeholder="0"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="minStock">Minimum Stock Level (Default 5)</Label>
+            <Input
+              id="minStock"
+              type="number"
+              value={formData.minStock}
+              onChange={(e) => handleChange("minStock", e.target.value)}
+              placeholder="5"
+              min="0"
+            />
+          </div>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="stock">Current Stock *</Label>
-          <Input
-            id="stock"
-            type="number"
-            value={formData.stock}
-            onChange={(e) => handleChange("stock", e.target.value)}
-            placeholder="0"
-            required
-          />
+        {/* Row 4: Volume and Tax Category */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:col-span-2">
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 min-h-[22px]">
+              <Label htmlFor="volume">Volume *</Label>
+            </div>
+            <div className="flex rounded-md border border-input overflow-hidden h-9">
+              <Select
+                value={formData.volumeUnit}
+                onValueChange={(value) => handleChange("volumeUnit", value)}
+              >
+                <SelectTrigger className="h-9 flex-1 rounded-none border-0 border-r border-input bg-muted/30 focus:ring-0 focus:ring-offset-0 min-w-0">
+                  <SelectValue placeholder="Unit" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="mg">Milligram (mg)</SelectItem>
+                  <SelectItem value="g">Gram (g)</SelectItem>
+                  <SelectItem value="kg">Kilogram (kg)</SelectItem>
+                  <SelectItem value="ml">Milliliters (ml)</SelectItem>
+                  <SelectItem value="l">Liters (l)</SelectItem>
+                  <SelectItem value="oz">Ounce (oz)</SelectItem>
+                  <SelectItem value="pcs">Pieces (pcs)</SelectItem>
+                  <SelectItem value="pkt">Packets (pkt)</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                id="volume"
+                type="number"
+                step="any"
+                min="0"
+                value={formData.volume}
+                onChange={(e) => handleChange("volume", e.target.value)}
+                placeholder="0"
+                required
+                className="h-9 flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 min-w-0"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 min-h-[22px]">
+              <Label htmlFor="taxCategory">Tax Category *</Label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
+                    <HelpCircle className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p>Select the appropriate tax category for this product as per Indian GST law.</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <Select
+              value={formData.taxCategory}
+              onValueChange={(value) => handleChange("taxCategory", value)}
+              disabled={isLoadingTaxCategories}
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder={isLoadingTaxCategories ? "Loading categories..." : "Select tax category"} />
+              </SelectTrigger>
+              <SelectContent>
+                {taxCategories.length > 0 ? (
+                  taxCategories.map((category) => (
+                    <SelectItem key={category.id} value={category.id}>
+                      {category.name} ({category.rate}% GST)
+                    </SelectItem>
+                  ))
+                ) : (
+                  <>
+                    <SelectItem value="essential">Essential Products (5% GST)</SelectItem>
+                    <SelectItem value="intermediate">Intermediate Products (12% GST)</SelectItem>
+                    <SelectItem value="standard">Standard Products (18% GST)</SelectItem>
+                    <SelectItem value="luxury">Luxury Products (28% GST)</SelectItem>
+                    <SelectItem value="exempt">Exempt Products (0% GST)</SelectItem>
+                  </>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="minStock">Minimum Stock Level (Default 5)</Label>
-          <Input
-            id="minStock"
-            type="number"
-            value={formData.minStock}
-            onChange={(e) => handleChange("minStock", e.target.value)}
-            placeholder="5"
-            min="0"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="supplier">Supplier</Label>
-          <SupplierCombobox
-            value={formData.supplier}
-            onChange={(value) => handleChange("supplier", value)}
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="sku">SKU</Label>
-          <Input
-            id="sku"
-            value={formData.sku}
-            onChange={(e) => handleChange("sku", e.target.value)}
-            placeholder="Product SKU"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="taxCategory">Tax Category *</Label>
-          <Select
-            value={formData.taxCategory}
-            onValueChange={(value) => handleChange("taxCategory", value)}
-            disabled={isLoadingTaxCategories}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder={isLoadingTaxCategories ? "Loading categories..." : "Select tax category"} />
-            </SelectTrigger>
-            <SelectContent>
-              {taxCategories.length > 0 ? (
-                taxCategories.map((category) => (
-                  <SelectItem key={category.id} value={category.id}>
-                    {category.name} ({category.rate}% GST)
-                  </SelectItem>
-                ))
-              ) : (
-                // Fallback options if no categories loaded
-                <>
-                  <SelectItem value="essential">Essential Products (5% GST)</SelectItem>
-                  <SelectItem value="intermediate">Intermediate Products (12% GST)</SelectItem>
-                  <SelectItem value="standard">Standard Products (18% GST)</SelectItem>
-                  <SelectItem value="luxury">Luxury Products (28% GST)</SelectItem>
-                  <SelectItem value="exempt">Exempt Products (0% GST)</SelectItem>
-                </>
-              )}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-slate-500">
-            Select the appropriate tax category for this product as per Indian GST law
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="productType">Product Type *</Label>
-          <Select
-            value={formData.productType}
-            onValueChange={(value) => handleChange("productType", value)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select product type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="retail">Retail - Sold to customers</SelectItem>
-              <SelectItem value="service">Service - Used in services only</SelectItem>
-              <SelectItem value="both">Both - Retail & Service</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-slate-500">
-            How this product will be used in your business
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="transactionType">Transaction Type *</Label>
-          <Select
-            value={formData.transactionType}
-            onValueChange={(value) => handleChange("transactionType", value)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select transaction type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="purchase">Purchase - New stock received</SelectItem>
-              <SelectItem value="return">Return - Customer return</SelectItem>
-              <SelectItem value="adjustment">Adjustment - Stock correction</SelectItem>
-              <SelectItem value="restock">Restock - Manual restock</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-slate-500">
-            How this product is being added to inventory
-          </p>
+        {/* Row 5: Product Type and Transaction Type */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:col-span-2">
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 min-h-[22px]">
+              <Label htmlFor="productType">Product Type *</Label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
+                    <HelpCircle className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p>How this product will be used in your business.</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <Select
+              value={formData.productType}
+              onValueChange={(value) => handleChange("productType", value)}
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="Select product type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="retail">Retail - Sold to customers</SelectItem>
+                <SelectItem value="service">Service - Used in services only</SelectItem>
+                <SelectItem value="both">Both - Retail & Service</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 min-h-[22px]">
+              <Label htmlFor="transactionType">Transaction Type *</Label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
+                    <HelpCircle className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  <p>How this product is being added to inventory.</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <Select
+              value={formData.transactionType}
+              onValueChange={(value) => handleChange("transactionType", value)}
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="Select transaction type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="purchase">Purchase - New stock received</SelectItem>
+                <SelectItem value="return">Return - Customer return</SelectItem>
+                <SelectItem value="adjustment">Adjustment - Stock correction</SelectItem>
+                <SelectItem value="restock">Restock - Manual restock</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 
+      {/* Row 6: Description */}
       <div className="space-y-2">
         <Label htmlFor="description">Description</Label>
         <Textarea
@@ -558,14 +687,26 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
         />
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="barcode">Barcode</Label>
-        <Input
-          id="barcode"
-          value={formData.barcode}
-          onChange={(e) => handleChange("barcode", e.target.value)}
-          placeholder="Barcode number"
-        />
+      {/* Row 7: SKU/Barcode and HSN/SAC Code */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="barcode">SKU/Barcode</Label>
+          <Input
+            id="barcode"
+            value={formData.barcode}
+            onChange={(e) => handleChange("barcode", e.target.value)}
+            placeholder="SKU or Barcode number"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="hsnSacCode">HSN/SAC Code</Label>
+          <Input
+            id="hsnSacCode"
+            value={formData.hsnSacCode}
+            onChange={(e) => handleChange("hsnSacCode", e.target.value)}
+            placeholder="e.g. 998313"
+          />
+        </div>
       </div>
 
       <div className="flex justify-end space-x-2">
@@ -575,5 +716,6 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
         <Button type="submit">{product ? "Update Product" : "Create Product"}</Button>
       </div>
     </form>
+    </TooltipProvider>
   )
 }

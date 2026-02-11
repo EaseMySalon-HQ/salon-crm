@@ -19,6 +19,24 @@ const serviceSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
+  fullPrice: {
+    type: Number,
+    min: 0,
+    default: undefined
+  },
+  offerPrice: {
+    type: Number,
+    min: 0,
+    default: undefined
+  },
+  taxApplicable: {
+    type: Boolean,
+    default: false
+  },
+  hsnSacCode: {
+    type: String,
+    default: ''
+  },
   description: {
     type: String,
     default: ''
@@ -26,6 +44,10 @@ const serviceSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  isAutoConsumptionEnabled: {
+    type: Boolean,
+    default: false
   },
   branchId: {
     type: mongoose.Schema.Types.ObjectId,

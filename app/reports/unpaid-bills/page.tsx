@@ -275,7 +275,7 @@ export default function UnpaidBillsPage() {
               <div className="overflow-hidden rounded-lg border border-slate-200">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-gradient-to-r from-slate-50 to-blue-50 hover:bg-gradient-to-r hover:from-slate-100 hover:to-blue-100">
+                    <TableRow className="bg-slate-50 border-b border-slate-200">
                       <TableHead className="py-4 text-slate-700 font-semibold">Bill No.</TableHead>
                       <TableHead className="py-4 text-slate-700 font-semibold">Customer</TableHead>
                       <TableHead className="py-4 text-slate-700 font-semibold">Due Date</TableHead>

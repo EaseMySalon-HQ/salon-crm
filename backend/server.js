@@ -1490,16 +1490,16 @@ app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requ
   }
 });
 
-// Change user password with old password verification
+// Change user password (no current password required; admin or self can reset)
 app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
   try {
-    const { oldPassword, newPassword } = req.body;
+    const { newPassword } = req.body;
     const { User } = req.mainModels;
 
-    if (!oldPassword || !newPassword) {
+    if (!newPassword) {
       return res.status(400).json({
         success: false,
-        error: 'Old password and new password are required'
+        error: 'New password is required'
       });
     }
 
@@ -1509,15 +1509,6 @@ app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase,
       return res.status(404).json({
         success: false,
         error: 'User not found'
-      });
-    }
-
-    // Verify old password
-    const isOldPasswordValid = await comparePassword(oldPassword, user.password);
-    if (!isOldPasswordValid) {
-      return res.status(400).json({
-        success: false,
-        error: 'Current password is incorrect'
       });
     }
 
@@ -3078,12 +3069,16 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
 app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Service } = req.businessModels;
-    const { name, category, duration, price, description } = req.body;
+    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isAutoConsumptionEnabled } = req.body;
 
-    if (!name || !category || !duration || !price) {
+    const full = fullPrice != null ? parseFloat(fullPrice) : (price != null ? parseFloat(price) : null);
+    const offer = offerPrice != null ? parseFloat(offerPrice) : null;
+    const effectivePrice = (offer != null && !isNaN(offer)) ? offer : (full != null && !isNaN(full) ? full : null);
+
+    if (!name || !category || !duration || (effectivePrice == null || isNaN(effectivePrice))) {
       return res.status(400).json({
         success: false,
-        error: 'Name, category, duration, and price are required'
+        error: 'Name, category, duration, and price (or full price) are required'
       });
     }
 
@@ -3091,9 +3086,14 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
       name,
       category,
       duration: parseInt(duration),
-      price: parseFloat(price),
+      price: effectivePrice,
+      fullPrice: full != null && !isNaN(full) ? full : undefined,
+      offerPrice: offer != null && !isNaN(offer) ? offer : undefined,
+      taxApplicable: !!taxApplicable,
+      hsnSacCode: hsnSacCode || '',
       description: description || '',
       isActive: true,
+      isAutoConsumptionEnabled: !!isAutoConsumptionEnabled,
       branchId: req.user.branchId
     });
 
@@ -3115,25 +3115,36 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
 app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Service } = req.businessModels;
-    const { name, category, duration, price, description, isActive } = req.body;
+    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isActive, isAutoConsumptionEnabled } = req.body;
 
-    if (!name || !category || !duration || !price) {
+    const full = fullPrice != null ? parseFloat(fullPrice) : (price != null ? parseFloat(price) : null);
+    const offer = offerPrice != null ? parseFloat(offerPrice) : null;
+    const effectivePrice = (offer != null && !isNaN(offer)) ? offer : (full != null && !isNaN(full) ? full : null);
+
+    if (!name || !category || !duration || (effectivePrice == null || isNaN(effectivePrice))) {
       return res.status(400).json({
         success: false,
-        error: 'Name, category, duration, and price are required'
+        error: 'Name, category, duration, and price (or full price) are required'
       });
     }
 
+    const updatePayload = {
+      name,
+      category,
+      duration: parseInt(duration),
+      price: effectivePrice,
+      fullPrice: full != null && !isNaN(full) ? full : undefined,
+      offerPrice: offer != null && !isNaN(offer) ? offer : undefined,
+      taxApplicable: !!taxApplicable,
+      hsnSacCode: hsnSacCode || '',
+      description: description || '',
+      isActive: isActive !== undefined ? isActive : true,
+    };
+    if (isAutoConsumptionEnabled !== undefined) updatePayload.isAutoConsumptionEnabled = !!isAutoConsumptionEnabled;
+
     const updatedService = await Service.findByIdAndUpdate(
       req.params.id,
-      {
-        name,
-        category,
-        duration: parseInt(duration),
-        price: parseFloat(price),
-        description: description || '',
-        isActive: isActive !== undefined ? isActive : true,
-      },
+      updatePayload,
       { new: true }
     );
 
@@ -3411,10 +3422,10 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
 app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Product, InventoryTransaction } = req.businessModels;
-    const { name, category, price, stock, minimumStock, sku, supplier, description, taxCategory, productType, transactionType } = req.body;
+    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
 
     console.log('🔍 Product creation request body:', req.body);
-    console.log('🔍 Extracted fields:', { name, category, price, stock, minimumStock, sku, supplier, description, taxCategory, productType });
+    console.log('🔍 Extracted fields:', { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType });
 
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
@@ -3441,10 +3452,16 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
     const newProduct = new Product({
       name,
       category,
-      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0
+      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0 (selling price)
+      cost: cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined,
+      offerPrice: offerPrice !== undefined && offerPrice !== null && offerPrice !== '' ? parseFloat(offerPrice) : undefined,
       stock: parseInt(stock),
       minimumStock: minimumStock !== undefined ? parseInt(minimumStock) : undefined,
       sku: sku || `SKU-${Date.now()}`,
+      barcode: barcode || '',
+      hsnSacCode: hsnSacCode || '',
+      volume: volume !== undefined && volume !== null && volume !== '' ? parseFloat(volume) : undefined,
+      volumeUnit: volumeUnit && ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'].includes(volumeUnit) ? volumeUnit : undefined,
       supplier,
       description,
       taxCategory: taxCategory || 'standard',
@@ -3497,7 +3514,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
     console.log('🔍 Request body:', req.body);
     
     const { Product, InventoryTransaction } = req.businessModels;
-    const { name, category, price, stock, minimumStock, sku, supplier, description, isActive, taxCategory, productType, transactionType } = req.body;
+    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, isActive, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
 
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
@@ -3529,9 +3546,15 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
     const updateData = {
       name,
       category,
-      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0
+      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0 (selling price)
+      cost: cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined,
+      offerPrice: offerPrice !== undefined && offerPrice !== null && offerPrice !== '' ? parseFloat(offerPrice) : undefined,
       stock: newStock,
       sku: sku || `SKU-${Date.now()}`,
+      barcode: barcode || '',
+      hsnSacCode: hsnSacCode || '',
+      volume: volume !== undefined && volume !== null && volume !== '' ? parseFloat(volume) : undefined,
+      volumeUnit: volumeUnit && ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'].includes(volumeUnit) ? volumeUnit : undefined,
       supplier,
       description,
       taxCategory: taxCategory || 'standard',
@@ -3767,17 +3790,25 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
           continue;
         }
 
-        // Prepare product data
+        // Prepare product data (align with Add Product form fields)
+        const priceVal = mappedData.price != null && mappedData.price !== '' ? parseFloat(mappedData.price) : (normalizedProductType === 'service' ? 0 : 0);
         const productToCreate = {
           name: mappedData.name,
           category: mappedData.category,
-          price: mappedData.price ? parseFloat(mappedData.price) : (normalizedProductType === 'service' ? 0 : 0),
-          stock: mappedData.stock ? parseInt(mappedData.stock) : 0,
-          sku: mappedData.sku && mappedData.sku.trim() !== '' ? mappedData.sku.trim() : undefined,
+          price: priceVal,
+          cost: (mappedData.cost != null && mappedData.cost !== '') || (mappedData.costPrice != null && mappedData.costPrice !== '') ? parseFloat(mappedData.cost ?? mappedData.costPrice) : undefined,
+          offerPrice: mappedData.offerPrice != null && mappedData.offerPrice !== '' ? parseFloat(mappedData.offerPrice) : undefined,
+          stock: mappedData.stock != null && mappedData.stock !== '' ? parseInt(mappedData.stock) : 0,
+          minimumStock: mappedData.minimumStock != null && mappedData.minimumStock !== '' ? parseInt(mappedData.minimumStock) : 5,
+          sku: mappedData.sku && String(mappedData.sku).trim() !== '' ? String(mappedData.sku).trim() : undefined,
+          barcode: mappedData.barcode && String(mappedData.barcode).trim() !== '' ? String(mappedData.barcode).trim() : '',
+          hsnSacCode: mappedData.hsnSacCode && String(mappedData.hsnSacCode).trim() !== '' ? String(mappedData.hsnSacCode).trim() : '',
+          volume: mappedData.volume != null && mappedData.volume !== '' ? parseFloat(mappedData.volume) : undefined,
+          volumeUnit: mappedData.volumeUnit && ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'].includes(String(mappedData.volumeUnit).toLowerCase()) ? String(mappedData.volumeUnit).toLowerCase() : undefined,
           supplier: mappedData.supplier || '',
           description: mappedData.description || '',
           taxCategory: mappedData.taxCategory || 'standard',
-          productType: normalizedProductType, // Use normalized productType from above
+          productType: normalizedProductType,
           branchId: req.user.branchId,
           isActive: true
         };
@@ -4252,17 +4283,9 @@ app.delete('/api/inventory/transactions', authenticateToken, setupBusinessDataba
 app.get('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { search, type, activeOnly } = req.query;
+    const { search, activeOnly } = req.query;
 
     let query = { branchId: req.user.branchId };
-
-    // Filter by type if provided (product, service, both)
-    if (type && ['product', 'service', 'both'].includes(type)) {
-      query.$or = [
-        { type: type },
-        { type: 'both' }
-      ];
-    }
 
     // Filter by active status if requested
     if (activeOnly === 'true') {
@@ -4319,7 +4342,7 @@ app.get('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
 app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { name, type, description } = req.body;
+    const { name, description } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -4329,31 +4352,30 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
       });
     }
 
-    // Validate type if provided
-    if (type && !['product', 'service', 'both'].includes(type)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid category type. Must be: product, service, or both'
-      });
-    }
-
-    // Check if category with same name already exists for this branch
+    // Check if category with same name already exists for this branch (case-insensitive, regex-safe)
+    const escapedName = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existingCategory = await Category.findOne({
       branchId: req.user.branchId,
-      name: { $regex: new RegExp(`^${name}$`, 'i') }
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') }
     });
 
     if (existingCategory) {
-      return res.status(400).json({
-        success: false,
-        error: 'A category with this name already exists'
-      });
+      // Get-or-create: return the existing category so user can proceed (no 400)
+      if (!existingCategory.isActive) {
+        existingCategory.isActive = true;
+        if (description != null) existingCategory.description = description;
+        await existingCategory.save();
+      } else if (description != null) {
+        existingCategory.description = description;
+        await existingCategory.save();
+      }
+      return res.status(201).json({ success: true, data: existingCategory });
     }
 
     // Create new category
     const category = new Category({
       name: name.trim(),
-      type: type || 'both',
+      type: 'both',
       description: description || '',
       branchId: req.user.branchId,
       isActive: true
@@ -4378,7 +4400,7 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
 app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { name, type, description, isActive } = req.body;
+    const { name, description, isActive } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -4388,19 +4410,12 @@ app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
       });
     }
 
-    // Validate type if provided
-    if (type && !['product', 'service', 'both'].includes(type)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid category type. Must be: product, service, or both'
-      });
-    }
-
-    // Check if another category with same name exists
+    // Check if another category with same name exists (case-insensitive, regex-safe)
+    const escapedName = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existingCategory = await Category.findOne({
       _id: { $ne: req.params.id },
       branchId: req.user.branchId,
-      name: { $regex: new RegExp(`^${name}$`, 'i') }
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') }
     });
 
     if (existingCategory) {
@@ -4414,7 +4429,6 @@ app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
       req.params.id,
       {
         name: name.trim(),
-        type: type || 'both',
         description: description || '',
         isActive: isActive !== undefined ? isActive : true
       },
@@ -4650,7 +4664,7 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
           notes: businessOwner.notes || 'Business Owner',
           isActive: businessOwner.isActive,
           hasLoginAccess: businessOwner.hasLoginAccess || true, // Business owner always has login access
-          allowAppointmentScheduling: businessOwner.allowAppointmentScheduling || true, // Business owner always has appointment access
+          allowAppointmentScheduling: businessOwner.allowAppointmentScheduling !== false, // Respect owner's choice; default true for legacy
           permissions: businessOwner.permissions || [],
           createdAt: businessOwner.createdAt,
           updatedAt: businessOwner.updatedAt,
@@ -4692,7 +4706,7 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
 app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
   try {
     const { Staff } = req.businessModels;
-    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive } = req.body;
+    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, workSchedule } = req.body;
 
     if (!name || !email || !phone || !role) {
       return res.status(400).json({
@@ -4731,6 +4745,14 @@ app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, a
       isActive: isActive !== undefined ? isActive : true,
       branchId: req.user.branchId
     };
+    if (Array.isArray(workSchedule) && workSchedule.length > 0) {
+      staffData.workSchedule = workSchedule.map(ws => ({
+        day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
+        enabled: ws.enabled !== false,
+        startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
+        endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
+      }));
+    }
 
     // Add password if provided
     if (password && password.trim() !== '') {
@@ -4777,6 +4799,25 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
         success: false,
         error: 'Unauthorized: You can only update your own profile'
       });
+    }
+
+    // Admin work-schedule-only update (e.g. from Working Hours page)
+    if (isAdmin && Array.isArray(req.body.workSchedule) && req.body.workSchedule.length > 0 && req.body.name === undefined) {
+      const workSchedule = req.body.workSchedule.map(ws => ({
+        day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
+        enabled: ws.enabled !== false,
+        startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
+        endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
+      }));
+      const updatedStaff = await Staff.findByIdAndUpdate(
+        req.params.id,
+        { workSchedule },
+        { new: true }
+      );
+      if (!updatedStaff) {
+        return res.status(404).json({ success: false, error: 'Staff member not found' });
+      }
+      return res.json({ success: true, data: updatedStaff });
     }
 
     // For self-updates, only allow updating name, email, phone (not role, salary, etc.)
@@ -4850,6 +4891,15 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       allowAppointmentScheduling: allowAppointmentScheduling !== undefined ? allowAppointmentScheduling : false,
       isActive: isActive !== undefined ? isActive : true,
     };
+    const { workSchedule } = req.body;
+    if (Array.isArray(workSchedule)) {
+      updateData.workSchedule = workSchedule.map(ws => ({
+        day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
+        enabled: ws.enabled !== false,
+        startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
+        endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
+      }));
+    }
 
     // Add password if provided
     if (password && password.trim() !== '') {
@@ -4908,6 +4958,120 @@ app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAd
   }
 });
 
+// Block Time (staff unavailability / blocked slots)
+app.get('/api/block-time', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { BlockTime } = req.businessModels;
+    const { staffId, startDate, endDate } = req.query;
+    const query = { branchId: req.user.branchId };
+    if (staffId) query.staffId = staffId;
+    if (startDate && endDate) {
+      query.$or = [
+        { recurringFrequency: 'none', startDate: { $gte: startDate, $lte: endDate } },
+        {
+          recurringFrequency: { $in: ['daily', 'weekly', 'monthly'] },
+          startDate: { $lte: endDate },
+          endDate: { $gte: startDate, $ne: null }
+        }
+      ];
+    } else if (startDate) {
+      query.$or = [
+        { recurringFrequency: 'none', startDate: { $gte: startDate } },
+        { recurringFrequency: { $in: ['daily', 'weekly', 'monthly'] }, endDate: { $gte: startDate, $ne: null } }
+      ];
+    } else if (endDate) {
+      query.$or = [
+        { recurringFrequency: 'none', startDate: { $lte: endDate } },
+        { recurringFrequency: { $in: ['daily', 'weekly', 'monthly'] }, startDate: { $lte: endDate } }
+      ];
+    }
+    const blocks = await BlockTime.find(query).sort({ startDate: 1, startTime: 1 }).lean();
+    const populated = await Promise.all(blocks.map(async (b) => {
+      const staff = await req.businessModels.Staff.findById(b.staffId).select('name').lean();
+      return { ...b, staffId: { _id: b.staffId, name: staff?.name || 'Staff' } };
+    }));
+    res.json({ success: true, data: populated });
+  } catch (error) {
+    console.error('Error fetching block time:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { BlockTime } = req.businessModels;
+    const { staffId, title, startDate, startTime, endTime, recurringFrequency, endDate, description } = req.body;
+    if (!staffId || !title || !startDate || !startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        error: 'Staff, title, start date, start time, and end time are required'
+      });
+    }
+    const doc = {
+      staffId,
+      title: String(title).trim(),
+      startDate: String(startDate),
+      startTime: String(startTime),
+      endTime: String(endTime),
+      recurringFrequency: ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none',
+      endDate: endDate && ['daily', 'weekly', 'monthly'].includes(recurringFrequency) ? String(endDate) : null,
+      description: description ? String(description).slice(0, 200) : '',
+      branchId: req.user.branchId
+    };
+    const created = await BlockTime.create(doc);
+    const populated = await BlockTime.findById(created._id).lean();
+    const staff = await req.businessModels.Staff.findById(created.staffId).select('name').lean();
+    const data = { ...populated, staffId: { _id: created.staffId, name: staff?.name || 'Staff' } };
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    console.error('Error creating block time:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { BlockTime } = req.businessModels;
+    const existing = await BlockTime.findOne({ _id: req.params.id, branchId: req.user.branchId });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Block time not found' });
+    }
+    const { title, startDate, startTime, endTime, recurringFrequency, endDate, description } = req.body;
+    const updateData = {};
+    if (title !== undefined) updateData.title = String(title).trim();
+    if (startDate !== undefined) updateData.startDate = String(startDate);
+    if (startTime !== undefined) updateData.startTime = String(startTime);
+    if (endTime !== undefined) updateData.endTime = String(endTime);
+    if (recurringFrequency !== undefined) updateData.recurringFrequency = ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none';
+    if (endDate !== undefined) {
+      const rec = updateData.recurringFrequency !== undefined ? updateData.recurringFrequency : existing.recurringFrequency;
+      updateData.endDate = (rec === 'daily' || rec === 'weekly' || rec === 'monthly') ? String(endDate) : null;
+    }
+    if (description !== undefined) updateData.description = String(description).slice(0, 200) || '';
+    const updated = await BlockTime.findByIdAndUpdate(req.params.id, { $set: updateData }, { new: true }).lean();
+    const staff = await req.businessModels.Staff.findById(updated.staffId).select('name').lean();
+    const data = { ...updated, staffId: { _id: updated.staffId, name: staff?.name || 'Staff' } };
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error updating block time:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { BlockTime } = req.businessModels;
+    const deleted = await BlockTime.findOneAndDelete({ _id: req.params.id, branchId: req.user.branchId });
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Block time not found' });
+    }
+    res.json({ success: true, message: 'Block time deleted' });
+  } catch (error) {
+    console.error('Error deleting block time:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
   if (!AppointmentModel || !appointmentId) return;
   try {
@@ -4933,7 +5097,7 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
 app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment } = req.businessModels;
-    const { page = 1, limit = 10, date, status } = req.query;
+    const { page = 1, limit = 10, date, status, clientId } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
@@ -4945,6 +5109,10 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 
     if (status) {
       query.status = status;
+    }
+
+    if (clientId) {
+      query.clientId = clientId;
     }
 
     const totalAppointments = await Appointment.countDocuments(query);
@@ -6267,6 +6435,102 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
+// Summary report (same metrics as daily summary email)
+app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Sale, Receipt, CashRegistry, Expense } = req.businessModels;
+    const branchId = req.user.branchId;
+    let dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom) : null;
+    let dateTo = req.query.dateTo ? new Date(req.query.dateTo) : null;
+    if (!dateFrom || !dateTo) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      dateFrom = dateFrom || today;
+      dateTo = dateTo || new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1);
+    } else {
+      dateTo.setHours(23, 59, 59, 999);
+    }
+    const todayDateString = dateFrom.toISOString().split('T')[0];
+    const tomorrowDateString = new Date(dateTo.getTime() + 1).toISOString().split('T')[0];
+
+    const sales = await Sale.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      status: { $nin: ['cancelled', 'Cancelled'] }
+    }).lean();
+
+    const receipts = await Receipt.find({
+      branchId,
+      date: { $gte: todayDateString, $lte: tomorrowDateString }
+    }).lean();
+
+    const closingRegistry = await CashRegistry.findOne({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      shiftType: 'closing'
+    }).sort({ date: -1 }).lean();
+
+    const cashExpenses = await Expense.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      paymentMode: 'Cash',
+      status: { $in: ['approved', 'pending'] }
+    }).lean();
+
+    const totalBillCount = sales.length;
+    const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
+    const totalCustomerCount = uniqueCustomers.size || totalBillCount;
+    const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
+    let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
+    sales.forEach(s => {
+      (s.payments || []).forEach(p => {
+        const amt = p.amount || 0;
+        if (p.mode === 'Cash') totalSalesCash += amt;
+        else if (p.mode === 'Online') totalSalesOnline += amt;
+        else if (p.mode === 'Card') totalSalesCard += amt;
+      });
+      if (!(s.payments && s.payments.length)) {
+        const amt = s.grossTotal || s.netTotal || 0;
+        if (s.paymentMode === 'Cash') totalSalesCash += amt;
+        else if (s.paymentMode === 'Online') totalSalesOnline += amt;
+        else if (s.paymentMode === 'Card') totalSalesCard += amt;
+      }
+    });
+    let duesCollected = 0;
+    sales.forEach(s => {
+      (s.paymentHistory || []).forEach(ph => {
+        const d = ph.date ? new Date(ph.date) : null;
+        if (d && d >= dateFrom && d <= dateTo) duesCollected += ph.amount || 0;
+      });
+    });
+    const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    const cashBalance = closingRegistry?.cashBalance ?? 0;
+
+    res.json({
+      success: true,
+      data: {
+        totalBillCount,
+        totalCustomerCount,
+        totalSales,
+        totalSalesCash,
+        totalSalesOnline,
+        totalSalesCard,
+        duesCollected,
+        cashExpense,
+        tipCollected,
+        cashBalance
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching summary report:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch summary'
+    });
+  }
+});
+
 // --- SALES API ---
 app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
@@ -6306,17 +6570,23 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     const { Sale, Product, InventoryTransaction, Appointment } = req.businessModels;
     const saleData = req.body;
     
-    // Process items to handle staff contributions and ensure productId is preserved
+    // Process items to handle staff contributions and preserve productId/serviceId
+    const mongoose = require('mongoose');
     if (saleData.items && Array.isArray(saleData.items)) {
       saleData.items = saleData.items.map(item => {
         // Ensure productId is preserved and converted to ObjectId if it's a string
         if (item.type === 'product' && item.productId) {
-          // Convert string productId to ObjectId if needed
-          const mongoose = require('mongoose');
           if (typeof item.productId === 'string' && mongoose.Types.ObjectId.isValid(item.productId)) {
             item.productId = new mongoose.Types.ObjectId(item.productId);
           }
         }
+        // Preserve serviceId for auto consumption (type === 'service')
+        if (item.type === 'service' && item.serviceId) {
+          if (typeof item.serviceId === 'string' && mongoose.Types.ObjectId.isValid(item.serviceId)) {
+            item.serviceId = new mongoose.Types.ObjectId(item.serviceId);
+          }
+        }
+        if (item.variantKey !== undefined) item.variantKey = item.variantKey || '';
         
         // If staffContributions is provided, calculate amounts
         if (item.staffContributions && Array.isArray(item.staffContributions)) {
@@ -6357,6 +6627,20 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
 
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+    }
+
+    // Auto consumption: deduct inventory for completed service lines (only when bill status is completed)
+    if (String(savedSale.status).toLowerCase() === 'completed') {
+      try {
+        const autoConsumption = require('./services/auto-consumption');
+        const { runAutoConsumptionForSale } = autoConsumption;
+        const { processedCount, warnings } = await runAutoConsumptionForSale(savedSale, req.businessModels, { user: req.user });
+        console.log('[AutoConsumption] Sale create result:', { billNo: savedSale.billNo, processedCount, warnings: warnings.length });
+        if (warnings.length) console.warn('[AutoConsumption] Warnings:', warnings);
+      } catch (autoConsumptionErr) {
+        console.error('Auto consumption on sale create failed:', autoConsumptionErr);
+        // Don't fail the sale; consumption can be reviewed
+      }
     }
 
     // Track products that had stock updated for low inventory check
@@ -6838,6 +7122,8 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       return res.status(404).json({ success: false, error: 'Sale not found' });
     }
 
+    const previousStatus = String(existingSale.status || '').toLowerCase();
+
     // Archive original bill snapshot once per edit
     try {
       if (BillArchive) {
@@ -6869,7 +7155,19 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     });
 
     const originalItems = existingSale.items || [];
-    const updatedItems = Array.isArray(updateData.items) ? updateData.items : originalItems;
+    let updatedItems = Array.isArray(updateData.items) ? updateData.items : originalItems;
+    // Preserve serviceId and variantKey on service items when updating
+    const mongooseSales = require('mongoose');
+    if (Array.isArray(updatedItems)) {
+      updatedItems = updatedItems.map((item) => {
+        const plain = item && typeof item.toObject === 'function' ? item.toObject() : { ...item };
+        if (plain.type === 'service' && plain.serviceId && typeof plain.serviceId === 'string' && mongooseSales.Types.ObjectId.isValid(plain.serviceId)) {
+          plain.serviceId = new mongooseSales.Types.ObjectId(plain.serviceId);
+        }
+        if (plain.variantKey !== undefined) plain.variantKey = plain.variantKey || '';
+        return plain;
+      });
+    }
 
     // Compute per-product quantity differences between original and updated items
     const productDiffMap = new Map();
@@ -7105,6 +7403,24 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       await markAppointmentCompleted(Appointment, savedSale.appointmentId);
     }
 
+    const newStatus = String(savedSale.status || '').toLowerCase();
+    if (newStatus === 'completed' && previousStatus !== 'completed') {
+      try {
+        const autoConsumption = require('./services/auto-consumption');
+        await autoConsumption.runAutoConsumptionForSale(savedSale, req.businessModels, { user: req.user });
+      } catch (autoConsumptionErr) {
+        console.error('Auto consumption on sale update failed:', autoConsumptionErr);
+      }
+    }
+    if (newStatus === 'cancelled' && previousStatus === 'completed') {
+      try {
+        const autoConsumption = require('./services/auto-consumption');
+        await autoConsumption.reverseConsumptionForBill(savedSale._id, req.businessModels);
+      } catch (reversalErr) {
+        console.error('Auto consumption reversal on bill cancel failed:', reversalErr);
+      }
+    }
+
     // Record edit history
     try {
       if (BillEditHistory) {
@@ -7158,6 +7474,172 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       session.endSession();
     }
     res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// ==================== AUTO CONSUMPTION (Service consumption rules & logs) ====================
+
+// List consumption rules (by serviceId or all for branch)
+app.get('/api/consumption-rules', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule } = req.businessModels;
+    const { serviceId } = req.query;
+    const branchId = req.user.branchId;
+    const query = { branchId };
+    if (serviceId) query.serviceId = serviceId;
+    const rules = await ServiceConsumptionRule.find(query).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
+    res.json({ success: true, data: rules });
+  } catch (err) {
+    console.error('Error listing consumption rules:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Create consumption rule
+app.post('/api/consumption-rules', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule, Product, Service } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { serviceId, productId, quantityUsed, unit, isAdjustable, maxAdjustmentPercent, variantKey } = req.body;
+    if (!serviceId || !productId || quantityUsed == null || !unit) {
+      return res.status(400).json({ success: false, error: 'serviceId, productId, quantityUsed, and unit are required' });
+    }
+    const product = await Product.findById(productId);
+    if (!product || String(product.branchId) !== String(branchId)) {
+      return res.status(400).json({ success: false, error: 'Product not found or wrong branch' });
+    }
+    const service = await Service.findById(serviceId);
+    if (!service || String(service.branchId) !== String(branchId)) {
+      return res.status(400).json({ success: false, error: 'Service not found or wrong branch' });
+    }
+    const unitNorm = String(unit).toLowerCase();
+    const allowedUnits = ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'];
+    if (!allowedUnits.includes(unitNorm)) {
+      return res.status(400).json({ success: false, error: `unit must be one of: ${allowedUnits.join(', ')}` });
+    }
+    const rule = await ServiceConsumptionRule.create({
+      serviceId,
+      productId,
+      quantityUsed: Number(quantityUsed),
+      unit: unitNorm,
+      isAdjustable: !!isAdjustable,
+      maxAdjustmentPercent: maxAdjustmentPercent != null ? Number(maxAdjustmentPercent) : 20,
+      variantKey: (variantKey || '').trim(),
+      branchId
+    });
+    const populated = await ServiceConsumptionRule.findById(rule._id).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
+    res.status(201).json({ success: true, data: populated });
+  } catch (err) {
+    console.error('Error creating consumption rule:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Update consumption rule
+app.put('/api/consumption-rules/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule, Product } = req.businessModels;
+    const branchId = req.user.branchId;
+    const rule = await ServiceConsumptionRule.findOne({ _id: req.params.id, branchId });
+    if (!rule) return res.status(404).json({ success: false, error: 'Rule not found' });
+    const { quantityUsed, unit, isAdjustable, maxAdjustmentPercent, variantKey } = req.body;
+    if (quantityUsed != null) rule.quantityUsed = Number(quantityUsed);
+    if (unit != null) {
+      const unitNorm = String(unit).toLowerCase();
+      const allowedUnits = ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'];
+      if (!allowedUnits.includes(unitNorm)) {
+        return res.status(400).json({ success: false, error: `unit must be one of: ${allowedUnits.join(', ')}` });
+      }
+      rule.unit = unitNorm;
+    }
+    if (isAdjustable !== undefined) rule.isAdjustable = !!isAdjustable;
+    if (maxAdjustmentPercent != null) rule.maxAdjustmentPercent = Number(maxAdjustmentPercent);
+    if (variantKey !== undefined) rule.variantKey = (variantKey || '').trim();
+    await rule.save();
+    const populated = await ServiceConsumptionRule.findById(rule._id).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
+    res.json({ success: true, data: populated });
+  } catch (err) {
+    console.error('Error updating consumption rule:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Delete consumption rule
+app.delete('/api/consumption-rules/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule } = req.businessModels;
+    const branchId = req.user.branchId;
+    const rule = await ServiceConsumptionRule.findOneAndDelete({ _id: req.params.id, branchId });
+    if (!rule) return res.status(404).json({ success: false, error: 'Rule not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting consumption rule:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Bulk create consumption rules for a service
+app.post('/api/consumption-rules/bulk', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { ServiceConsumptionRule, Product, Service } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { serviceId, rules } = req.body; // rules: [{ productId, quantityUsed, unit, isAdjustable?, maxAdjustmentPercent?, variantKey? }]
+    if (!serviceId || !Array.isArray(rules) || rules.length === 0) {
+      return res.status(400).json({ success: false, error: 'serviceId and non-empty rules array required' });
+    }
+    const service = await Service.findById(serviceId);
+    if (!service || String(service.branchId) !== String(branchId)) {
+      return res.status(400).json({ success: false, error: 'Service not found or wrong branch' });
+    }
+    const created = [];
+    for (const r of rules) {
+      const { productId, quantityUsed, unit, isAdjustable, maxAdjustmentPercent, variantKey } = r;
+      if (!productId || quantityUsed == null || !unit) continue;
+      const product = await Product.findById(productId);
+      if (!product || String(product.branchId) !== String(branchId)) continue;
+      const unitNorm = String(unit).toLowerCase();
+      const allowedUnits = ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'];
+      if (!allowedUnits.includes(unitNorm)) continue;
+      const rule = await ServiceConsumptionRule.create({
+        serviceId,
+        productId,
+        quantityUsed: Number(quantityUsed),
+        unit: unitNorm,
+        isAdjustable: !!isAdjustable,
+        maxAdjustmentPercent: maxAdjustmentPercent != null ? Number(maxAdjustmentPercent) : 20,
+        variantKey: (variantKey || '').trim(),
+        branchId
+      });
+      created.push(rule);
+    }
+    res.status(201).json({ success: true, data: created });
+  } catch (err) {
+    console.error('Error bulk creating consumption rules:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get inventory consumption logs (filtered)
+app.get('/api/consumption-logs', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { InventoryConsumptionLog } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { productId, serviceId, billId, fromDate, toDate, limit } = req.query;
+    const query = { branchId };
+    if (productId) query.productId = productId;
+    if (serviceId) query.serviceId = serviceId;
+    if (billId) query.billId = billId;
+    if (fromDate || toDate) {
+      query.createdAt = {};
+      if (fromDate) query.createdAt.$gte = new Date(fromDate);
+      if (toDate) query.createdAt.$lte = new Date(toDate);
+    }
+    const limitNum = Math.min(parseInt(limit, 10) || 100, 500);
+    const logs = await InventoryConsumptionLog.find(query).sort({ createdAt: -1 }).limit(limitNum).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
+    res.json({ success: true, data: logs });
+  } catch (err) {
+    console.error('Error listing consumption logs:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -9175,6 +9657,118 @@ app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, 
       success: false,
       error: error.message || 'Failed to export sales report'
     });
+  }
+});
+
+// Export summary report (emailed to admin)
+app.post('/api/reports/export/summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportSummaryReport } = require('./utils/report-exporter');
+    const result = await exportSummaryReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Summary report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting summary report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export summary report'
+    });
+  }
+});
+
+// Export staff performance report (emailed to admin)
+app.post('/api/reports/export/staff-performance', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {}, data = [] } = req.body;
+    const { exportStaffPerformanceReport } = require('./utils/report-exporter');
+    const result = await exportStaffPerformanceReport({
+      branchId: req.user.branchId,
+      format,
+      filters,
+      data: Array.isArray(data) ? data : []
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Staff performance report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting staff performance report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export staff performance report'
+    });
+  }
+});
+
+// Export service list report (emailed to admin)
+app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportServiceListReport } = require('./utils/report-exporter');
+    const result = await exportServiceListReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Service list report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting service list report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export service list report'
+    });
+  }
+});
+
+// Tip payouts (for Staff Tip report - Mark as Paid)
+app.get('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { TipPayout } = req.businessModels;
+    const { dateFrom, dateTo } = req.query;
+    const query = {};
+    if (dateFrom || dateTo) {
+      query.paidAt = {};
+      if (dateFrom) query.paidAt.$gte = new Date(dateFrom);
+      if (dateTo) { const d = new Date(dateTo); d.setHours(23, 59, 59, 999); query.paidAt.$lte = d; }
+    }
+    const payouts = await TipPayout.find(query).sort({ paidAt: -1 }).lean();
+    res.json({ success: true, data: payouts });
+  } catch (error) {
+    console.error('Error fetching tip payouts:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to fetch tip payouts' });
+  }
+});
+
+app.post('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { TipPayout } = req.businessModels;
+    const { staffId, staffName, amount, dateFrom, dateTo } = req.body;
+    if (!staffId || !staffName || amount == null || amount < 0) {
+      return res.status(400).json({ success: false, error: 'staffId, staffName and amount (>= 0) are required' });
+    }
+    const branchId = req.user.branchId;
+    const payout = await TipPayout.create({
+      staffId,
+      staffName,
+      amount: Number(amount),
+      dateFrom: dateFrom ? new Date(dateFrom) : undefined,
+      dateTo: dateTo ? new Date(dateTo) : undefined,
+      branchId
+    });
+    res.json({ success: true, data: payout });
+  } catch (error) {
+    console.error('Error creating tip payout:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to create tip payout' });
   }
 });
 

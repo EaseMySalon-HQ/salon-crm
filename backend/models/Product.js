@@ -17,21 +17,58 @@ const productSchema = new mongoose.Schema({
     min: 0,
     default: 0
   },
+  cost: {
+    type: Number,
+    min: 0,
+    default: undefined
+  },
+  offerPrice: {
+    type: Number,
+    min: 0,
+    default: undefined
+  },
   stock: {
     type: Number,
     required: true,
-    min: 0,
     default: 0
+    // No min: 0 - allow negative stock when auto consumption runs; alert when below minimumStock
   },
   minimumStock: {
     type: Number,
     min: 0,
     default: 5
   },
+  baseUnit: {
+    type: String,
+    enum: ['g', 'ml', 'pcs'],
+    default: 'pcs'
+  },
+  volume: {
+    type: Number,
+    min: 0,
+    default: undefined
+  },
+  volumeUnit: {
+    type: String,
+    enum: ['mg', 'g', 'kg', 'ml', 'l', 'oz', 'pcs', 'pkt'],
+    default: 'pcs'
+  },
+  allowFractionalConsumption: {
+    type: Boolean,
+    default: false
+  },
   sku: {
     type: String,
     unique: true,
     sparse: true
+  },
+  barcode: {
+    type: String,
+    default: ''
+  },
+  hsnSacCode: {
+    type: String,
+    default: ''
   },
   supplier: {
     type: String,

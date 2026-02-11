@@ -1,11 +1,11 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Check, Plus, Trash2, Search, User, Phone, Mail, X, CalendarDays, FileText, TrendingUp, Loader2, Calendar as CalendarIcon } from "lucide-react"
+import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, TrendingUp, Loader2, Calendar as CalendarIcon } from "lucide-react"
 import { format, isBefore, startOfDay } from "date-fns"
 import { DayPicker } from "react-day-picker"
 
@@ -17,7 +17,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import {
   Dialog,
@@ -30,28 +29,47 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
-import { ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI } from "@/lib/api"
+import { ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, BlockTimeAPI } from "@/lib/api"
 
-// Time slots for appointments
+/** Parse time string (e.g. "9:00 AM" or "09:00") to minutes from midnight */
+function parseTimeToMinutes(time: string): number {
+  if (!time) return 0
+  const cleaned = time.replace(/\s*(am|pm)/i, "").trim()
+  const parts = cleaned.split(":")
+  const h = parseInt(parts[0] || "0", 10)
+  const m = parseInt(parts[1] || "0", 10)
+  const isPm = /pm/i.test(time) && h < 12
+  const hour = isPm ? h + 12 : /am/i.test(time) && h === 12 ? 0 : h
+  return hour * 60 + m
+}
+
+/** Check if a block applies on a given date (recurring logic) */
+function blockAppliesOnDate(block: { startDate: string; endDate?: string | null; recurringFrequency?: string }, dateStr: string): boolean {
+  const rec = block.recurringFrequency || "none"
+  if (rec === "none") return block.startDate === dateStr
+  const end = block.endDate
+  if (!end || dateStr < block.startDate || dateStr > end) return false
+  if (rec === "daily") return true
+  if (rec === "weekly") {
+    return new Date(block.startDate + "T00:00:00").getDay() === new Date(dateStr + "T00:00:00").getDay()
+  }
+  if (rec === "monthly") {
+    return new Date(block.startDate + "T00:00:00").getDate() === new Date(dateStr + "T00:00:00").getDate()
+  }
+  return false
+}
+
+// Time slots for appointments (15-min intervals to match calendar grid)
 const timeSlots = [
-  "9:00 AM",
-  "9:30 AM",
-  "10:00 AM",
-  "10:30 AM",
-  "11:00 AM",
-  "11:30 AM",
-  "12:00 PM",
-  "12:30 PM",
-  "1:00 PM",
-  "1:30 PM",
-  "2:00 PM",
-  "2:30 PM",
-  "3:00 PM",
-  "3:30 PM",
-  "4:00 PM",
-  "4:30 PM",
-  "5:00 PM",
-  "5:30 PM",
+  "9:00 AM", "9:15 AM", "9:30 AM", "9:45 AM",
+  "10:00 AM", "10:15 AM", "10:30 AM", "10:45 AM",
+  "11:00 AM", "11:15 AM", "11:30 AM", "11:45 AM",
+  "12:00 PM", "12:15 PM", "12:30 PM", "12:45 PM",
+  "1:00 PM", "1:15 PM", "1:30 PM", "1:45 PM",
+  "2:00 PM", "2:15 PM", "2:30 PM", "2:45 PM",
+  "3:00 PM", "3:15 PM", "3:30 PM", "3:45 PM",
+  "4:00 PM", "4:15 PM", "4:30 PM", "4:45 PM",
+  "5:00 PM", "5:15 PM", "5:30 PM", "5:45 PM",
 ]
 
 const formSchema = z.object({
@@ -80,27 +98,58 @@ interface ServiceDropdownState {
   }
 }
 
-export function AppointmentForm() {
+export interface AppointmentFormProps {
+  /** Pre-fill date (YYYY-MM-DD), e.g. from calendar slot click */
+  initialDate?: string
+  /** Pre-fill time (e.g. "9:00 AM", "9:15 AM") */
+  initialTime?: string
+  /** Pre-fill staff for first service when added (staff id) */
+  initialStaffId?: string
+  /** Called when user selects or clears the client (for showing client details panel) */
+  onClientSelect?: (client: Client | null) => void
+}
+
+export function AppointmentForm({ initialDate, initialTime, initialStaffId, onClientSelect }: AppointmentFormProps = {}) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
-  
+
+  // Prefer URL params (from calendar slot) over props so time is correct on first paint
+  const urlDate = searchParams?.get("date") ?? initialDate
+  const urlTime = searchParams?.get("time") ?? initialTime
+  const urlStaffId = searchParams?.get("staffId") ?? initialStaffId
+
+  // Normalize time to match a form timeSlot exactly so the Select displays it
+  const defaultTime = useMemo(() => {
+    if (!urlTime) return ""
+    return timeSlots.find((t) => t.toLowerCase() === urlTime.toLowerCase()) ?? urlTime
+  }, [urlTime])
+
+  const defaultDate = useMemo(() => {
+    if (!urlDate) return undefined
+    const parts = urlDate.split("-").map(Number)
+    if (parts.length < 3) return undefined
+    return new Date(parts[0], parts[1] - 1, parts[2])
+  }, [urlDate])
+
   // Client search state
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [clients, setClients] = useState<Client[]>([])
-  
+
   // Services and staff state
   const [services, setServices] = useState<any[]>([])
   const [staff, setStaff] = useState<any[]>([])
+  const [blockTimesForDate, setBlockTimesForDate] = useState<any[]>([])
   const [loadingServices, setLoadingServices] = useState(true)
   const [loadingStaff, setLoadingStaff] = useState(true)
-  
+
   // Service dropdown search state
   const [serviceDropdowns, setServiceDropdowns] = useState<ServiceDropdownState>({})
-  
+
   // New client dialog
   const [showNewClientDialog, setShowNewClientDialog] = useState(false)
   const [newClient, setNewClient] = useState({
@@ -112,18 +161,85 @@ export function AppointmentForm() {
 
   // Date picker popover state
   const [datePickerOpen, setDatePickerOpen] = useState(false)
-  
+
   // Today's date for date picker (calculated once)
   const today = useMemo(() => startOfDay(new Date()), [])
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      date: undefined,
-      time: "",
+      date: defaultDate,
+      time: defaultTime,
       notes: "",
     },
   })
+
+  // Sync URL params into form when they appear (e.g. client nav from calendar)
+  useEffect(() => {
+    if (urlDate || urlTime) {
+      const date = urlDate
+        ? (() => {
+            const parts = urlDate.split("-").map(Number)
+            return new Date(parts[0], parts[1] - 1, parts[2])
+          })()
+        : form.getValues("date")
+      form.reset({
+        ...form.getValues(),
+        ...(date && { date }),
+        ...(defaultTime && { time: defaultTime }),
+      })
+    }
+  }, [urlDate, urlTime, defaultTime])
+
+  const formDate = form.watch("date")
+  const formTime = form.watch("time")
+
+  // Fetch block times when date is set (for availability filtering)
+  useEffect(() => {
+    if (!formDate) {
+      setBlockTimesForDate([])
+      return
+    }
+    const dateStr = format(formDate, "yyyy-MM-dd")
+    BlockTimeAPI.getAll({ startDate: dateStr, endDate: dateStr })
+      .then((res) => {
+        if (res?.success && Array.isArray(res?.data)) setBlockTimesForDate(res.data)
+        else setBlockTimesForDate([])
+      })
+      .catch(() => setBlockTimesForDate([]))
+  }, [formDate])
+
+  // Staff available on the selected date and time (work schedule + not blocked)
+  const availableStaff = useMemo(() => {
+    if (!formDate || !formTime) return staff
+    const dateStr = format(formDate, "yyyy-MM-dd")
+    const dayIndex = formDate.getDay()
+    const timeMinutes = parseTimeToMinutes(formTime)
+
+    return staff.filter((member: any) => {
+      const staffId = member._id || member.id
+      if (!staffId) return false
+
+      const schedule = member.workSchedule || []
+      const dayRow = schedule.find((r: any) => r.day === dayIndex)
+      if (dayRow && dayRow.enabled === false) return false
+      const startStr = dayRow?.startTime ?? "09:00"
+      const endStr = dayRow?.endTime ?? "21:00"
+      const startM = parseTimeToMinutes(startStr)
+      const endM = parseTimeToMinutes(endStr)
+      if (timeMinutes < startM || timeMinutes >= endM) return false
+
+      const isBlocked = blockTimesForDate.some((block: any) => {
+        const blockStaffId = typeof block.staffId === "object" && block.staffId?._id ? block.staffId._id : String(block.staffId)
+        if (blockStaffId !== staffId) return false
+        if (!blockAppliesOnDate(block, dateStr)) return false
+        const blockStartM = parseTimeToMinutes(block.startTime)
+        const blockEndM = parseTimeToMinutes(block.endTime)
+        return timeMinutes >= blockStartM && timeMinutes < blockEndM
+      })
+      return !isBlocked
+    })
+  }, [staff, formDate, formTime, blockTimesForDate])
 
   // Load services and staff on component mount
   useEffect(() => {
@@ -222,6 +338,7 @@ export function AppointmentForm() {
     setSelectedCustomer(customer)
     setCustomerSearch(customer.name)
     setShowCustomerDropdown(false)
+    onClientSelect?.(customer)
   }
 
   // Handle customer search input
@@ -233,8 +350,10 @@ export function AppointmentForm() {
       const phoneValue = value.replace(/\D/g, '').slice(0, 10)
       setCustomerSearch(phoneValue)
     } else if (value.length === 0) {
-      // Allow empty string
+      // Allow empty string and clear selection
       setCustomerSearch(value)
+      setSelectedCustomer(null)
+      onClientSelect?.(null)
     } else {
       // Allow text for name/email search (contains letters or special chars)
       setCustomerSearch(value)
@@ -247,6 +366,7 @@ export function AppointmentForm() {
       : value
     if (selectedCustomer && !selectedCustomer.name.toLowerCase().includes(finalValue.toLowerCase())) {
       setSelectedCustomer(null)
+      onClientSelect?.(null)
     }
   }
 
@@ -308,6 +428,7 @@ export function AppointmentForm() {
         if (createdClient) {
           setSelectedCustomer(createdClient)
           setCustomerSearch(createdClient.name)
+          onClientSelect?.(createdClient)
         }
 
         setNewClient({
@@ -339,12 +460,13 @@ export function AppointmentForm() {
     }
   }
 
-  // Add a service to the appointment
+  // Add a service to the appointment (pre-fill staff when coming from calendar slot)
   const addService = () => {
+    const isFirstService = selectedServices.length === 0
     const newService: SelectedService = {
       id: Date.now().toString(),
       serviceId: "",
-      staffId: "",
+      staffId: isFirstService && urlStaffId ? urlStaffId : "",
       name: "",
       duration: 0,
       price: 0,
@@ -447,6 +569,19 @@ export function AppointmentForm() {
       return
     }
 
+    if (values.date && values.time) {
+      const availableIds = new Set(availableStaff.map((m: any) => m._id || m.id))
+      const unavailable = selectedServices.filter((s) => s.staffId && !availableIds.has(s.staffId))
+      if (unavailable.length > 0) {
+        toast({
+          title: "Error",
+          description: "One or more selected staff are not available on the chosen date and time. Please pick a different time or staff.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
     setIsSubmitting(true)
 
     try {
@@ -498,8 +633,8 @@ export function AppointmentForm() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 p-6">
-      <div className="max-w-4xl mx-auto">
+    <>
+      <div className="w-full max-w-full">
         <Card className="shadow-2xl border-0 bg-white/80 backdrop-blur-sm">
           <CardHeader className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-t-lg">
             <div className="flex items-center space-x-3">
@@ -609,41 +744,6 @@ export function AppointmentForm() {
                   </div>
                 )}
               </div>
-
-              {/* Selected Customer Details */}
-              {selectedCustomer && (
-                <div className="p-6 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-200 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 bg-indigo-100 rounded-lg">
-                        <User className="h-5 w-5 text-indigo-600" />
-                      </div>
-                      <div>
-                        <span className="font-semibold text-slate-800 text-lg">{selectedCustomer.name}</span>
-                        <Badge 
-                          variant={selectedCustomer.status === "active" ? "default" : "secondary"}
-                          className="ml-2 bg-green-100 text-green-800 hover:bg-green-100"
-                        >
-                          {selectedCustomer.status}
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-6 text-sm">
-                    <div className="flex items-center gap-2 text-slate-600">
-                      <Phone className="h-4 w-4 text-indigo-500" />
-                      <span className="font-medium">{selectedCustomer.phone}</span>
-                    </div>
-                    {selectedCustomer.email && (
-                      <div className="flex items-center gap-2 text-slate-600">
-                        <Mail className="h-4 w-4 text-indigo-500" />
-                        <span className="font-medium">{selectedCustomer.email}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* Date & Time */}
@@ -728,7 +828,7 @@ export function AppointmentForm() {
                 render={({ field }) => (
                   <FormItem className="flex flex-col space-y-2">
                     <FormLabel className="text-sm font-semibold text-slate-700">Time *</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value || undefined}>
                       <FormControl>
                         <SelectTrigger className="h-12 px-4 border-slate-200 hover:border-slate-400 focus:border-slate-500 focus:ring-slate-500 rounded-xl font-medium text-slate-700 bg-white shadow-sm transition-all duration-200">
                           <SelectValue placeholder="Select a time" />
@@ -875,16 +975,24 @@ export function AppointmentForm() {
                                 No active staff available
                               </SelectItem>
                             ) : (
-                              staff
-                                .filter((member) => (member._id || member.id))
-                                .map((member) => {
+                              (() => {
+                                const list = availableStaff.filter((member: any) => member._id || member.id)
+                                const selectedId = service.staffId
+                                const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
+                                const options = selectedNotInList
+                                  ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
+                                  : list
+                                return options.map((member: any) => {
                                   const staffId = member._id || member.id
+                                  const isUnavailable = selectedNotInList && staffId === selectedId
                                   return (
                                     <SelectItem key={staffId} value={staffId}>
                                       {member.name}
+                                      {isUnavailable ? " (unavailable for this date/time)" : ""}
                                     </SelectItem>
                                   )
                                 })
+                              })()
                             )}
                           </SelectContent>
                           </Select>
@@ -1070,6 +1178,6 @@ export function AppointmentForm() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }

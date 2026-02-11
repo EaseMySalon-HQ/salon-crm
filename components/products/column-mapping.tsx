@@ -21,15 +21,20 @@ interface ColumnMappingProps {
 const PRODUCT_FIELDS = [
   { value: 'name', label: 'Product Name', required: true, description: 'Name of the product' },
   { value: 'category', label: 'Category', required: true, description: 'Product category' },
-  { value: 'price', label: 'Price', required: true, description: 'Selling price' },
-  { value: 'stock', label: 'Stock', required: true, description: 'Available quantity' },
-  { value: 'sku', label: 'SKU', required: false, description: 'Product code/SKU' },
-  { value: 'supplier', label: 'Supplier', required: false, description: 'Supplier name' },
-  { value: 'description', label: 'Description', required: false, description: 'Product description' },
+  { value: 'cost', label: 'Cost Price', required: false, description: 'Purchase cost per unit' },
+  { value: 'price', label: 'Selling Price', required: true, description: 'Selling price' },
+  { value: 'offerPrice', label: 'Offer Price', required: false, description: 'Offer/discounted price (optional)' },
+  { value: 'stock', label: 'Current Stock', required: true, description: 'Available quantity' },
+  { value: 'minimumStock', label: 'Minimum Stock Level', required: false, description: 'Minimum stock for alerts (default 5)' },
+  { value: 'volume', label: 'Volume', required: false, description: 'Volume value (number)' },
+  { value: 'volumeUnit', label: 'Volume Unit', required: false, description: 'mg, g, kg, ml, l, oz, pcs, pkt' },
+  { value: 'taxCategory', label: 'Tax Category', required: false, description: 'essential, intermediate, standard, luxury, exempt' },
   { value: 'productType', label: 'Product Type', required: false, description: 'retail, service, or both' },
-  { value: 'taxCategory', label: 'Tax Category', required: false, description: 'Tax classification (essential, intermediate, standard, luxury, exempt)' },
-  { value: 'costPrice', label: 'Cost Price', required: false, description: 'Purchase cost per unit' },
-  { value: 'minimumStock', label: 'Minimum Stock Level', required: false, description: 'Minimum stock level for alerts' }
+  { value: 'transactionType', label: 'Transaction Type', required: false, description: 'purchase, return, adjustment, restock' },
+  { value: 'description', label: 'Description', required: false, description: 'Product description' },
+  { value: 'barcode', label: 'SKU/Barcode', required: false, description: 'SKU or barcode number' },
+  { value: 'hsnSacCode', label: 'HSN/SAC Code', required: false, description: 'Tax code for invoicing' },
+  { value: 'supplier', label: 'Supplier', required: false, description: 'Supplier name' }
 ]
 
 export function ColumnMapping({ 

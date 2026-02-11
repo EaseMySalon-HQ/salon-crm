@@ -153,10 +153,19 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
     ]
   })
 
-  // Update settings when propSettings change
+  // Update settings when propSettings change (merge so nested objects always exist)
   useEffect(() => {
     if (propSettings) {
-      setSettings(propSettings)
+      setSettings(prev => {
+        const next = { ...prev, ...propSettings }
+        if (!next.creationRules || typeof next.creationRules !== 'object') {
+          next.creationRules = { defaultRole: 'staff', requirePassword: true, requireEmailVerification: false, requirePhoneVerification: false, allowSelfRegistration: false, requireAdminApproval: true, autoActivate: false, sendWelcomeEmail: true, ...(prev?.creationRules || {}), ...(propSettings?.creationRules || {}) }
+        }
+        if (!next.defaultPermissions || typeof next.defaultPermissions !== 'object') {
+          next.defaultPermissions = prev?.defaultPermissions || {}
+        }
+        return next
+      })
     }
   }, [propSettings])
 
@@ -164,12 +173,12 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
     setSettings(prev => {
       const newSettings = { ...prev }
       const keys = path.split('.')
-      let current = newSettings
-      
+      let current: any = newSettings
       for (let i = 0; i < keys.length - 1; i++) {
-        current = current[keys[i]]
+        const k = keys[i]
+        if (current[k] == null || typeof current[k] !== 'object') current[k] = {}
+        current = current[k]
       }
-      
       current[keys[keys.length - 1]] = value
       onSettingsChange(newSettings)
       return newSettings
@@ -229,7 +238,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
             <div className="space-y-2">
               <Label htmlFor="defaultRole">Default Role</Label>
               <Select
-                value={settings.creationRules.defaultRole}
+                value={settings?.creationRules?.defaultRole ?? 'staff'}
                 onValueChange={(value) => handleSettingChange('creationRules.defaultRole', value)}
               >
                 <SelectTrigger>
@@ -253,7 +262,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.requirePassword}
+                checked={settings?.creationRules?.requirePassword ?? true}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.requirePassword', checked)}
               />
             </div>
@@ -266,7 +275,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.requireEmailVerification}
+                checked={settings?.creationRules?.requireEmailVerification ?? false}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.requireEmailVerification', checked)}
               />
             </div>
@@ -292,7 +301,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.allowSelfRegistration}
+                checked={settings?.creationRules?.allowSelfRegistration ?? false}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.allowSelfRegistration', checked)}
               />
             </div>
@@ -305,7 +314,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.requireAdminApproval}
+                checked={settings?.creationRules?.requireAdminApproval ?? true}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.requireAdminApproval', checked)}
               />
             </div>
@@ -318,7 +327,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.autoActivate}
+                checked={settings?.creationRules?.autoActivate ?? false}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.autoActivate', checked)}
               />
             </div>
@@ -331,7 +340,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.sendWelcomeEmail}
+                checked={settings?.creationRules?.sendWelcomeEmail ?? true}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.sendWelcomeEmail', checked)}
               />
             </div>
@@ -351,13 +360,13 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {Object.entries(settings.defaultPermissions).map(([role, permissions]) => (
+          {Object.entries(settings?.defaultPermissions ?? {}).map(([role, permissions]) => (
             <div key={role} className="space-y-4">
               <h4 className="font-medium text-sm capitalize">{role} Permissions</h4>
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse">
                   <thead>
-                    <tr className="border-b">
+                    <tr className="bg-slate-50 border-b border-slate-200">
                       <th className="text-left p-2 font-medium">Module</th>
                       {features.map(feature => (
                         <th key={feature.id} className="text-center p-2 font-medium text-xs">
