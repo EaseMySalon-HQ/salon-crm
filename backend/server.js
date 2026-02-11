@@ -4283,17 +4283,9 @@ app.delete('/api/inventory/transactions', authenticateToken, setupBusinessDataba
 app.get('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { search, type, activeOnly } = req.query;
+    const { search, activeOnly } = req.query;
 
     let query = { branchId: req.user.branchId };
-
-    // Filter by type if provided (product, service, both)
-    if (type && ['product', 'service', 'both'].includes(type)) {
-      query.$or = [
-        { type: type },
-        { type: 'both' }
-      ];
-    }
 
     // Filter by active status if requested
     if (activeOnly === 'true') {
@@ -4350,7 +4342,7 @@ app.get('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
 app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { name, type, description } = req.body;
+    const { name, description } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -4360,31 +4352,30 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
       });
     }
 
-    // Validate type if provided
-    if (type && !['product', 'service', 'both'].includes(type)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid category type. Must be: product, service, or both'
-      });
-    }
-
-    // Check if category with same name already exists for this branch
+    // Check if category with same name already exists for this branch (case-insensitive, regex-safe)
+    const escapedName = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existingCategory = await Category.findOne({
       branchId: req.user.branchId,
-      name: { $regex: new RegExp(`^${name}$`, 'i') }
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') }
     });
 
     if (existingCategory) {
-      return res.status(400).json({
-        success: false,
-        error: 'A category with this name already exists'
-      });
+      // Get-or-create: return the existing category so user can proceed (no 400)
+      if (!existingCategory.isActive) {
+        existingCategory.isActive = true;
+        if (description != null) existingCategory.description = description;
+        await existingCategory.save();
+      } else if (description != null) {
+        existingCategory.description = description;
+        await existingCategory.save();
+      }
+      return res.status(201).json({ success: true, data: existingCategory });
     }
 
     // Create new category
     const category = new Category({
       name: name.trim(),
-      type: type || 'both',
+      type: 'both',
       description: description || '',
       branchId: req.user.branchId,
       isActive: true
@@ -4409,7 +4400,7 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
 app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { name, type, description, isActive } = req.body;
+    const { name, description, isActive } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -4419,19 +4410,12 @@ app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
       });
     }
 
-    // Validate type if provided
-    if (type && !['product', 'service', 'both'].includes(type)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid category type. Must be: product, service, or both'
-      });
-    }
-
-    // Check if another category with same name exists
+    // Check if another category with same name exists (case-insensitive, regex-safe)
+    const escapedName = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const existingCategory = await Category.findOne({
       _id: { $ne: req.params.id },
       branchId: req.user.branchId,
-      name: { $regex: new RegExp(`^${name}$`, 'i') }
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') }
     });
 
     if (existingCategory) {
@@ -4445,7 +4429,6 @@ app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
       req.params.id,
       {
         name: name.trim(),
-        type: type || 'both',
         description: description || '',
         isActive: isActive !== undefined ? isActive : true
       },

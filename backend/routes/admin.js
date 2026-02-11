@@ -270,7 +270,7 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       return res.status(400).json({ success: false, error: 'Owner password is required' });
     }
 
-    // Create owner user first (using main database models)
+    // Create owner user first — they are the first user and have full control as business admin
     const hashedPassword = await bcrypt.hash(ownerData.password, 10);
     const owner = new req.mainModels.User({
       firstName: ownerData.firstName,
@@ -344,23 +344,38 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       businessCode = `BIZ${Date.now().toString().slice(-4)}`;
     }
 
-    // Create business (using main database models)
+    // Build address and contact from whatever the user filled (same as in Business Settings)
+    const address = {
+      street: (businessInfo.address?.street || businessInfo.location?.street) || 'Not provided',
+      city: businessInfo.address?.city || businessInfo.location?.city || '',
+      state: businessInfo.address?.state || businessInfo.location?.state || '',
+      zipCode: businessInfo.address?.zipCode || businessInfo.location?.zipCode || '',
+      country: businessInfo.address?.country || businessInfo.location?.country || 'India'
+    };
+    const contact = {
+      phone: businessInfo.contact?.phone || businessInfo.phone || '',
+      email: businessInfo.contact?.email || businessInfo.email || '',
+      website: (businessInfo.contact?.website || businessInfo.website) || ''
+    };
+
+    // Default settings; form can override via businessInfo.settings (e.g. operatingHours)
+    const defaultOperatingHours = {
+      monday: { open: '09:00', close: '18:00', closed: false },
+      tuesday: { open: '09:00', close: '18:00', closed: false },
+      wednesday: { open: '09:00', close: '18:00', closed: false },
+      thursday: { open: '09:00', close: '18:00', closed: false },
+      friday: { open: '09:00', close: '18:00', closed: false },
+      saturday: { open: '09:00', close: '18:00', closed: false },
+      sunday: { open: '10:00', close: '16:00', closed: false }
+    };
+
+    // Create business with all details from the form so they appear in Business Settings
     const business = new req.mainModels.Business({
       code: businessCode,
       name: businessInfo.name || businessInfo.businessName,
       businessType: (businessInfo.businessType || 'salon').toLowerCase(),
-      address: {
-        street: (businessInfo.address?.street || businessInfo.location?.street) || 'Not provided',
-        city: businessInfo.address?.city || businessInfo.location?.city,
-        state: businessInfo.address?.state || businessInfo.location?.state,
-        zipCode: businessInfo.address?.zipCode || businessInfo.location?.zipCode,
-        country: businessInfo.address?.country || businessInfo.location?.country || 'India'
-      },
-      contact: {
-        phone: businessInfo.contact?.phone || businessInfo.phone,
-        email: businessInfo.contact?.email || businessInfo.email,
-        website: businessInfo.contact?.website || businessInfo.website || ''
-      },
+      address,
+      contact,
       settings: {
         timezone: 'Asia/Kolkata',
         currency: 'INR',
@@ -368,17 +383,9 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
         dateFormat: 'DD/MM/YYYY',
         timeFormat: '12',
         taxRate: 18,
-        gstNumber: '',
-        businessLicense: '',
-        operatingHours: {
-          monday: { open: '09:00', close: '18:00', closed: false },
-          tuesday: { open: '09:00', close: '18:00', closed: false },
-          wednesday: { open: '09:00', close: '18:00', closed: false },
-          thursday: { open: '09:00', close: '18:00', closed: false },
-          friday: { open: '09:00', close: '18:00', closed: false },
-          saturday: { open: '09:00', close: '18:00', closed: false },
-          sunday: { open: '10:00', close: '16:00', closed: false }
-        },
+        gstNumber: (businessInfo.settings && businessInfo.settings.gstNumber) || '',
+        businessLicense: (businessInfo.settings && businessInfo.settings.businessLicense) || '',
+        operatingHours: (businessInfo.settings && businessInfo.settings.operatingHours) || defaultOperatingHours,
         appointmentSettings: {
           slotDuration: 30,
           advanceBookingDays: 30,
@@ -397,7 +404,7 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
           secondaryColor: '#1E40AF',
           fontFamily: 'Inter'
         },
-        ...businessInfo.settings // Allow frontend to override defaults if needed
+        ...(businessInfo.settings || {})
       },
       owner: owner._id,
       status: 'active'
@@ -420,13 +427,14 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       const businessConnection = await databaseManager.getConnection(business.code, req.mainConnection);
       const businessModels = modelFactory.createBusinessModels(businessConnection);
       
-      // Create default business settings
+      // Create default business settings from creation form data so Business Settings reflect the same info
       const defaultSettings = new businessModels.BusinessSettings({
+        branchId: business._id,
         name: business.name,
         email: business.contact.email,
         phone: business.contact.phone,
         website: business.contact.website || '',
-        description: `${business.name} - Professional salon and spa services`,
+        description: `${business.name} - ${(business.businessType || 'salon').replace('_', ' ')}`,
         address: business.address.street,
         city: business.address.city,
         state: business.address.state,
@@ -435,13 +443,14 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
         invoicePrefix: "INV",
         receiptNumber: 1,
         autoIncrementReceipt: true,
-        currency: "INR",
-        taxRate: 8.25,
+        currency: (business.settings && business.settings.currency) || 'INR',
+        taxRate: (business.settings && business.settings.taxRate) != null ? business.settings.taxRate : 18,
+        gstNumber: (business.settings && business.settings.gstNumber) || '',
         processingFee: 2.9,
         enableCurrency: true,
         enableTax: true,
         enableProcessingFees: true,
-        socialMedia: `@${business.name.toLowerCase().replace(/\s+/g, '')}`
+        socialMedia: `@${(business.name || '').toLowerCase().replace(/\s+/g, '')}`
       });
       
       await defaultSettings.save();

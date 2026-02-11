@@ -8,8 +8,21 @@ const modelFactory = require('../models/model-factory');
 const setupBusinessDatabase = async (req, res, next) => {
   try {
     // Get business ID from user
-    const businessId = req.user?.branchId;
-    
+    let businessId = req.user?.branchId;
+
+    // Admin without branchId: use first business so admin has full rights in at least one context
+    if (!businessId && req.user?.role === 'admin') {
+      const mainConnection = await databaseManager.getMainConnection();
+      const Business = mainConnection.model('Business', require('../models/Business').schema);
+      const firstBusiness = await Business.findOne({}).sort({ createdAt: 1 }).lean();
+      if (firstBusiness && firstBusiness._id) {
+        businessId = firstBusiness._id;
+        if (!req.user) req.user = {};
+        req.user.branchId = businessId;
+        console.log('🔍 Business DB Middleware: Admin using first business as context:', businessId);
+      }
+    }
+
     console.log('🔍 Business DB Middleware Debug:', {
       user: req.user ? {
         id: req.user._id,
@@ -19,7 +32,7 @@ const setupBusinessDatabase = async (req, res, next) => {
       } : 'No user',
       businessId: businessId
     });
-    
+
     if (!businessId) {
       return res.status(400).json({
         success: false,
