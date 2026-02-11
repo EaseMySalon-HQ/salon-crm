@@ -124,10 +124,11 @@ class DatabaseManager {
 
     let connection;
     try {
-      connection = await mongoose.createConnection(uri);
-      
-      // Wait for connection to be ready
-      await new Promise(resolve => setTimeout(resolve, 200));
+      connection = mongoose.createConnection(uri, {
+        serverSelectionTimeoutMS: 60000, // 60s for Railway cold start
+      });
+      // Properly wait for connection (not just 200ms - connection can take 30s+ on cold start)
+      await connection.asPromise();
       
       // Verify connection state
       if (connection.readyState !== 1) {
@@ -191,10 +192,11 @@ class DatabaseManager {
     
     let connection;
     try {
-      connection = await mongoose.createConnection(uri);
-      
-      // Wait for connection to be ready
-      await new Promise(resolve => setTimeout(resolve, 200));
+      connection = mongoose.createConnection(uri, {
+        serverSelectionTimeoutMS: 60000, // 60s for Railway cold start
+      });
+      // Properly wait for connection (not just 200ms - Railway cold start can take 30s+)
+      await connection.asPromise();
       
       // Verify connection state
       if (connection.readyState !== 1) {
