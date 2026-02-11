@@ -499,7 +499,9 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                     </TableCell>
                     <TableCell className="px-4 py-3">
                       <div className="flex items-center space-x-2">
-                        <div className="text-base font-medium text-gray-700">{product.stock}</div>
+                        <div className="text-base font-medium text-gray-700">
+                          {(Math.round((product.stock ?? 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                        </div>
                         {getStockBadge(product.stock, product.minimumStock ?? product.minStock ?? 10)}
                       </div>
                     </TableCell>

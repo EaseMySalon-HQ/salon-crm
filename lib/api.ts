@@ -420,7 +420,7 @@ export class SuppliersAPI {
 }
 
 export class CategoriesAPI {
-  static async getAll(params?: { search?: string; type?: 'product' | 'service' | 'both'; activeOnly?: boolean }): Promise<ApiResponse<any[]>> {
+  static async getAll(params?: { search?: string; activeOnly?: boolean }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/categories', { params })
     return response.data
   }
@@ -430,12 +430,12 @@ export class CategoriesAPI {
     return response.data
   }
 
-  static async create(data: { name: string; type?: 'product' | 'service' | 'both'; description?: string }): Promise<ApiResponse<any>> {
+  static async create(data: { name: string; description?: string }): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/categories', data)
     return response.data
   }
 
-  static async update(id: string, data: { name?: string; type?: 'product' | 'service' | 'both'; description?: string; isActive?: boolean }): Promise<ApiResponse<any>> {
+  static async update(id: string, data: { name?: string; description?: string; isActive?: boolean }): Promise<ApiResponse<any>> {
     const response = await apiClient.put(`/categories/${id}`, data)
     return response.data
   }

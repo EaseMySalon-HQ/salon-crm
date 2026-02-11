@@ -35,7 +35,6 @@ import { useToast } from "@/hooks/use-toast"
 interface Category {
   _id?: string
   name: string
-  type?: 'product' | 'service' | 'both'
   description?: string
   isActive?: boolean
 }
@@ -44,11 +43,10 @@ interface CategoryComboboxProps {
   value: string
   onChange: (value: string) => void
   disabled?: boolean
-  type?: 'product' | 'service' | 'both' // Filter categories by type
   onManageCategories?: () => void // Optional callback to open category management
 }
 
-export function CategoryCombobox({ value, onChange, disabled, type = 'both', onManageCategories }: CategoryComboboxProps) {
+export function CategoryCombobox({ value, onChange, disabled, onManageCategories }: CategoryComboboxProps) {
   const [open, setOpen] = React.useState(false)
   const [categories, setCategories] = React.useState<Category[]>([])
   const [loading, setLoading] = React.useState(false)
@@ -58,11 +56,11 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
   const [addingCategory, setAddingCategory] = React.useState(false)
   const { toast } = useToast()
 
-  // Load categories on mount and when type changes
+  // Load categories on mount
   React.useEffect(() => {
     loadCategories()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type]) // Reload when type changes
+  }, [])
 
   const loadCategories = async () => {
     try {
@@ -70,12 +68,9 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
       const uniqueCategories = new Set<string>()
       const categoryMap = new Map<string, Category>()
       
-      // First, try to fetch from the Categories API
+      // Fetch from Categories API
       try {
-        const response = await CategoriesAPI.getAll({ 
-          type, 
-          activeOnly: true 
-        })
+        const response = await CategoriesAPI.getAll({ activeOnly: true })
         
         if (response.success && response.data) {
           response.data.forEach((category: any) => {
@@ -85,7 +80,6 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
               categoryMap.set(categoryName, {
                 name: categoryName,
                 _id: category._id || categoryName,
-                type: category.type,
                 isActive: category.isActive
               })
             }
@@ -95,55 +89,49 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
         console.log('Categories API not available or empty, will extract from products/services')
       }
       
-      // Also extract categories from existing products and services for backward compatibility
-      if (type === 'product' || type === 'both') {
-        try {
-          const response = await ProductsAPI.getAll({ limit: 10000 })
-          if (response.success && response.data) {
-            const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-            
-            products.forEach((product: any) => {
-              if (product.category && product.category.trim()) {
-                const categoryName = product.category.trim()
-                if (!uniqueCategories.has(categoryName)) {
-                  uniqueCategories.add(categoryName)
-                  categoryMap.set(categoryName, {
-                    name: categoryName,
-                    _id: categoryName,
-                    isActive: true
-                  })
-                }
+      // Also extract categories from existing products and services
+      try {
+        const response = await ProductsAPI.getAll({ limit: 10000 })
+        if (response.success && response.data) {
+          const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+          products.forEach((product: any) => {
+            if (product.category && product.category.trim()) {
+              const categoryName = product.category.trim()
+              if (!uniqueCategories.has(categoryName)) {
+                uniqueCategories.add(categoryName)
+                categoryMap.set(categoryName, {
+                  name: categoryName,
+                  _id: categoryName,
+                  isActive: true
+                })
               }
-            })
-          }
-        } catch (error) {
-          console.log('Error fetching products for categories:', error)
+            }
+          })
         }
+      } catch (error) {
+        console.log('Error fetching products for categories:', error)
       }
       
-      if (type === 'service' || type === 'both') {
-        try {
-          const response = await ServicesAPI.getAll({ limit: 10000 })
-          if (response.success && response.data) {
-            const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-            
-            services.forEach((service: any) => {
-              if (service.category && service.category.trim()) {
-                const categoryName = service.category.trim()
-                if (!uniqueCategories.has(categoryName)) {
-                  uniqueCategories.add(categoryName)
-                  categoryMap.set(categoryName, {
-                    name: categoryName,
-                    _id: categoryName,
-                    isActive: true
-                  })
-                }
+      try {
+        const response = await ServicesAPI.getAll({ limit: 10000 })
+        if (response.success && response.data) {
+          const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+          services.forEach((service: any) => {
+            if (service.category && service.category.trim()) {
+              const categoryName = service.category.trim()
+              if (!uniqueCategories.has(categoryName)) {
+                uniqueCategories.add(categoryName)
+                categoryMap.set(categoryName, {
+                  name: categoryName,
+                  _id: categoryName,
+                  isActive: true
+                })
               }
-            })
-          }
-        } catch (error) {
-          console.log('Error fetching services for categories:', error)
+            }
+          })
         }
+      } catch (error) {
+        console.log('Error fetching services for categories:', error)
       }
       
       // Convert map to array and sort alphabetically
@@ -180,7 +168,6 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
       // Create the category using the API
       const response = await CategoriesAPI.create({
         name: newCategoryName.trim(),
-        type: type === 'both' ? 'both' : type, // Use the specified type or 'both'
         description: ''
       })
       
@@ -204,10 +191,31 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
         throw new Error(response.error || 'Failed to create category')
       }
     } catch (error: any) {
+      const responseData = error.response?.data || error.responseData
+      const existingCategory = responseData?.existingCategory
+      const isAlreadyExists =
+        error.response?.status === 400 &&
+        (responseData?.error?.includes('already exists') || existingCategory)
+
+      // If category already exists (400 + existingCategory or "already exists" message), select it
+      if (isAlreadyExists && existingCategory?.name) {
+        await loadCategories()
+        onChange(String(existingCategory.name))
+        setShowAddDialog(false)
+        setNewCategoryName("")
+        setOpen(false)
+        toast({
+          title: "Category already exists",
+          description: `"${existingCategory.name}" is already a category and has been selected.`,
+        })
+        return
+      }
+
       console.error('Error adding category:', error)
+      const message = responseData?.error || error.message || "Failed to add category"
       toast({
         title: "Error",
-        description: error.message || "Failed to add category",
+        description: message,
         variant: "destructive",
       })
     } finally {
@@ -273,7 +281,22 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
                     </Button>
                   </div>
                 ) : (
-                  "No categories found."
+                  <div className="p-2 space-y-1">
+                    <p className="text-sm text-muted-foreground">
+                      {categories.length === 0 ? "No categories yet." : "No categories found."}
+                    </p>
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start text-left"
+                      onClick={() => {
+                        setNewCategoryName("")
+                        setShowAddDialog(true)
+                      }}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add new category
+                    </Button>
+                  </div>
                 )}
               </CommandEmpty>
               <CommandGroup>
@@ -311,6 +334,18 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
                 </CommandGroup>
               )}
               <CommandSeparator />
+              <CommandGroup>
+                <CommandItem
+                  onSelect={() => {
+                    setNewCategoryName(searchQuery.trim() || "")
+                    setShowAddDialog(true)
+                  }}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add new category...
+                </CommandItem>
+              </CommandGroup>
+              <CommandSeparator />
               <div className="p-2 text-center">
                 <p className="text-xs text-muted-foreground">
                   <Settings className="inline h-3 w-3 mr-1" />
@@ -328,7 +363,7 @@ export function CategoryCombobox({ value, onChange, disabled, type = 'both', onM
           <DialogHeader>
             <DialogTitle>Add New Category</DialogTitle>
             <DialogDescription>
-              Create a new category for your {type === 'product' ? 'products' : type === 'service' ? 'services' : 'products and services'}.
+              Create a new category for your products and services.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">

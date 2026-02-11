@@ -236,7 +236,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
       const productData: any = {
         name: formData.name,
         category: formData.category,
-        price: formData.productType === 'service' ? 0 : parseFloat(formData.price),
+        price: parseFloat(formData.price) || 0,
         cost: formData.cost !== undefined && formData.cost !== null && formData.cost !== '' ? parseFloat(formData.cost) : undefined,
         offerPrice: formData.offerPrice !== undefined && formData.offerPrice !== null && formData.offerPrice !== '' ? parseFloat(formData.offerPrice) : undefined,
         stock: parseInt(formData.stock),
@@ -413,11 +413,43 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
           <CategoryCombobox
             value={formData.category}
             onChange={(value) => handleChange("category", value)}
-            type="product"
           />
         </div>
 
-        {formData.productType !== 'service' && (
+        {formData.productType === 'service' ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:col-span-2">
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 min-h-[22px]">
+                <Label htmlFor="cost">Cost Price</Label>
+              </div>
+              <Input
+                id="cost"
+                type="number"
+                step="0.01"
+                min="0"
+                value={formData.cost}
+                onChange={(e) => handleChange("cost", e.target.value)}
+                placeholder="0.00"
+                className="h-9"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5 min-h-[22px]">
+                <Label htmlFor="price">Selling Price</Label>
+              </div>
+              <Input
+                id="price"
+                type="number"
+                step="0.01"
+                min="0"
+                value={formData.price}
+                onChange={(e) => handleChange("price", e.target.value)}
+                placeholder="0.00"
+                className="h-9"
+              />
+            </div>
+          </div>
+        ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:col-span-2">
             <div className="space-y-2">
               <div className="flex items-center gap-1.5 min-h-[22px]">
