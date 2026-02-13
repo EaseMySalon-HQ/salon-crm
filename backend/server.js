@@ -5120,6 +5120,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
       .populate('clientId', 'name phone email')
       .populate('serviceId', 'name price duration')
       .populate('staffId', 'name role')
+      .populate('staffAssignments.staffId', 'name role')
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
       .sort({ createdAt: -1 });
@@ -5146,7 +5147,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, status = 'scheduled' } = req.body;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled' } = req.body;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -5159,6 +5160,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
     const createdAppointments = [];
     
     for (const service of services) {
+      const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
       const appointmentData = {
         clientId,
         serviceId: service.serviceId,
@@ -5167,6 +5169,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         duration: service.duration,
         status,
         notes,
+        leadSource: leadSource || '',
+        createdBy,
         price: service.price,
         branchId: req.user.branchId
       };
@@ -6053,6 +6057,25 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
       success: false,
       error: 'Failed to create receipt'
     });
+  }
+});
+
+app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { Appointment } = req.businessModels;
+    const appointment = await Appointment.findById(id)
+      .populate('clientId', 'name phone email')
+      .populate('serviceId', 'name price duration')
+      .populate('staffId', 'name role')
+      .populate('staffAssignments.staffId', 'name role');
+    if (!appointment) {
+      return res.status(404).json({ success: false, error: 'Appointment not found' });
+    }
+    res.json({ success: true, data: appointment });
+  } catch (error) {
+    console.error('Error fetching appointment:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch appointment' });
   }
 });
 
@@ -7075,6 +7098,21 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       error: err.message,
       details: err.errors || err.message
     });
+  }
+});
+
+app.get('/api/sales/by-appointment/:appointmentId', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Sale } = req.businessModels;
+    const mongoose = require('mongoose');
+    const appointmentId = req.params.appointmentId;
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      return res.json({ success: true, data: null });
+    }
+    const sale = await Sale.findOne({ appointmentId: new mongoose.Types.ObjectId(appointmentId) }).lean();
+    res.json({ success: true, data: sale || null });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, TrendingUp, Loader2, Calendar as CalendarIcon } from "lucide-react"
+import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, TrendingUp, Loader2, Receipt, Calendar as CalendarIcon } from "lucide-react"
 import { format, isBefore, startOfDay } from "date-fns"
 import { DayPicker } from "react-day-picker"
 
@@ -72,6 +72,16 @@ const timeSlots = [
   "5:00 PM", "5:15 PM", "5:30 PM", "5:45 PM",
 ]
 
+const LEAD_SOURCE_OPTIONS = [
+  "Walk-in",
+  "Phone",
+  "Instagram",
+  "Facebook",
+  "JustDial",
+  "Referral",
+  "Other",
+] as const
+
 const formSchema = z.object({
   date: z.date({
     required_error: "Please select a date.",
@@ -79,6 +89,8 @@ const formSchema = z.object({
   time: z.string({
     required_error: "Please select a time.",
   }),
+  leadSource: z.string().optional(),
+  leadSourceDetail: z.string().optional(),
   notes: z.string().optional(),
 })
 
@@ -105,15 +117,20 @@ export interface AppointmentFormProps {
   initialTime?: string
   /** Pre-fill staff for first service when added (staff id) */
   initialStaffId?: string
+  /** Appointment ID for edit mode - loads appointment and locks client */
+  appointmentId?: string
   /** Called when user selects or clears the client (for showing client details panel) */
   onClientSelect?: (client: Client | null) => void
 }
 
-export function AppointmentForm({ initialDate, initialTime, initialStaffId, onClientSelect }: AppointmentFormProps = {}) {
+export function AppointmentForm({ initialDate, initialTime, initialStaffId, appointmentId: appointmentIdProp, onClientSelect }: AppointmentFormProps = {}) {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const appointmentId = appointmentIdProp ?? searchParams?.get("edit") ?? undefined
+  const isEditMode = !!appointmentId
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [loadingAppointment, setLoadingAppointment] = useState(false)
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
 
   // Prefer URL params (from calendar slot) over props so time is correct on first paint
@@ -128,10 +145,11 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
   }, [urlTime])
 
   const defaultDate = useMemo(() => {
-    if (!urlDate) return undefined
-    const parts = urlDate.split("-").map(Number)
-    if (parts.length < 3) return undefined
-    return new Date(parts[0], parts[1] - 1, parts[2])
+    if (urlDate) {
+      const parts = urlDate.split("-").map(Number)
+      if (parts.length >= 3) return new Date(parts[0], parts[1] - 1, parts[2])
+    }
+    return startOfDay(new Date())
   }, [urlDate])
 
   // Client search state
@@ -170,6 +188,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
     defaultValues: {
       date: defaultDate,
       time: defaultTime,
+      leadSource: "",
+      leadSourceDetail: "",
       notes: "",
     },
   })
@@ -247,6 +267,75 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
     fetchStaff()
     fetchClients()
   }, [])
+
+  // Load appointment when in edit mode
+  useEffect(() => {
+    if (!appointmentId) return
+    let cancelled = false
+    setLoadingAppointment(true)
+    AppointmentsAPI.getById(appointmentId)
+      .then((res) => {
+        if (cancelled || !res?.success || !res?.data) return
+        const a = res.data as any
+        const client = a.clientId
+        if (client) {
+          const clientData: Client = {
+            _id: client._id,
+            id: client._id,
+            name: client.name || "",
+            phone: client.phone || "",
+            email: client.email,
+            status: "active",
+          }
+          setSelectedCustomer(clientData)
+          setCustomerSearch(clientData.name)
+          onClientSelect?.(clientData)
+        }
+        const svc = a.serviceId
+        const staffIdVal = a.staffId?._id || a.staffId || (a.staffAssignments?.[0]?.staffId?._id ?? a.staffAssignments?.[0]?.staffId)
+        setSelectedServices([{
+          id: "edit-service",
+          serviceId: svc?._id || svc,
+          staffId: staffIdVal || "",
+          name: svc?.name || "Service",
+          duration: a.duration ?? svc?.duration ?? 60,
+          price: a.price ?? svc?.price ?? 0,
+        }])
+        if (a.date) {
+          const parts = a.date.split("-").map(Number)
+          if (parts.length >= 3) {
+            form.reset({
+              ...form.getValues(),
+              date: new Date(parts[0], parts[1] - 1, parts[2]),
+              time: timeSlots.find((t) => t.toLowerCase() === (a.time || "").toLowerCase()) ?? a.time ?? "",
+              notes: a.notes || "",
+            })
+          }
+        }
+        if (a.time) {
+          const match = timeSlots.find((t) => t.toLowerCase() === a.time.toLowerCase())
+          form.setValue("time", match ?? a.time)
+        }
+        form.setValue("notes", a.notes || "")
+        const ls = a.leadSource || ""
+        if (ls.startsWith("Referral:")) {
+          form.setValue("leadSource", "Referral")
+          form.setValue("leadSourceDetail", ls.replace(/^Referral:\s*/, ""))
+        } else if (ls.startsWith("Other:")) {
+          form.setValue("leadSource", "Other")
+          form.setValue("leadSourceDetail", ls.replace(/^Other:\s*/, ""))
+        } else {
+          form.setValue("leadSource", ls || "")
+        }
+      })
+      .catch(() => {
+        if (!cancelled) toast({ title: "Error", description: "Failed to load appointment", variant: "destructive" })
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingAppointment(false)
+      })
+    return () => { cancelled = true }
+  }, [appointmentId])
 
   // Subscribe to client store changes
   useEffect(() => {
@@ -585,40 +674,54 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
     setIsSubmitting(true)
 
     try {
-      // Prepare appointment data
-      const appointmentData = {
-        clientId: selectedCustomer._id || selectedCustomer.id,
-        clientName: selectedCustomer.name,
-        date: format(values.date, "yyyy-MM-dd"),
-        time: values.time,
-        services: selectedServices.map(service => ({
-          serviceId: service.serviceId,
-          staffId: service.staffId,
-          name: service.name,
-          duration: service.duration,
-          price: service.price,
-        })),
-        totalDuration: calculateTotalDuration(),
-        totalAmount: calculateTotalAmount(),
-        notes: values.notes,
-        status: "scheduled",
-      }
+      const leadSourceValue = values.leadSource
+        ? (values.leadSource === "Referral" || values.leadSource === "Other")
+          ? `${values.leadSource}${values.leadSourceDetail ? `: ${values.leadSourceDetail}` : ""}`
+          : values.leadSource
+        : undefined
 
-      // Create appointment
-      const response = await AppointmentsAPI.create(appointmentData)
-      
-      if (response.success) {
-        toast({
-          title: "Appointment Created",
-          description: "New appointment has been successfully scheduled.",
+      if (isEditMode && appointmentId) {
+        const svc = selectedServices[0]
+        const response = await AppointmentsAPI.update(appointmentId, {
+          date: format(values.date, "yyyy-MM-dd"),
+          time: values.time,
+          staffId: svc?.staffId,
+          staffAssignments: svc?.staffId ? [{ staffId: svc.staffId, percentage: 100, role: "primary" }] : undefined,
+          leadSource: leadSourceValue || "",
+          notes: values.notes,
         })
-        router.push("/appointments")
+        if (response?.success) {
+          toast({ title: "Appointment Updated", description: "Changes have been saved." })
+          router.push("/appointments")
+        } else {
+          toast({ title: "Error", description: response?.error || "Failed to update.", variant: "destructive" })
+        }
       } else {
-        toast({
-          title: "Error",
-          description: "Failed to create appointment. Please try again.",
-          variant: "destructive",
-        })
+        const appointmentData = {
+          clientId: selectedCustomer._id || selectedCustomer.id,
+          clientName: selectedCustomer.name,
+          date: format(values.date, "yyyy-MM-dd"),
+          time: values.time,
+          leadSource: leadSourceValue,
+          services: selectedServices.map(service => ({
+            serviceId: service.serviceId,
+            staffId: service.staffId,
+            name: service.name,
+            duration: service.duration,
+            price: service.price,
+          })),
+          totalDuration: calculateTotalDuration(),
+          totalAmount: calculateTotalAmount(),
+          notes: values.notes,
+          status: "scheduled",
+        }
+        const response = await AppointmentsAPI.create(appointmentData)
+        if (response.success) {
+          toast({ title: "Appointment Created", description: "New appointment has been successfully scheduled." })
+          router.push("/appointments")
+        } else {
+          toast({ title: "Error", description: "Failed to create appointment. Please try again.", variant: "destructive" })
+        }
       }
     } catch (error) {
       console.error('Error creating appointment:', error)
@@ -642,12 +745,20 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                 <CalendarDays className="h-6 w-6" />
               </div>
               <div>
-                <CardTitle className="text-2xl font-bold">New Appointment</CardTitle>
-                <CardDescription className="text-indigo-100 mt-1">Schedule a new appointment with multiple services</CardDescription>
+                <CardTitle className="text-2xl font-bold">{isEditMode ? "Edit Appointment" : "New Appointment"}</CardTitle>
+                <CardDescription className="text-indigo-100 mt-1">
+                  {isEditMode ? "Update appointment details" : "Schedule a new appointment with multiple services"}
+                </CardDescription>
               </div>
             </div>
           </CardHeader>
           <CardContent className="p-8">
+        {loadingAppointment ? (
+          <div className="flex flex-col items-center justify-center py-16 gap-4">
+            <Loader2 className="h-10 w-10 animate-spin text-indigo-600" />
+            <p className="text-slate-600">Loading appointment...</p>
+          </div>
+        ) : (
         <Form {...form}>
           <form id="appointmentForm" onSubmit={form.handleSubmit(onSubmit)} className="space-y-10">
             
@@ -658,8 +769,14 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                   <User className="h-4 w-4" />
                   Client *
                 </Label>
-                <p className="text-sm text-slate-500">Search and select a client for the appointment</p>
+                <p className="text-sm text-slate-500">{isEditMode ? "Client is locked when editing" : "Search and select a client for the appointment"}</p>
               </div>
+              {isEditMode ? (
+                <div className="flex items-center gap-3 h-12 px-4 bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-medium">
+                  <User className="h-4 w-4 text-slate-500" />
+                  {selectedCustomer?.name || "—"}
+                </div>
+              ) : (
               <div className="relative customer-search-container">
                 <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
                 <Input
@@ -668,7 +785,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                   value={customerSearch}
                   onChange={(e) => {
                     const value = e.target.value
-                    // If it's all digits, restrict immediately to 10 digits
                     if (/^\d+$/.test(value)) {
                       const restricted = value.slice(0, 10)
                       handleCustomerSearchChange(restricted)
@@ -677,7 +793,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                     }
                   }}
                   onPaste={(e) => {
-                    // Handle paste events for phone numbers
                     const pastedText = e.clipboardData.getData('text')
                     if (/^\d+$/.test(pastedText)) {
                       e.preventDefault()
@@ -686,9 +801,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                     }
                   }}
                   onKeyDown={(e) => {
-                    // Prevent typing if it's a phone number and already 10 digits
                     if (/^\d+$/.test(customerSearch) && customerSearch.length >= 10) {
-                      // Allow backspace, delete, arrow keys, tab, etc.
                       if (!['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'].includes(e.key) && 
                           !e.ctrlKey && !e.metaKey) {
                         e.preventDefault()
@@ -744,6 +857,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                   </div>
                 )}
               </div>
+              )}
             </div>
 
             {/* Date & Time */}
@@ -755,7 +869,12 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                 </h3>
                 <p className="text-sm text-slate-500">Select the date and time for the appointment</p>
               </div>
-              <div className="grid gap-6 md:grid-cols-2 pb-8">
+              <div className={cn(
+                "grid gap-6 pb-8 schedule-grid-transition",
+                (form.watch("leadSource") === "Referral" || form.watch("leadSource") === "Other")
+                  ? "md:grid-cols-4"
+                  : "md:grid-cols-3"
+              )}>
                 <FormField
                 control={form.control}
                 name="date"
@@ -846,6 +965,53 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                   </FormItem>
                 )}
                 />
+                <FormField
+                  control={form.control}
+                  name="leadSource"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-col space-y-2">
+                      <FormLabel className="text-sm font-semibold text-slate-700">Lead Source</FormLabel>
+                      <Select onValueChange={(v) => { field.onChange(v); form.setValue("leadSourceDetail", "") }} value={field.value || undefined}>
+                        <FormControl>
+                          <SelectTrigger className="h-12 px-4 border-slate-200 hover:border-slate-400 focus:border-slate-500 focus:ring-slate-500 rounded-xl font-medium text-slate-700 bg-white shadow-sm transition-all duration-200">
+                            <SelectValue placeholder="Select lead source" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent className="rounded-xl border-slate-200 shadow-lg">
+                          {LEAD_SOURCE_OPTIONS.map((opt) => (
+                            <SelectItem key={opt} value={opt}>
+                              {opt}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {(form.watch("leadSource") === "Referral" || form.watch("leadSource") === "Other") && (
+                  <div className="animate-in slide-in-from-right-reveal">
+                    <FormField
+                      control={form.control}
+                      name="leadSourceDetail"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-col space-y-2">
+                          <FormLabel className="text-sm font-semibold text-slate-700">
+                            {form.watch("leadSource") === "Referral" ? "Referred by" : "Please specify"}
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              {...field}
+                              placeholder={form.watch("leadSource") === "Referral" ? "e.g. John Doe" : "Enter details"}
+                              className="h-12 px-4 border-slate-200 rounded-xl"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -857,10 +1023,12 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                     <FileText className="h-5 w-5 text-slate-600" />
                     Services *
                   </h3>
-                  <Button type="button" onClick={addService} className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl px-4 py-2">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Service
-                  </Button>
+                  {!isEditMode && (
+                    <Button type="button" onClick={addService} className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl px-4 py-2">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Service
+                    </Button>
+                  )}
                 </div>
                 <p className="text-sm text-slate-500">Add services and assign staff members for this appointment</p>
               </div>
@@ -876,22 +1044,28 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                           </div>
                           <h4 className="font-semibold text-slate-800">Service {selectedServices.indexOf(service) + 1}</h4>
                         </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeService(service.id)}
-                          className="text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {!isEditMode && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeService(service.id)}
+                            className="text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
                       </div>
 
                       <div className="grid gap-4 md:grid-cols-2">
                         <div className="space-y-2">
                           <Label className="text-sm font-semibold text-slate-700">Service</Label>
                           <div className="relative service-dropdown-container">
-                            {service.serviceId && service.name ? (
+                            {isEditMode ? (
+                              <div className="flex items-center h-10 px-3 py-2 bg-slate-100 rounded-lg text-sm border border-slate-200">
+                                <span className="truncate">{service.name}</span>
+                              </div>
+                            ) : service.serviceId && service.name ? (
                               <div className="flex items-center justify-between h-10 px-3 py-2 bg-slate-100 rounded-lg text-sm border border-slate-200">
                                 <span className="truncate">{service.name}</span>
                                 <button
@@ -1078,6 +1252,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
             )}
           </form>
         </Form>
+        )}
           </CardContent>
           <CardFooter className="bg-slate-50/50 px-8 py-8 border-t border-slate-200/50">
             <div className="flex justify-end gap-4 w-full">
@@ -1090,20 +1265,57 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, onCl
                 Cancel
               </Button>
               <Button 
+                variant="outline"
+                type="button"
+                disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
+                onClick={() => {
+                  const values = form.getValues()
+                  if (!selectedCustomer || selectedServices.length === 0) return
+                  const saleData: Record<string, unknown> = {
+                    clientId: selectedCustomer._id || selectedCustomer.id,
+                    clientName: selectedCustomer.name,
+                    clientPhone: selectedCustomer.phone || "",
+                    clientEmail: selectedCustomer.email || "",
+                    date: values.date ? format(values.date, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
+                    time: values.time || "",
+                    notes: values.notes || "",
+                    services: selectedServices.map(s => {
+                      const staffMember = staff.find((st: any) => (st._id || st.id) === s.staffId)
+                      return {
+                        serviceId: s.serviceId,
+                        staffId: s.staffId,
+                        staffName: staffMember?.name || "",
+                        name: s.name,
+                        price: s.price,
+                        duration: s.duration,
+                      }
+                    }),
+                  }
+                  if (isEditMode && appointmentId) {
+                    saleData.appointmentId = appointmentId
+                  }
+                  router.push(`/quick-sale?appointment=${btoa(JSON.stringify(saleData))}`)
+                }}
+                className="px-8 py-3 border-emerald-300 text-emerald-700 hover:bg-emerald-50 rounded-xl font-medium min-w-[140px]"
+              >
+                <Receipt className="h-4 w-4 mr-2" />
+                Raise Sale
+              </Button>
+              <Button 
                 type="submit" 
                 form="appointmentForm" 
-                disabled={isSubmitting || selectedServices.length === 0 || !selectedCustomer}
+                disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
                 className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-w-[200px]"
               >
                 {isSubmitting ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Scheduling...
+                    {isEditMode ? "Updating..." : "Scheduling..."}
                   </>
                 ) : (
                   <>
                     <CalendarDays className="h-4 w-4 mr-2" />
-                    Schedule Appointment
+                    {isEditMode ? "Update Appointment" : "Schedule Appointment"}
                   </>
                 )}
               </Button>

@@ -70,7 +70,8 @@ export function RecentAppointments() {
         } else {
           setItems([])
         }
-      } catch {
+      } catch (error: any) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) return
         setItems([])
       }
     }

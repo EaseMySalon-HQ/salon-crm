@@ -1,9 +1,10 @@
 "use client"
 
 import { useState, useEffect, forwardRef, useImperativeHandle } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, startOfWeek, addWeeks, subWeeks } from "date-fns"
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import { ChevronLeft, ChevronRight, Pencil } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { AppointmentsAPI } from "@/lib/api"
+import { AppointmentsAPI, SalesAPI } from "@/lib/api"
 
 interface Appointment {
   _id: string
@@ -32,6 +33,7 @@ interface Appointment {
     name: string
     role?: string
   }
+  staffAssignments?: Array<{ staffId: { _id: string; name: string }; role?: string }>
   date: string
   time: string
   duration: number
@@ -39,6 +41,38 @@ interface Appointment {
   notes?: string
   price: number
   createdAt: string
+  createdBy?: string
+  leadSource?: string
+}
+
+function parseTimeToMinutes(time: string): number {
+  if (!time) return 0
+  const cleaned = time.replace(/\s*(am|pm)/i, "").trim()
+  const parts = cleaned.split(":")
+  const h = parseInt(parts[0] || "0", 10)
+  const m = parseInt(parts[1] || "0", 10)
+  const isPm = /pm/i.test(time) && h < 12
+  const hour = isPm ? h + 12 : /am/i.test(time) && h === 12 ? 0 : h
+  return hour * 60 + m
+}
+
+function slotMinutesToTimeString(totalMinutes: number): string {
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  return format(new Date(2000, 0, 1, h, m), "h:mm a")
+}
+
+function getPrimaryStaffName(apt: Appointment): string {
+  const a = apt as any
+  if (a.staffId?.name) return a.staffId.name
+  if (a.staffAssignments?.length) {
+    const primary = a.staffAssignments.find((s: any) => s.role === "primary")
+    const first = a.staffAssignments[0]
+    const assignment = primary || first
+    const staff = assignment?.staffId
+    return staff?.name ?? (typeof staff === "string" ? staff : "Unassigned Staff")
+  }
+  return "Unassigned Staff"
 }
 
 interface AppointmentsCalendarProps {
@@ -79,7 +113,26 @@ export const AppointmentsCalendar = forwardRef<
     const date = String(today.getDate()).padStart(2, '0')
     return `${year}-${month}-${date}`
   })
+  const [linkedSale, setLinkedSale] = useState<any | null>(null)
   const startDate = startOfWeek(currentDate, { weekStartsOn: 1 })
+
+  useEffect(() => {
+    if (!selectedAppointment?._id) {
+      setLinkedSale(null)
+      return
+    }
+    let cancelled = false
+    SalesAPI.getByAppointmentId(selectedAppointment._id)
+      .then((res) => {
+        if (!cancelled && res?.success) setLinkedSale(res.data ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setLinkedSale(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedAppointment?._id])
 
   useImperativeHandle(ref, () => ({
     showCancelledModal: () => setShowCancelledModal(true),
@@ -694,48 +747,97 @@ export const AppointmentsCalendar = forwardRef<
             </DialogDescription>
           </DialogHeader>
           {selectedAppointment && (
-            <div className="space-y-3 text-sm">
+            <div className="space-y-4 text-sm">
               {(() => {
                 const a: any = selectedAppointment as any
                 const serviceName = a?.serviceId?.name || 'Service'
                 const clientName = a?.clientId?.name || 'Client'
-                const staffName = a?.staffId?.name || 'Unassigned Staff'
-                const staffRole = a?.staffId?.role
+                const staffName = getPrimaryStaffName(selectedAppointment)
                 const duration = a?.duration ?? 0
                 const price = a?.price ?? 0
+                const timeFrom = a?.time || ''
+                const timeTo = timeFrom ? slotMinutesToTimeString(parseTimeToMinutes(timeFrom) + duration) : ''
+                const paymentStatus = linkedSale?.paymentStatus
+                  ? (linkedSale.paymentStatus.remainingAmount <= 0 ? 'Paid' : linkedSale.paymentStatus.paidAmount > 0 ? 'Partial' : 'Unpaid')
+                  : '—'
+                const createdDate = a?.createdAt ? format(new Date(a.createdAt), 'dd MMM yyyy, h:mm a') : '—'
+                const createdBy = a?.createdBy || '—'
+                const leadSource = a?.leadSource || '—'
+                const bookingNote = a?.notes || '—'
                 return (
                   <>
-                    <div className="font-medium">{serviceName}</div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="text-xl font-semibold text-slate-900">{clientName}</div>
+                      {selectedAppointment &&
+                      (selectedAppointment.status === 'scheduled' ||
+                        selectedAppointment.status === 'confirmed' ||
+                        selectedAppointment.status === 'arrived') ? (
+                        selectedAppointment.status === 'scheduled' ||
+                        selectedAppointment.status === 'confirmed' ? (
+                          <Button
+                            onClick={() => handleMarkStatus('arrived')}
+                            disabled={updatingStatus}
+                            size="sm"
+                            className="bg-blue-600 hover:bg-blue-700 text-white shrink-0"
+                          >
+                            {updatingStatus ? 'Updating...' : 'Mark as Arrived'}
+                          </Button>
+                        ) : (
+                          <Button
+                            onClick={() => handleMarkStatus('service_started')}
+                            disabled={updatingStatus}
+                            size="sm"
+                            className="bg-purple-600 hover:bg-purple-700 text-white shrink-0"
+                          >
+                            {updatingStatus ? 'Updating...' : 'Service Started'}
+                          </Button>
+                        )
+                      ) : (
+                        <span className="shrink-0" aria-hidden />
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                       <div>
-                        <div className="text-muted-foreground">Client</div>
-                        <div>{clientName}</div>
+                        <div className="text-muted-foreground text-xs">Service Name</div>
+                        <div className="font-medium">{serviceName}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground">Staff</div>
-                        <div>
-                          {staffName}
-                          {staffRole ? ` (${staffRole})` : ''}
-                        </div>
+                        <div className="text-muted-foreground text-xs">Service Price</div>
+                        <div>₹{price}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground">Duration</div>
+                        <div className="text-muted-foreground text-xs">Time (From – To)</div>
+                        <div>{timeFrom && timeTo ? `${timeFrom} – ${timeTo}` : timeFrom || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Service Duration</div>
                         <div>{duration} min</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground">Price</div>
-                        <div>₹{price}</div>
+                        <div className="text-muted-foreground text-xs">Stylist Name</div>
+                        <div>{staffName}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Payment Status</div>
+                        <div>{paymentStatus}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Lead Source</div>
+                        <div>{leadSource}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Created Date</div>
+                        <div>{createdDate}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Created By</div>
+                        <div>{createdBy}</div>
                       </div>
                     </div>
-                    {a?.notes && (
-                      <>
-                        <Separator />
-                        <div>
-                          <div className="text-muted-foreground mb-1">Notes</div>
-                          <div>{a.notes}</div>
-                        </div>
-                      </>
-                    )}
+                    <div>
+                      <div className="text-muted-foreground text-xs mb-1">Booking Note</div>
+                      <div className="text-slate-700">{bookingNote}</div>
+                    </div>
                   </>
                 )
               })()}
@@ -753,33 +855,20 @@ export const AppointmentsCalendar = forwardRef<
                 >
                   {cancelling ? 'Cancelling...' : 'Cancel Appointment'}
                 </Button>
-                {/* Mark as Arrived / Service Started - show when status is scheduled, confirmed, or arrived */}
-                {selectedAppointment &&
-                  (selectedAppointment.status === 'scheduled' ||
-                    selectedAppointment.status === 'confirmed' ||
-                    selectedAppointment.status === 'arrived') ? (
-                  selectedAppointment.status === 'scheduled' ||
-                  selectedAppointment.status === 'confirmed' ? (
-                    <Button
-                      onClick={() => handleMarkStatus('arrived')}
-                      disabled={updatingStatus}
-                      className="bg-blue-600 hover:bg-blue-700 text-white shrink-0"
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    variant="outline"
+                    asChild
+                  >
+                    <Link
+                      href={selectedAppointment ? `/appointments/new?edit=${selectedAppointment._id}` : '#'}
+                      onClick={() => setShowDetails(false)}
                     >
-                      {updatingStatus ? 'Updating...' : 'Mark as Arrived'}
-                    </Button>
-                  ) : (
-                    <Button
-                      onClick={() => handleMarkStatus('service_started')}
-                      disabled={updatingStatus}
-                      className="bg-purple-600 hover:bg-purple-700 text-white shrink-0"
-                    >
-                      {updatingStatus ? 'Updating...' : 'Service Started'}
-                    </Button>
-                  )
-                ) : (
-                  <span className="shrink-0" aria-hidden />
-                )}
-                <Button
+                      <Pencil className="h-4 w-4 mr-2" />
+                      Edit
+                    </Link>
+                  </Button>
+                  <Button
                   onClick={() => {
                     if (!selectedAppointment) return
                     const anySel: any = selectedAppointment as any
@@ -803,10 +892,10 @@ export const AppointmentsCalendar = forwardRef<
                     setShowDetails(false)
                     router.push(`/quick-sale?appointment=${encodedData}`)
                   }}
-                  className="shrink-0"
-                >
-                  Raise Sale
-                </Button>
+                  >
+                    Raise Sale
+                  </Button>
+                </div>
               </div>
             </div>
           )}

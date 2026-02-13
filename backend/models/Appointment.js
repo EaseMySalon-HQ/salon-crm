@@ -56,6 +56,14 @@ const appointmentSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  leadSource: {
+    type: String,
+    default: ''
+  },
+  createdBy: {
+    type: String,
+    default: ''
+  },
   price: {
     type: Number,
     required: true,
