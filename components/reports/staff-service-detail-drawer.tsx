@@ -154,14 +154,27 @@ export function StaffServiceDetailDrawer({
         )
       : null
 
-  const totalRevenue = commissionResult?.totalRevenue ?? 0
-  const serviceRevenueForStaff = commissionResult?.serviceRevenue ?? 0
-  const productRevenueForStaff = commissionResult?.productRevenue ?? 0
+  // When staff has no commission profiles, derive revenue/counts from raw sales (same as detailed tables)
+  const fallbackFromAggregates = () => {
+    const svc = aggregateByType("service")
+    const prod = aggregateByType("product")
+    return {
+      serviceRevenue: svc.reduce((s, r) => s + r.grossTotal, 0),
+      productRevenue: prod.reduce((s, r) => s + r.grossTotal, 0),
+      serviceCount: svc.reduce((s, r) => s + r.quantitySold, 0),
+      productCount: prod.reduce((s, r) => s + r.quantitySold, 0)
+    }
+  }
+  const fallback = commissionResult == null ? fallbackFromAggregates() : null
+
+  const totalRevenue = commissionResult?.totalRevenue ?? (fallback ? fallback.serviceRevenue + fallback.productRevenue : 0)
+  const serviceRevenueForStaff = commissionResult?.serviceRevenue ?? fallback?.serviceRevenue ?? 0
+  const productRevenueForStaff = commissionResult?.productRevenue ?? fallback?.productRevenue ?? 0
   const totalCommission = commissionResult?.totalCommission ?? 0
   const serviceCommission = commissionResult?.serviceCommission ?? 0
   const productCommissionAmount = commissionResult?.productCommission ?? 0
-  const totalServicesPerformed = commissionResult?.serviceCount ?? 0
-  const totalProductCount = commissionResult?.productCount ?? 0
+  const totalServicesPerformed = commissionResult?.serviceCount ?? fallback?.serviceCount ?? 0
+  const totalProductCount = commissionResult?.productCount ?? fallback?.productCount ?? 0
   const averageServiceValue =
     totalServicesPerformed > 0 ? serviceRevenueForStaff / totalServicesPerformed : 0
 
