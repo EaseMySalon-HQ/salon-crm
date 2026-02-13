@@ -36,7 +36,7 @@ async function sendDailySummaries() {
         // Respect delivery mode: skip scheduler-based send when set to "afterClosing"
         const deliveryMode = emailSettings?.dailySummary?.mode || 'fixedTime';
         if (deliveryMode === 'afterClosing') {
-          console.log(`⏭️  Skipping daily summary for ${business.name} - mode set to afterClosing (sent on close)`);
+          console.log(`⏭️  Skipping daily summary for ${business.name} - mode set to afterClosing (sent on verification)`);
           continue;
         }
         

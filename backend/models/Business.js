@@ -72,7 +72,7 @@ const businessSchema = new mongoose.Schema({
         enabled: { type: Boolean, default: false },
         // When to send daily summary emails:
         // - 'fixedTime': at a specific time of day (uses scheduler)
-        // - 'afterClosing': when the day/registry is closed (manual trigger)
+        // - 'afterClosing': when the day's cash registry status is verified (triggered on verify)
         mode: { type: String, enum: ['fixedTime', 'afterClosing'], default: 'fixedTime' },
         time: { type: String, default: '21:00' }, // HH:mm format
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]

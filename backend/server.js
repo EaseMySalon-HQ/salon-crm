@@ -9429,6 +9429,17 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
       { new: true, runValidators: true }
     );
     
+    // Trigger daily summary email if notification is set to "after verification"
+    const branchId = req.user.branchId;
+    if (branchId && verifiedCashRegistry?.date) {
+      const { sendDailySummaryForDate } = require('./utils/daily-summary-sender');
+      const targetDate = new Date(verifiedCashRegistry.date);
+      targetDate.setHours(0, 0, 0, 0);
+      sendDailySummaryForDate(branchId, branchId, targetDate).catch(err => {
+        console.error('Failed to send daily summary after verification:', err);
+      });
+    }
+    
     res.json(verifiedCashRegistry);
   } catch (error) {
     console.error('Error verifying cash registry:', error);

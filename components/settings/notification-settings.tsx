@@ -404,7 +404,7 @@ export function NotificationSettings() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="fixedTime">At a fixed time every day</SelectItem>
-                    <SelectItem value="afterClosing">After day closing / cash registry close</SelectItem>
+                    <SelectItem value="afterClosing">After status is verified for that day</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -440,7 +440,7 @@ export function NotificationSettings() {
 
               {settings.dailySummary.mode === "afterClosing" && (
                 <p className="text-sm text-slate-500">
-                  Daily summary will be sent when you close the day / cash registry, instead of at a fixed time.
+                  Daily summary will be sent when the day&apos;s cash registry status is verified.
                 </p>
               )}
             </CardContent>
