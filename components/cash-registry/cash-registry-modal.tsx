@@ -329,7 +329,7 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader className="pb-4">
           <DialogTitle className="text-xl font-semibold text-center">
             {shift === "opening" ? "Set Opening Balance" : "Set Closing Balance"}

@@ -85,7 +85,7 @@ interface SalesRecord {
   }>
 }
 
-type DatePeriod = "currentMonth" | "previousMonth" | "customRange"
+type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "previousMonth" | "all" | "customRange"
 
 // Utility function to format currency
 const formatCurrency = (amount: number, symbol: string) => {
@@ -191,7 +191,26 @@ export function StaffPerformanceReport() {
         let startDate: Date
         let endDate: Date = now
 
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
         switch (datePeriod) {
+          case "today":
+            startDate = new Date(today)
+            endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+            break
+          case "yesterday": {
+            const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
+            startDate = yesterday
+            endDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1)
+            break
+          }
+          case "last7days":
+            startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+            endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+            break
+          case "last30days":
+            startDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
+            endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+            break
           case "currentMonth":
             startDate = new Date(now.getFullYear(), now.getMonth(), 1)
             endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0) // Last day of current month
@@ -199,6 +218,10 @@ export function StaffPerformanceReport() {
           case "previousMonth":
             startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
             endDate = new Date(now.getFullYear(), now.getMonth(), 0) // Last day of previous month
+            break
+          case "all":
+            startDate = new Date(0) // Beginning of time
+            endDate = new Date()
             break
           case "customRange":
             // Use custom date range if set, otherwise default to current month
@@ -589,6 +612,7 @@ export function StaffPerformanceReport() {
 
   function getStaffPerformanceExportFilters(): { dateFrom?: string; dateTo?: string; periodLabel: string; staffId?: string; currencySymbol: string } {
     const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     let from: Date
     let to: Date
     let periodLabel: string
@@ -596,18 +620,39 @@ export function StaffPerformanceReport() {
       from = dateRange.from
       to = dateRange.to
       periodLabel = `${format(from, "MMM dd, yyyy")} - ${format(to, "MMM dd, yyyy")}`
+    } else if (datePeriod === "today") {
+      from = today
+      to = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+      periodLabel = "Today"
+    } else if (datePeriod === "yesterday") {
+      const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
+      from = yesterday
+      to = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1)
+      periodLabel = "Yesterday"
+    } else if (datePeriod === "last7days") {
+      from = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+      to = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+      periodLabel = "Last 7 days"
+    } else if (datePeriod === "last30days") {
+      from = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
+      to = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+      periodLabel = "Last 30 days"
     } else if (datePeriod === "currentMonth") {
       from = new Date(now.getFullYear(), now.getMonth(), 1)
       to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-      periodLabel = "Current Month"
+      periodLabel = "Current month"
     } else if (datePeriod === "previousMonth") {
       from = new Date(now.getFullYear(), now.getMonth() - 1, 1)
       to = new Date(now.getFullYear(), now.getMonth(), 0)
-      periodLabel = "Previous Month"
+      periodLabel = "Previous month"
+    } else if (datePeriod === "all") {
+      from = new Date(0)
+      to = new Date()
+      periodLabel = "All time"
     } else {
       from = new Date(now.getFullYear(), now.getMonth(), 1)
       to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-      periodLabel = "Current Month"
+      periodLabel = "Current month"
     }
     const filters: { dateFrom?: string; dateTo?: string; periodLabel: string; staffId?: string; currencySymbol: string } = {
       dateFrom: from.toISOString(),
@@ -770,9 +815,14 @@ export function StaffPerformanceReport() {
                     <SelectValue placeholder="Select period" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="currentMonth">Current Month</SelectItem>
-                    <SelectItem value="previousMonth">Previous Month</SelectItem>
-                    <SelectItem value="customRange">Custom Range</SelectItem>
+                    <SelectItem value="today">Today</SelectItem>
+                    <SelectItem value="yesterday">Yesterday</SelectItem>
+                    <SelectItem value="last7days">Last 7 days</SelectItem>
+                    <SelectItem value="last30days">Last 30 days</SelectItem>
+                    <SelectItem value="currentMonth">Current month</SelectItem>
+                    <SelectItem value="previousMonth">Previous month</SelectItem>
+                    <SelectItem value="all">All time</SelectItem>
+                    <SelectItem value="customRange">Custom range</SelectItem>
                   </SelectContent>
                 </Select>
                 {datePeriod === "customRange" && (

@@ -5116,14 +5116,68 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
     }
 
     const totalAppointments = await Appointment.countDocuments(query);
-    const appointments = await Appointment.find(query)
-      .populate('clientId', 'name phone email')
-      .populate('serviceId', 'name price duration')
-      .populate('staffId', 'name role')
-      .populate('staffAssignments.staffId', 'name role')
+    const rawAppointments = await Appointment.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Resolve staff names: Staff from business DB, Owner from main DB (User)
+    const { Staff } = req.businessModels;
+    const mainConnection = await databaseManager.getMainConnection();
+    const UserModel = mainConnection.model('User', require('./models/User').schema);
+    const businessOwner = await UserModel.findOne({ branchId: req.user.branchId, role: 'admin' })
+      .select('_id firstName lastName')
+      .lean();
+    const ownerId = businessOwner?._id?.toString();
+    const ownerName = businessOwner ? `${businessOwner.firstName || ''} ${businessOwner.lastName || ''}`.trim() || 'Owner' : null;
+
+    const staffIdsToResolve = new Set();
+    rawAppointments.forEach((apt) => {
+      if (apt.staffId) staffIdsToResolve.add(apt.staffId.toString());
+      (apt.staffAssignments || []).forEach((as) => {
+        if (as.staffId) staffIdsToResolve.add(as.staffId.toString());
+      });
+    });
+    const staffIds = [...staffIdsToResolve];
+    const staffFromDb = staffIds.length ? await Staff.find({ _id: { $in: staffIds } }).select('_id name role').lean() : [];
+    const staffMap = new Map(staffFromDb.map((s) => [s._id.toString(), { _id: s._id, name: s.name, role: s.role }]));
+
+    const resolveStaff = (id) => {
+      if (!id) return null;
+      const idStr = id.toString?.() || String(id);
+      const fromStaff = staffMap.get(idStr);
+      if (fromStaff) return fromStaff;
+      if (idStr === ownerId && ownerName) return { _id: id, name: ownerName, role: 'admin' };
+      return { _id: id, name: 'Unassigned Staff', role: null };
+    };
+
+    const appointments = rawAppointments.map((apt) => {
+      const a = { ...apt };
+      a.clientId = apt.clientId;
+      a.serviceId = apt.serviceId;
+      a.staffId = apt.staffId ? resolveStaff(apt.staffId) : null;
+      a.staffAssignments = (apt.staffAssignments || []).map((as) => ({
+        ...as,
+        staffId: as.staffId ? resolveStaff(as.staffId) : null,
+      }));
+      return a;
+    });
+
+    // Populate clientId and serviceId (they're in business DB)
+    const clientIds = [...new Set(appointments.map((a) => a.clientId).filter(Boolean))];
+    const serviceIds = [...new Set(appointments.map((a) => a.serviceId).filter(Boolean))];
+    const { Client, Service } = req.businessModels;
+    const [clients, services] = await Promise.all([
+      clientIds.length ? Client.find({ _id: { $in: clientIds } }).select('name phone email').lean() : [],
+      serviceIds.length ? Service.find({ _id: { $in: serviceIds } }).select('name price duration').lean() : [],
+    ]);
+    const clientMap = new Map(clients.map((c) => [c._id.toString(), c]));
+    const serviceMap = new Map(services.map((s) => [s._id.toString(), s]));
+    appointments.forEach((a) => {
+      if (a.clientId) a.clientId = clientMap.get(a.clientId.toString()) || a.clientId;
+      if (a.serviceId) a.serviceId = serviceMap.get(a.serviceId.toString()) || a.serviceId;
+    });
 
     res.json({
       success: true,
@@ -6064,14 +6118,49 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
   try {
     const { id } = req.params;
     const { Appointment } = req.businessModels;
-    const appointment = await Appointment.findById(id)
-      .populate('clientId', 'name phone email')
-      .populate('serviceId', 'name price duration')
-      .populate('staffId', 'name role')
-      .populate('staffAssignments.staffId', 'name role');
-    if (!appointment) {
+    const raw = await Appointment.findById(id).lean();
+    if (!raw) {
       return res.status(404).json({ success: false, error: 'Appointment not found' });
     }
+    const { Staff, Client, Service } = req.businessModels;
+    const mainConnection = await databaseManager.getMainConnection();
+    const UserModel = mainConnection.model('User', require('./models/User').schema);
+    const businessOwner = await UserModel.findOne({ branchId: req.user.branchId, role: 'admin' })
+      .select('_id firstName lastName')
+      .lean();
+    const ownerId = businessOwner?._id?.toString();
+    const ownerName = businessOwner ? `${businessOwner.firstName || ''} ${businessOwner.lastName || ''}`.trim() || 'Owner' : null;
+
+    const staffIds = [];
+    if (raw.staffId) staffIds.push(raw.staffId);
+    (raw.staffAssignments || []).forEach((as) => { if (as.staffId) staffIds.push(as.staffId); });
+    const staffFromDb = staffIds.length ? await Staff.find({ _id: { $in: staffIds } }).select('_id name role').lean() : [];
+    const staffMap = new Map(staffFromDb.map((s) => [s._id.toString(), { _id: s._id, name: s.name, role: s.role }]));
+    const resolveStaff = (sid) => {
+      if (!sid) return null;
+      const idStr = sid.toString?.() || String(sid);
+      const fromStaff = staffMap.get(idStr);
+      if (fromStaff) return fromStaff;
+      if (idStr === ownerId && ownerName) return { _id: sid, name: ownerName, role: 'admin' };
+      return { _id: sid, name: 'Unassigned Staff', role: null };
+    };
+
+    const appointment = { ...raw };
+    appointment.staffId = raw.staffId ? resolveStaff(raw.staffId) : null;
+    appointment.staffAssignments = (raw.staffAssignments || []).map((as) => ({
+      ...as,
+      staffId: as.staffId ? resolveStaff(as.staffId) : null,
+    }));
+
+    if (raw.clientId) {
+      const client = await Client.findById(raw.clientId).select('name phone email').lean();
+      appointment.clientId = client || raw.clientId;
+    }
+    if (raw.serviceId) {
+      const service = await Service.findById(raw.serviceId).select('name price duration').lean();
+      appointment.serviceId = service || raw.serviceId;
+    }
+
     res.json({ success: true, data: appointment });
   } catch (error) {
     console.error('Error fetching appointment:', error);
@@ -6527,7 +6616,10 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
       });
     });
     const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-    const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    // Tip collected: sum from Sales (Quick Sale flow) + Receipts (manual receipt flow), for selected date range, all staff
+    const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
+    const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    const tipCollected = tipFromSales + tipFromReceipts;
     const cashBalance = closingRegistry?.cashBalance ?? 0;
 
     res.json({
@@ -7172,6 +7264,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     }
 
     const previousStatus = String(existingSale.status || '').toLowerCase();
+    const oldPaidAmount = Number(existingSale.paymentStatus?.paidAmount || 0);
 
     // Archive original bill snapshot once per edit
     try {
@@ -7406,6 +7499,26 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       }
       
       console.log('💰 Updated status:', existingSale.status);
+
+      // Sync paymentHistory when payment collected via bill edit (so Dues Collected reflects it)
+      if (newPaidAmount > oldPaidAmount) {
+        const delta = newPaidAmount - oldPaidAmount;
+        const lastPayment = updateData.payments[updateData.payments.length - 1];
+        let method = (lastPayment?.mode || lastPayment?.type || 'Cash');
+        const m = String(method).toLowerCase();
+        if (m.includes('card')) method = 'Card';
+        else if (m.includes('online') || m.includes('upi')) method = 'Online';
+        else method = 'Cash';
+        existingSale.paymentHistory = existingSale.paymentHistory || [];
+        existingSale.paymentHistory.push({
+          date: new Date(),
+          amount: delta,
+          method,
+          notes: 'Payment collected via bill edit',
+          collectedBy: req.user?.name || req.user?.firstName || 'Staff'
+        });
+        existingSale.markModified('paymentHistory');
+      }
     } else {
       // Ensure paymentStatus totalAmount matches grossTotal (when payments not updated)
       if (!existingSale.paymentStatus) {

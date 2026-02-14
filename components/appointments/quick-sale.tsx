@@ -27,6 +27,7 @@ import {
   ChevronDown,
   Edit,
   RefreshCw,
+  Package,
 } from "lucide-react"
 import { Calendar as DatePicker } from "@/components/ui/calendar"
 import { Button } from "@/components/ui/button"
@@ -320,13 +321,41 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const [posSettings, setPOSSettings] = useState<any>(null)
   const [paymentSettings, setPaymentSettings] = useState<any>(null)
 
-  // Filtered services and products for dropdown search
-  const filteredServicesForDropdown = services.filter(service =>
-    service.name.toLowerCase().includes(serviceDropdownSearch.toLowerCase())
-  )
-  const filteredProductsForDropdown = products.filter(product =>
-    product.name.toLowerCase().includes(productDropdownSearch.toLowerCase())
-  )
+  // Filtered services and products for dropdown search (search by name or category)
+  const filteredServicesForDropdown = services.filter(service => {
+    const q = serviceDropdownSearch.toLowerCase().trim()
+    if (!q) return true
+    const nameMatch = service.name?.toLowerCase().includes(q)
+    const categoryMatch = service.category?.toLowerCase().includes(q)
+    return nameMatch || categoryMatch
+  })
+
+  // Group filtered services by category for dropdown display
+  const servicesByCategory = filteredServicesForDropdown.reduce<Record<string, typeof filteredServicesForDropdown>>((acc, service) => {
+    const cat = service.category?.trim() || "Uncategorized"
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(service)
+    return acc
+  }, {})
+  const categoryOrder = Object.keys(servicesByCategory).sort((a, b) => a.localeCompare(b))
+
+  // Filtered products (search by name or category)
+  const filteredProductsForDropdown = products.filter(product => {
+    const q = productDropdownSearch.toLowerCase().trim()
+    if (!q) return true
+    const nameMatch = product.name?.toLowerCase().includes(q)
+    const categoryMatch = product.category?.toLowerCase().includes(q)
+    return nameMatch || categoryMatch
+  })
+
+  // Group filtered products by category for dropdown display
+  const productsByCategory = filteredProductsForDropdown.reduce<Record<string, typeof filteredProductsForDropdown>>((acc, product) => {
+    const cat = product.category?.trim() || "Uncategorized"
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(product)
+    return acc
+  }, {})
+  const productCategoryOrder = Object.keys(productsByCategory).sort((a, b) => a.localeCompare(b))
 
   // Add item to cart function
   const addToCart = (item: any, type: "service" | "product") => {
@@ -378,6 +407,19 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     return () => clearInterval(id)
   }, [])
 
+  // Close service/product dropdowns when clicking outside
+  useEffect(() => {
+    if (!activeServiceDropdown && !activeProductDropdown) return
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (target instanceof Element && target.closest('[data-quicksale-dropdown]')) return
+      setActiveServiceDropdown(null)
+      setActiveProductDropdown(null)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [activeServiceDropdown, activeProductDropdown])
+
   const dateStr = format(selectedDate, "yyyy-MM-dd")
   const currentTimeStr = format(new Date(), "HH:mm")
   const allStaffIds = staff.map((s) => String(s._id || s.id)).filter(Boolean)
@@ -394,12 +436,16 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     )
   }
 
-  /** Staff list filtered by availability for a given duration. Pass includeIds to keep selected staff in list. */
+  /** Staff list filtered by availability for a given duration. Excludes staff marked absent (Full Day Off). Pass includeIds to keep selected staff in list. */
   const getAvailableStaffList = (durationMinutes: number, includeIds?: string[]) => {
     const availableIds = getAvailableStaffForSlot(durationMinutes)
     const includeSet = new Set(includeIds?.map(String) || [])
+    const dayOfWeek = selectedDate.getDay() // 0 = Sunday, 6 = Saturday
     return staff.filter((s) => {
       const id = String(s._id || s.id)
+      // Exclude staff marked as absent (Full Day Off) for this day in work schedule
+      const daySchedule = (s.workSchedule || []).find((d: { day: number; enabled?: boolean }) => d.day === dayOfWeek)
+      if (daySchedule && daySchedule.enabled === false) return false
       return availableIds.includes(id) || includeSet.has(id)
     })
   }
@@ -3641,7 +3687,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
             {serviceItems.length > 0 && (
               <div className="border border-gray-200 rounded-xl shadow-sm bg-white">
-                <div className="grid grid-cols-[2fr_3fr_120px_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-indigo-50 to-purple-50 font-semibold text-sm text-gray-700 border-b sticky top-0 bg-white z-10">
+                <div className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-indigo-50 to-purple-50 font-semibold text-sm text-gray-700 border-b sticky top-0 bg-white z-10">
                   <div>Service *</div>
                   <div>Staff *</div>
                   <div>Qty</div>
@@ -3655,9 +3701,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                   {serviceItems.map((item) => (
                   <div
                     key={item.id}
-                    className="grid grid-cols-[2fr_3fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200"
+                    className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200"
                   >
-                    <div className="relative">
+                    <div className="relative" data-quicksale-dropdown>
                       {item.serviceId ? (
                         <div className="flex items-center justify-between h-8 px-3 py-1 bg-muted rounded-md text-sm">
                           <span className="truncate">
@@ -3707,20 +3753,30 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                                   {serviceDropdownSearch ? `No services found matching "${serviceDropdownSearch}"` : 'No services available'}
                                 </div>
                               ) : (
-                                filteredServicesForDropdown.map((service) => (
-                                  <div
-                                    key={service._id || service.id}
-                                    className="p-3 hover:bg-slate-50 cursor-pointer text-sm border-b last:border-b-0 transition-colors"
-                                    onClick={() => {
-                                      updateServiceItem(item.id, "serviceId", service._id || service.id)
-                                      setServiceDropdownSearch("")
-                                      setActiveServiceDropdown(null)
-                                    }}
-                                  >
-                                    <div className="font-medium text-slate-800">{service.name}</div>
-                                    <div className="text-xs text-slate-500 mt-1">{service.duration} min - {formatCurrency(service.price)}</div>
-                                  </div>
-                                ))
+                                <div className="py-1">
+                                  {categoryOrder.map((category) => (
+                                    <div key={category} className="mb-2 last:mb-0">
+                                      <div className="px-3 py-1.5 text-xs font-bold text-slate-500 uppercase tracking-wide bg-slate-50 border-b border-slate-100">
+                                        {category}
+                                      </div>
+                                      {servicesByCategory[category].map((service) => (
+                                        <div
+                                          key={service._id || service.id}
+                                          className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer text-sm transition-colors"
+                                          onClick={() => {
+                                            updateServiceItem(item.id, "serviceId", service._id || service.id)
+                                            setServiceDropdownSearch("")
+                                            setActiveServiceDropdown(null)
+                                          }}
+                                        >
+                                          <User className="h-4 w-4 text-slate-400 shrink-0" />
+                                          <span className="flex-1 font-medium text-slate-800 truncate">{service.name}</span>
+                                          <span className="text-slate-600 shrink-0">{formatCurrency(service.price ?? service.offerPrice ?? 0)}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ))}
+                                </div>
                               )}
                             </>
                           )}
@@ -3732,6 +3788,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                       key={`service-${item.id}-staff`}
                       staffList={getAvailableStaffList(services.find((s) => (s._id || s.id) === item.serviceId)?.duration ?? 60, (item.staffContributions || []).map((c) => c.staffId).filter(Boolean))}
                       serviceTotal={item.total}
+                      compact
+                      selectStaffFlex={1.5}
+                      addStaffFlex={0.5}
                       onStaffContributionsChange={(contributions) => {
                         console.log('=== MULTI STAFF SELECTOR CALLBACK (SERVICE) ===')
                         console.log('Item ID:', item.id)
@@ -3819,7 +3878,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
             {productItems.length > 0 && (
               <div className="border border-gray-200 rounded-xl shadow-sm bg-white">
-                <div className="grid grid-cols-[2fr_3fr_120px_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-emerald-50 to-green-50 font-semibold text-sm text-gray-700 border-b sticky top-0 bg-white z-10">
+                <div className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-emerald-50 to-green-50 font-semibold text-sm text-gray-700 border-b sticky top-0 bg-white z-10">
                   <div>Product *</div>
                   <div>Staff *</div>
                   <div>Qty</div>
@@ -3832,8 +3891,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 <div style={{ overflow: 'visible' }}>
                   {productItems.map((item) => (
                   <div key={item.id} className="space-y-2">
-                    <div className="grid grid-cols-[2fr_3fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-emerald-50/30 transition-all duration-200">
-                      <div className="relative">
+                    <div className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-emerald-50/30 transition-all duration-200">
+                      <div className="relative" data-quicksale-dropdown>
                         {item.productId ? (
                           <div className="flex items-center justify-between h-8 px-3 py-1 bg-muted rounded-md text-sm">
                             <span className="truncate">
@@ -3883,20 +3942,33 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                                     {productDropdownSearch ? `No products found matching "${productDropdownSearch}"` : 'No products available'}
                                   </div>
                                 ) : (
-                                  filteredProductsForDropdown.map((product) => (
-                                    <div
-                                      key={product._id || product.id}
-                                      className="p-3 hover:bg-slate-50 cursor-pointer text-sm border-b last:border-b-0 transition-colors"
-                                      onClick={() => {
-                                        updateProductItem(item.id, "productId", product._id || product.id)
-                                        setProductDropdownSearch("")
-                                        setActiveProductDropdown(null)
-                                      }}
-                                    >
-                                      <div className="font-medium text-slate-800">{product.name}</div>
-                                      <div className="text-xs text-slate-500 mt-1">Stock: {product.stock} - {formatCurrency(product.price)}</div>
-                                    </div>
-                                  ))
+                                  <div className="py-1">
+                                    {productCategoryOrder.map((category) => (
+                                      <div key={category} className="mb-2 last:mb-0">
+                                        <div className="px-3 py-1.5 text-xs font-bold text-slate-500 uppercase tracking-wide bg-slate-50 border-b border-slate-100">
+                                          {category}
+                                        </div>
+                                        {productsByCategory[category].map((product) => (
+                                          <div
+                                            key={product._id || product.id}
+                                            className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 cursor-pointer text-sm transition-colors"
+                                            onClick={() => {
+                                              updateProductItem(item.id, "productId", product._id || product.id)
+                                              setProductDropdownSearch("")
+                                              setActiveProductDropdown(null)
+                                            }}
+                                          >
+                                            <Package className="h-4 w-4 text-slate-400 shrink-0" />
+                                            <span className="flex-1 min-w-0">
+                                              <span className="font-medium text-slate-800 truncate block">{product.name}</span>
+                                              <span className="text-xs text-slate-500">Stock: {product.stock ?? 0}</span>
+                                            </span>
+                                            <span className="text-slate-600 shrink-0">{formatCurrency(product.price ?? product.offerPrice ?? 0)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ))}
+                                  </div>
                                 )}
                               </>
                             )}

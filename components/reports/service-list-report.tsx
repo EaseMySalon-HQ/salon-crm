@@ -33,7 +33,7 @@ interface ServiceRow {
   paymentMode: string
 }
 
-export type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "all"
+export type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "all" | "custom"
 
 export interface ServiceListControlledFilters {
   datePeriod: DatePeriod
@@ -123,6 +123,7 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
       case "currentMonth":
         return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) }
       case "all":
+      case "custom":
       default:
         return { from: undefined, to: undefined }
     }

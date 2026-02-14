@@ -260,7 +260,7 @@ export function SalesReport() {
 
   const handleServiceListDatePeriodChange = (period: ServiceListDatePeriod) => {
     setServiceListDatePeriod(period)
-    if (period !== "all") {
+    if (period !== "all" && period !== "custom") {
       setServiceListDateRange(getServiceListDateRangeFromPeriod(period))
     } else {
       setServiceListDateRange({})
@@ -1082,8 +1082,26 @@ export function SalesReport() {
                       <SelectItem value="last30days">Last 30 days</SelectItem>
                       <SelectItem value="currentMonth">Current month</SelectItem>
                       <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
                     </SelectContent>
                   </Select>
+                  {serviceListDatePeriod === "custom" && (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className="w-40 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                          <span className="truncate">
+                            {serviceListDateRange?.from ? (serviceListDateRange?.to && serviceListDateRange.from.getTime() !== serviceListDateRange.to.getTime()
+                              ? `${format(serviceListDateRange.from, "dd MMM")} – ${format(serviceListDateRange.to, "dd MMM")}`
+                              : format(serviceListDateRange.from, "dd MMM yyyy")) : "Pick dates"}
+                          </span>
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar mode="range" selected={serviceListDateRange as never} onSelect={(r) => setServiceListDateRange(r || {})} numberOfMonths={2} />
+                      </PopoverContent>
+                    </Popover>
+                  )}
                   <Select value={serviceListStaffFilter} onValueChange={setServiceListStaffFilter}>
                     <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Staff" />
