@@ -262,6 +262,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [showColorLegend, setShowColorLegend] = useState(false)
   const [blockTimes, setBlockTimes] = useState<BlockTime[]>([])
+  const [walkInSales, setWalkInSales] = useState<any[]>([])
   const [pendingAppointmentId, setPendingAppointmentId] = useState<string | null>(
     initialAppointmentId ?? null
   )
@@ -379,6 +380,37 @@ export const AppointmentsCalendarGrid = forwardRef<
       cancelled = true
     }
   }, [selectedDate, staffFilter])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!selectedDate) return
+    const load = async () => {
+      try {
+        const res = await SalesAPI.getAll({
+          dateFrom: selectedDate,
+          dateTo: selectedDate,
+        })
+        if (cancelled) return
+        if (res?.success && Array.isArray(res?.data)) {
+          const sales = res.data
+          const walkIns = sales.filter(
+            (s: any) =>
+              !s.appointmentId &&
+              s.items?.some((i: any) => i.type === "service")
+          )
+          setWalkInSales(walkIns)
+        } else {
+          setWalkInSales([])
+        }
+      } catch (e) {
+        if (!cancelled) setWalkInSales([])
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [selectedDate])
 
   const dateNorm = (d: string) =>
     d && d.length >= 10 ? d.slice(0, 10) : d
@@ -513,6 +545,43 @@ export const AppointmentsCalendarGrid = forwardRef<
     })
     return map
   }, [columns, filteredAppointments])
+
+  const WALK_IN_SALE_DURATION = 30
+
+  const salesByColumn = useMemo(() => {
+    const map: Record<string, Array<{ sale: any; serviceItem: any; top: number; height: number; startM: number; endM: number }>> = {}
+    columns.forEach((col) => {
+      map[col._id] = []
+    })
+    walkInSales.forEach((sale) => {
+      const serviceItems = (sale.items || []).filter((i: any) => i.type === "service")
+      if (serviceItems.length === 0) return
+      const checkoutEndM = parseTimeToMinutes(sale.time || "9:00")
+      const duration = WALK_IN_SALE_DURATION
+      const slotDuration = Math.ceil(duration / SLOT_MINUTES) * SLOT_MINUTES
+      const staffOffsets: Record<string, number> = {}
+      serviceItems.forEach((item: any) => {
+        const staffId =
+          item.staffId ||
+          item.staffContributions?.[0]?.staffId ||
+          sale.staffId
+        if (!staffId || !map[staffId]) return
+        const endM = checkoutEndM
+        const startM = endM - slotDuration
+        if (startM < startMinutes || endM > endMinutes) return
+        const baseTop = ((startM - startMinutes) / SLOT_MINUTES) * SLOT_HEIGHT
+        const offset = (staffOffsets[staffId] || 0) * 8
+        staffOffsets[staffId] = (staffOffsets[staffId] || 0) + 1
+        const top = baseTop + offset
+        const height = Math.max(SLOT_HEIGHT * 0.6, (duration / SLOT_MINUTES) * SLOT_HEIGHT)
+        map[staffId].push({ sale, serviceItem: item, top, height, startM, endM })
+      })
+    })
+    columns.forEach((col) => {
+      (map[col._id] || []).sort((a, b) => a.top - b.top)
+    })
+    return map
+  }, [columns, walkInSales, startMinutes, endMinutes])
 
   const blockTimesByColumn = useMemo(() => {
     const map: Record<string, Array<{ block: BlockTime; top: number; height: number }>> = {}
@@ -1034,6 +1103,12 @@ export const AppointmentsCalendarGrid = forwardRef<
               const rowBorderClass = isHourBoundary
                 ? "border-b border-slate-200"
                 : "border-b border-slate-100 border-dotted"
+              const now = new Date()
+              const todayStr = format(now, "yyyy-MM-dd")
+              const isToday = selectedDate === todayStr
+              const isPastDate = selectedDate < todayStr
+              const currentMinutes = now.getHours() * 60 + now.getMinutes()
+              const isPastSlot = isPastDate || (isToday && slot.minutes < currentMinutes)
               return (
                 <Fragment key={`row-${slot.minutes}`}>
                   <div
@@ -1047,15 +1122,20 @@ export const AppointmentsCalendarGrid = forwardRef<
                       key={`empty-${slot.minutes}`}
                       type="button"
                       onClick={() => {
+                        if (isPastSlot) return
                         const params = new URLSearchParams({
                           date: selectedDate,
                           time: slotMinutesToTimeString(slot.minutes),
                         })
                         router.push(`/appointments/new?${params.toString()}`)
                       }}
-                      className={`w-full border-r border-slate-200 text-left ${rowBorderClass} hover:bg-indigo-50/80 transition-colors cursor-pointer`}
+                      className={`w-full border-r border-slate-200 text-left ${rowBorderClass} transition-colors ${
+                        isPastSlot
+                          ? "bg-slate-50 text-slate-300 cursor-not-allowed"
+                          : "hover:bg-indigo-50/80 cursor-pointer"
+                      }`}
                       style={{ height: SLOT_HEIGHT, minHeight: SLOT_HEIGHT }}
-                      title="New appointment"
+                      title={isPastSlot ? "Past slot – unavailable" : "New appointment"}
                     />
                   ) : (
                     columns.map((col) => {
@@ -1072,7 +1152,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           return slot.minutes < endM && slot.minutes + SLOT_MINUTES > startM
                         }
                       )
-                      const inWindow = inWorkWindow && !isBlockedByTime
+                      const inWindow = inWorkWindow && !isBlockedByTime && !isPastSlot
                       return (
                       <button
                         key={`${col._id}-${slot.minutes}`}
@@ -1092,7 +1172,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                             : "bg-slate-50 text-slate-300 cursor-not-allowed"
                         }`}
                         style={{ height: SLOT_HEIGHT, minHeight: SLOT_HEIGHT }}
-                        title={inWindow ? `New appointment with ${col.name}` : "Unavailable (blocked or outside working hours)"}
+                        title={inWindow ? `New appointment with ${col.name}` : isPastSlot ? "Past slot – unavailable" : "Unavailable (blocked or outside working hours)"}
                       />
                       );
                     })
@@ -1209,6 +1289,36 @@ export const AppointmentsCalendarGrid = forwardRef<
                           {canDrag && (
                             <div className="w-8 h-0.5 rounded-full bg-slate-500/60" aria-hidden />
                           )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {(salesByColumn[col._id] || []).map(({ sale, serviceItem, top, height, startM, endM }) => {
+                    return (
+                      <div
+                        key={`${sale._id}-${serviceItem?.name || ""}-${startM}`}
+                        className="absolute left-1 right-1 rounded-lg shadow-sm border overflow-hidden text-left bg-teal-50 border-teal-300 flex flex-col z-10 pointer-events-auto cursor-pointer hover:ring-2 hover:ring-teal-400 transition-all"
+                        style={{
+                          top: top + 2,
+                          height: Math.max(SLOT_HEIGHT * 0.6, height - 4),
+                        }}
+                        onClick={() => router.push(`/billing/${sale.billNo}?mode=edit`)}
+                        title={`Bill #${sale.billNo} • Click to view`}
+                      >
+                        <div className="h-1.5 shrink-0 rounded-t-lg bg-teal-500" aria-hidden />
+                        <div className="pt-3 px-1.5 pb-1.5 text-xs overflow-hidden text-left flex-1 min-w-0">
+                          <div className="font-bold text-slate-800 truncate">
+                            {sale.customerName}
+                          </div>
+                          <div className="text-slate-600 text-[11px] truncate">
+                            ({serviceItem?.name || "Service"})
+                          </div>
+                          <div className="text-slate-500 text-[10px] tabular-nums truncate">
+                            {formatAppointmentTime(slotMinutesToTimeString(startM))} – {formatAppointmentTime(slotMinutesToTimeString(endM))}
+                          </div>
+                          <div className="text-teal-700 text-[10px] font-medium truncate mt-0.5">
+                            Bill #{sale.billNo}
+                          </div>
                         </div>
                       </div>
                     )

@@ -59,7 +59,7 @@ import {
   type PaymentMethod,
   getAllReceipts,
 } from "@/lib/data"
-import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI } from "@/lib/api"
+import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI, BlockTimeAPI } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
@@ -180,6 +180,77 @@ interface ProductItem {
 
 type BillingMode = "create" | "edit" | "exchange"
 
+/** Parse time string (e.g. "HH:mm", "9:00am") to minutes since midnight */
+function parseTimeToMinutes(time: string): number {
+  if (!time) return 0
+  const cleaned = time.replace(/\s*(am|pm)/i, "").trim()
+  const parts = cleaned.split(":")
+  const h = parseInt(parts[0] || "0", 10)
+  const m = parseInt(parts[1] || "0", 10)
+  const isPm = /pm/i.test(time) && h < 12
+  const hour = isPm ? h + 12 : /am/i.test(time) && h === 12 ? 0 : h
+  return hour * 60 + m
+}
+
+/** Check if a block time applies on the given date (handles recurring) */
+function blockAppliesOnDate(block: { startDate: string; endDate?: string | null; recurringFrequency?: string }, dateStr: string): boolean {
+  const rec = block.recurringFrequency || "none"
+  if (rec === "none") return block.startDate === dateStr
+  const end = block.endDate
+  if (!end || dateStr < block.startDate || dateStr > end) return false
+  if (rec === "daily") return true
+  if (rec === "weekly") {
+    return new Date(block.startDate + "T00:00:00").getDay() === new Date(dateStr + "T00:00:00").getDay()
+  }
+  if (rec === "monthly") {
+    return new Date(block.startDate + "T00:00:00").getDate() === new Date(dateStr + "T00:00:00").getDate()
+  }
+  return false
+}
+
+/** Get staff IDs that are available for a slot [startM, startM + duration] on dateStr */
+function getAvailableStaffIds(
+  dateStr: string,
+  timeStr: string,
+  durationMinutes: number,
+  appointments: any[],
+  blockTimes: any[],
+  allStaffIds: string[]
+): string[] {
+  const startM = parseTimeToMinutes(timeStr)
+  const endM = startM + durationMinutes
+  const busyStaffIds = new Set<string>()
+
+  // Appointments: only mark staff unavailable when client has arrived (Quick Sale uses current time)
+  for (const apt of appointments) {
+    if (apt.status === "cancelled") continue
+    if (apt.status !== "arrived" && apt.status !== "service_started") continue
+    const aptStartM = parseTimeToMinutes(apt.time || "0:00")
+    const aptDuration = apt.duration ?? 60
+    const aptEndM = aptStartM + aptDuration
+    if (aptEndM <= startM || aptStartM >= endM) continue // no overlap
+    const staffId = apt.staffId?._id || apt.staffId?.id || apt.staffId
+    if (staffId) busyStaffIds.add(String(staffId))
+    for (const a of apt.staffAssignments || []) {
+      const sid = a.staffId?._id || a.staffId?.id || a.staffId
+      if (sid) busyStaffIds.add(String(sid))
+    }
+  }
+
+  // Block times that apply on this date
+  for (const block of blockTimes) {
+    if (!blockAppliesOnDate(block, dateStr)) continue
+    const blockStaffId = block.staffId?._id || block.staffId?.id || block.staffId
+    if (!blockStaffId) continue
+    const blockStartM = parseTimeToMinutes(block.startTime || "0:00")
+    const blockEndM = parseTimeToMinutes(block.endTime || "23:59")
+    if (blockEndM <= startM || blockStartM >= endM) continue
+    busyStaffIds.add(String(blockStaffId))
+  }
+
+  return allStaffIds.filter((id) => !busyStaffIds.has(String(id)))
+}
+
 interface QuickSaleProps {
   mode?: BillingMode
   initialSale?: any
@@ -297,6 +368,41 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const [loadingProducts, setLoadingProducts] = useState(true)
   const [loadingStaff, setLoadingStaff] = useState(true)
   const [loadingClients, setLoadingClients] = useState(true)
+  const [appointmentsForDate, setAppointmentsForDate] = useState<any[]>([])
+  const [blockTimesForDate, setBlockTimesForDate] = useState<any[]>([])
+  const [, setTimeTick] = useState(0)
+
+  // Refresh availability every minute (billing uses current time)
+  useEffect(() => {
+    const id = setInterval(() => setTimeTick((t) => t + 1), 60000)
+    return () => clearInterval(id)
+  }, [])
+
+  const dateStr = format(selectedDate, "yyyy-MM-dd")
+  const currentTimeStr = format(new Date(), "HH:mm")
+  const allStaffIds = staff.map((s) => String(s._id || s.id)).filter(Boolean)
+
+  /** Available staff for a given duration (uses current time for billing) */
+  const getAvailableStaffForSlot = (durationMinutes: number) => {
+    return getAvailableStaffIds(
+      dateStr,
+      currentTimeStr,
+      durationMinutes,
+      appointmentsForDate,
+      blockTimesForDate,
+      allStaffIds
+    )
+  }
+
+  /** Staff list filtered by availability for a given duration. Pass includeIds to keep selected staff in list. */
+  const getAvailableStaffList = (durationMinutes: number, includeIds?: string[]) => {
+    const availableIds = getAvailableStaffForSlot(durationMinutes)
+    const includeSet = new Set(includeIds?.map(String) || [])
+    return staff.filter((s) => {
+      const id = String(s._id || s.id)
+      return availableIds.includes(id) || includeSet.has(id)
+    })
+  }
 
   // Fetch services, products, staff, clients, and business settings from API
   useEffect(() => {
@@ -469,6 +575,30 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     fetchTaxSettings()
     fetchClients()
   }, [])
+
+  // Fetch appointments and block times for selected date (for staff availability)
+  useEffect(() => {
+    const dateStr = format(selectedDate, "yyyy-MM-dd")
+    let cancelled = false
+    const load = async () => {
+      try {
+        const [aptRes, blockRes] = await Promise.all([
+          AppointmentsAPI.getAll({ date: dateStr, limit: 500 }),
+          BlockTimeAPI.getAll({ startDate: dateStr, endDate: dateStr }),
+        ])
+        if (cancelled) return
+        setAppointmentsForDate(aptRes?.success && aptRes?.data ? aptRes.data : [])
+        setBlockTimesForDate(blockRes?.success && blockRes?.data ? blockRes.data : [])
+      } catch (e) {
+        if (!cancelled) {
+          setAppointmentsForDate([])
+          setBlockTimesForDate([])
+        }
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [selectedDate])
 
   // Subscribe to client store changes
   useEffect(() => {
@@ -3600,7 +3730,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
                     <MultiStaffSelector
                       key={`service-${item.id}-staff`}
-                      staffList={staff}
+                      staffList={getAvailableStaffList(services.find((s) => (s._id || s.id) === item.serviceId)?.duration ?? 60, (item.staffContributions || []).map((c) => c.staffId).filter(Boolean))}
                       serviceTotal={item.total}
                       onStaffContributionsChange={(contributions) => {
                         console.log('=== MULTI STAFF SELECTOR CALLBACK (SERVICE) ===')
@@ -3700,11 +3830,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 </div>
 
                 <div style={{ overflow: 'visible' }}>
-                  {productItems.map((item) => {
-                  console.log('=== RENDERING PRODUCT ITEM ===')
-                  console.log('Product item ID:', item.id)
-                  console.log('Product item staffId:', item.staffId)
-                  return (
+                  {productItems.map((item) => (
                   <div key={item.id} className="space-y-2">
                     <div className="grid grid-cols-[2fr_3fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-emerald-50/30 transition-all duration-200">
                       <div className="relative">
@@ -3781,15 +3907,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                       <Select
                         key={`product-${item.id}-staff`}
                         value={item.staffId}
-                        onValueChange={(value) => {
-                          console.log('=== PRODUCT STAFF SELECTION ===')
-                          console.log('Product ID:', item.id)
-                          console.log('Selected Staff ID:', value)
-                          console.log('Available Staff:', staff.map(s => ({ id: s._id || s.id, name: s.name })))
-                          console.log('Current Product Items Before Update:', productItems.map(p => ({ id: p.id, staffId: p.staffId })))
-                          updateProductItem(item.id, "staffId", value)
-                          console.log('Product staff selection completed for:', item.id)
-                        }}
+                        onValueChange={(value) => updateProductItem(item.id, "staffId", value)}
                       >
                         <SelectTrigger className="h-8">
                           <SelectValue placeholder="Select staff" />
@@ -3805,10 +3923,10 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                             </SelectItem>
                           ) : (
                             (() => {
-                              const validStaff = staff.filter((member) => {
+                              const availableStaff = getAvailableStaffList(15, item.staffId ? [item.staffId] : undefined)
+                              const validStaff = availableStaff.filter((member) => {
                                 const validId = member._id || member.id
                                 const isValid = validId && validId.toString().trim() !== ''
-                                console.log(`Staff member ${member.name}: ID=${validId}, Valid=${isValid}`)
                                 return isValid
                               })
                               
@@ -3895,7 +4013,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                       return null
                     })()}
                   </div>
-                  )})}
+                ))}
                 </div>
               </div>
             )}
