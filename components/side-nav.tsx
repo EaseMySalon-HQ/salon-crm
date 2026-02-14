@@ -96,6 +96,12 @@ export function SideNav() {
       requiredRole: "manager", // Manager and above
     },
     {
+      title: "Staff Directory",
+      href: "/staff",
+      icon: Users,
+      requiredRole: "admin", // Admin only
+    },
+    {
       title: "Settings",
       href: "/settings",
       icon: Settings,

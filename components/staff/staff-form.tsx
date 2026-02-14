@@ -38,7 +38,7 @@ const staffSchema = z.object({
     required_error: "Please select a role",
   }),
   specialties: z.array(z.string()).optional(),
-  salary: z.string().min(1, "Please enter salary"),
+  salary: z.string().optional(),
   commissionProfileIds: z.array(z.string()).optional(),
   hasLoginAccess: z.boolean().optional(),
   allowAppointmentScheduling: z.boolean().optional(),
@@ -170,7 +170,7 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
         phone: values.phone,
         role: values.role,
         specialties: values.specialties || [],
-        salary: parseFloat(values.salary),
+        salary: values.salary && values.salary.trim() ? parseFloat(values.salary) : 0,
         commissionProfileIds: values.commissionProfileIds || [],
         hasLoginAccess: values.hasLoginAccess || false,
         allowAppointmentScheduling: values.allowAppointmentScheduling || false,
@@ -300,7 +300,7 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
             name="salary"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Salary ({getSymbol()}) *</FormLabel>
+                <FormLabel>Salary ({getSymbol()})</FormLabel>
                 <FormControl>
                   <Input type="number" placeholder="0.00" {...field} />
                 </FormControl>
