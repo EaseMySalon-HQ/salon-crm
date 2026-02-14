@@ -1,5 +1,6 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
+import { handleSessionExpired } from './auth-utils'
 
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
@@ -16,16 +17,10 @@ const apiClient: AxiosInstance = axios.create({
 // Request interceptor to add auth token
 apiClient.interceptors.request.use(
   (config) => {
-    // Check if we're in browser environment
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('salon-auth-token')
-      console.log('🔐 API Request Interceptor: Token found:', !!token)
-      console.log('🔐 API Request Interceptor: Token value:', token ? `${token.substring(0, 20)}...` : 'none')
       if (token) {
         config.headers.Authorization = `Bearer ${token}`
-        console.log('🔐 API Request Interceptor: Authorization header set')
-      } else {
-        console.log('⚠️ API Request Interceptor: No token found, request will be unauthenticated')
       }
     }
     return config
@@ -168,34 +163,19 @@ apiClient.interceptors.response.use(
       error.responseData = error.response.data;
     }
     
-    if (error.response?.status === 401) {
-      // Handle unauthorized access - but only if we're not already on login page
-      // Don't redirect if this is the initial auth check (profile endpoint)
-      // Don't redirect if we're on a public route (like public receipt page)
-      const isAuthCheck = error.config?.url?.includes('/auth/profile')
-      const isPublicRoute = typeof window !== 'undefined' && 
+    // Handle 401 (Unauthorized) and 403 (Forbidden) - session expired or invalid token
+    const status = error?.response?.status
+    if (status === 401 || status === 403) {
+      const isPublicRoute = typeof window !== 'undefined' &&
         (window.location.pathname.includes('/receipt/public/') ||
          window.location.pathname.includes('/public/'))
-      
-      console.log('🔐 API Response Interceptor: Unauthorized, clearing auth data', { isAuthCheck, isPublicRoute })
-      
-      // Clear tokens only if not on public route
-      if (typeof window !== 'undefined' && !isPublicRoute) {
-        localStorage.removeItem('salon-auth-token')
-        localStorage.removeItem('salon-auth-user')
-      }
-      
-      // Only redirect if not on login page, not during initial auth check, and not on public route
-      // The auth context will handle the redirect for auth checks
-      if (typeof window !== 'undefined' && 
-          !window.location.pathname.includes('/login') && 
-          !isAuthCheck &&
-          !isPublicRoute) {
-        try {
-          window.location.href = '/login'
-        } catch (redirectError) {
-          console.warn('Redirect failed:', redirectError)
+      const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
+
+      if (typeof window !== 'undefined' && !isPublicRoute && !isLoginPage) {
+        if (process.env.NODE_ENV === 'development') {
+          console.log('🔐 API Response Interceptor: Session invalid (', status, '), redirecting to login')
         }
+        handleSessionExpired('/login')
       }
     }
     return Promise.reject(error)
@@ -682,6 +662,11 @@ export class SalesAPI {
     return response.data
   }
 
+  static async getByAppointmentId(appointmentId: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/sales/by-appointment/${appointmentId}`)
+    return response.data
+  }
+
   // Public method to get sale by bill number and token (no authentication required)
   static async getByBillNoPublic(billNo: string, token: string): Promise<ApiResponse<any>> {
     // Create a new axios instance without auth interceptor for public access
@@ -719,7 +704,8 @@ export class SalesAPI {
     if (!saleId || saleId.trim() === '') {
       return {
         success: false,
-        error: 'Sale ID is required for product exchange'
+        error: 'Sale ID is required for product exchange',
+        data: undefined as any
       }
     }
     console.log(`Calling POST /sales/${saleId}/exchange`)
@@ -1311,7 +1297,7 @@ export class MarketingTemplatesAPI {
       return {
         success: false,
         error: error.message || 'Failed to create template',
-        details: error
+        data: undefined as any
       }
     }
   }

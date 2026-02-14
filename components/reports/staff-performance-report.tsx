@@ -203,8 +203,15 @@ export function StaffPerformanceReport() {
           case "customRange":
             // Use custom date range if set, otherwise default to current month
             if (dateRange?.from && dateRange?.to) {
-              startDate = dateRange.from
-              endDate = dateRange.to
+              startDate = new Date(dateRange.from)
+              startDate.setHours(0, 0, 0, 0)
+              endDate = new Date(dateRange.to)
+              endDate.setHours(23, 59, 59, 999)
+            } else if (dateRange?.from) {
+              startDate = new Date(dateRange.from)
+              startDate.setHours(0, 0, 0, 0)
+              endDate = new Date(dateRange.from)
+              endDate.setHours(23, 59, 59, 999)
             } else {
               startDate = new Date(now.getFullYear(), now.getMonth(), 1)
               endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0)

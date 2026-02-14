@@ -54,6 +54,7 @@ export function DashboardStatsCards() {
   }
 
   useEffect(() => {
+    let isAuthError = false
     const fetchStats = async () => {
       try {
         // Build today's date string in local time (yyyy-MM-dd)
@@ -104,10 +105,15 @@ export function DashboardStatsCards() {
           totalRevenue: todaysRevenue,
           totalServices: base.totalServices,
         })
-      } catch (error) {
+      } catch (error: any) {
+        const status = error?.response?.status
+        if (status === 401 || status === 403) {
+          isAuthError = true
+          return
+        }
         console.error("Failed to fetch dashboard stats:", error)
       } finally {
-        setLoading(false)
+        if (!isAuthError) setLoading(false)
       }
     }
 
@@ -206,6 +212,7 @@ export function ServiceStatsCards() {
   }
 
   const fetchServiceStats = async () => {
+    let isAuthError = false
     try {
       const response = await ServicesAPI.getAll({ limit: 1000 }) // Fetch up to 1000 services
       if (response.success) {
@@ -225,10 +232,14 @@ export function ServiceStatsCards() {
           averageDuration: Math.round(averageDuration)
         })
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.response?.status === 401 || error?.response?.status === 403) {
+        isAuthError = true
+        return
+      }
       console.error("Failed to fetch service stats:", error)
     } finally {
-      setLoading(false)
+      if (!isAuthError) setLoading(false)
     }
   }
 
@@ -346,6 +357,7 @@ export function ProductStatsCards({ productTypeFilter = "all", onLowStockClick, 
   }
 
   const fetchProductStats = async () => {
+    let isAuthError = false
     try {
       const response = await ProductsAPI.getAll({ limit: 1000 }) // Fetch up to 1000 products
       if (response.success) {
@@ -376,10 +388,14 @@ export function ProductStatsCards({ productTypeFilter = "all", onLowStockClick, 
           categories
         })
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.response?.status === 401 || error?.response?.status === 403) {
+        isAuthError = true
+        return
+      }
       console.error("Failed to fetch product stats:", error)
     } finally {
-      setLoading(false)
+      if (!isAuthError) setLoading(false)
     }
   }
 

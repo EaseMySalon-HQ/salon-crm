@@ -33,6 +33,7 @@ function NewAppointmentContent() {
   const initialDate = searchParams?.get("date") ?? undefined
   const initialTime = searchParams?.get("time") ?? undefined
   const initialStaffId = searchParams?.get("staffId") ?? undefined
+  const editAppointmentId = searchParams?.get("edit") ?? undefined
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [panelVisible, setPanelVisible] = useState(false)
   const isLg = useIsLg()
@@ -50,10 +51,11 @@ function NewAppointmentContent() {
 
   const form = (
     <AppointmentForm
-      key={initialDate && initialTime ? `form-${initialDate}-${initialTime}-${initialStaffId ?? ""}` : "form-new"}
+      key={editAppointmentId ? `form-edit-${editAppointmentId}` : initialDate && initialTime ? `form-${initialDate}-${initialTime}-${initialStaffId ?? ""}` : "form-new"}
       initialDate={initialDate}
       initialTime={initialTime}
       initialStaffId={initialStaffId}
+      appointmentId={editAppointmentId}
       onClientSelect={handleClientSelect}
     />
   )

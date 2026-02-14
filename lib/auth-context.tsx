@@ -1,9 +1,10 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { AuthAPI } from "@/lib/api"
 import { SessionTimeoutManager } from "@/components/auth/session-timeout-manager"
+import { AUTH_LOGOUT_EVENT, clearAuthStorage } from "@/lib/auth-utils"
 
 export interface User {
   _id: string
@@ -36,6 +37,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
   const router = useRouter()
 
+  // Listen for auth logout event (from API interceptor on 401/403)
+  useEffect(() => {
+    const handleAuthLogout = () => {
+      setUser(null)
+    }
+    window.addEventListener(AUTH_LOGOUT_EVENT, handleAuthLogout)
+    return () => window.removeEventListener(AUTH_LOGOUT_EVENT, handleAuthLogout)
+  }, [])
+
   // Check for existing session on mount
   useEffect(() => {
     const checkAuth = async () => {
@@ -52,7 +62,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const isPublicRoute = window.location.pathname.includes('/receipt/public/') ||
                              window.location.pathname.includes('/public/')
         if (isPublicRoute) {
-          console.log('🔓 Public route detected, skipping auth check')
           setIsLoading(false)
           return
         }
@@ -62,72 +71,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const storedUser = localStorage.getItem("salon-auth-user")
         
         if (!storedToken || !storedUser) {
-          console.log('🔐 No stored authentication data found')
           setIsLoading(false)
           return
         }
         
         // Clear mock tokens - only use real authentication
         if (storedToken.startsWith('mock-token-')) {
-          console.log('🔐 Clearing mock token, requiring real authentication')
-          localStorage.removeItem("salon-auth-token")
-          localStorage.removeItem("salon-auth-user")
+          clearAuthStorage()
           setIsLoading(false)
           return
         }
         
-        // Try to validate with API
+        // Validate token with API - only set user on successful validation
         try {
           const response = await AuthAPI.getProfile()
           if (response.success && response.data) {
-            console.log('✅ API authentication successful')
             setUser(response.data)
           } else {
-            console.log('❌ API authentication failed, clearing stored data')
-            localStorage.removeItem("salon-auth-token")
-            localStorage.removeItem("salon-auth-user")
+            clearAuthStorage()
           }
         } catch (apiError: any) {
-          // Only clear tokens if it's a 401 (unauthorized) error
-          // Don't clear on network errors or other API issues
-          if (apiError?.response?.status === 401) {
-            console.log('❌ Token is invalid (401), clearing stored data')
-            localStorage.removeItem("salon-auth-token")
-            localStorage.removeItem("salon-auth-user")
+          // 401/403: clear storage (interceptor may have already done this)
+          if (apiError?.response?.status === 401 || apiError?.response?.status === 403) {
+            clearAuthStorage()
+            setUser(null)
           } else {
-            // For other errors (network, timeout, 404, etc.), try to use stored user data
-            console.warn('⚠️ API validation error (non-401), attempting to use stored user data:', apiError?.message)
-            try {
-              const parsedUser = JSON.parse(storedUser || '{}')
-              if (parsedUser && (parsedUser.email || parsedUser._id || parsedUser.id)) {
-                console.log('✅ Using stored user data as fallback')
-                // Ensure user object has required fields
-                const fallbackUser: User = {
-                  _id: parsedUser._id || parsedUser.id || '',
-                  name: parsedUser.name || `${parsedUser.firstName || ''} ${parsedUser.lastName || ''}`.trim() || parsedUser.email || 'User',
-                  email: parsedUser.email || '',
-                  role: parsedUser.role || 'staff',
-                  avatar: parsedUser.avatar,
-                  createdAt: parsedUser.createdAt,
-                  updatedAt: parsedUser.updatedAt
-                }
-                setUser(fallbackUser)
-              } else {
-                console.log('❌ Stored user data is invalid - missing email/id')
-                // Don't clear tokens on 404 - might be temporary API issue
-                // Only clear if it's a critical error
-              }
-            } catch (parseError) {
-              console.error('❌ Failed to parse stored user data:', parseError)
-              // Don't clear tokens on parse error - might be corrupted but user might still be valid
-            }
+            // Network/timeout or other errors: do NOT use stored user - require re-validation
+            // Prevents showing dashboard with stale data when token may be expired
+            clearAuthStorage()
+            setUser(null)
           }
         }
       } catch (error) {
         console.error('Authentication check error:', error)
-        // Clear any corrupted data
-        localStorage.removeItem("salon-auth-token")
-        localStorage.removeItem("salon-auth-user")
+        clearAuthStorage()
       } finally {
         setIsLoading(false)
       }
@@ -242,30 +219,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
-      // Clear user state first to prevent race conditions
       setUser(null)
       setIsLoading(true)
       
-      // Clear local storage (only in browser environment)
+      clearAuthStorage()
+      // Clear other session data (sidebar state etc.) - preserves admin auth keys
       if (typeof window !== 'undefined') {
-        localStorage.removeItem("salon-auth-token")
-        localStorage.removeItem("salon-auth-user")
+        const keysToRemove: string[] = []
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i)
+          if (key && !key.startsWith('admin-')) keysToRemove.push(key)
+        }
+        keysToRemove.forEach(k => sessionStorage.removeItem(k))
       }
       
-      // Clear any other stored data that might cause issues
-      sessionStorage.clear()
+      AuthAPI.logout().catch(() => {})
       
-      // Try real API logout (but don't wait for it)
-      AuthAPI.logout().catch(error => {
-        console.warn("API logout failed, but continuing with local logout:", error)
-      })
+      await new Promise(resolve => setTimeout(resolve, 100))
       
-      // Small delay to ensure state is cleared and components unmount
-      await new Promise(resolve => setTimeout(resolve, 150))
-      
-      // Force a page refresh to ensure clean state
       if (typeof window !== 'undefined') {
         window.location.href = '/login'
       } else {
@@ -273,12 +246,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } catch (error) {
       console.error("Logout error:", error)
-      // Even if there's an error, ensure we're logged out
       setUser(null)
-      localStorage.removeItem("salon-auth-token")
-      localStorage.removeItem("salon-auth-user")
-      sessionStorage.clear()
-      
+      clearAuthStorage()
       if (typeof window !== 'undefined') {
         window.location.href = '/login'
       } else {
@@ -287,7 +256,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [router])
 
   // Role-based helper functions
   const hasRole = (roles: string[]): boolean => {

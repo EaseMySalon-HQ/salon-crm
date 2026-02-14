@@ -638,23 +638,68 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               await fetchCustomerStats(customerId)
               console.log('Fetched customer stats for pre-filled client')
             }
+          } else if (appointmentData.clientName) {
+            // Client not in list (e.g. from new appointment form before sync) - use passed data
+            setSelectedCustomer({
+              _id: appointmentData.clientId,
+              id: appointmentData.clientId,
+              name: appointmentData.clientName,
+              phone: appointmentData.clientPhone || "",
+              email: appointmentData.clientEmail || "",
+            } as Client)
+            setCustomerSearch(appointmentData.clientName)
           }
         }
 
-        // Find and add the service
-        if (appointmentData.serviceId) {
-          const service = services.find(s => 
+        // Set date and notes from new appointment form
+        if (appointmentData.date) {
+          setSelectedDate(new Date(appointmentData.date))
+        }
+        if (appointmentData.notes) {
+          setRemarks(appointmentData.notes)
+        }
+
+        // Find and add service(s) - support both single service (from calendar) and multiple (from new appointment form)
+        const serviceItemsToAdd: ServiceItem[] = []
+
+        if (appointmentData.services && Array.isArray(appointmentData.services) && appointmentData.services.length > 0) {
+          // Multiple services from new appointment form
+          for (const svcData of appointmentData.services) {
+            const service = services.find(s =>
+              (s._id || s.id) === svcData.serviceId
+            )
+            if (service) {
+              const staffMember = staff.find(s =>
+                (s._id || s.id) === svcData.staffId
+              )
+              serviceItemsToAdd.push({
+                id: Date.now().toString() + Math.random(),
+                serviceId: service._id || service.id,
+                staffId: svcData.staffId || "",
+                quantity: 1,
+                price: svcData.price ?? service.price ?? 0,
+                discount: 0,
+                total: svcData.price ?? service.price ?? 0,
+                staffContributions: (svcData.staffId && staffMember) ? [{
+                  staffId: svcData.staffId,
+                  staffName: staffMember.name || svcData.staffName || "",
+                  percentage: 100,
+                  amount: svcData.price ?? service.price ?? 0
+                }] : []
+              })
+              console.log("Pre-filled service:", service.name)
+            }
+          }
+        } else if (appointmentData.serviceId) {
+          // Single service from calendar / existing appointment
+          const service = services.find(s =>
             (s._id || s.id) === appointmentData.serviceId
           )
-          
           if (service) {
-            // Find staff member for name
-            const staffMember = staff.find(s => 
+            const staffMember = staff.find(s =>
               (s._id || s.id) === appointmentData.staffId
             )
-            
-            // Add service item with pre-filled data
-            const newServiceItem: ServiceItem = {
+            serviceItemsToAdd.push({
               id: Date.now().toString(),
               serviceId: service._id || service.id,
               staffId: appointmentData.staffId || "",
@@ -664,15 +709,17 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               total: service.price || appointmentData.servicePrice || 0,
               staffContributions: (appointmentData.staffId && staffMember) ? [{
                 staffId: appointmentData.staffId,
-                staffName: staffMember.name || appointmentData.staffName || '',
+                staffName: staffMember.name || appointmentData.staffName || "",
                 percentage: 100,
                 amount: service.price || appointmentData.servicePrice || 0
               }] : []
-            }
-            
-            setServiceItems([newServiceItem])
-            console.log('Pre-filled service:', service.name)
+            })
+            console.log("Pre-filled service:", service.name)
           }
+        }
+
+        if (serviceItemsToAdd.length > 0) {
+          setServiceItems(serviceItemsToAdd)
         }
 
         // Clear the URL parameter after reading it
