@@ -480,6 +480,14 @@ export const AppointmentsCalendar = forwardRef<
       return
     }
     if (!data?.id) return
+    setDraggingAppointmentId(null)
+
+    if (targetStatusKey === 'cancelled') {
+      setAppointmentToCancel(data.id)
+      setShowCancelConfirm(true)
+      return
+    }
+
     setUpdatingFromDrop(true)
     setJustDropped(true)
     setTimeout(() => setJustDropped(false), 200)
@@ -492,7 +500,6 @@ export const AppointmentsCalendar = forwardRef<
       alert('Failed to update status. Please try again.')
     } finally {
       setUpdatingFromDrop(false)
-      setDraggingAppointmentId(null)
     }
   }
 
@@ -976,7 +983,7 @@ export const AppointmentsCalendar = forwardRef<
       </Dialog>
 
       {/* Cancel Confirmation Modal */}
-      <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
+      <Dialog open={showCancelConfirm} onOpenChange={(open) => { setShowCancelConfirm(open); if (!open) setAppointmentToCancel(null) }}>
         <DialogContent className="rounded-2xl border-0 shadow-2xl max-w-md">
           <DialogHeader className="text-center pb-4">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">

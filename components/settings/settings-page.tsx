@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Settings, Building2, Calendar, CreditCard, Bell, Users, ChevronRight, Receipt, DollarSign, Calculator, Wallet } from "lucide-react"
+import { Settings, Building2, Calendar, CreditCard, Bell, ChevronRight, Receipt, DollarSign, Calculator, Wallet } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { useRouter } from "next/navigation"
 import { GeneralSettings } from "./general-settings"
@@ -13,7 +13,6 @@ import { PaymentSettings } from "./payment-settings"
 import { CurrencySettings } from "./currency-settings"
 import { TaxSettings } from "./tax-settings"
 import { NotificationSettings } from "./notification-settings"
-import { StaffDirectory } from "./staff-directory"
 import { POSSettings } from "./pos-settings"
 import { PlanBilling } from "./plan-billing"
 
@@ -73,13 +72,6 @@ const settingsCategories = [
     description: "Email alerts, SMS notifications, and reminder settings",
     icon: Bell,
     requiredRole: "manager",
-  },
-  {
-    id: "staff",
-    title: "Staff Directory",
-    description: "Manage staff accounts, roles, and permissions",
-    icon: Users,
-    requiredRole: "admin", // Only admin can access
   },
   {
     id: "plan-billing",
@@ -148,8 +140,6 @@ export function SettingsPage() {
         return <POSSettings />
       case "notifications":
         return <NotificationSettings />
-      case "staff":
-        return <StaffDirectory />
       case "plan-billing":
         return <PlanBilling />
       default:

@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useRef } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { format, addDays, subDays, startOfWeek } from "date-fns"
 
-import { ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Plus, Trash2, AlertTriangle, Clock, CalendarOff, RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -17,7 +17,6 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -25,7 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { StaffDirectoryAPI, StaffAPI, BlockTimeAPI } from "@/lib/api"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { StaffDirectoryAPI, StaffAPI, BlockTimeAPI, AppointmentsAPI } from "@/lib/api"
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
@@ -121,6 +121,52 @@ function formatRange(dayRow?: StaffWorkDay): string {
 
 type EditModalState = { staff: StaffRow; dayIndex: number; dayDate: Date } | null
 
+type AvailabilityType = "full" | "first-half" | "second-half" | "custom" | "off"
+
+/** Parse time string (e.g. "9:00 AM", "1:00 PM", or "09:00") to minutes from midnight */
+function parseTimeToMinutes(t: string): number {
+  if (!t) return 0
+  const cleaned = t.replace(/\s*(am|pm)/i, "").trim()
+  const parts = cleaned.split(":")
+  const h = parseInt(parts[0] || "0", 10)
+  const m = parseInt(parts[1] || "0", 10)
+  const isPm = /pm/i.test(t) && h < 12
+  const hour = isPm ? h + 12 : /am/i.test(t) && h === 12 ? 0 : h
+  return hour * 60 + m
+}
+
+function getFirstHalfHours(startTime: string, endTime: string): { start: string; end: string } {
+  const startM = parseTimeToMinutes(startTime)
+  const endM = parseTimeToMinutes(endTime)
+  const midM = Math.floor((startM + endM) / 2)
+  const midH = Math.floor(midM / 60)
+  const midMin = midM % 60
+  return {
+    start: startTime,
+    end: `${String(midH).padStart(2, "0")}:${String(midMin).padStart(2, "0")}`,
+  }
+}
+
+function getSecondHalfHours(startTime: string, endTime: string): { start: string; end: string } {
+  const startM = parseTimeToMinutes(startTime)
+  const endM = parseTimeToMinutes(endTime)
+  const midM = Math.floor((startM + endM) / 2)
+  const midH = Math.floor(midM / 60)
+  const midMin = midM % 60
+  return {
+    start: `${String(midH).padStart(2, "0")}:${String(midMin).padStart(2, "0")}`,
+    end: endTime,
+  }
+}
+
+function isAppointmentOutsideHours(apt: { time: string; duration?: number }, startTime: string, endTime: string): boolean {
+  const aptStartM = parseTimeToMinutes(apt.time)
+  const aptEndM = aptStartM + (apt.duration || 60)
+  const rangeStartM = parseTimeToMinutes(startTime)
+  const rangeEndM = parseTimeToMinutes(endTime)
+  return aptStartM < rangeStartM || aptEndM > rangeEndM
+}
+
 export function StaffWorkingHoursContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -129,9 +175,11 @@ export function StaffWorkingHoursContent() {
   const [selectedDate, setSelectedDate] = useState(() => format(new Date(), "yyyy-MM-dd"))
   const dateInputRef = useRef<HTMLInputElement>(null)
   const [editModal, setEditModal] = useState<EditModalState>(null)
+  const [modalAvailabilityType, setModalAvailabilityType] = useState<AvailabilityType>("full")
   const [modalStartTime, setModalStartTime] = useState("09:00")
   const [modalEndTime, setModalEndTime] = useState("21:00")
-  const [modalMarkAbsent, setModalMarkAbsent] = useState(false)
+  const [conflictingAppointments, setConflictingAppointments] = useState<any[]>([])
+  const [loadingAppointments, setLoadingAppointments] = useState(false)
   const [saving, setSaving] = useState(false)
   const [blockTimeModalOpen, setBlockTimeModalOpen] = useState(false)
   const [blockTitle, setBlockTitle] = useState("")
@@ -227,14 +275,110 @@ export function StaffWorkingHoursContent() {
     return map
   }, [blockTimes, weekDates])
 
+  const defaultHours = useMemo(() => {
+    if (!editModal) return { start: "09:00", end: "21:00" }
+    const schedule = getDefaultWorkSchedule(editModal.staff.workSchedule)
+    const dayRow = schedule[editModal.dayIndex]
+    return {
+      start: dayRow.startTime || "09:00",
+      end: dayRow.endTime || "21:00",
+    }
+  }, [editModal])
+
+  const firstHalfHours = useMemo(
+    () => getFirstHalfHours(defaultHours.start, defaultHours.end),
+    [defaultHours]
+  )
+  const secondHalfHours = useMemo(
+    () => getSecondHalfHours(defaultHours.start, defaultHours.end),
+    [defaultHours]
+  )
+
   useEffect(() => {
     if (!editModal) return
     const schedule = getDefaultWorkSchedule(editModal.staff.workSchedule)
     const dayRow = schedule[editModal.dayIndex]
-    setModalStartTime(dayRow.startTime || "09:00")
-    setModalEndTime(dayRow.endTime || "21:00")
-    setModalMarkAbsent(dayRow.enabled === false)
+    const defStart = dayRow.startTime || "09:00"
+    const defEnd = dayRow.endTime || "21:00"
+    const first = getFirstHalfHours(defStart, defEnd)
+    const second = getSecondHalfHours(defStart, defEnd)
+
+    if (dayRow.enabled === false) {
+      setModalAvailabilityType("off")
+      setModalStartTime(defStart)
+      setModalEndTime(defEnd)
+    } else if (dayRow.startTime === first.start && dayRow.endTime === first.end) {
+      setModalAvailabilityType("first-half")
+      setModalStartTime(first.start)
+      setModalEndTime(first.end)
+    } else if (dayRow.startTime === second.start && dayRow.endTime === second.end) {
+      setModalAvailabilityType("second-half")
+      setModalStartTime(second.start)
+      setModalEndTime(second.end)
+    } else if (dayRow.startTime === defStart && dayRow.endTime === defEnd) {
+      setModalAvailabilityType("full")
+      setModalStartTime(defStart)
+      setModalEndTime(defEnd)
+    } else {
+      setModalAvailabilityType("custom")
+      setModalStartTime(dayRow.startTime || defStart)
+      setModalEndTime(dayRow.endTime || defEnd)
+    }
+    setConflictingAppointments([])
   }, [editModal])
+
+  useEffect(() => {
+    if (!editModal || modalAvailabilityType === "off") {
+      setConflictingAppointments([])
+      return
+    }
+    let cancelled = false
+    setLoadingAppointments(true)
+    const dateStr = format(editModal.dayDate, "yyyy-MM-dd")
+    const getEffectiveHours = () => {
+      switch (modalAvailabilityType) {
+        case "full":
+          return defaultHours
+        case "first-half":
+          return firstHalfHours
+        case "second-half":
+          return secondHalfHours
+        case "custom":
+          return { start: modalStartTime, end: modalEndTime }
+        default:
+          return defaultHours
+      }
+    }
+    const hours = getEffectiveHours()
+    AppointmentsAPI.getAll({ date: dateStr, limit: 100 })
+      .then((res: any) => {
+        if (cancelled) return
+        const list = res?.data || []
+        const staffId = editModal.staff._id
+        const staffApts = list.filter((a: any) => {
+          const sid = a.staffId?._id || a.staffId
+          if (sid) return String(sid) === staffId
+          const assignments = a.staffAssignments || []
+          return assignments.some((s: any) => {
+            const asid = s.staffId?._id || s.staffId
+            return asid && String(asid) === staffId
+          })
+        })
+        const outside = staffApts.filter((a: any) =>
+          isAppointmentOutsideHours(a, hours.start, hours.end)
+        )
+        setConflictingAppointments(outside)
+      })
+      .catch(() => {
+        if (!cancelled) setConflictingAppointments([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingAppointments(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [editModal, modalAvailabilityType, modalStartTime, modalEndTime, defaultHours, firstHalfHours, secondHalfHours])
 
   const openEditModal = (s: StaffRow, dayIndex: number, dayDate: Date) => {
     if (s.isOwner) return
@@ -245,16 +389,51 @@ export function StaffWorkingHoursContent() {
     setEditModal(null)
   }
 
+  const getEffectiveHoursForSave = () => {
+    switch (modalAvailabilityType) {
+      case "full":
+        return defaultHours
+      case "first-half":
+        return firstHalfHours
+      case "second-half":
+        return secondHalfHours
+      case "custom":
+        return { start: modalStartTime, end: modalEndTime }
+      case "off":
+        return { start: defaultHours.start, end: defaultHours.end }
+      default:
+        return defaultHours
+    }
+  }
+
+  const handleAvailabilityTypeChange = (value: AvailabilityType) => {
+    setModalAvailabilityType(value)
+    if (value === "full") {
+      setModalStartTime(defaultHours.start)
+      setModalEndTime(defaultHours.end)
+    } else if (value === "first-half") {
+      setModalStartTime(firstHalfHours.start)
+      setModalEndTime(firstHalfHours.end)
+    } else if (value === "second-half") {
+      setModalStartTime(secondHalfHours.start)
+      setModalEndTime(secondHalfHours.end)
+    } else if (value === "off") {
+      setModalStartTime(defaultHours.start)
+      setModalEndTime(defaultHours.end)
+    }
+  }
+
   const handleUpdateWorkingHours = async () => {
     if (!editModal) return
     setSaving(true)
     try {
       const schedule = getDefaultWorkSchedule(editModal.staff.workSchedule)
+      const hours = getEffectiveHoursForSave()
       const updated: StaffWorkDay = {
         day: editModal.dayIndex,
-        enabled: !modalMarkAbsent,
-        startTime: modalStartTime,
-        endTime: modalEndTime,
+        enabled: modalAvailabilityType !== "off",
+        startTime: hours.start,
+        endTime: hours.end,
       }
       const newSchedule = schedule.map((row) =>
         row.day === editModal.dayIndex ? updated : row
@@ -277,16 +456,60 @@ export function StaffWorkingHoursContent() {
     }
   }
 
-  const handleDeleteDay = async () => {
+  const hasOverride = useMemo(() => {
+    if (!editModal) return false
+    const schedule = getDefaultWorkSchedule(editModal.staff.workSchedule)
+    const dayRow = schedule[editModal.dayIndex]
+    const defStart = dayRow.startTime || "09:00"
+    const defEnd = dayRow.endTime || "21:00"
+    if (dayRow.enabled === false) return true
+    const first = getFirstHalfHours(defStart, defEnd)
+    const second = getSecondHalfHours(defStart, defEnd)
+    if (dayRow.startTime === first.start && dayRow.endTime === first.end) return true
+    if (dayRow.startTime === second.start && dayRow.endTime === second.end) return true
+    if (dayRow.startTime !== defStart || dayRow.endTime !== defEnd) return true
+    return false
+  }, [editModal])
+
+  const handleCancelConflictingAppointments = async () => {
+    if (conflictingAppointments.length === 0) return
+    if (!confirm(`Cancel ${conflictingAppointments.length} conflicting appointment(s)?`)) return
+    setSaving(true)
+    try {
+      await Promise.all(
+        conflictingAppointments.map((apt: any) =>
+          AppointmentsAPI.update(apt._id, { status: "cancelled" })
+        )
+      )
+      setConflictingAppointments([])
+    } catch (e) {
+      console.error(e)
+      alert("Failed to cancel appointments.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleReassignConflicting = () => {
+    if (!editModal) return
+    closeEditModal()
+    router.push(
+      `/appointments?view=calendar&date=${format(editModal.dayDate, "yyyy-MM-dd")}&staffId=${editModal.staff._id}`
+    )
+  }
+
+  const handleRemoveOverride = async () => {
     if (!editModal) return
     setSaving(true)
     try {
       const schedule = getDefaultWorkSchedule(editModal.staff.workSchedule)
+      const defStart = defaultHours.start
+      const defEnd = defaultHours.end
       const updated: StaffWorkDay = {
         day: editModal.dayIndex,
-        enabled: false,
-        startTime: "09:00",
-        endTime: "21:00",
+        enabled: true,
+        startTime: defStart,
+        endTime: defEnd,
       }
       const newSchedule = schedule.map((row) =>
         row.day === editModal.dayIndex ? updated : row
@@ -661,70 +884,171 @@ export function StaffWorkingHoursContent() {
         </div>
 
         <Dialog open={!!editModal} onOpenChange={(open) => !open && closeEditModal()}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Working Hours</DialogTitle>
-              <DialogDescription>
+          <DialogContent className="sm:max-w-lg rounded-2xl border-slate-200 shadow-xl">
+            <DialogHeader className="space-y-1 pb-4">
+              <DialogTitle className="text-xl font-semibold text-slate-900">
+                Manage Availability
+              </DialogTitle>
+              <DialogDescription className="text-slate-500">
                 {editModal && (
-                  <>
+                  <span className="font-medium text-slate-600">
                     {editModal.staff.name} – {format(editModal.dayDate, "EEEE, dd MMM yyyy")}
-                  </>
+                  </span>
                 )}
               </DialogDescription>
             </DialogHeader>
             {editModal && (
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="modal-start">Start Time</Label>
-                  <input
-                    id="modal-start"
-                    type="time"
-                    value={modalStartTime}
-                    onChange={(e) => setModalStartTime(e.target.value)}
-                    disabled={modalMarkAbsent}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
+              <div className="space-y-6 py-2">
+                <div className="space-y-3">
+                  <Label className="text-sm font-medium text-slate-700">Availability Type</Label>
+                  <RadioGroup
+                    value={modalAvailabilityType}
+                    onValueChange={(v) => handleAvailabilityTypeChange(v as AvailabilityType)}
+                    className="grid gap-3"
+                  >
+                    <div className="flex items-center space-x-3 rounded-xl border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50 transition-colors">
+                      <RadioGroupItem value="full" id="avail-full" />
+                      <Label htmlFor="avail-full" className="flex-1 cursor-pointer">
+                        <span className="font-medium text-slate-800">Full Working Day</span>
+                        <span className="block text-xs text-slate-500 mt-0.5">
+                          {format(new Date(2000, 0, 1, parseInt(defaultHours.start.split(":")[0], 10), parseInt(defaultHours.start.split(":")[1], 10)), "h:mma").toLowerCase()} – {format(new Date(2000, 0, 1, parseInt(defaultHours.end.split(":")[0], 10), parseInt(defaultHours.end.split(":")[1], 10)), "h:mma").toLowerCase()}
+                        </span>
+                      </Label>
+                      <Clock className="h-4 w-4 text-slate-400" />
+                    </div>
+                    <div className="flex items-center space-x-3 rounded-xl border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50 transition-colors">
+                      <RadioGroupItem value="first-half" id="avail-first" />
+                      <Label htmlFor="avail-first" className="flex-1 cursor-pointer">
+                        <span className="font-medium text-slate-800">First Half Only</span>
+                        <span className="block text-xs text-slate-500 mt-0.5">
+                          {format(new Date(2000, 0, 1, parseInt(firstHalfHours.start.split(":")[0], 10), parseInt(firstHalfHours.start.split(":")[1], 10)), "h:mma").toLowerCase()} – {format(new Date(2000, 0, 1, parseInt(firstHalfHours.end.split(":")[0], 10), parseInt(firstHalfHours.end.split(":")[1], 10)), "h:mma").toLowerCase()}
+                        </span>
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-3 rounded-xl border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50 transition-colors">
+                      <RadioGroupItem value="second-half" id="avail-second" />
+                      <Label htmlFor="avail-second" className="flex-1 cursor-pointer">
+                        <span className="font-medium text-slate-800">Second Half Only</span>
+                        <span className="block text-xs text-slate-500 mt-0.5">
+                          {format(new Date(2000, 0, 1, parseInt(secondHalfHours.start.split(":")[0], 10), parseInt(secondHalfHours.start.split(":")[1], 10)), "h:mma").toLowerCase()} – {format(new Date(2000, 0, 1, parseInt(secondHalfHours.end.split(":")[0], 10), parseInt(secondHalfHours.end.split(":")[1], 10)), "h:mma").toLowerCase()}
+                        </span>
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-3 rounded-xl border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50 transition-colors">
+                      <RadioGroupItem value="custom" id="avail-custom" />
+                      <Label htmlFor="avail-custom" className="flex-1 cursor-pointer font-medium text-slate-800">
+                        Custom Hours
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-3 rounded-xl border border-slate-200 bg-slate-50/50 p-3 hover:bg-slate-50 transition-colors">
+                      <RadioGroupItem value="off" id="avail-off" />
+                      <Label htmlFor="avail-off" className="flex-1 cursor-pointer">
+                        <span className="font-medium text-slate-800">Full Day Off</span>
+                        <span className="block text-xs text-slate-500 mt-0.5">Unavailable for appointments</span>
+                      </Label>
+                      <CalendarOff className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </RadioGroup>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="modal-end">End Time</Label>
-                  <input
-                    id="modal-end"
-                    type="time"
-                    value={modalEndTime}
-                    onChange={(e) => setModalEndTime(e.target.value)}
-                    disabled={modalMarkAbsent}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="modal-absent"
-                    checked={modalMarkAbsent}
-                    onCheckedChange={(checked) => setModalMarkAbsent(!!checked)}
-                  />
-                  <Label htmlFor="modal-absent" className="text-sm font-normal cursor-pointer">
-                    Mark as absent
-                  </Label>
-                </div>
+
+                {modalAvailabilityType === "custom" && (
+                  <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="modal-start" className="text-sm font-medium text-slate-700">Start Time</Label>
+                      <input
+                        id="modal-start"
+                        type="time"
+                        value={modalStartTime}
+                        onChange={(e) => setModalStartTime(e.target.value)}
+                        className="flex h-10 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="modal-end" className="text-sm font-medium text-slate-700">End Time</Label>
+                      <input
+                        id="modal-end"
+                        type="time"
+                        value={modalEndTime}
+                        onChange={(e) => setModalEndTime(e.target.value)}
+                        className="flex h-10 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {conflictingAppointments.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-amber-800">
+                          {conflictingAppointments.length} appointment{conflictingAppointments.length !== 1 ? "s" : ""} fall outside selected hours
+                        </p>
+                        <p className="text-xs text-amber-700 mt-1">
+                          Choose how to handle conflicting appointments before saving.
+                        </p>
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="border-amber-300 text-amber-800 hover:bg-amber-100"
+                            onClick={handleReassignConflicting}
+                          >
+                            Reassign
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="border-amber-300 text-amber-800 hover:bg-amber-100"
+                            onClick={handleCancelConflictingAppointments}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="border-amber-300 text-amber-800 hover:bg-amber-100"
+                            onClick={() => setConflictingAppointments([])}
+                          >
+                            Keep Anyway
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-            <DialogFooter className="flex-row gap-2 sm:justify-between">
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={handleDeleteDay}
-                disabled={saving}
-                className="mr-auto"
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
-              </Button>
+            <DialogFooter className="flex flex-row gap-2 sm:justify-between pt-6 border-t border-slate-200">
               <div className="flex gap-2">
-                <Button type="button" variant="outline" onClick={closeEditModal} disabled={saving}>
+                {hasOverride && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRemoveOverride}
+                    disabled={saving}
+                    className="text-slate-600 hover:text-slate-800 hover:bg-slate-100"
+                  >
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    Remove Override
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={closeEditModal} disabled={saving} className="rounded-xl">
                   Cancel
                 </Button>
-                <Button type="button" onClick={handleUpdateWorkingHours} disabled={saving}>
-                  {saving ? "Saving…" : "Update"}
+                <Button
+                  type="button"
+                  onClick={handleUpdateWorkingHours}
+                  disabled={saving}
+                  className="rounded-xl bg-indigo-600 hover:bg-indigo-700"
+                >
+                  {saving ? "Saving…" : "Save Changes"}
                 </Button>
               </div>
             </DialogFooter>

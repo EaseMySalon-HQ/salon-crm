@@ -1072,27 +1072,27 @@ export const AppointmentsCalendarGrid = forwardRef<
         </div>
       </div>
 
-      <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-        <div className="overflow-x-auto relative">
+      <div className="border border-slate-200 rounded-xl overflow-clip bg-white">
+        <div className="overflow-auto max-h-[calc(100vh-320px)] min-h-[400px]">
           <div
-            className="grid min-w-[600px]"
+            className="grid min-w-[600px] relative"
             style={{
               gridTemplateColumns: `80px repeat(${Math.max(1, columns.length)}, minmax(120px, 1fr))`,
               gridTemplateRows: `44px repeat(${totalSlots}, ${SLOT_HEIGHT}px)`,
             }}
           >
-            <div className="border-b border-r border-slate-200 bg-white p-2.5 font-medium text-slate-600 text-xs uppercase tracking-wide text-left">
+            <div className="sticky top-0 z-20 border-b border-r border-slate-200 bg-white p-2.5 font-medium text-slate-600 text-xs uppercase tracking-wide text-left shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]">
               Time
             </div>
             {columns.length === 0 ? (
-              <div className="border-b border-r border-slate-200 bg-white p-2.5 font-semibold text-slate-500 text-center">
+              <div className="sticky top-0 z-20 border-b border-r border-slate-200 bg-white p-2.5 font-semibold text-slate-500 text-center shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]">
                 No staff
               </div>
             ) : (
               columns.map((col) => (
                 <div
                   key={col._id}
-                  className="border-b border-r border-slate-200 bg-white p-2.5 font-semibold text-slate-700 text-center last:border-r-0"
+                  className="sticky top-0 z-20 border-b border-r border-slate-200 bg-white p-2.5 font-semibold text-slate-700 text-center last:border-r-0 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]"
                 >
                   {col.name}
                 </div>
@@ -1180,13 +1180,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                 </Fragment>
               )
             })}
-          </div>
-          {columns.length > 0 && (
-            <div
-              ref={blocksContainerRef}
-              className="absolute pointer-events-none top-[44px] left-[80px] right-0 bottom-0 min-w-[520px]"
-              style={{ height: totalSlots * SLOT_HEIGHT }}
-            >
+            {columns.length > 0 && (
+              <div
+                ref={blocksContainerRef}
+                className="absolute pointer-events-none top-[44px] left-[80px] right-0 bottom-0 min-w-[520px]"
+                style={{ height: totalSlots * SLOT_HEIGHT }}
+              >
               {columns.map((col, colIndex) => (
                 <div
                   key={`blocks-${col._id}`}
@@ -1347,8 +1346,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                   ))}
                 </div>
               ))}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
