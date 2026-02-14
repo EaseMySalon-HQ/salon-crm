@@ -6560,7 +6560,18 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
     console.log('🔍 Sales request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
     const { Sale, BillEditHistory } = req.businessModels;
-    const sales = await Sale.find().sort({ date: -1 }).lean();
+    const { dateFrom, dateTo } = req.query;
+    let query = { status: { $nin: ['cancelled', 'Cancelled'] } };
+    if (dateFrom || dateTo) {
+      query.date = {};
+      if (dateFrom) query.date.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const d = new Date(dateTo);
+        d.setHours(23, 59, 59, 999);
+        query.date.$lte = d;
+      }
+    }
+    const sales = await Sale.find(query).sort({ date: -1 }).lean();
     
     // For bills that don't have isEdited set but have edit history, mark them as edited
     if (BillEditHistory) {
