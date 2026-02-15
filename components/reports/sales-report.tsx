@@ -530,6 +530,7 @@ export function SalesReport() {
   }, 0)
 
   const handleExportPDF = async () => {
+    toast({ title: "Export requested", description: "Generating sales report PDF...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       
@@ -598,6 +599,7 @@ export function SalesReport() {
   }
 
   const handleExportXLS = async () => {
+    toast({ title: "Export requested", description: "Generating sales report Excel...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       
@@ -697,6 +699,7 @@ export function SalesReport() {
   }
 
   const handleExportSummaryPDF = async () => {
+    toast({ title: "Export requested", description: "Generating summary report PDF...", duration: 3000 })
     try {
       const { ReportsAPI } = await import("@/lib/api")
       const filters = getSummaryExportDateRange()
@@ -710,6 +713,7 @@ export function SalesReport() {
   }
 
   const handleExportSummaryXLS = async () => {
+    toast({ title: "Export requested", description: "Generating summary report Excel...", duration: 3000 })
     try {
       const { ReportsAPI } = await import("@/lib/api")
       const filters = getSummaryExportDateRange()
@@ -723,6 +727,7 @@ export function SalesReport() {
   }
 
   const handleExportServiceListPDF = async () => {
+    toast({ title: "Export requested", description: "Generating service list PDF...", duration: 3000 })
     try {
       const { ReportsAPI } = await import("@/lib/api")
       const filters: any = getServiceListExportDateRange()
@@ -740,6 +745,7 @@ export function SalesReport() {
   }
 
   const handleExportServiceListXLS = async () => {
+    toast({ title: "Export requested", description: "Generating service list Excel...", duration: 3000 })
     try {
       const { ReportsAPI } = await import("@/lib/api")
       const filters: any = getServiceListExportDateRange()
@@ -1406,45 +1412,76 @@ export function SalesReport() {
                   </div>
                 </div>
 
-                {/* Section D: Final Settlement */}
+                {/* Section D: Final Settlement (single day) / Total Cash Balance (date range) */}
+                {(() => {
+                  const isSummarySingleDay = datePeriod === "today" || datePeriod === "yesterday" ||
+                    (datePeriod === "custom" && dateRange.from && dateRange.to && toDateStringIST(dateRange.from) === toDateStringIST(dateRange.to))
+                  const expectedCashInDrawer = (summaryData.openingBalance ?? 0) + summaryData.totalSalesCash + (summaryData.cashDuesCollected ?? 0) - summaryData.cashExpense
+                  const cashBalance = summaryData.closingBalance ?? summaryData.cashBalance ?? 0
+                  const diff = Math.abs(cashBalance - expectedCashInDrawer)
+                  const cashBalanceColor = diff < 0.01 ? "text-emerald-600" : cashBalance < expectedCashInDrawer ? "text-red-600" : "text-orange-600"
+                  return (
                 <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
                   <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
                     <Banknote className="h-4 w-4 text-indigo-500" />
-                    Final Settlement
+                    {isSummarySingleDay ? "Final Settlement" : "Total Cash Balance"}
                   </h3>
                   <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600 flex items-center gap-1.5">
-                        Expected Cash in Drawer
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs p-3">
-                            <p className="text-sm">Opening Balance + Cash Sales + Cash Dues Collected − Cash Expenses</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </span>
-                      <span className="font-semibold text-slate-900">₹{((summaryData.openingBalance ?? 0) + summaryData.totalSalesCash + (summaryData.cashDuesCollected ?? 0) - summaryData.cashExpense).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-3 border-t border-slate-100">
-                      <span className="text-slate-600 flex items-center gap-1.5">
-                        Cash Balance
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs p-3">
-                            <p className="text-sm">Closing balance recorded in the cash registry when the shift was closed.</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </span>
-                      <span className={`font-bold text-lg ${(summaryData.closingBalance ?? summaryData.cashBalance ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                        ₹{(summaryData.closingBalance ?? summaryData.cashBalance ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                      </span>
-                    </div>
+                    {isSummarySingleDay ? (
+                          <>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-600 flex items-center gap-1.5">
+                                Expected Cash in Drawer
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="max-w-xs p-3">
+                                    <p className="text-sm">Opening Balance + Cash Sales + Cash Dues Collected − Cash Expenses</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </span>
+                              <span className="font-semibold text-slate-900">₹{expectedCashInDrawer.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                            </div>
+                            <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+                              <span className="text-slate-600 flex items-center gap-1.5">
+                                Cash Balance
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="max-w-xs p-3">
+                                    <p className="text-sm">Closing balance recorded in the cash registry when the shift was closed.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </span>
+                              <span className={`font-bold text-lg ${cashBalanceColor}`}>
+                                ₹{cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          </>
+                    ) : (
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600 flex items-center gap-1.5">
+                          Total Cash Balance
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs p-3">
+                              <p className="text-sm">Total cash balance across the selected date range.</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </span>
+                        <span className={`font-bold text-lg ${cashBalanceColor}`}>
+                          ₹{cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
+                  )
+                })()}
               </div>
 
             </TooltipProvider>

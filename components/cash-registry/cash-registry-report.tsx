@@ -984,6 +984,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   })
 
   const handleExportPDF = async () => {
+    toast({ title: "Export requested", description: "Generating cash registry PDF...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       
@@ -1012,6 +1013,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   }
 
   const handleExportXLS = async () => {
+    toast({ title: "Export requested", description: "Generating cash registry Excel...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       
@@ -1971,7 +1973,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                             rows.push(
                               <TableRow key={`${entry.id}-opening`}>
                                 <TableCell className="font-medium">
-                                  {format(new Date(entry.date), "dd MMM yyyy, HH:mm")}
+                                  {entry.createdAt
+                                    ? format(new Date(entry.createdAt), "dd MMM yyyy, h:mm a")
+                                    : format(new Date(entry.date), "dd MMM yyyy")}
                                 </TableCell>
                                 <TableCell>{entry.createdBy}</TableCell>
                                 <TableCell>
@@ -2027,7 +2031,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                             rows.push(
                               <TableRow key={`${entry.id}-closing`}>
                                 <TableCell className="font-medium">
-                                  {format(new Date(entry.date), "dd MMM yyyy, HH:mm")}
+                                  {entry.createdAt
+                                    ? format(new Date(entry.createdAt), "dd MMM yyyy, h:mm a")
+                                    : format(new Date(entry.date), "dd MMM yyyy")}
                                 </TableCell>
                                 <TableCell>{entry.createdBy}</TableCell>
                                 <TableCell>

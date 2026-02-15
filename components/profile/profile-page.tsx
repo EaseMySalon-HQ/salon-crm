@@ -53,6 +53,7 @@ export function ProfilePage() {
   const handleExportData = async () => {
     if (!user?._id || user?.role !== 'admin') return
 
+    toast({ title: "Export requested", description: "Generating your data export...", duration: 3000 })
     setIsExporting(true)
     try {
       const response = await GDPRAPI.exportUserData(user._id)
