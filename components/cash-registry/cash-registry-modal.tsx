@@ -164,8 +164,10 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
       // Recalculate total balance from cleaned denominations
       const calculatedTotalBalance = cleanDenominations.reduce((sum, d) => sum + d.total, 0)
       
+      // Send date as YYYY-MM-DD to avoid timezone shift (e.g. 15th becoming 14th in UTC-* zones)
+      const dateString = format(date, "yyyy-MM-dd")
       const cashRegistryData = {
-        date: date, // Send the Date object as is
+        date: dateString,
         shiftType: shift,
         createdBy: user?.name || user?.email || "Unknown User", // Add required createdBy field
         denominations: cleanDenominations, // Use cleaned denominations

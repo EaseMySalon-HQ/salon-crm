@@ -4,6 +4,7 @@ const CashRegistry = require('../models/CashRegistry');
 const Sale = require('../models/Sale');
 const Expense = require('../models/Expense');
 const { authenticateToken: auth } = require('../middleware/auth');
+const { parseDateIST, getStartOfDayIST, getEndOfDayIST } = require('../utils/date-utils');
 
 // Test endpoint to verify connection (no auth for testing) - MUST BE FIRST
 router.get('/test', (req, res) => {
@@ -136,15 +137,14 @@ router.post('/', auth, async (req, res) => {
       return sum + total;
     }, 0);
     
-    // Check if a record already exists for this date
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
+    // Parse date in IST (Asia/Kolkata) - all dates use IST
+    const dateObj = parseDateIST(date);
+    const startOfDay = getStartOfDayIST(date);
+    const endOfDay = getEndOfDayIST(date);
     
     console.log('Looking for existing record:', {
       date: date,
+      dateObj: dateObj,
       startOfDay: startOfDay,
       endOfDay: endOfDay,
       shiftType: shiftType
@@ -240,9 +240,9 @@ router.post('/', auth, async (req, res) => {
       console.log('🟢 Sending update response:', response);
       res.json(response);
     } else {
-      // Create new record
+      // Create new record (use dateObj for consistent storage)
       const cashRegistry = new CashRegistry({
-        date,
+        date: dateObj,
         shiftType,
         createdBy: req.user.name || req.user.email || 'Unknown User',
         userId: req.user.id,
