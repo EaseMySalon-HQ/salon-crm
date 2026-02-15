@@ -9,16 +9,35 @@ import { MessageCircle, Shield, Sparkles, TrendingUp } from "lucide-react"
 import { LoginForm } from "@/components/auth/login-form"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
+import { useToast } from "@/hooks/use-toast"
+import { consumeSessionExpiredFlag } from "@/lib/auth-utils"
 
 export default function LoginPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
+  const { toast } = useToast()
 
   useEffect(() => {
     if (!isLoading && user) {
       router.push("/dashboard")
     }
   }, [user, isLoading, router])
+
+  // Show "Session expired" message when redirected after 401/403
+  useEffect(() => {
+    const fromQuery = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("session_expired") === "1"
+    const fromFlag = consumeSessionExpiredFlag()
+    if (fromQuery || fromFlag) {
+      toast({
+        title: "Session Expired",
+        description: "Your session has expired. Please log in again.",
+        variant: "destructive",
+      })
+      if (fromQuery && typeof window !== "undefined") {
+        window.history.replaceState({}, "", "/login")
+      }
+    }
+  }, [toast])
 
   if (isLoading) {
     return (

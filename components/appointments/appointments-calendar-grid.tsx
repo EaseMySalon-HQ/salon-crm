@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useEffect, forwardRef, useImperativeHandle, useMemo, Fragment } from "react"
+import { useState, useEffect, forwardRef, useImperativeHandle, useMemo, Fragment, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI } from "@/lib/api"
+import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI } from "@/lib/api"
 
 interface Appointment {
   _id: string
@@ -48,6 +48,8 @@ interface Appointment {
   notes?: string
   price: number
   createdAt: string
+  createdBy?: string
+  leadSource?: string
 }
 
 interface StaffWorkDay {
@@ -145,6 +147,19 @@ function getPrimaryStaffId(apt: Appointment): string | null {
     return assignment?.staffId?._id ?? assignment?.staffId ?? null
   }
   return null
+}
+
+function getPrimaryStaffName(apt: Appointment): string {
+  const a = apt as any
+  if (a.staffId?.name) return a.staffId.name
+  if (a.staffAssignments?.length) {
+    const primary = a.staffAssignments.find((s: any) => s.role === "primary")
+    const first = a.staffAssignments[0]
+    const assignment = primary || first
+    const staff = assignment?.staffId
+    return staff?.name ?? (typeof staff === "string" ? staff : "Unassigned Staff")
+  }
+  return "Unassigned Staff"
 }
 
 function getStatusColor(status: string): string {
@@ -247,9 +262,56 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [showColorLegend, setShowColorLegend] = useState(false)
   const [blockTimes, setBlockTimes] = useState<BlockTime[]>([])
+  const [walkInSales, setWalkInSales] = useState<any[]>([])
   const [pendingAppointmentId, setPendingAppointmentId] = useState<string | null>(
     initialAppointmentId ?? null
   )
+  const [linkedSale, setLinkedSale] = useState<any | null>(null)
+  const [draggingApt, setDraggingApt] = useState<{
+    id: string
+    startX: number
+    startY: number
+    startTimeMinutes: number
+    duration: number
+    mode: "move" | "resize-top" | "resize-bottom"
+    sourceStaffId: string
+  } | null>(null)
+  const [updatingTimeForId, setUpdatingTimeForId] = useState<string | null>(null)
+  const [dragOffsetY, setDragOffsetY] = useState(0)
+  const [dragOffsetX, setDragOffsetX] = useState(0)
+  const blocksContainerRef = useRef<HTMLDivElement | null>(null)
+  const justDraggedRef = useRef(false)
+  const [showTimeChangeConfirm, setShowTimeChangeConfirm] = useState(false)
+  const [pendingTimeChange, setPendingTimeChange] = useState<{
+    id: string
+    mode: "move" | "resize-top" | "resize-bottom" | "staff"
+    oldTime?: string
+    newTime?: string
+    oldDuration?: number
+    newDuration?: number
+    oldStaffId?: string
+    newStaffId?: string
+    oldStaffName?: string
+    newStaffName?: string
+  } | null>(null)
+
+  useEffect(() => {
+    if (!selectedAppointment?._id) {
+      setLinkedSale(null)
+      return
+    }
+    let cancelled = false
+    SalesAPI.getByAppointmentId(selectedAppointment._id)
+      .then((res) => {
+        if (!cancelled && res?.success) setLinkedSale(res.data ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setLinkedSale(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedAppointment?._id])
 
   useImperativeHandle(ref, () => ({
     showCancelledModal: () => setShowCancelledModal(true),
@@ -318,6 +380,37 @@ export const AppointmentsCalendarGrid = forwardRef<
       cancelled = true
     }
   }, [selectedDate, staffFilter])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!selectedDate) return
+    const load = async () => {
+      try {
+        const res = await SalesAPI.getAll({
+          dateFrom: selectedDate,
+          dateTo: selectedDate,
+        })
+        if (cancelled) return
+        if (res?.success && Array.isArray(res?.data)) {
+          const sales = res.data
+          const walkIns = sales.filter(
+            (s: any) =>
+              !s.appointmentId &&
+              s.items?.some((i: any) => i.type === "service")
+          )
+          setWalkInSales(walkIns)
+        } else {
+          setWalkInSales([])
+        }
+      } catch (e) {
+        if (!cancelled) setWalkInSales([])
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [selectedDate])
 
   const dateNorm = (d: string) =>
     d && d.length >= 10 ? d.slice(0, 10) : d
@@ -453,6 +546,43 @@ export const AppointmentsCalendarGrid = forwardRef<
     return map
   }, [columns, filteredAppointments])
 
+  const WALK_IN_SALE_DURATION = 30
+
+  const salesByColumn = useMemo(() => {
+    const map: Record<string, Array<{ sale: any; serviceItem: any; top: number; height: number; startM: number; endM: number }>> = {}
+    columns.forEach((col) => {
+      map[col._id] = []
+    })
+    walkInSales.forEach((sale) => {
+      const serviceItems = (sale.items || []).filter((i: any) => i.type === "service")
+      if (serviceItems.length === 0) return
+      const checkoutEndM = parseTimeToMinutes(sale.time || "9:00")
+      const duration = WALK_IN_SALE_DURATION
+      const slotDuration = Math.ceil(duration / SLOT_MINUTES) * SLOT_MINUTES
+      const staffOffsets: Record<string, number> = {}
+      serviceItems.forEach((item: any) => {
+        const staffId =
+          item.staffId ||
+          item.staffContributions?.[0]?.staffId ||
+          sale.staffId
+        if (!staffId || !map[staffId]) return
+        const endM = checkoutEndM
+        const startM = endM - slotDuration
+        if (startM < startMinutes || endM > endMinutes) return
+        const baseTop = ((startM - startMinutes) / SLOT_MINUTES) * SLOT_HEIGHT
+        const offset = (staffOffsets[staffId] || 0) * 8
+        staffOffsets[staffId] = (staffOffsets[staffId] || 0) + 1
+        const top = baseTop + offset
+        const height = Math.max(SLOT_HEIGHT * 0.6, (duration / SLOT_MINUTES) * SLOT_HEIGHT)
+        map[staffId].push({ sale, serviceItem: item, top, height, startM, endM })
+      })
+    })
+    columns.forEach((col) => {
+      (map[col._id] || []).sort((a, b) => a.top - b.top)
+    })
+    return map
+  }, [columns, walkInSales, startMinutes, endMinutes])
+
   const blockTimesByColumn = useMemo(() => {
     const map: Record<string, Array<{ block: BlockTime; top: number; height: number }>> = {}
     columns.forEach((col) => {
@@ -562,6 +692,265 @@ export const AppointmentsCalendarGrid = forwardRef<
     } finally {
       setUpdatingStatus(false)
     }
+  }
+
+  const handleTimeDragStart = (e: React.MouseEvent, apt: Appointment) => {
+    if (apt.status === "cancelled") return
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOffsetY(0)
+    setDragOffsetX(0)
+    const sourceStaffId = getPrimaryStaffId(apt) ?? ""
+    setDraggingApt({
+      id: apt._id,
+      startX: e.clientX,
+      startY: e.clientY,
+      startTimeMinutes: parseTimeToMinutes(apt.time),
+      duration: apt.duration ?? 60,
+      mode: "move",
+      sourceStaffId,
+    })
+  }
+
+  const handleResizeStart = (e: React.MouseEvent, apt: Appointment, mode: "resize-top" | "resize-bottom") => {
+    if (apt.status === "cancelled") return
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOffsetY(0)
+    setDragOffsetX(0)
+    const sourceStaffId = getPrimaryStaffId(apt) ?? ""
+    setDraggingApt({
+      id: apt._id,
+      startX: e.clientX,
+      startY: e.clientY,
+      startTimeMinutes: parseTimeToMinutes(apt.time),
+      duration: apt.duration ?? 60,
+      mode,
+      sourceStaffId,
+    })
+  }
+
+  useEffect(() => {
+    if (!draggingApt) return
+    const onMouseMove = (e: MouseEvent) => {
+      if (showTimeChangeConfirm) return
+      justDraggedRef.current = true
+      setDragOffsetY(e.clientY - draggingApt.startY)
+      if (draggingApt.mode === "move" || draggingApt.mode === "resize-top") {
+        setDragOffsetX(e.clientX - draggingApt.startX)
+      }
+    }
+    const onMouseUp = async (e: MouseEvent) => {
+      if (showTimeChangeConfirm) return
+      const current = draggingApt
+      if (!current) return
+      const deltaY = e.clientY - current.startY
+      const slotDelta = Math.round(deltaY / SLOT_HEIGHT)
+      const minutesDelta = slotDelta * SLOT_MINUTES
+
+      const getTargetColumnIndex = (): number | null => {
+        const el = blocksContainerRef.current
+        if (!el || columns.length === 0) return null
+        const rect = el.getBoundingClientRect()
+        const clientX = e.clientX
+        if (clientX < rect.left || clientX > rect.right) return null
+        const colWidth = rect.width / columns.length
+        const index = Math.floor((clientX - rect.left) / colWidth)
+        return index >= 0 && index < columns.length ? index : null
+      }
+
+      if (current.mode === "move") {
+        const targetColIndex = getTargetColumnIndex()
+        const targetStaffId = targetColIndex != null && columns[targetColIndex] ? columns[targetColIndex]._id : null
+        const isStaffChange = columns.length > 1 && targetStaffId && targetStaffId !== current.sourceStaffId
+
+        if (isStaffChange) {
+          let newMinutes = current.startTimeMinutes + minutesDelta
+          const endMinutesBound = endMinutes - current.duration
+          newMinutes = Math.max(startMinutes, Math.min(endMinutesBound, newMinutes))
+          newMinutes = Math.floor(newMinutes / SLOT_MINUTES) * SLOT_MINUTES
+          const newTime = slotMinutesToTimeString(newMinutes)
+          const oldTime = slotMinutesToTimeString(current.startTimeMinutes)
+          const oldStaff = columns.find((c) => c._id === current.sourceStaffId)
+          const newStaff = columns.find((c) => c._id === targetStaffId)
+          setPendingTimeChange({
+            id: current.id,
+            mode: "staff",
+            oldStaffId: current.sourceStaffId,
+            newStaffId: targetStaffId,
+            oldStaffName: oldStaff?.name ?? "Unknown",
+            newStaffName: newStaff?.name ?? "Unknown",
+            oldTime,
+            newTime,
+          })
+          setShowTimeChangeConfirm(true)
+        } else {
+          let newMinutes = current.startTimeMinutes + minutesDelta
+          const endMinutesBound = endMinutes - current.duration
+          newMinutes = Math.max(startMinutes, Math.min(endMinutesBound, newMinutes))
+          newMinutes = Math.floor(newMinutes / SLOT_MINUTES) * SLOT_MINUTES
+          if (newMinutes === current.startTimeMinutes) {
+            setDraggingApt(null)
+            setDragOffsetY(0)
+            setDragOffsetX(0)
+            return
+          }
+          const newTime = slotMinutesToTimeString(newMinutes)
+          const oldTime = slotMinutesToTimeString(current.startTimeMinutes)
+          setPendingTimeChange({ id: current.id, mode: "move", oldTime, newTime })
+          setShowTimeChangeConfirm(true)
+        }
+      } else if (current.mode === "resize-top") {
+        const targetColIndex = getTargetColumnIndex()
+        const targetStaffId = targetColIndex != null && columns[targetColIndex] ? columns[targetColIndex]._id : null
+        const isStaffChange = columns.length > 1 && targetStaffId && targetStaffId !== current.sourceStaffId
+
+        if (isStaffChange) {
+          let newStartMinutes = current.startTimeMinutes + minutesDelta
+          const endMinutesBound = endMinutes - current.duration
+          newStartMinutes = Math.max(startMinutes, Math.min(endMinutesBound, newStartMinutes))
+          newStartMinutes = Math.floor(newStartMinutes / SLOT_MINUTES) * SLOT_MINUTES
+          const newTime = slotMinutesToTimeString(newStartMinutes)
+          const oldTime = slotMinutesToTimeString(current.startTimeMinutes)
+          const oldStaff = columns.find((c) => c._id === current.sourceStaffId)
+          const newStaff = columns.find((c) => c._id === targetStaffId)
+          setPendingTimeChange({
+            id: current.id,
+            mode: "staff",
+            oldStaffId: current.sourceStaffId,
+            newStaffId: targetStaffId,
+            oldStaffName: oldStaff?.name ?? "Unknown",
+            newStaffName: newStaff?.name ?? "Unknown",
+            oldTime,
+            newTime,
+          })
+          setShowTimeChangeConfirm(true)
+        } else {
+          let newStartMinutes = current.startTimeMinutes + minutesDelta
+          const endMinutesBound = endMinutes - current.duration
+          newStartMinutes = Math.max(startMinutes, Math.min(endMinutesBound, newStartMinutes))
+          newStartMinutes = Math.floor(newStartMinutes / SLOT_MINUTES) * SLOT_MINUTES
+          if (newStartMinutes === current.startTimeMinutes) {
+            setDraggingApt(null)
+            setDragOffsetY(0)
+            setDragOffsetX(0)
+            return
+          }
+          const newTime = slotMinutesToTimeString(newStartMinutes)
+          const oldTime = slotMinutesToTimeString(current.startTimeMinutes)
+          setPendingTimeChange({ id: current.id, mode: "resize-top", oldTime, newTime })
+          setShowTimeChangeConfirm(true)
+        }
+      } else if (current.mode === "resize-bottom") {
+        const minDuration = SLOT_MINUTES
+        const maxEndMinutes = endMinutes - current.startTimeMinutes
+        let newDuration = current.duration + minutesDelta
+        newDuration = Math.max(minDuration, Math.min(maxEndMinutes, newDuration))
+        newDuration = Math.floor(newDuration / SLOT_MINUTES) * SLOT_MINUTES
+        if (newDuration === current.duration) {
+          setDraggingApt(null)
+          setDragOffsetY(0)
+          setDragOffsetX(0)
+          return
+        }
+        const oldTime = slotMinutesToTimeString(current.startTimeMinutes)
+        setPendingTimeChange({
+          id: current.id,
+          mode: "resize-bottom",
+          oldTime,
+          oldDuration: current.duration,
+          newDuration,
+        })
+        setShowTimeChangeConfirm(true)
+      }
+    }
+    window.addEventListener("mousemove", onMouseMove)
+    window.addEventListener("mouseup", onMouseUp)
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove)
+      window.removeEventListener("mouseup", onMouseUp)
+    }
+  }, [draggingApt, startMinutes, endMinutes, showTimeChangeConfirm, columns])
+
+  const confirmTimeChange = async () => {
+    const pending = pendingTimeChange
+    if (!pending) return
+    setUpdatingTimeForId(pending.id)
+    try {
+      let res: { success?: boolean; error?: string } | null = null
+      if (pending.mode === "staff") {
+        if (!pending.newStaffId) return
+        const updatePayload: { staffId: string; staffAssignments: any[]; time?: string } = {
+          staffId: pending.newStaffId,
+          staffAssignments: [{ staffId: pending.newStaffId, percentage: 100, role: "primary" }],
+        }
+        if (pending.newTime) updatePayload.time = pending.newTime
+        res = await AppointmentsAPI.update(pending.id, updatePayload)
+        if (res?.success) {
+          const newStaff = columns.find((c) => c._id === pending.newStaffId)
+          setAppointments((prev) =>
+            prev.map((a) => {
+              if (a._id !== pending.id) return a
+              const aAny = a as any
+              const updated: any = {
+                ...a,
+                staffId: newStaff ? { _id: newStaff._id, name: newStaff.name, role: newStaff.role } : aAny.staffId,
+                staffAssignments: [{ staffId: { _id: pending.newStaffId!, name: newStaff?.name ?? "Staff" }, role: "primary" }],
+              }
+              if (pending.newTime) updated.time = pending.newTime
+              return updated
+            })
+          )
+        } else {
+          alert("Failed to reassign staff.")
+          return
+        }
+      } else if (pending.mode === "move" || pending.mode === "resize-top") {
+        if (!pending.newTime) return
+        res = await AppointmentsAPI.update(pending.id, { time: pending.newTime })
+        if (res?.success) {
+          setAppointments((prev) =>
+            prev.map((a) =>
+              a._id === pending.id ? { ...a, time: pending.newTime! } : a
+            )
+          )
+        } else {
+          alert("Failed to update appointment time.")
+          return
+        }
+      } else if (pending.mode === "resize-bottom") {
+        if (pending.newDuration == null) return
+        res = await AppointmentsAPI.update(pending.id, { duration: pending.newDuration })
+        if (res?.success) {
+          setAppointments((prev) =>
+            prev.map((a) =>
+              a._id === pending.id ? { ...a, duration: pending.newDuration! } : a
+            )
+          )
+        } else {
+          alert("Failed to update appointment duration.")
+          return
+        }
+      }
+      setDraggingApt(null)
+      setDragOffsetY(0)
+      setDragOffsetX(0)
+      setPendingTimeChange(null)
+      setShowTimeChangeConfirm(false)
+    } catch (err) {
+      console.error(err)
+      alert("Failed to update appointment.")
+    } finally {
+      setUpdatingTimeForId(null)
+    }
+  }
+
+  const cancelTimeChange = () => {
+    setDraggingApt(null)
+    setDragOffsetY(0)
+    setDragOffsetX(0)
+    setPendingTimeChange(null)
+    setShowTimeChangeConfirm(false)
   }
 
   if (loading) {
@@ -683,27 +1072,27 @@ export const AppointmentsCalendarGrid = forwardRef<
         </div>
       </div>
 
-      <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-        <div className="overflow-x-auto relative">
+      <div className="border border-slate-200 rounded-xl overflow-clip bg-white">
+        <div className="overflow-auto max-h-[calc(100vh-320px)] min-h-[400px]">
           <div
-            className="grid min-w-[600px]"
+            className="grid min-w-[600px] relative"
             style={{
               gridTemplateColumns: `80px repeat(${Math.max(1, columns.length)}, minmax(120px, 1fr))`,
               gridTemplateRows: `44px repeat(${totalSlots}, ${SLOT_HEIGHT}px)`,
             }}
           >
-            <div className="border-b border-r border-slate-200 bg-white p-2.5 font-medium text-slate-600 text-xs uppercase tracking-wide text-left">
+            <div className="sticky top-0 z-20 border-b border-r border-slate-200 bg-white p-2.5 font-medium text-slate-600 text-xs uppercase tracking-wide text-left shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]">
               Time
             </div>
             {columns.length === 0 ? (
-              <div className="border-b border-r border-slate-200 bg-white p-2.5 font-semibold text-slate-500 text-center">
+              <div className="sticky top-0 z-20 border-b border-r border-slate-200 bg-white p-2.5 font-semibold text-slate-500 text-center shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]">
                 No staff
               </div>
             ) : (
               columns.map((col) => (
                 <div
                   key={col._id}
-                  className="border-b border-r border-slate-200 bg-white p-2.5 font-semibold text-slate-700 text-center last:border-r-0"
+                  className="sticky top-0 z-20 border-b border-r border-slate-200 bg-white p-2.5 font-semibold text-slate-700 text-center last:border-r-0 shadow-[0_2px_4px_-1px_rgba(0,0,0,0.06)]"
                 >
                   {col.name}
                 </div>
@@ -714,6 +1103,12 @@ export const AppointmentsCalendarGrid = forwardRef<
               const rowBorderClass = isHourBoundary
                 ? "border-b border-slate-200"
                 : "border-b border-slate-100 border-dotted"
+              const now = new Date()
+              const todayStr = format(now, "yyyy-MM-dd")
+              const isToday = selectedDate === todayStr
+              const isPastDate = selectedDate < todayStr
+              const currentMinutes = now.getHours() * 60 + now.getMinutes()
+              const isPastSlot = isPastDate || (isToday && slot.minutes < currentMinutes)
               return (
                 <Fragment key={`row-${slot.minutes}`}>
                   <div
@@ -727,15 +1122,20 @@ export const AppointmentsCalendarGrid = forwardRef<
                       key={`empty-${slot.minutes}`}
                       type="button"
                       onClick={() => {
+                        if (isPastSlot) return
                         const params = new URLSearchParams({
                           date: selectedDate,
                           time: slotMinutesToTimeString(slot.minutes),
                         })
                         router.push(`/appointments/new?${params.toString()}`)
                       }}
-                      className={`w-full border-r border-slate-200 text-left ${rowBorderClass} hover:bg-indigo-50/80 transition-colors cursor-pointer`}
+                      className={`w-full border-r border-slate-200 text-left ${rowBorderClass} transition-colors ${
+                        isPastSlot
+                          ? "bg-slate-50 text-slate-300 cursor-not-allowed"
+                          : "hover:bg-indigo-50/80 cursor-pointer"
+                      }`}
                       style={{ height: SLOT_HEIGHT, minHeight: SLOT_HEIGHT }}
-                      title="New appointment"
+                      title={isPastSlot ? "Past slot – unavailable" : "New appointment"}
                     />
                   ) : (
                     columns.map((col) => {
@@ -752,7 +1152,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           return slot.minutes < endM && slot.minutes + SLOT_MINUTES > startM
                         }
                       )
-                      const inWindow = inWorkWindow && !isBlockedByTime
+                      const inWindow = inWorkWindow && !isBlockedByTime && !isPastSlot
                       return (
                       <button
                         key={`${col._id}-${slot.minutes}`}
@@ -772,7 +1172,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                             : "bg-slate-50 text-slate-300 cursor-not-allowed"
                         }`}
                         style={{ height: SLOT_HEIGHT, minHeight: SLOT_HEIGHT }}
-                        title={inWindow ? `New appointment with ${col.name}` : "Unavailable (blocked or outside working hours)"}
+                        title={inWindow ? `New appointment with ${col.name}` : isPastSlot ? "Past slot – unavailable" : "Unavailable (blocked or outside working hours)"}
                       />
                       );
                     })
@@ -780,12 +1180,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                 </Fragment>
               )
             })}
-          </div>
-          {columns.length > 0 && (
-            <div
-              className="absolute pointer-events-none top-[44px] left-[80px] right-0 bottom-0 min-w-[520px]"
-              style={{ height: totalSlots * SLOT_HEIGHT }}
-            >
+            {columns.length > 0 && (
+              <div
+                ref={blocksContainerRef}
+                className="absolute pointer-events-none top-[44px] left-[80px] right-0 bottom-0 min-w-[520px]"
+                style={{ height: totalSlots * SLOT_HEIGHT }}
+              >
               {columns.map((col, colIndex) => (
                 <div
                   key={`blocks-${col._id}`}
@@ -802,31 +1202,124 @@ export const AppointmentsCalendarGrid = forwardRef<
                     const clientName = a?.clientId?.name || "Client"
                     const cardFill = getStatusCardFill(apt.status)
                     const darkStrip = getStatusColor(apt.status)
+                    const isDragging = draggingApt?.id === apt._id
+                    const isUpdating = updatingTimeForId === apt._id
+                    const canDrag = apt.status !== "cancelled"
+                    const baseHeight = Math.max(SLOT_HEIGHT * 0.6, height - 4)
+                    const resizeBottomHeight =
+                      isDragging && draggingApt?.mode === "resize-bottom"
+                        ? Math.max(SLOT_HEIGHT * 0.6, baseHeight + dragOffsetY)
+                        : baseHeight
+                    const showTranslate =
+                      isDragging &&
+                      (draggingApt?.mode === "move" || draggingApt?.mode === "resize-top")
+                    const transformParts: string[] = []
+                    if (showTranslate) {
+                      if ((draggingApt?.mode === "move" || draggingApt?.mode === "resize-top") && dragOffsetX !== 0) {
+                        transformParts.push(`translateX(${dragOffsetX}px)`)
+                      }
+                      transformParts.push(`translateY(${dragOffsetY}px)`)
+                    }
                     return (
-                      <button
+                      <div
                         key={apt._id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedAppointment(apt)
-                          setShowDetails(true)
+                        className={`absolute left-1 right-1 rounded-lg shadow-sm border overflow-hidden text-left ${cardFill} hover:ring-2 hover:ring-indigo-400 z-10 pointer-events-auto flex flex-col select-none ${
+                          isDragging ? "ring-2 ring-indigo-500 shadow-lg transition-none" : "transition-all"
+                        } ${isUpdating ? "opacity-70" : ""}`}
+                        style={{
+                          top: top + 2,
+                          height: resizeBottomHeight,
+                          transform: transformParts.length > 0 ? transformParts.join(" ") : undefined,
                         }}
-                        className={`absolute left-1 right-1 rounded-lg shadow-sm border overflow-hidden text-left ${cardFill} hover:ring-2 hover:ring-indigo-400 transition-all z-10 pointer-events-auto flex flex-col`}
+                      >
+                        <div
+                          className={`absolute top-0 left-0 right-0 z-20 h-[16px] rounded-t-lg flex flex-col items-center justify-center gap-0.5 ${darkStrip} ${canDrag ? "!cursor-grab active:!cursor-grabbing hover:opacity-90" : ""}`}
+                          aria-hidden
+                          onMouseDown={(e) => {
+                            if (canDrag) handleResizeStart(e, apt, "resize-top")
+                          }}
+                          title={canDrag ? "Drag to change start time or reassign staff" : undefined}
+                        >
+                          {canDrag && (
+                            <>
+                              <div className="pointer-events-none w-8 h-0.5 rounded-full bg-white/50" aria-hidden />
+                              <div className="pointer-events-none w-8 h-0.5 rounded-full bg-white/50" aria-hidden />
+                            </>
+                          )}
+                        </div>
+                        <div
+                          className={`pt-4 px-1.5 pb-1.5 text-xs overflow-hidden text-left flex-1 min-w-0 ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
+                          onMouseDown={(e) => {
+                            if (canDrag) handleTimeDragStart(e, apt)
+                          }}
+                          onClick={() => {
+                            if (justDraggedRef.current) {
+                              justDraggedRef.current = false
+                              return
+                            }
+                            setSelectedAppointment(apt)
+                            setShowDetails(true)
+                          }}
+                          title={canDrag ? "Drag to move time or reassign staff • Click to view details" : "Click to view details"}
+                        >
+                          <div className="font-bold text-slate-800 truncate">
+                            {clientName}
+                          </div>
+                          <div className="text-slate-600 text-[11px] truncate">
+                            ({serviceName} – {apt.duration ?? 60} min)
+                          </div>
+                          <div className="text-slate-500 text-[10px] tabular-nums truncate">
+                            {formatAppointmentTime(apt.time)} – {formatAppointmentTime(slotMinutesToTimeString(parseTimeToMinutes(apt.time) + (apt.duration ?? 60)))}
+                          </div>
+                          {apt.notes && (
+                            <div className="text-slate-500 text-[10px] truncate mt-0.5 italic">
+                              {apt.notes}
+                            </div>
+                          )}
+                        </div>
+                        <div
+                          className={`h-[16px] min-h-[16px] shrink-0 rounded-b-lg flex items-center justify-center bg-slate-200/50 ${canDrag ? "hover:bg-slate-300/50 cursor-n-resize" : ""}`}
+                          aria-hidden
+                          onMouseDown={(e) => {
+                            if (canDrag) handleResizeStart(e, apt, "resize-bottom")
+                          }}
+                          title={canDrag ? "Drag to change duration" : undefined}
+                        >
+                          {canDrag && (
+                            <div className="w-8 h-0.5 rounded-full bg-slate-500/60" aria-hidden />
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {(salesByColumn[col._id] || []).map(({ sale, serviceItem, top, height, startM, endM }) => {
+                    return (
+                      <div
+                        key={`${sale._id}-${serviceItem?.name || ""}-${startM}`}
+                        className="absolute left-1 right-1 rounded-lg shadow-sm border overflow-hidden text-left bg-teal-50 border-teal-300 flex flex-col z-10 pointer-events-auto cursor-pointer hover:ring-2 hover:ring-teal-400 transition-all"
                         style={{
                           top: top + 2,
                           height: Math.max(SLOT_HEIGHT * 0.6, height - 4),
                         }}
+                        onClick={() => router.push(`/billing/${sale.billNo}?mode=edit`)}
+                        title={`Bill #${sale.billNo} • Click to view`}
                       >
-                        <div className={`h-1.5 shrink-0 rounded-t-lg ${darkStrip}`} aria-hidden />
-                        <div className="p-1.5 text-xs overflow-hidden text-left flex-1 min-w-0">
-                          <div className="font-medium text-slate-800 truncate">
-                            {serviceName}
+                        <div className="h-1.5 shrink-0 rounded-t-lg bg-teal-500" aria-hidden />
+                        <div className="pt-3 px-1.5 pb-1.5 text-xs overflow-hidden text-left flex-1 min-w-0">
+                          <div className="font-bold text-slate-800 truncate">
+                            {sale.customerName}
                           </div>
-                          <div className="text-slate-600 truncate">{clientName}</div>
-                          <div className="text-slate-500 text-[10px] tabular-nums">
-                            {formatAppointmentTime(apt.time)}
+                          <div className="text-slate-600 text-[11px] truncate">
+                            ({serviceItem?.name || "Service"})
+                          </div>
+                          <div className="text-slate-500 text-[10px] tabular-nums truncate">
+                            {formatAppointmentTime(slotMinutesToTimeString(startM))} – {formatAppointmentTime(slotMinutesToTimeString(endM))}
+                          </div>
+                          <div className="text-teal-700 text-[10px] font-medium truncate mt-0.5">
+                            Bill #{sale.billNo}
                           </div>
                         </div>
-                      </button>
+                      </div>
                     )
                   })}
                   {(blockTimesByColumn[col._id] || []).map(({ block, top, height }) => (
@@ -853,8 +1346,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                   ))}
                 </div>
               ))}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -869,48 +1363,97 @@ export const AppointmentsCalendarGrid = forwardRef<
             </DialogDescription>
           </DialogHeader>
           {selectedAppointment && (
-            <div className="space-y-3 text-sm">
+            <div className="space-y-4 text-sm">
               {(() => {
                 const a = selectedAppointment as any
                 const serviceName = a?.serviceId?.name || "Service"
                 const clientName = a?.clientId?.name || "Client"
-                const staffName = a?.staffId?.name || "Unassigned Staff"
-                const staffRole = a?.staffId?.role
+                const staffName = getPrimaryStaffName(selectedAppointment)
                 const duration = a?.duration ?? 0
                 const price = a?.price ?? 0
+                const timeFrom = a?.time || ""
+                const timeTo = timeFrom ? slotMinutesToTimeString(parseTimeToMinutes(timeFrom) + duration) : ""
+                const paymentStatus = linkedSale?.paymentStatus
+                  ? (linkedSale.paymentStatus.remainingAmount <= 0 ? "Paid" : linkedSale.paymentStatus.paidAmount > 0 ? "Partial" : "Unpaid")
+                  : "—"
+                const createdDate = a?.createdAt ? format(new Date(a.createdAt), "dd MMM yyyy, h:mm a") : "—"
+                const createdBy = a?.createdBy || "—"
+                const leadSource = a?.leadSource || "—"
+                const bookingNote = a?.notes || "—"
                 return (
                   <>
-                    <div className="font-medium">{serviceName}</div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="text-xl font-semibold text-slate-900">{clientName}</div>
+                      {selectedAppointment &&
+                      (selectedAppointment.status === "scheduled" ||
+                        selectedAppointment.status === "confirmed" ||
+                        selectedAppointment.status === "arrived") ? (
+                        selectedAppointment.status === "scheduled" ||
+                        selectedAppointment.status === "confirmed" ? (
+                          <Button
+                            onClick={() => handleMarkStatus("arrived")}
+                            disabled={updatingStatus}
+                            size="sm"
+                            className="bg-blue-600 hover:bg-blue-700 text-white shrink-0"
+                          >
+                            {updatingStatus ? "Updating..." : "Mark as Arrived"}
+                          </Button>
+                        ) : (
+                          <Button
+                            onClick={() => handleMarkStatus("service_started")}
+                            disabled={updatingStatus}
+                            size="sm"
+                            className="bg-purple-600 hover:bg-purple-700 text-white shrink-0"
+                          >
+                            {updatingStatus ? "Updating..." : "Service Started"}
+                          </Button>
+                        )
+                      ) : (
+                        <span className="shrink-0" aria-hidden />
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                       <div>
-                        <div className="text-muted-foreground">Client</div>
-                        <div>{clientName}</div>
+                        <div className="text-muted-foreground text-xs">Service Name</div>
+                        <div className="font-medium">{serviceName}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground">Staff</div>
-                        <div>
-                          {staffName}
-                          {staffRole ? ` (${staffRole})` : ""}
-                        </div>
+                        <div className="text-muted-foreground text-xs">Service Price</div>
+                        <div>₹{price}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground">Duration</div>
+                        <div className="text-muted-foreground text-xs">Time (From – To)</div>
+                        <div>{timeFrom && timeTo ? `${timeFrom} – ${timeTo}` : timeFrom || "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Service Duration</div>
                         <div>{duration} min</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground">Price</div>
-                        <div>₹{price}</div>
+                        <div className="text-muted-foreground text-xs">Stylist Name</div>
+                        <div>{staffName}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Payment Status</div>
+                        <div>{paymentStatus}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Lead Source</div>
+                        <div>{leadSource}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Created Date</div>
+                        <div>{createdDate}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground text-xs">Created By</div>
+                        <div>{createdBy}</div>
                       </div>
                     </div>
-                    {a?.notes && (
-                      <>
-                        <Separator />
-                        <div>
-                          <div className="text-muted-foreground mb-1">Notes</div>
-                          <div>{a.notes}</div>
-                        </div>
-                      </>
-                    )}
+                    <div>
+                      <div className="text-muted-foreground text-xs mb-1">Booking Note</div>
+                      <div className="text-slate-700">{bookingNote}</div>
+                    </div>
                   </>
                 )
               })()}
@@ -924,33 +1467,20 @@ export const AppointmentsCalendarGrid = forwardRef<
                 >
                   {cancelling ? "Cancelling..." : "Cancel Appointment"}
                 </Button>
-                {/* Mark as Arrived / Service Started - show when status is scheduled, confirmed, or arrived */}
-                {selectedAppointment &&
-                (selectedAppointment.status === "scheduled" ||
-                  selectedAppointment.status === "confirmed" ||
-                  selectedAppointment.status === "arrived") ? (
-                  selectedAppointment.status === "scheduled" ||
-                  selectedAppointment.status === "confirmed" ? (
-                    <Button
-                      onClick={() => handleMarkStatus("arrived")}
-                      disabled={updatingStatus}
-                      className="bg-blue-600 hover:bg-blue-700 text-white shrink-0"
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    variant="outline"
+                    asChild
+                  >
+                    <Link
+                      href={selectedAppointment ? `/appointments/new?edit=${selectedAppointment._id}` : "#"}
+                      onClick={() => setShowDetails(false)}
                     >
-                      {updatingStatus ? "Updating..." : "Mark as Arrived"}
-                    </Button>
-                  ) : (
-                    <Button
-                      onClick={() => handleMarkStatus("service_started")}
-                      disabled={updatingStatus}
-                      className="bg-purple-600 hover:bg-purple-700 text-white shrink-0"
-                    >
-                      {updatingStatus ? "Updating..." : "Service Started"}
-                    </Button>
-                  )
-                ) : (
-                  <span className="shrink-0" aria-hidden />
-                )}
-                <Button
+                      <Pencil className="h-4 w-4 mr-2" />
+                      Edit
+                    </Link>
+                  </Button>
+                  <Button
                   onClick={() => {
                     if (!selectedAppointment) return
                     const a = selectedAppointment as any
@@ -968,10 +1498,10 @@ export const AppointmentsCalendarGrid = forwardRef<
                     setShowDetails(false)
                     router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
                   }}
-                  className="shrink-0"
-                >
-                  Raise Sale
-                </Button>
+                  >
+                    Raise Sale
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -1131,6 +1661,84 @@ export const AppointmentsCalendarGrid = forwardRef<
                 </div>
               )}
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showTimeChangeConfirm} onOpenChange={(open) => !open && cancelTimeChange()}>
+        <DialogContent className="rounded-2xl border-0 shadow-2xl max-w-md">
+          <DialogHeader className="text-center pb-4">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100">
+              <Clock className="h-6 w-6 text-indigo-600" />
+            </div>
+            <DialogTitle className="text-xl font-bold text-slate-900">
+              {pendingTimeChange?.mode === "staff" ? "Confirm Staff Change" : "Confirm Time Change"}
+            </DialogTitle>
+            <DialogDescription className="text-slate-600 mt-2">
+              {pendingTimeChange?.mode === "staff" ? (
+                <>
+                  Reassign appointment from <strong>{pendingTimeChange.oldStaffName}</strong> to{" "}
+                  <strong>{pendingTimeChange.newStaffName}</strong>
+                  {pendingTimeChange.newTime && pendingTimeChange.oldTime !== pendingTimeChange.newTime ? (
+                    <> and change time from <strong>{formatAppointmentTime(pendingTimeChange.oldTime ?? "")}</strong> to{" "}
+                    <strong>{formatAppointmentTime(pendingTimeChange.newTime)}</strong></>
+                  ) : null}
+                  ?
+                </>
+              ) : pendingTimeChange?.mode === "resize-bottom" ? (
+                <>
+                  Change duration from <strong>{pendingTimeChange.oldDuration} min</strong> to{" "}
+                  <strong>{pendingTimeChange.newDuration} min</strong>?
+                </>
+              ) : (
+                <>
+                  Change appointment time from <strong>{formatAppointmentTime(pendingTimeChange?.oldTime ?? "")}</strong> to{" "}
+                  <strong>{formatAppointmentTime(pendingTimeChange?.newTime ?? "")}</strong>?
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end">
+            <Button
+              variant="outline"
+              onClick={cancelTimeChange}
+              disabled={!!updatingTimeForId}
+              className="border-slate-300 text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmTimeChange}
+              disabled={!!updatingTimeForId}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white"
+            >
+              {updatingTimeForId ? (
+                <>
+                  <svg
+                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  Saving...
+                </>
+              ) : (
+                "Confirm Change"
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

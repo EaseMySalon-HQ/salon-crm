@@ -10,6 +10,7 @@ const cron = require('node-cron');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
+const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST } = require('./utils/date-utils');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -5116,13 +5117,68 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
     }
 
     const totalAppointments = await Appointment.countDocuments(query);
-    const appointments = await Appointment.find(query)
-      .populate('clientId', 'name phone email')
-      .populate('serviceId', 'name price duration')
-      .populate('staffId', 'name role')
+    const rawAppointments = await Appointment.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Resolve staff names: Staff from business DB, Owner from main DB (User)
+    const { Staff } = req.businessModels;
+    const mainConnection = await databaseManager.getMainConnection();
+    const UserModel = mainConnection.model('User', require('./models/User').schema);
+    const businessOwner = await UserModel.findOne({ branchId: req.user.branchId, role: 'admin' })
+      .select('_id firstName lastName')
+      .lean();
+    const ownerId = businessOwner?._id?.toString();
+    const ownerName = businessOwner ? `${businessOwner.firstName || ''} ${businessOwner.lastName || ''}`.trim() || 'Owner' : null;
+
+    const staffIdsToResolve = new Set();
+    rawAppointments.forEach((apt) => {
+      if (apt.staffId) staffIdsToResolve.add(apt.staffId.toString());
+      (apt.staffAssignments || []).forEach((as) => {
+        if (as.staffId) staffIdsToResolve.add(as.staffId.toString());
+      });
+    });
+    const staffIds = [...staffIdsToResolve];
+    const staffFromDb = staffIds.length ? await Staff.find({ _id: { $in: staffIds } }).select('_id name role').lean() : [];
+    const staffMap = new Map(staffFromDb.map((s) => [s._id.toString(), { _id: s._id, name: s.name, role: s.role }]));
+
+    const resolveStaff = (id) => {
+      if (!id) return null;
+      const idStr = id.toString?.() || String(id);
+      const fromStaff = staffMap.get(idStr);
+      if (fromStaff) return fromStaff;
+      if (idStr === ownerId && ownerName) return { _id: id, name: ownerName, role: 'admin' };
+      return { _id: id, name: 'Unassigned Staff', role: null };
+    };
+
+    const appointments = rawAppointments.map((apt) => {
+      const a = { ...apt };
+      a.clientId = apt.clientId;
+      a.serviceId = apt.serviceId;
+      a.staffId = apt.staffId ? resolveStaff(apt.staffId) : null;
+      a.staffAssignments = (apt.staffAssignments || []).map((as) => ({
+        ...as,
+        staffId: as.staffId ? resolveStaff(as.staffId) : null,
+      }));
+      return a;
+    });
+
+    // Populate clientId and serviceId (they're in business DB)
+    const clientIds = [...new Set(appointments.map((a) => a.clientId).filter(Boolean))];
+    const serviceIds = [...new Set(appointments.map((a) => a.serviceId).filter(Boolean))];
+    const { Client, Service } = req.businessModels;
+    const [clients, services] = await Promise.all([
+      clientIds.length ? Client.find({ _id: { $in: clientIds } }).select('name phone email').lean() : [],
+      serviceIds.length ? Service.find({ _id: { $in: serviceIds } }).select('name price duration').lean() : [],
+    ]);
+    const clientMap = new Map(clients.map((c) => [c._id.toString(), c]));
+    const serviceMap = new Map(services.map((s) => [s._id.toString(), s]));
+    appointments.forEach((a) => {
+      if (a.clientId) a.clientId = clientMap.get(a.clientId.toString()) || a.clientId;
+      if (a.serviceId) a.serviceId = serviceMap.get(a.serviceId.toString()) || a.serviceId;
+    });
 
     res.json({
       success: true,
@@ -5146,7 +5202,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, status = 'scheduled' } = req.body;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled' } = req.body;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -5159,6 +5215,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
     const createdAppointments = [];
     
     for (const service of services) {
+      const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
       const appointmentData = {
         clientId,
         serviceId: service.serviceId,
@@ -5167,6 +5224,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         duration: service.duration,
         status,
         notes,
+        leadSource: leadSource || '',
+        createdBy,
         price: service.price,
         branchId: req.user.branchId
       };
@@ -6056,6 +6115,60 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
   }
 });
 
+app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { Appointment } = req.businessModels;
+    const raw = await Appointment.findById(id).lean();
+    if (!raw) {
+      return res.status(404).json({ success: false, error: 'Appointment not found' });
+    }
+    const { Staff, Client, Service } = req.businessModels;
+    const mainConnection = await databaseManager.getMainConnection();
+    const UserModel = mainConnection.model('User', require('./models/User').schema);
+    const businessOwner = await UserModel.findOne({ branchId: req.user.branchId, role: 'admin' })
+      .select('_id firstName lastName')
+      .lean();
+    const ownerId = businessOwner?._id?.toString();
+    const ownerName = businessOwner ? `${businessOwner.firstName || ''} ${businessOwner.lastName || ''}`.trim() || 'Owner' : null;
+
+    const staffIds = [];
+    if (raw.staffId) staffIds.push(raw.staffId);
+    (raw.staffAssignments || []).forEach((as) => { if (as.staffId) staffIds.push(as.staffId); });
+    const staffFromDb = staffIds.length ? await Staff.find({ _id: { $in: staffIds } }).select('_id name role').lean() : [];
+    const staffMap = new Map(staffFromDb.map((s) => [s._id.toString(), { _id: s._id, name: s.name, role: s.role }]));
+    const resolveStaff = (sid) => {
+      if (!sid) return null;
+      const idStr = sid.toString?.() || String(sid);
+      const fromStaff = staffMap.get(idStr);
+      if (fromStaff) return fromStaff;
+      if (idStr === ownerId && ownerName) return { _id: sid, name: ownerName, role: 'admin' };
+      return { _id: sid, name: 'Unassigned Staff', role: null };
+    };
+
+    const appointment = { ...raw };
+    appointment.staffId = raw.staffId ? resolveStaff(raw.staffId) : null;
+    appointment.staffAssignments = (raw.staffAssignments || []).map((as) => ({
+      ...as,
+      staffId: as.staffId ? resolveStaff(as.staffId) : null,
+    }));
+
+    if (raw.clientId) {
+      const client = await Client.findById(raw.clientId).select('name phone email').lean();
+      appointment.clientId = client || raw.clientId;
+    }
+    if (raw.serviceId) {
+      const service = await Service.findById(raw.serviceId).select('name price duration').lean();
+      appointment.serviceId = service || raw.serviceId;
+    }
+
+    res.json({ success: true, data: appointment });
+  } catch (error) {
+    console.error('Error fetching appointment:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch appointment' });
+  }
+});
+
 // Update appointment
 app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
@@ -6443,15 +6556,17 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     let dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom) : null;
     let dateTo = req.query.dateTo ? new Date(req.query.dateTo) : null;
     if (!dateFrom || !dateTo) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      dateFrom = dateFrom || today;
-      dateTo = dateTo || new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1);
+      // Default to today in IST
+      const todayStr = getTodayIST();
+      dateFrom = getStartOfDayIST(todayStr);
+      dateTo = getEndOfDayIST(todayStr);
     } else {
-      dateTo.setHours(23, 59, 59, 999);
+      dateFrom = new Date(dateFrom);
+      dateTo = new Date(dateTo);
     }
-    const todayDateString = dateFrom.toISOString().split('T')[0];
-    const tomorrowDateString = new Date(dateTo.getTime() + 1).toISOString().split('T')[0];
+    const todayDateString = toDateStringIST(dateFrom);
+    const tomorrowDate = new Date(dateTo.getTime() + 1);
+    const tomorrowDateString = toDateStringIST(tomorrowDate);
 
     const sales = await Sale.find({
       branchId,
@@ -6463,6 +6578,12 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
       branchId,
       date: { $gte: todayDateString, $lte: tomorrowDateString }
     }).lean();
+
+    const openingRegistry = await CashRegistry.findOne({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      shiftType: 'opening'
+    }).sort({ date: 1 }).lean();
 
     const closingRegistry = await CashRegistry.findOne({
       branchId,
@@ -6483,29 +6604,45 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
     let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
     sales.forEach(s => {
-      (s.payments || []).forEach(p => {
-        const amt = p.amount || 0;
-        if (p.mode === 'Cash') totalSalesCash += amt;
-        else if (p.mode === 'Online') totalSalesOnline += amt;
-        else if (p.mode === 'Card') totalSalesCard += amt;
-      });
-      if (!(s.payments && s.payments.length)) {
+      let cashAmt = 0;
+      let isAllCash = false;
+      if (s.payments && s.payments.length) {
+        s.payments.forEach(p => {
+          const amt = p.amount || 0;
+          if (p.mode === 'Cash') { totalSalesCash += amt; cashAmt += amt; }
+          else if (p.mode === 'Online') totalSalesOnline += amt;
+          else if (p.mode === 'Card') totalSalesCard += amt;
+        });
+        const hasNonCash = (s.payments || []).some(p => p.mode === 'Card' || p.mode === 'Online');
+        isAllCash = cashAmt > 0 && !hasNonCash;
+      } else {
         const amt = s.grossTotal || s.netTotal || 0;
-        if (s.paymentMode === 'Cash') totalSalesCash += amt;
+        if (s.paymentMode === 'Cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;
+    let cashDuesCollected = 0;
     sales.forEach(s => {
       (s.paymentHistory || []).forEach(ph => {
         const d = ph.date ? new Date(ph.date) : null;
-        if (d && d >= dateFrom && d <= dateTo) duesCollected += ph.amount || 0;
+        if (d && d >= dateFrom && d <= dateTo) {
+          duesCollected += ph.amount || 0;
+          if ((ph.method || '').toLowerCase() === 'cash') cashDuesCollected += ph.amount || 0;
+        }
       });
     });
-    const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-    const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    // Use Expense collection as source of truth for cash expenses; closingRegistry.expenseValue is 0 when not yet closed
+    const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    // Tip collected: sum from Sales (Quick Sale flow) + Receipts (manual receipt flow), for selected date range, all staff
+    const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
+    const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    const tipCollected = tipFromSales + tipFromReceipts;
     const cashBalance = closingRegistry?.cashBalance ?? 0;
+    const openingBalance = openingRegistry?.openingBalance ?? 0;
+    const closingBalance = closingRegistry?.closingBalance ?? cashBalance;
 
     res.json({
       success: true,
@@ -6517,9 +6654,12 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         totalSalesOnline,
         totalSalesCard,
         duesCollected,
+        cashDuesCollected,
         cashExpense,
         tipCollected,
-        cashBalance
+        cashBalance,
+        openingBalance,
+        closingBalance
       }
     });
   } catch (error) {
@@ -6537,7 +6677,18 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
     console.log('🔍 Sales request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
     const { Sale, BillEditHistory } = req.businessModels;
-    const sales = await Sale.find().sort({ date: -1 }).lean();
+    const { dateFrom, dateTo } = req.query;
+    let query = { status: { $nin: ['cancelled', 'Cancelled'] } };
+    if (dateFrom || dateTo) {
+      query.date = {};
+      if (dateFrom) query.date.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const d = new Date(dateTo);
+        d.setHours(23, 59, 59, 999);
+        query.date.$lte = d;
+      }
+    }
+    const sales = await Sale.find(query).sort({ date: -1 }).lean();
     
     // For bills that don't have isEdited set but have edit history, mark them as edited
     if (BillEditHistory) {
@@ -7078,6 +7229,21 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
   }
 });
 
+app.get('/api/sales/by-appointment/:appointmentId', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Sale } = req.businessModels;
+    const mongoose = require('mongoose');
+    const appointmentId = req.params.appointmentId;
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      return res.json({ success: true, data: null });
+    }
+    const sale = await Sale.findOne({ appointmentId: new mongoose.Types.ObjectId(appointmentId) }).lean();
+    res.json({ success: true, data: sale || null });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/sales/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Sale } = req.businessModels;
@@ -7123,6 +7289,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     }
 
     const previousStatus = String(existingSale.status || '').toLowerCase();
+    const oldPaidAmount = Number(existingSale.paymentStatus?.paidAmount || 0);
 
     // Archive original bill snapshot once per edit
     try {
@@ -7357,6 +7524,26 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       }
       
       console.log('💰 Updated status:', existingSale.status);
+
+      // Sync paymentHistory when payment collected via bill edit (so Dues Collected reflects it)
+      if (newPaidAmount > oldPaidAmount) {
+        const delta = newPaidAmount - oldPaidAmount;
+        const lastPayment = updateData.payments[updateData.payments.length - 1];
+        let method = (lastPayment?.mode || lastPayment?.type || 'Cash');
+        const m = String(method).toLowerCase();
+        if (m.includes('card')) method = 'Card';
+        else if (m.includes('online') || m.includes('upi')) method = 'Online';
+        else method = 'Cash';
+        existingSale.paymentHistory = existingSale.paymentHistory || [];
+        existingSale.paymentHistory.push({
+          date: new Date(),
+          amount: delta,
+          method,
+          notes: 'Payment collected via bill edit',
+          collectedBy: req.user?.name || req.user?.firstName || 'Staff'
+        });
+        existingSale.markModified('paymentHistory');
+      }
     } else {
       // Ensure paymentStatus totalAmount matches grossTotal (when payments not updated)
       if (!existingSale.paymentStatus) {
@@ -9259,13 +9446,12 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
     let balanceDifference = 0;
     let onlinePosDifference = 0;
     
+    // Parse date in IST (Asia/Kolkata) - all dates use IST
+    const dateObj = parseDateIST(date);
+    
     if (shiftType === 'closing') {
-      // Convert date string to Date object and set time ranges
-      const dateObj = new Date(date);
-      const startOfDay = new Date(dateObj);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(dateObj);
-      endOfDay.setHours(23, 59, 59, 999);
+      const startOfDay = getStartOfDayIST(date);
+      const endOfDay = getEndOfDayIST(date);
       
       // Get cash collected from sales for the date
       const sales = await Sale.find({
@@ -9296,7 +9482,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
     }
     
     const cashRegistry = new CashRegistry({
-      date: new Date(date),
+      date: dateObj,
       shiftType,
       createdBy: createdBy || `${req.user.firstName} ${req.user.lastName}`.trim() || req.user.email,
       userId: req.user.id,
@@ -9428,6 +9614,17 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
       updates,
       { new: true, runValidators: true }
     );
+    
+    // Trigger daily summary email if notification is set to "after verification"
+    const branchId = req.user.branchId;
+    if (branchId && verifiedCashRegistry?.date) {
+      const { sendDailySummaryForDate } = require('./utils/daily-summary-sender');
+      const targetDate = new Date(verifiedCashRegistry.date);
+      targetDate.setHours(0, 0, 0, 0);
+      sendDailySummaryForDate(branchId, branchId, targetDate).catch(err => {
+        console.error('Failed to send daily summary after verification:', err);
+      });
+    }
     
     res.json(verifiedCashRegistry);
   } catch (error) {

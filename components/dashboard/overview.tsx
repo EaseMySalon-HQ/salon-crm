@@ -17,6 +17,7 @@ export function Overview() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let isAuthError = false
     const fetchChartData = async () => {
       try {
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -48,12 +49,16 @@ export function Overview() {
         }
 
         setData(base)
-      } catch (error) {
+      } catch (error: any) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) {
+          isAuthError = true
+          return
+        }
         console.error("Failed to fetch chart data:", error)
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         setData(months.map((name) => ({ name, appointments: 0, revenue: 0 })))
       } finally {
-        setLoading(false)
+        if (!isAuthError) setLoading(false)
       }
     }
 

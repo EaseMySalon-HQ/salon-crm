@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon } from "lucide-react"
+import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -10,8 +10,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
+import { getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST } from "@/lib/date-utils"
 import { Calendar } from "@/components/ui/calendar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
@@ -87,9 +89,12 @@ export function SalesReport() {
     totalSalesOnline: number
     totalSalesCard: number
     duesCollected: number
+    cashDuesCollected?: number
     cashExpense: number
     tipCollected: number
     cashBalance: number
+    openingBalance?: number
+    closingBalance?: number
   } | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
 
@@ -109,12 +114,8 @@ export function SalesReport() {
 
   // Mock data - replace with actual API call
   useEffect(() => {
-    // Set default date range to today
-    const today = new Date()
-    const todayRange = {
-      from: new Date(today.getFullYear(), today.getMonth(), today.getDate()),
-      to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
-    }
+    // Set default date range to today (IST)
+    const todayRange = getDateRangeFromPeriod("today")
     setDateRange(todayRange)
     
     async function fetchSales() {
@@ -176,42 +177,57 @@ export function SalesReport() {
     return () => { cancelled = true }
   }, [reportType])
 
-  // Function to get date range based on selected period
+  // Function to get date range based on selected period (all dates in IST)
   const getDateRangeFromPeriod = (period: DatePeriod) => {
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const todayStr = getTodayIST()
+    const today = new Date(getStartOfDayIST(todayStr))
     
     switch (period) {
       case "today":
         return {
           from: today,
-          to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+          to: new Date(getEndOfDayIST(todayStr))
         }
-      case "yesterday":
-        const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
+      case "yesterday": {
+        const todayNoon = new Date(todayStr + "T12:00:00+05:30")
+        const yesterdayNoon = new Date(todayNoon.getTime() - 24 * 60 * 60 * 1000)
+        const yesterdayStr = toDateStringIST(yesterdayNoon)
         return {
-          from: yesterday,
-          to: new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1)
+          from: new Date(getStartOfDayIST(yesterdayStr)),
+          to: new Date(getEndOfDayIST(yesterdayStr))
         }
-      case "last7days":
-        const last7Days = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+      }
+      case "last7days": {
+        const todayNoon = new Date(todayStr + "T12:00:00+05:30")
+        const fromNoon = new Date(todayNoon.getTime() - 7 * 24 * 60 * 60 * 1000)
+        const fromStr = toDateStringIST(fromNoon)
         return {
-          from: last7Days,
-          to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+          from: new Date(getStartOfDayIST(fromStr)),
+          to: new Date(getEndOfDayIST(todayStr))
         }
-      case "last30days":
-        const last30Days = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
+      }
+      case "last30days": {
+        const todayNoon = new Date(todayStr + "T12:00:00+05:30")
+        const fromNoon = new Date(todayNoon.getTime() - 30 * 24 * 60 * 60 * 1000)
+        const fromStr = toDateStringIST(fromNoon)
         return {
-          from: last30Days,
-          to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+          from: new Date(getStartOfDayIST(fromStr)),
+          to: new Date(getEndOfDayIST(todayStr))
         }
-      case "currentMonth":
-        const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      }
+      case "currentMonth": {
+        const [y, m] = todayStr.split("-").map(Number)
+        const firstStr = `${y}-${String(m).padStart(2, "0")}-01`
+        const firstOfMonth = new Date(firstStr + "T12:00:00+05:30")
+        const lastOfMonth = new Date(firstOfMonth)
+        lastOfMonth.setUTCMonth(lastOfMonth.getUTCMonth() + 1)
+        lastOfMonth.setUTCDate(0)
+        const lastStr = toDateStringIST(lastOfMonth)
         return {
-          from: firstDayOfMonth,
-          to: new Date(lastDayOfMonth.getTime() + 24 * 60 * 60 * 1000 - 1)
+          from: new Date(getStartOfDayIST(firstStr)),
+          to: new Date(getEndOfDayIST(lastStr))
         }
+      }
       case "custom":
         return { from: undefined, to: undefined }
       case "all":
@@ -235,32 +251,15 @@ export function SalesReport() {
     }
   }
 
-  // Service list date range helper (same shape as ServiceListReport)
+  // Service list date range helper (same shape as ServiceListReport, uses IST)
   const getServiceListDateRangeFromPeriod = (period: ServiceListDatePeriod) => {
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    switch (period) {
-      case "today":
-        return { from: today, to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "yesterday": {
-        const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
-        return { from: yesterday, to: new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      }
-      case "last7days":
-        return { from: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000), to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "last30days":
-        return { from: new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000), to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "currentMonth":
-        return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) }
-      case "all":
-      default:
-        return { from: undefined, to: undefined }
-    }
+    const range = getDateRangeFromPeriod(period as DatePeriod)
+    return { from: range.from, to: range.to }
   }
 
   const handleServiceListDatePeriodChange = (period: ServiceListDatePeriod) => {
     setServiceListDatePeriod(period)
-    if (period !== "all") {
+    if (period !== "all" && period !== "custom") {
       setServiceListDateRange(getServiceListDateRangeFromPeriod(period))
     } else {
       setServiceListDateRange({})
@@ -360,16 +359,48 @@ export function SalesReport() {
         return inRange && hasTip && matchesStaff
       })
     : []
+  const getTipPaymentMode = (sale: SalesRecord): "Cash" | "Card" | "Online" | "Mixed" => {
+    const norm = (s: string) => (s || "").toLowerCase()
+    if (sale.payments && sale.payments.length > 0) {
+      const modes = [...new Set(sale.payments.map((p: any) => norm(p.mode || p.type || "")))]
+      const hasCash = modes.some(m => m.includes("cash"))
+      const hasCard = modes.some(m => m.includes("card"))
+      const hasOnline = modes.some(m => m.includes("online") || m.includes("upi"))
+      if (hasCash && !hasCard && !hasOnline) return "Cash"
+      if (hasCard && !hasCash && !hasOnline) return "Card"
+      if (hasOnline && !hasCash && !hasCard) return "Online"
+      return "Mixed"
+    }
+    const pm = norm(sale.paymentMode || "")
+    if (pm.includes("cash") && !pm.includes("card") && !pm.includes("online")) return "Cash"
+    if (pm.includes("card") && !pm.includes("cash") && !pm.includes("online")) return "Card"
+    if (pm.includes("online") || pm.includes("upi")) return "Online"
+    return "Mixed"
+  }
+
   const staffTipAggregated = (() => {
-    const map = new Map<string, { staffId: string; staffName: string; tipAmount: number }>()
+    const map = new Map<string, { staffId: string; staffName: string; tipAmount: number; cashTipAmount: number; nonCashTipAmount: number; paymentModes: string[] }>()
     staffTipSales.forEach((sale) => {
       const id = (sale.tipStaffId || sale.tipStaffName || "").toString()
       const name = sale.tipStaffName || (salesStaff.find((s) => s._id === sale.tipStaffId)?.name) || "—"
+      const tipAmt = sale.tip || 0
+      const mode = getTipPaymentMode(sale)
+      const isCash = mode === "Cash"
       const existing = map.get(id)
       if (existing) {
-        existing.tipAmount += sale.tip || 0
+        existing.tipAmount += tipAmt
+        if (isCash) existing.cashTipAmount += tipAmt
+        else existing.nonCashTipAmount += tipAmt
+        if (!existing.paymentModes.includes(mode)) existing.paymentModes.push(mode)
       } else {
-        map.set(id, { staffId: id, staffName: name, tipAmount: sale.tip || 0 })
+        map.set(id, {
+          staffId: id,
+          staffName: name,
+          tipAmount: tipAmt,
+          cashTipAmount: isCash ? tipAmt : 0,
+          nonCashTipAmount: isCash ? 0 : tipAmt,
+          paymentModes: [mode]
+        })
       }
     })
     return Array.from(map.values()).sort((a, b) => b.tipAmount - a.tipAmount)
@@ -383,20 +414,21 @@ export function SalesReport() {
     return map
   })()
 
-  const handleMarkTipAsPaid = async (row: { staffId: string; staffName: string; tipAmount: number }) => {
+  const handleMarkTipAsPaid = async (row: { staffId: string; staffName: string; tipAmount: number; nonCashTipAmount: number }) => {
     const from = staffTipDateRange?.from
     const to = staffTipDateRange?.to
     if (!from || !to) return
+    const amountToMark = row.nonCashTipAmount > 0 ? row.nonCashTipAmount : row.tipAmount
     try {
       const res = await ReportsAPI.createTipPayout({
         staffId: row.staffId,
         staffName: row.staffName,
-        amount: row.tipAmount,
+        amount: amountToMark,
         dateFrom: from.toISOString(),
         dateTo: to.toISOString()
       })
       if (res?.success) {
-        toast({ title: "Marked as paid", description: `₹${row.tipAmount.toFixed(2)} paid to ${row.staffName}.` })
+        toast({ title: "Marked as paid", description: `₹${amountToMark.toFixed(2)} paid to ${row.staffName}.` })
         const list = await ReportsAPI.getTipPayouts({
           dateFrom: from.toISOString(),
           dateTo: to.toISOString()
@@ -464,16 +496,25 @@ export function SalesReport() {
   const tipsCollected = filteredSales.reduce((sum, sale) => sum + (sale.tip || 0), 0)
   
   // Calculate cash and online collections (supporting both legacy and split payments)
+  // Exclude tip from Cash Collected when tip was paid in cash
   const cashCollected = filteredSales.reduce((sum, sale) => {
+    let cashAmt = 0
+    let isAllCash = false
     if (sale.payments && sale.payments.length > 0) {
-      // New split payment structure
-      return sum + sale.payments
-        .filter(payment => payment.mode === "Cash")
-        .reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
+      const cashPayments = sale.payments.filter((p: any) => (p.mode || p.type || "").toLowerCase().includes("cash"))
+      const hasNonCash = sale.payments.some((p: any) => {
+        const m = (p.mode || p.type || "").toLowerCase()
+        return m.includes("card") || m.includes("online") || m.includes("upi")
+      })
+      cashAmt = cashPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
+      isAllCash = cashAmt > 0 && !hasNonCash
     } else {
-      // Legacy single payment mode
-      return sum + (sale.paymentMode === "Cash" ? sale.netTotal : 0)
+      const pm = (sale.paymentMode || "").toLowerCase()
+      cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
+      isAllCash = cashAmt > 0
     }
+    const tip = sale.tip || 0
+    return sum + cashAmt - (isAllCash ? tip : 0)
   }, 0)
   
   const onlineCashCollected = filteredSales.reduce((sum, sale) => {
@@ -822,40 +863,40 @@ export function SalesReport() {
     return ''
   }
 
-  // Get filtered amount based on payment filter
+  // Net Total = bill + tip (including tip); Gross Total = bill only (excluding tip)
+  const getDisplayNetTotal = (sale: SalesRecord) => (sale.grossTotal || 0) + (sale.tip || 0)
+  const getDisplayGrossTotal = (sale: SalesRecord) => sale.grossTotal || 0
+
+  // Get filtered amount based on payment filter (Net Total = incl tip)
   const getFilteredAmount = (sale: SalesRecord) => {
     if (paymentFilter === "all") {
-      return sale.netTotal
+      return getDisplayNetTotal(sale)
     }
     
     if (sale.payments && sale.payments.length > 0) {
-      // Get amount for the selected payment type
       const filteredPayment = sale.payments.find(payment => payment.mode === paymentFilter)
       return filteredPayment ? filteredPayment.amount : 0
     } else {
-      // Legacy single payment mode
-      return sale.paymentMode === paymentFilter ? sale.netTotal : 0
+      return sale.paymentMode === paymentFilter ? getDisplayNetTotal(sale) : 0
     }
   }
 
-  // Get filtered gross total based on payment filter
+  // Get filtered gross total based on payment filter (Gross Total = excl tip)
   const getFilteredGrossTotal = (sale: SalesRecord) => {
     if (paymentFilter === "all") {
-      return sale.grossTotal
+      return getDisplayGrossTotal(sale)
     }
     
     if (sale.payments && sale.payments.length > 0) {
-      // Get amount for the selected payment type
       const filteredPayment = sale.payments.find(payment => payment.mode === paymentFilter)
       if (filteredPayment) {
-        // Calculate proportional tax and gross total
-        const ratio = filteredPayment.amount / sale.netTotal
-        return filteredPayment.amount + (sale.taxAmount * ratio)
+        const netTotal = getDisplayNetTotal(sale)
+        const ratio = netTotal > 0 ? filteredPayment.amount / netTotal : 0
+        return (sale.grossTotal || 0) * ratio
       }
       return 0
     } else {
-      // Legacy single payment mode
-      return sale.paymentMode === paymentFilter ? sale.grossTotal : 0
+      return sale.paymentMode === paymentFilter ? getDisplayGrossTotal(sale) : 0
     }
   }
 
@@ -1082,8 +1123,26 @@ export function SalesReport() {
                       <SelectItem value="last30days">Last 30 days</SelectItem>
                       <SelectItem value="currentMonth">Current month</SelectItem>
                       <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
                     </SelectContent>
                   </Select>
+                  {serviceListDatePeriod === "custom" && (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className="w-40 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                          <span className="truncate">
+                            {serviceListDateRange?.from ? (serviceListDateRange?.to && serviceListDateRange.from.getTime() !== serviceListDateRange.to.getTime()
+                              ? `${format(serviceListDateRange.from, "dd MMM")} – ${format(serviceListDateRange.to, "dd MMM")}`
+                              : format(serviceListDateRange.from, "dd MMM yyyy")) : "Pick dates"}
+                          </span>
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar mode="range" selected={serviceListDateRange as never} onSelect={(r) => setServiceListDateRange(r || {})} numberOfMonths={2} />
+                      </PopoverContent>
+                    </Popover>
+                  )}
                   <Select value={serviceListStaffFilter} onValueChange={setServiceListStaffFilter}>
                     <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Staff" />
@@ -1219,59 +1278,183 @@ export function SalesReport() {
           }}
         />
       ) : reportType === "summary" ? (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="p-6">
-            {summaryLoading ? (
-              <div className="flex items-center justify-center py-16">
-                <p className="text-slate-500">Loading summary...</p>
+        <div className="min-h-[480px] bg-slate-50/80 rounded-2xl p-6 space-y-6">
+          {summaryLoading ? (
+            <div className="flex items-center justify-center py-24">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-10 h-10 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+                <p className="text-slate-500 text-sm">Loading summary...</p>
               </div>
-            ) : summaryData ? (
-              <div className="space-y-1">
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg bg-slate-50 border-b border-slate-200">
-                  <span className="font-medium text-slate-700">1. Total Bill Count</span>
-                  <span className="font-semibold text-slate-900">{summaryData.totalBillCount}</span>
+            </div>
+          ) : summaryData ? (
+            <TooltipProvider delayDuration={200}>
+              {/* 1. Top KPI Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:shadow-md hover:border-slate-200/80 transition-all duration-200">
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Total Sales</p>
+                  <p className="text-2xl font-bold text-slate-900 tracking-tight">₹{summaryData.totalSales.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</p>
+                  <p className="text-xs text-emerald-600 mt-1.5 flex items-center gap-0.5">
+                    <ArrowUpRight className="h-3 w-3" /> Revenue for period
+                  </p>
                 </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg border-b border-slate-100">
-                  <span className="font-medium text-slate-700">2. Total Customer Count</span>
-                  <span className="font-semibold text-slate-900">{summaryData.totalCustomerCount}</span>
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:shadow-md hover:border-slate-200/80 transition-all duration-200">
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Total Bills</p>
+                  <p className="text-2xl font-bold text-slate-900 tracking-tight">{summaryData.totalBillCount}</p>
+                  <p className="text-xs text-slate-400 mt-1.5">Transactions</p>
                 </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg border-b border-slate-100">
-                  <span className="font-medium text-slate-700">3. Total Sales</span>
-                  <span className="font-semibold text-slate-900">₹{summaryData.totalSales.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:shadow-md hover:border-slate-200/80 transition-all duration-200">
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Total Customers</p>
+                  <p className="text-2xl font-bold text-slate-900 tracking-tight">{summaryData.totalCustomerCount}</p>
+                  <p className="text-xs text-slate-400 mt-1.5">Unique visitors</p>
                 </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg border-b border-slate-100">
-                  <span className="font-medium text-slate-700">4. Total Sales (Cash)</span>
-                  <span className="font-semibold text-slate-900">₹{summaryData.totalSalesCash.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg border-b border-slate-100">
-                  <span className="font-medium text-slate-700">5. Total Sales (Online)</span>
-                  <span className="font-semibold text-slate-900">₹{summaryData.totalSalesOnline.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg border-b border-slate-100">
-                  <span className="font-medium text-slate-700">6. Total Sales (Card)</span>
-                  <span className="font-semibold text-slate-900">₹{summaryData.totalSalesCard.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg border-b border-slate-100">
-                  <span className="font-medium text-slate-700">7. Dues Collected</span>
-                  <span className="font-semibold text-slate-900">₹{summaryData.duesCollected.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg border-b border-slate-100">
-                  <span className="font-medium text-slate-700">8. Cash Expense</span>
-                  <span className="font-semibold text-slate-900">₹{summaryData.cashExpense.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg border-b border-slate-100">
-                  <span className="font-medium text-slate-700">9. Tip Collected</span>
-                  <span className="font-semibold text-slate-900">₹{summaryData.tipCollected.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="flex justify-between items-center py-3 px-4 rounded-lg">
-                  <span className="font-medium text-slate-700">10. Cash Balance</span>
-                  <span className="font-semibold text-slate-900">₹{summaryData.cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:shadow-md hover:border-slate-200/80 transition-all duration-200">
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Average Bill Value</p>
+                  <p className="text-2xl font-bold text-slate-900 tracking-tight">
+                    ₹{(summaryData.totalBillCount > 0 ? (summaryData.totalSales / summaryData.totalBillCount) : 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1.5">Total Sales ÷ Total Bills</p>
                 </div>
               </div>
-            ) : (
-              <div className="text-center py-16 text-slate-500">No summary data for the selected period.</div>
-            )}
-          </div>
+
+              {/* 2. Grouped Sections */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Section A: Revenue Overview */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                    <DollarSign className="h-4 w-4 text-indigo-500" />
+                    Revenue Overview
+                  </h3>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600">Total Sales</span>
+                      <span className="font-semibold text-slate-900">₹{summaryData.totalSales.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 flex items-center gap-1.5">
+                        Dues Collected
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs p-3">
+                            <p className="text-sm">Payments received during this period on previously unpaid or partially paid bills.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="font-semibold text-emerald-600">₹{summaryData.duesCollected.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600">Tip Collected</span>
+                      <span className="font-semibold text-emerald-600">₹{summaryData.tipCollected.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section B: Payment Mode Breakdown */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                    <CreditCard className="h-4 w-4 text-indigo-500" />
+                    Payment Mode Breakdown
+                  </h3>
+                  {summaryData.totalSales > 0 ? (
+                    <div className="space-y-4">
+                      {[
+                        { label: "Cash", value: summaryData.totalSalesCash, color: "bg-emerald-500" },
+                        { label: "Online", value: summaryData.totalSalesOnline, color: "bg-blue-500" },
+                        { label: "Card", value: summaryData.totalSalesCard, color: "bg-violet-500" },
+                      ].map(({ label, value, color }) => (
+                        <div key={label}>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-slate-600">{label}</span>
+                            <span className="font-medium text-slate-900">₹{value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${color} transition-all duration-500`}
+                              style={{ width: `${Math.min(100, (value / summaryData.totalSales) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-slate-400 text-sm">No payment data for this period.</p>
+                  )}
+                </div>
+
+                {/* Section C: Expenses */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                    <Wallet className="h-4 w-4 text-indigo-500" />
+                    Expenses
+                  </h3>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600 flex items-center gap-1.5">
+                      Cash Expense
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs p-3">
+                          <p className="text-sm">Cash paid out for expenses during this period (e.g. supplies, petty cash).</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </span>
+                    <span className={`font-semibold ${summaryData.cashExpense > 0 ? "text-red-600" : "text-slate-900"}`}>
+                      ₹{summaryData.cashExpense.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Section D: Final Settlement */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                    <Banknote className="h-4 w-4 text-indigo-500" />
+                    Final Settlement
+                  </h3>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 flex items-center gap-1.5">
+                        Expected Cash in Drawer
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs p-3">
+                            <p className="text-sm">Opening Balance + Cash Sales + Cash Dues Collected − Cash Expenses</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="font-semibold text-slate-900">₹{((summaryData.openingBalance ?? 0) + summaryData.totalSalesCash + (summaryData.cashDuesCollected ?? 0) - summaryData.cashExpense).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+                      <span className="text-slate-600 flex items-center gap-1.5">
+                        Cash Balance
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs p-3">
+                            <p className="text-sm">Closing balance recorded in the cash registry when the shift was closed.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className={`font-bold text-lg ${(summaryData.closingBalance ?? summaryData.cashBalance ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                        ₹{(summaryData.closingBalance ?? summaryData.cashBalance ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </TooltipProvider>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-24 text-slate-500">
+              <Receipt className="h-12 w-12 text-slate-300 mb-3" />
+              <p className="font-medium">No summary data</p>
+              <p className="text-sm">Select a different date range to view metrics.</p>
+            </div>
+          )}
         </div>
       ) : reportType === "staff-tip" ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -1289,18 +1472,29 @@ export function SalesReport() {
                   <TableRow>
                     <TableHead>Staff Name</TableHead>
                     <TableHead className="text-right">Tip Amount</TableHead>
+                    <TableHead>Mode of Payment</TableHead>
                     <TableHead className="w-[140px] text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {staffTipAggregated.map((row) => {
-                    const paid = (staffTipPaidAmountByStaff.get(row.staffId) || 0) >= row.tipAmount - 0.01
+                    const isAllCash = row.nonCashTipAmount < 0.01
+                    const paidAmount = staffTipPaidAmountByStaff.get(row.staffId) || 0
+                    const paid = isAllCash || paidAmount >= row.nonCashTipAmount - 0.01
+                    const paymentModeLabel = row.paymentModes.length === 1 ? row.paymentModes[0] : "Mixed"
                     return (
                       <TableRow key={row.staffId}>
                         <TableCell className="font-medium">{row.staffName}</TableCell>
                         <TableCell className="text-right">₹{row.tipAmount.toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="font-normal">
+                            {paymentModeLabel}
+                          </Badge>
+                        </TableCell>
                         <TableCell className="text-right">
-                          {paid ? (
+                          {isAllCash ? (
+                            <span className="text-slate-500 text-sm">—</span>
+                          ) : paid ? (
                             <Badge variant="secondary" className="bg-green-100 text-green-800">Paid</Badge>
                           ) : (
                             <Button
@@ -1322,6 +1516,7 @@ export function SalesReport() {
           </div>
         </div>
       ) : (
+        <TooltipProvider delayDuration={200}>
         <>
       {/* Enhanced Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
@@ -1436,21 +1631,41 @@ export function SalesReport() {
                 <TableHead className="font-semibold text-slate-800">Status</TableHead>
                 <TableHead className="font-semibold text-slate-800">Payment Mode</TableHead>
                 <TableHead className="font-semibold text-slate-800">
-                  Net Total
-                  {paymentFilter !== "all" && (
+                  <span className="inline-flex items-center gap-1">
+                    Net Total
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs p-3">
+                        <p className="text-sm">This is the final amount collected from the customer after discounts, plus tax and tip.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                    {paymentFilter !== "all" && (
                     <Badge variant="secondary" className="ml-2 text-xs bg-blue-100 text-blue-700 border-blue-200">
                       {paymentFilter} only
                     </Badge>
-                  )}
+                    )}
+                  </span>
                 </TableHead>
                 <TableHead className="font-semibold text-slate-800">Tax Amount</TableHead>
                 <TableHead className="font-semibold text-slate-800">
-                  Gross Total
-                  {paymentFilter !== "all" && (
+                  <span className="inline-flex items-center gap-1">
+                    Gross Total
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs p-3">
+                        <p className="text-sm">This is the total bill amount before applying any discount, tax, or tip. Used to calculate your business revenue.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                    {paymentFilter !== "all" && (
                     <Badge variant="secondary" className="ml-2 text-xs bg-blue-100 text-blue-700 border-blue-200">
                       {paymentFilter} only
                     </Badge>
-                  )}
+                    )}
+                  </span>
                 </TableHead>
                 <TableHead className="font-semibold text-slate-800">Actions</TableHead>
               </TableRow>
@@ -1562,16 +1777,36 @@ export function SalesReport() {
                   <p className="text-lg">{getPaymentModeDisplay(selectedBill)}</p>
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-muted-foreground">Net Total</label>
-                  <p className="text-lg">₹{selectedBill.netTotal.toFixed(2)}</p>
+                  <label className="text-sm font-medium text-muted-foreground inline-flex items-center gap-1">
+                    Net Total
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs p-3">
+                        <p className="text-sm">This is the final amount collected from the customer after discounts, plus tax and tip.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </label>
+                  <p className="text-lg">₹{getDisplayNetTotal(selectedBill).toFixed(2)}</p>
                 </div>
                 <div>
                   <label className="text-sm font-medium text-muted-foreground">Tax Amount</label>
                   <p className="text-lg">₹{selectedBill.taxAmount.toFixed(2)}</p>
                 </div>
                 <div className="col-span-2">
-                  <label className="text-sm font-medium text-muted-foreground">Gross Total</label>
-                  <p className="text-2xl font-bold text-green-600">₹{selectedBill.grossTotal.toFixed(2)}</p>
+                  <label className="text-sm font-medium text-muted-foreground inline-flex items-center gap-1">
+                    Gross Total
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs p-3">
+                        <p className="text-sm">This is the total bill amount before applying any discount, tax, or tip. Used to calculate your business revenue.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </label>
+                  <p className="text-2xl font-bold text-green-600">₹{getDisplayGrossTotal(selectedBill).toFixed(2)}</p>
                 </div>
               </div>
               {selectedBill.payments && selectedBill.payments.length > 0 && (
@@ -1630,6 +1865,7 @@ export function SalesReport() {
       </Dialog>
 
         </>
+        </TooltipProvider>
       )}
     </div>
   )

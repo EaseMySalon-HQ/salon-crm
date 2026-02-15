@@ -1,0 +1,31 @@
+---
+description: Reports and lists must use a single combined bar for report type + filters
+globs: components/reports/**/*.tsx, app/reports/**/*.tsx
+alwaysApply: false
+---
+
+# Reports: Single Bar for Type + Filters
+
+When adding or changing report/list types (e.g. in Sales Report or any report that has multiple views):
+
+1. **One bar only** – Report type dropdown and all filters for the selected type MUST live in the **same** top bar. Do not add a separate card/section for filters below the report type.
+
+2. **Per-type filters** – For each report type (e.g. "Sales Report", "Service List"):
+   - Add a new `reportType === "your-type"` block in the same bar.
+   - Put that type’s filters (date, status, service, staff, etc.) in that block.
+   - Optional actions (e.g. "View Unpaid Bills", "Export") stay on the right side of the same bar when relevant to that type.
+
+3. **Controlled filters for embedded reports** – If the report is a separate component (e.g. `ServiceListReport`):
+   - The parent (e.g. `SalesReport`) owns the filter state and passes it via a `controlledFilters`-style prop.
+   - The child component accepts optional `controlledFilters` and **does not render its own filter bar** when that prop is provided.
+   - When the same report is used elsewhere (e.g. another tab) without `controlledFilters`, it may render its own filter bar.
+
+4. **Pattern in code** – In `components/reports/sales-report.tsx`, the combined bar looks like:
+   - One wrapper card with `p-6`.
+   - Report type `Select` first.
+   - Then `{reportType === "sales" && ( ... sales filters ... )}`.
+   - Then `{reportType === "service-list" && ( ... service list filters ... )}`.
+   - Add a new `{reportType === "new-type" && ( ... new type filters ... )}` when adding a new report type.
+   - Right side: type-specific actions (only when that type is selected).
+
+Adding a new report/list type = add its option to the report type Select, add its filter block in the same bar, and wire controlled filters if it’s an embedded component.
