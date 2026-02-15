@@ -137,6 +137,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
   )
 
   const handleExportPDF = async () => {
+    toast({ title: "Export requested", description: "Generating products report PDF...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       
@@ -166,6 +167,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
   }
 
   const handleExportXLS = async () => {
+    toast({ title: "Export requested", description: "Generating products report Excel...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       

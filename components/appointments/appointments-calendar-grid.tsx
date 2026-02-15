@@ -695,7 +695,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   const handleTimeDragStart = (e: React.MouseEvent, apt: Appointment) => {
-    if (apt.status === "cancelled") return
+    if (apt.status === "cancelled" || apt.status === "completed") return
     e.preventDefault()
     e.stopPropagation()
     setDragOffsetY(0)
@@ -713,7 +713,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   const handleResizeStart = (e: React.MouseEvent, apt: Appointment, mode: "resize-top" | "resize-bottom") => {
-    if (apt.status === "cancelled") return
+    if (apt.status === "cancelled" || apt.status === "completed") return
     e.preventDefault()
     e.stopPropagation()
     setDragOffsetY(0)
@@ -1204,7 +1204,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                     const darkStrip = getStatusColor(apt.status)
                     const isDragging = draggingApt?.id === apt._id
                     const isUpdating = updatingTimeForId === apt._id
-                    const canDrag = apt.status !== "cancelled"
+                    const canDrag = apt.status !== "cancelled" && apt.status !== "completed"
                     const baseHeight = Math.max(SLOT_HEIGHT * 0.6, height - 4)
                     const resizeBottomHeight =
                       isDragging && draggingApt?.mode === "resize-bottom"
