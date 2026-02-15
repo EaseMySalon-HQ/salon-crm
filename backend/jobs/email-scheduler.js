@@ -96,19 +96,24 @@ async function sendDailySummaries() {
         // 4–6. Sales by payment mode (from payments array)
         let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
         sales.forEach(s => {
-          (s.payments || []).forEach(p => {
-            const amt = p.amount || 0;
-            if (p.mode === 'Cash') totalSalesCash += amt;
-            else if (p.mode === 'Online') totalSalesOnline += amt;
-            else if (p.mode === 'Card') totalSalesCard += amt;
-          });
-          // Legacy: single paymentMode
-          if (!(s.payments && s.payments.length)) {
+          let cashAmt = 0;
+          let isAllCash = false;
+          if (s.payments && s.payments.length) {
+            s.payments.forEach(p => {
+              const amt = p.amount || 0;
+              if (p.mode === 'Cash') { totalSalesCash += amt; cashAmt += amt; }
+              else if (p.mode === 'Online') totalSalesOnline += amt;
+              else if (p.mode === 'Card') totalSalesCard += amt;
+            });
+            const hasNonCash = (s.payments || []).some(p => p.mode === 'Card' || p.mode === 'Online');
+            isAllCash = cashAmt > 0 && !hasNonCash;
+          } else {
             const amt = s.grossTotal || s.netTotal || 0;
-            if (s.paymentMode === 'Cash') totalSalesCash += amt;
+            if (s.paymentMode === 'Cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
             else if (s.paymentMode === 'Online') totalSalesOnline += amt;
             else if (s.paymentMode === 'Card') totalSalesCard += amt;
           }
+          if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
         });
         // 7. Dues collected (payments recorded today via paymentHistory)
         let duesCollected = 0;

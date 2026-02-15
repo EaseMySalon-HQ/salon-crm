@@ -71,18 +71,24 @@ async function sendDailySummaryForDate(businessId, branchId, targetDate) {
     const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
     let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
     sales.forEach(s => {
-      (s.payments || []).forEach(p => {
-        const amt = p.amount || 0;
-        if (p.mode === 'Cash') totalSalesCash += amt;
-        else if (p.mode === 'Online') totalSalesOnline += amt;
-        else if (p.mode === 'Card') totalSalesCard += amt;
-      });
-      if (!(s.payments && s.payments.length)) {
+      let cashAmt = 0;
+      let isAllCash = false;
+      if (s.payments && s.payments.length) {
+        s.payments.forEach(p => {
+          const amt = p.amount || 0;
+          if (p.mode === 'Cash') { totalSalesCash += amt; cashAmt += amt; }
+          else if (p.mode === 'Online') totalSalesOnline += amt;
+          else if (p.mode === 'Card') totalSalesCard += amt;
+        });
+        const hasNonCash = (s.payments || []).some(p => p.mode === 'Card' || p.mode === 'Online');
+        isAllCash = cashAmt > 0 && !hasNonCash;
+      } else {
         const amt = s.grossTotal || s.netTotal || 0;
-        if (s.paymentMode === 'Cash') totalSalesCash += amt;
+        if (s.paymentMode === 'Cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;
     sales.forEach(s => {

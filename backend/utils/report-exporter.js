@@ -353,17 +353,22 @@ async function exportSalesReport({ branchId, format = 'xlsx', filters = {} }) {
     
     if (format === 'xlsx') {
       // Generate Excel file
-      const data = sales.map(sale => ({
-        "Bill No.": sale.billNo,
-        "Customer Name": sale.customerName,
-        "Date": sale.date ? new Date(sale.date).toLocaleDateString() : '',
-        "Status": String(sale.status || '').trim(),
-        "Payment Mode": sale.paymentMode || 'N/A',
-        "Net Total": parseFloat(sale.netTotal) || 0,
-        "Tax Amount": parseFloat(sale.taxAmount) || 0,
-        "Gross Total": parseFloat(sale.grossTotal) || 0,
-        "Staff Name": sale.staffName || 'N/A'
-      }));
+      // Net Total = bill + tip (incl tip); Gross Total = bill only (excl tip)
+      const data = sales.map(sale => {
+        const gross = parseFloat(sale.grossTotal) || 0;
+        const tip = parseFloat(sale.tip) || 0;
+        return {
+          "Bill No.": sale.billNo,
+          "Customer Name": sale.customerName,
+          "Date": sale.date ? new Date(sale.date).toLocaleDateString() : '',
+          "Status": String(sale.status || '').trim(),
+          "Payment Mode": sale.paymentMode || 'N/A',
+          "Net Total": gross + tip,
+          "Tax Amount": parseFloat(sale.taxAmount) || 0,
+          "Gross Total": gross,
+          "Staff Name": sale.staffName || 'N/A'
+        };
+      });
       
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
@@ -1045,11 +1050,24 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
             .filter(s => s.paymentMode?.toLowerCase().includes('cash') || 
                        s.payments?.some(p => p.mode?.toLowerCase() === 'cash'))
             .reduce((sum, s) => {
+              let cashAmt = 0;
+              let isAllCash = false;
               if (s.payments && s.payments.length > 0) {
-                return sum + (s.payments.filter(p => p.mode?.toLowerCase() === 'cash')
-                  .reduce((pSum, p) => pSum + (p.amount || 0), 0));
+                cashAmt = s.payments.filter(p => p.mode?.toLowerCase() === 'cash')
+                  .reduce((pSum, p) => pSum + (p.amount || 0), 0);
+                const hasNonCash = s.payments.some(p => {
+                  const m = (p.mode || '').toLowerCase();
+                  return m === 'card' || m === 'online';
+                });
+                isAllCash = cashAmt > 0 && !hasNonCash;
+              } else {
+                cashAmt = (s.netTotal || 0);
+                isAllCash = (s.paymentMode || '').toLowerCase().includes('cash') && 
+                  !(s.paymentMode || '').toLowerCase().includes('card') && 
+                  !(s.paymentMode || '').toLowerCase().includes('online');
               }
-              return sum + (s.netTotal || 0);
+              const tip = s.tip || 0;
+              return sum + cashAmt - (isAllCash ? tip : 0);
             }, 0);
           
           summary.onlineSales = sales
@@ -1313,18 +1331,24 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
     const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
     let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
     sales.forEach(s => {
-      (s.payments || []).forEach(p => {
-        const amt = p.amount || 0;
-        if (p.mode === 'Cash') totalSalesCash += amt;
-        else if (p.mode === 'Online') totalSalesOnline += amt;
-        else if (p.mode === 'Card') totalSalesCard += amt;
-      });
-      if (!(s.payments && s.payments.length)) {
+      let cashAmt = 0;
+      let isAllCash = false;
+      if (s.payments && s.payments.length) {
+        s.payments.forEach(p => {
+          const amt = p.amount || 0;
+          if (p.mode === 'Cash') { totalSalesCash += amt; cashAmt += amt; }
+          else if (p.mode === 'Online') totalSalesOnline += amt;
+          else if (p.mode === 'Card') totalSalesCard += amt;
+        });
+        const hasNonCash = (s.payments || []).some(p => p.mode === 'Card' || p.mode === 'Online');
+        isAllCash = cashAmt > 0 && !hasNonCash;
+      } else {
         const amt = s.grossTotal || s.netTotal || 0;
-        if (s.paymentMode === 'Cash') totalSalesCash += amt;
+        if (s.paymentMode === 'Cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;
     sales.forEach(s => {

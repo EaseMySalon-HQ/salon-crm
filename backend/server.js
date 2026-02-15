@@ -10,6 +10,7 @@ const cron = require('node-cron');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
+const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST } = require('./utils/date-utils');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -6555,15 +6556,17 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     let dateFrom = req.query.dateFrom ? new Date(req.query.dateFrom) : null;
     let dateTo = req.query.dateTo ? new Date(req.query.dateTo) : null;
     if (!dateFrom || !dateTo) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      dateFrom = dateFrom || today;
-      dateTo = dateTo || new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1);
+      // Default to today in IST
+      const todayStr = getTodayIST();
+      dateFrom = getStartOfDayIST(todayStr);
+      dateTo = getEndOfDayIST(todayStr);
     } else {
-      dateTo.setHours(23, 59, 59, 999);
+      dateFrom = new Date(dateFrom);
+      dateTo = new Date(dateTo);
     }
-    const todayDateString = dateFrom.toISOString().split('T')[0];
-    const tomorrowDateString = new Date(dateTo.getTime() + 1).toISOString().split('T')[0];
+    const todayDateString = toDateStringIST(dateFrom);
+    const tomorrowDate = new Date(dateTo.getTime() + 1);
+    const tomorrowDateString = toDateStringIST(tomorrowDate);
 
     const sales = await Sale.find({
       branchId,
@@ -6575,6 +6578,12 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
       branchId,
       date: { $gte: todayDateString, $lte: tomorrowDateString }
     }).lean();
+
+    const openingRegistry = await CashRegistry.findOne({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      shiftType: 'opening'
+    }).sort({ date: 1 }).lean();
 
     const closingRegistry = await CashRegistry.findOne({
       branchId,
@@ -6595,32 +6604,45 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
     let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
     sales.forEach(s => {
-      (s.payments || []).forEach(p => {
-        const amt = p.amount || 0;
-        if (p.mode === 'Cash') totalSalesCash += amt;
-        else if (p.mode === 'Online') totalSalesOnline += amt;
-        else if (p.mode === 'Card') totalSalesCard += amt;
-      });
-      if (!(s.payments && s.payments.length)) {
+      let cashAmt = 0;
+      let isAllCash = false;
+      if (s.payments && s.payments.length) {
+        s.payments.forEach(p => {
+          const amt = p.amount || 0;
+          if (p.mode === 'Cash') { totalSalesCash += amt; cashAmt += amt; }
+          else if (p.mode === 'Online') totalSalesOnline += amt;
+          else if (p.mode === 'Card') totalSalesCard += amt;
+        });
+        const hasNonCash = (s.payments || []).some(p => p.mode === 'Card' || p.mode === 'Online');
+        isAllCash = cashAmt > 0 && !hasNonCash;
+      } else {
         const amt = s.grossTotal || s.netTotal || 0;
-        if (s.paymentMode === 'Cash') totalSalesCash += amt;
+        if (s.paymentMode === 'Cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;
+    let cashDuesCollected = 0;
     sales.forEach(s => {
       (s.paymentHistory || []).forEach(ph => {
         const d = ph.date ? new Date(ph.date) : null;
-        if (d && d >= dateFrom && d <= dateTo) duesCollected += ph.amount || 0;
+        if (d && d >= dateFrom && d <= dateTo) {
+          duesCollected += ph.amount || 0;
+          if ((ph.method || '').toLowerCase() === 'cash') cashDuesCollected += ph.amount || 0;
+        }
       });
     });
-    const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    // Use Expense collection as source of truth for cash expenses; closingRegistry.expenseValue is 0 when not yet closed
+    const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     // Tip collected: sum from Sales (Quick Sale flow) + Receipts (manual receipt flow), for selected date range, all staff
     const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
     const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
     const tipCollected = tipFromSales + tipFromReceipts;
     const cashBalance = closingRegistry?.cashBalance ?? 0;
+    const openingBalance = openingRegistry?.openingBalance ?? 0;
+    const closingBalance = closingRegistry?.closingBalance ?? cashBalance;
 
     res.json({
       success: true,
@@ -6632,9 +6654,12 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         totalSalesOnline,
         totalSalesCard,
         duesCollected,
+        cashDuesCollected,
         cashExpense,
         tipCollected,
-        cashBalance
+        cashBalance,
+        openingBalance,
+        closingBalance
       }
     });
   } catch (error) {
@@ -9421,13 +9446,12 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
     let balanceDifference = 0;
     let onlinePosDifference = 0;
     
+    // Parse date in IST (Asia/Kolkata) - all dates use IST
+    const dateObj = parseDateIST(date);
+    
     if (shiftType === 'closing') {
-      // Convert date string to Date object and set time ranges
-      const dateObj = new Date(date);
-      const startOfDay = new Date(dateObj);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(dateObj);
-      endOfDay.setHours(23, 59, 59, 999);
+      const startOfDay = getStartOfDayIST(date);
+      const endOfDay = getEndOfDayIST(date);
       
       // Get cash collected from sales for the date
       const sales = await Sale.find({
@@ -9458,7 +9482,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
     }
     
     const cashRegistry = new CashRegistry({
-      date: new Date(date),
+      date: dateObj,
       shiftType,
       createdBy: createdBy || `${req.user.firstName} ${req.user.lastName}`.trim() || req.user.email,
       userId: req.user.id,

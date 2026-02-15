@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
+import { toDateStringIST, formatInIST } from "@/lib/date-utils"
 import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -137,7 +138,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     const entriesByDate: { [date: string]: { opening?: any; closing?: any } } = {}
     
     cashRegistryData.forEach(entry => {
-      const dateKey = new Date(entry.date).toISOString().split('T')[0]
+      const dateKey = toDateStringIST(entry.date)
       if (!entriesByDate[dateKey]) {
         entriesByDate[dateKey] = {}
       }
@@ -156,7 +157,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       
       // Get sales data for this date
       const dateSales = salesData.filter(sale => {
-        const saleDate = new Date(sale.date).toISOString().split('T')[0]
+        const saleDate = toDateStringIST(sale.date)
         return saleDate === dateKey
       })
       
@@ -299,7 +300,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         
         if (verifiedEntry) {
           const entryDate = new Date(verifiedEntry.date)
-          const dateKey = entryDate.toISOString().split('T')[0] // YYYY-MM-DD format
+          const dateKey = toDateStringIST(entryDate) // YYYY-MM-DD format
           
           // Get the opening entry for the same date
           const openingEntry = cashRegistryData.find(entry => {
@@ -319,7 +320,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           let expense = 0
           let onlineSales = 0
           
-          if (dateKey === new Date().toISOString().split('T')[0]) {
+          if (dateKey === toDateStringIST(new Date())) {
             // For today's entries, use real-time data
             cashCollected = getRealTimeCashSales()
             expense = getRealTimeExpenses()
@@ -386,15 +387,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           title: "Success",
           description: "Cash registry has been verified and closed successfully. Summary by Day has been updated.",
         })
-        // Refresh all data after successful verification
-        await fetchCashRegistryData()
+        // Refresh all data after successful verification (silent = no full-page loading spinner)
+        await fetchCashRegistryData(true)
         await fetchSalesData()
         await fetchExpensesData()
-        // Regenerate daily summaries to reflect the updated verification status
-        // The useEffect should handle this automatically, but we'll trigger it explicitly to ensure it happens
-        setTimeout(() => {
-          generateDailySummaries()
-        }, 300)
+        // useEffect will regenerate daily summaries when cashRegistryData updates
         onVerificationModalChange(false)
       } else {
         toast({
@@ -473,8 +470,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
 
 
-  const fetchCashRegistryData = async () => {
-    setLoading(true)
+  const fetchCashRegistryData = async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       console.log("Fetching cash registry data...")
       const response = await CashRegistryAPI.getAll()
@@ -535,7 +532,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       console.error("Error fetching cash registry data:", error)
       setCashRegistryData([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -565,7 +562,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             type: typeof expense.date
           })
           
-          const expenseDate = new Date(expense.date).toISOString().split('T')[0]
+          const expenseDate = toDateStringIST(expense.date)
           if (!expensesMap[expenseDate]) {
             expensesMap[expenseDate] = 0
           }
@@ -706,15 +703,23 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     return salesData.reduce((sum: number, sale: any) => {
       const saleDate = new Date(sale.date)
       if (saleDate >= dateRange.from! && saleDate <= dateRange.to!) {
+        let cashAmt = 0
+        let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
-          // Split payment structure
-          return sum + sale.payments
-            .filter((payment: any) => payment.mode === "Cash")
-            .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
+          const cashPayments = sale.payments.filter((p: any) => (p.mode || p.type || "").toLowerCase().includes("cash"))
+          const hasNonCash = sale.payments.some((p: any) => {
+            const m = (p.mode || p.type || "").toLowerCase()
+            return m.includes("card") || m.includes("online") || m.includes("upi")
+          })
+          cashAmt = cashPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
+          isAllCash = cashAmt > 0 && !hasNonCash
         } else {
-          // Legacy single payment mode
-          return sum + (sale.paymentMode === "Cash" ? sale.netTotal : 0)
+          const pm = (sale.paymentMode || "").toLowerCase()
+          cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
+          isAllCash = cashAmt > 0
         }
+        const tip = sale.tip || 0
+        return sum + cashAmt - (isAllCash ? tip : 0)
       }
       return sum
     }, 0)
@@ -755,10 +760,10 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   // Get today's online sales specifically for the modal
   const getTodayOnlineSales = () => {
     const today = new Date()
-    const todayString = today.toISOString().split('T')[0]
+    const todayString = toDateStringIST(today)
     
     const result = salesData.reduce((sum: number, sale: any) => {
-      const saleDate = new Date(sale.date).toISOString().split('T')[0]
+      const saleDate = toDateStringIST(sale.date)
       if (saleDate === todayString) {
         if (sale.payments && sale.payments.length > 0) {
           // Split payment structure
@@ -776,7 +781,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     console.log("🔍 getTodayOnlineSales:", {
       todayString,
       salesDataCount: salesData.length,
-      availableDates: salesData.map(sale => new Date(sale.date).toISOString().split('T')[0]),
+      availableDates: salesData.map(sale => toDateStringIST(sale.date)),
       result
     })
     
@@ -801,30 +806,40 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   // Helper functions to get real-time data for each entry
   const getEntryCashSales = (entryDate: string) => {
     // Normalize entry date to YYYY-MM-DD format
-    const normalizedEntryDate = new Date(entryDate).toISOString().split('T')[0]
+    const normalizedEntryDate = toDateStringIST(entryDate)
     
     const result = salesData.reduce((sum: number, sale: any) => {
       // Normalize sale date to YYYY-MM-DD format
-      const saleDate = new Date(sale.date).toISOString().split('T')[0]
+      const saleDate = toDateStringIST(sale.date)
       
       if (saleDate === normalizedEntryDate) {
+        let cashAmt = 0
+        let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
-          return sum + sale.payments
-            .filter((payment: any) => payment.mode === "Cash")
-            .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
+          const cashPayments = sale.payments.filter((p: any) => (p.mode || p.type || "").toLowerCase().includes("cash"))
+          const hasNonCash = sale.payments.some((p: any) => {
+            const m = (p.mode || p.type || "").toLowerCase()
+            return m.includes("card") || m.includes("online") || m.includes("upi")
+          })
+          cashAmt = cashPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
+          isAllCash = cashAmt > 0 && !hasNonCash
         } else {
-          return sum + (sale.paymentMode === "Cash" ? sale.netTotal : 0)
+          const pm = (sale.paymentMode || "").toLowerCase()
+          cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
+          isAllCash = cashAmt > 0
         }
+        const tip = sale.tip || 0
+        return sum + cashAmt - (isAllCash ? tip : 0)
       }
       return sum
     }, 0)
     
     console.log(`💰 Cash sales for ${entryDate} (normalized: ${normalizedEntryDate}):`, {
       totalSales: salesData.length,
-      availableSaleDates: salesData.map(sale => new Date(sale.date).toISOString().split('T')[0]),
+      availableSaleDates: salesData.map(sale => toDateStringIST(sale.date)),
       normalizedEntryDate,
       matchingSales: salesData.filter(sale => {
-        const saleDate = new Date(sale.date).toISOString().split('T')[0]
+        const saleDate = toDateStringIST(sale.date)
         return saleDate === normalizedEntryDate
       }),
       result
@@ -837,11 +852,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
   const getEntryOnlineSales = (entryDate: string) => {
     // Normalize entry date to YYYY-MM-DD format
-    const normalizedEntryDate = new Date(entryDate).toISOString().split('T')[0]
+    const normalizedEntryDate = toDateStringIST(entryDate)
     
     const result = salesData.reduce((sum: number, sale: any) => {
       // Normalize sale date to YYYY-MM-DD format
-      const saleDate = new Date(sale.date).toISOString().split('T')[0]
+      const saleDate = toDateStringIST(sale.date)
       
       if (saleDate === normalizedEntryDate) {
         if (sale.payments && sale.payments.length > 0) {
@@ -857,10 +872,10 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     
     console.log(`💳 Online sales for ${entryDate} (normalized: ${normalizedEntryDate}):`, {
       totalSales: salesData.length,
-      availableSaleDates: salesData.map(sale => new Date(sale.date).toISOString().split('T')[0]),
+      availableSaleDates: salesData.map(sale => toDateStringIST(sale.date)),
       normalizedEntryDate,
       matchingSales: salesData.filter(sale => {
-        const saleDate = new Date(sale.date).toISOString().split('T')[0]
+        const saleDate = toDateStringIST(sale.date)
         return saleDate === normalizedEntryDate
       }),
       result
@@ -872,7 +887,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   const getEntryExpenses = (entryDate: string) => {
     // Use the same logic as stats cards - calculate expenses from the expensesData
     // This ensures consistency between stats and table columns
-    const normalizedEntryDate = new Date(entryDate).toISOString().split('T')[0]
+    const normalizedEntryDate = toDateStringIST(entryDate)
     
     console.log(`🔍 DEBUG: Looking for expenses on ${entryDate}`)
     console.log(`📅 DEBUG: Normalized entry date: ${normalizedEntryDate}`)
@@ -881,7 +896,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     
     // Calculate expenses for this specific date using the same approach as getRealTimeExpenses
     const result = Object.entries(expensesData).reduce((sum: number, [date, amount]) => {
-      const expenseDate = new Date(date).toISOString().split('T')[0]
+      const expenseDate = toDateStringIST(date)
       console.log(`🔍 DEBUG: Comparing expense date ${expenseDate} with entry date ${normalizedEntryDate}`)
       if (expenseDate === normalizedEntryDate) {
         console.log(`✅ DEBUG: Match found! Adding amount ${amount}`)
@@ -1080,7 +1095,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     
     // Find all cash registry entries for this date
     const entriesForDate = cashRegistryData.filter(entry => {
-      const entryDate = new Date(entry.date).toISOString().split('T')[0]
+      const entryDate = toDateStringIST(entry.date)
       return entryDate === summaryDate
     })
     
@@ -1115,7 +1130,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         
         // Find all entries for this date
         const entriesForDate = cashRegistryData.filter(entry => {
-          const entryDate = new Date(entry.date).toISOString().split('T')[0]
+          const entryDate = toDateStringIST(entry.date)
           return entryDate === selectedSummaryDate
         })
         
@@ -1826,12 +1841,12 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                                       ) : (() => {
                                         // Check for opening and closing entries for this date
                                         const openingEntry = cashRegistryData.find(registryEntry => {
-                                          const entryDate = new Date(registryEntry.date).toISOString().split('T')[0]
+                                          const entryDate = toDateStringIST(registryEntry.date)
                                           return entryDate === entry.date && registryEntry.shiftType === 'opening'
                                         })
                                         
                                         const closingEntry = cashRegistryData.find(registryEntry => {
-                                          const entryDate = new Date(registryEntry.date).toISOString().split('T')[0]
+                                          const entryDate = toDateStringIST(registryEntry.date)
                                           return entryDate === entry.date && registryEntry.shiftType === 'closing'
                                         })
                                         
@@ -2274,7 +2289,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                       <span className="font-medium">Entries to Delete:</span>
                       <p className="text-muted-foreground">
                         {selectedSummaryDate ? cashRegistryData.filter(entry => {
-                          const entryDate = new Date(entry.date).toISOString().split('T')[0]
+                          const entryDate = toDateStringIST(entry.date)
                           return entryDate === selectedSummaryDate
                         }).length : 0} entries
                       </p>

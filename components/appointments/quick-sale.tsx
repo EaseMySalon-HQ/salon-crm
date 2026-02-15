@@ -2550,7 +2550,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             })
           ],
           // Sale model required fields
-          netTotal: subtotal,
+          // Net Total = bill + tip (including tip); Gross Total = bill only (excluding tip)
+          netTotal: calculatedTotal + tip,
           taxAmount: calculatedTax,
           grossTotal: calculatedTotal,
           tip: tip,
