@@ -2,6 +2,7 @@ const XLSX = require('xlsx');
 const PDFDocument = require('pdfkit');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
+const { toDateStringIST } = require('./date-utils');
 
 /**
  * Helper function to add a styled header to PDF
@@ -1298,8 +1299,9 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
     } else {
       dateTo.setHours(23, 59, 59, 999);
     }
-    const todayDateString = dateFrom.toISOString().split('T')[0];
-    const tomorrowDateString = new Date(dateTo.getTime() + 1).toISOString().split('T')[0];
+    const todayDateString = toDateStringIST(dateFrom);
+    const tomorrowDate = new Date(dateTo.getTime() + 24 * 60 * 60 * 1000);
+    const tomorrowDateString = toDateStringIST(tomorrowDate);
 
     const sales = await Sale.find({
       branchId,
@@ -1357,9 +1359,14 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
         if (d && d >= dateFrom && d <= dateTo) duesCollected += ph.amount || 0;
       });
     });
-    const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-    const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
-    const cashBalance = closingRegistry?.cashBalance ?? 0;
+    // Use Expense collection as source of truth (matches /api/reports/summary)
+    const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    // Tip collected: sum from Sales (Quick Sale) + Receipts (manual receipts), matches API
+    const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
+    const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
+    const tipCollected = tipFromSales + tipFromReceipts;
+    // Use closingBalance (actual counted) when available, else cashBalance (calculated) - matches API & UI
+    const cashBalance = closingRegistry?.closingBalance ?? closingRegistry?.cashBalance ?? 0;
 
     const summaryData = {
       totalBillCount,
@@ -1418,17 +1425,18 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
       doc.on('end', () => {});
       let y = addPDFHeader(doc, 'Summary Report', `Period: ${periodText} | Generated: ${new Date().toLocaleString()}`);
       y += 20;
+      const fmt = (n) => (Number(n) || 0).toFixed(2);
       const metrics = [
         ['Total Bill Count', String(summaryData.totalBillCount)],
         ['Total Customer Count', String(summaryData.totalCustomerCount)],
-        ['Total Sales', `₹${Number(summaryData.totalSales).toFixed(2)}`],
-        ['Total Sales (Cash)', `₹${Number(summaryData.totalSalesCash).toFixed(2)}`],
-        ['Total Sales (Online)', `₹${Number(summaryData.totalSalesOnline).toFixed(2)}`],
-        ['Total Sales (Card)', `₹${Number(summaryData.totalSalesCard).toFixed(2)}`],
-        ['Dues Collected', `₹${Number(summaryData.duesCollected).toFixed(2)}`],
-        ['Cash Expense', `₹${Number(summaryData.cashExpense).toFixed(2)}`],
-        ['Tip Collected', `₹${Number(summaryData.tipCollected).toFixed(2)}`],
-        ['Cash Balance', `₹${Number(summaryData.cashBalance).toFixed(2)}`]
+        ['Total Sales', `₹${fmt(summaryData.totalSales)}`],
+        ['Total Sales (Cash)', `₹${fmt(summaryData.totalSalesCash)}`],
+        ['Total Sales (Online)', `₹${fmt(summaryData.totalSalesOnline)}`],
+        ['Total Sales (Card)', `₹${fmt(summaryData.totalSalesCard)}`],
+        ['Dues Collected', `₹${fmt(summaryData.duesCollected)}`],
+        ['Cash Expense', `₹${fmt(summaryData.cashExpense)}`],
+        ['Tip Collected', `₹${fmt(summaryData.tipCollected)}`],
+        ['Cash Balance', `₹${fmt(summaryData.cashBalance)}`]
       ];
       const headers = ['Metric', 'Value'];
       const tableRows = metrics;

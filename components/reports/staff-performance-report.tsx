@@ -665,6 +665,7 @@ export function StaffPerformanceReport() {
   }
 
   const handleExportPDF = async () => {
+    toast({ title: "Export requested", description: "Generating staff performance PDF...", duration: 3000 })
     try {
       const filters = getStaffPerformanceExportFilters()
       const result = await ReportsAPI.exportStaffPerformance("pdf", filters, filteredPerformanceData)
@@ -684,6 +685,7 @@ export function StaffPerformanceReport() {
   }
 
   const handleExportExcel = async () => {
+    toast({ title: "Export requested", description: "Generating staff performance Excel...", duration: 3000 })
     try {
       const filters = getStaffPerformanceExportFilters()
       const result = await ReportsAPI.exportStaffPerformance("xlsx", filters, filteredPerformanceData)

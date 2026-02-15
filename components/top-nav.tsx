@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Bell, Plus, User, Users, Briefcase, Package, Receipt, CreditCard, Settings, LogOut, Banknote } from "lucide-react"
+import { Bell, Plus, User, Users, Briefcase, Package, Receipt, CreditCard, Settings, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
 import { SettingsAPI } from "@/lib/api"
+import { useTodayOnlineSales } from "@/hooks/use-today-online-sales"
 import { ExpenseForm } from "@/components/expenses/expense-form"
 import { CashRegistryModal } from "@/components/cash-registry/cash-registry-modal"
 import { SessionStatus } from "@/components/auth/session-status"
@@ -36,6 +37,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const router = useRouter()
   const [showExpenseDialog, setShowExpenseDialog] = useState(false)
   const [showCashRegistryModal, setShowCashRegistryModal] = useState(false)
+  const { amount: todayOnlineSales } = useTodayOnlineSales(showCashRegistryModal)
   const [businessName, setBusinessName] = useState<string>("Ease My Salon")
   const [isLoadingBusinessName, setIsLoadingBusinessName] = useState(true)
 
@@ -136,17 +138,13 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
 
         {/* Right side - Quick Add, Notifications, and User */}
         <div className="flex items-center gap-3">
-          {/* Cash Register Button */}
-          <Button 
-            variant="outline" 
-            size="sm" 
+          {/* Add Entry Button */}
+          <Button
             onClick={() => setShowCashRegistryModal(true)}
-            className="flex items-center gap-2 bg-gradient-to-r from-emerald-50 to-green-50 hover:from-emerald-100 hover:to-green-100 border-emerald-200 text-emerald-700 hover:text-emerald-800 hover:border-emerald-300 transition-all duration-300 transform hover:scale-105 hover:shadow-md px-4 py-2"
+            className="flex items-center gap-2 justify-center whitespace-nowrap text-sm font-medium bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 rounded-xl px-6 py-2"
           >
-            <Banknote className="h-4 w-4" />
-            Cash Register
+            Add Opening/Closing
           </Button>
-
           {/* Session Status */}
           <SessionStatus showAlways={false} />
 
@@ -297,18 +295,15 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
         </div>
       </div>
 
-      {/* Cash Registry Modal */}
-      <CashRegistryModal 
-        open={showCashRegistryModal} 
+      {/* Cash Registry Modal - full functionality: online sales, save event for report refresh */}
+      <CashRegistryModal
+        open={showCashRegistryModal}
         onOpenChange={setShowCashRegistryModal}
         onSaveSuccess={() => {
-          // Dispatch a custom event that the report can listen to
-          window.dispatchEvent(new CustomEvent('cash-registry-saved'))
+          window.dispatchEvent(new CustomEvent("cash-registry-saved"))
         }}
-        onlineSalesAmount={0} // Will be updated when used from the report page
-        onPosCashChange={(amount) => {
-          console.log("POS Cash amount changed:", amount)
-        }}
+        onlineSalesAmount={todayOnlineSales}
+        onPosCashChange={() => {}}
       />
 
       {/* Expense Form Dialog */}

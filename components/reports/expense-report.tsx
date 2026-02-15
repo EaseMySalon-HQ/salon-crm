@@ -147,6 +147,7 @@ export function ExpenseReport() {
   }
 
   const handleExportPDF = async () => {
+    toast({ title: "Export requested", description: "Generating expense report PDF...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       
@@ -215,6 +216,7 @@ export function ExpenseReport() {
   }
 
   const handleExportXLS = async () => {
+    toast({ title: "Export requested", description: "Generating expense report Excel...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       

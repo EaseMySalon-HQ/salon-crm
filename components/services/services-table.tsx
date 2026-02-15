@@ -94,6 +94,7 @@ export function ServicesTable() {
   )
 
   const handleExportPDF = async () => {
+    toast({ title: "Export requested", description: "Generating services report PDF...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       const result = await ReportsAPI.exportServices('pdf', {
@@ -119,6 +120,7 @@ export function ServicesTable() {
   }
 
   const handleExportXLS = async () => {
+    toast({ title: "Export requested", description: "Generating services report Excel...", duration: 3000 })
     try {
       const { ReportsAPI } = await import('@/lib/api');
       const result = await ReportsAPI.exportServices('xlsx', {
