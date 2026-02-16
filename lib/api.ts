@@ -163,8 +163,9 @@ apiClient.interceptors.response.use(
       error.responseData = error.response.data;
     }
     
-    // Handle 401 (Unauthorized) and 403 (Forbidden) - session expired or invalid token
+    // Handle 401 (Unauthorized) and 403 (Forbidden)
     const status = error?.response?.status
+    const errorMsg = (error?.response?.data?.error || '').toLowerCase()
     if (status === 401 || status === 403) {
       const isPublicRoute = typeof window !== 'undefined' &&
         (window.location.pathname.includes('/receipt/public/') ||
@@ -172,10 +173,24 @@ apiClient.interceptors.response.use(
       const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
 
       if (typeof window !== 'undefined' && !isPublicRoute && !isLoginPage) {
-        if (process.env.NODE_ENV === 'development') {
-          console.log('🔐 API Response Interceptor: Session invalid (', status, '), redirecting to login')
+        // 403 "Insufficient permissions" = permission denied, NOT session invalid - don't logout
+        const isPermissionDenied = status === 403 && (
+          errorMsg.includes('insufficient permissions') ||
+          errorMsg.includes('insufficient admin permissions') ||
+          errorMsg.includes('feature') && errorMsg.includes('not available')
+        )
+        if (isPermissionDenied) {
+          if (process.env.NODE_ENV === 'development') {
+            console.log('🔐 API 403: Permission denied, redirecting to unauthorized')
+          }
+          window.location.href = '/unauthorized'
+        } else {
+          // 401 or 403 auth-related (invalid/expired token) - session expired, logout
+          if (process.env.NODE_ENV === 'development') {
+            console.log('🔐 API Response Interceptor: Session invalid (', status, '), redirecting to login')
+          }
+          handleSessionExpired('/login')
         }
-        handleSessionExpired('/login')
       }
     }
     return Promise.reject(error)
