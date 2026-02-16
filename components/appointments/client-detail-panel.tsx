@@ -27,6 +27,7 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
   const [clientDetails, setClientDetails] = useState<Client | null>(null)
   const [showAllBills, setShowAllBills] = useState(false)
   const [expandedBillId, setExpandedBillId] = useState<string | null>(null)
+  const [billActivityOpen, setBillActivityOpen] = useState(false)
 
   const BILLS_VISIBLE_DEFAULT = 5
   const visibleBills = showAllBills ? bills : bills.slice(0, BILLS_VISIBLE_DEFAULT)
@@ -161,11 +162,23 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
 
         <Separator className="shrink-0" />
 
-        <div className="flex flex-col min-h-0 flex-1">
-          <p className="text-xs sm:text-sm font-semibold text-slate-600 mb-2 sm:mb-3 flex items-center gap-1.5 shrink-0">
-            <FileText className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
-            Bill activity
-          </p>
+        <Collapsible open={billActivityOpen} onOpenChange={setBillActivityOpen} className="flex flex-col min-h-0 flex-1">
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="w-full text-left text-xs sm:text-sm font-semibold text-slate-600 mb-2 sm:mb-3 flex items-center justify-between gap-1.5 shrink-0 hover:bg-slate-50 rounded-lg px-1 py-0.5 -mx-1 transition-colors"
+            >
+              <span className="flex items-center gap-1.5">
+                <FileText className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
+                Bill activity
+                {bills.length > 0 && (
+                  <span className="font-normal text-slate-500">({bills.length} bill{bills.length !== 1 ? "s" : ""})</span>
+                )}
+              </span>
+              <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform shrink-0 ${billActivityOpen ? "rotate-180" : ""}`} />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col min-h-0 flex-1 data-[state=closed]:hidden">
           {bills.length === 0 ? (
             <p className="text-xs sm:text-sm text-slate-500 shrink-0">No bills yet</p>
           ) : (
@@ -275,7 +288,8 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
               )}
             </>
           )}
-        </div>
+          </CollapsibleContent>
+        </Collapsible>
       </CardContent>
     </Card>
   )
