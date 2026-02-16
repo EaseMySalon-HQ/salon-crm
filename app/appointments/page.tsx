@@ -67,25 +67,25 @@ function AppointmentsContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 px-12 py-8">
-      <div className="max-w-8xl mx-auto">
-        <div className="flex flex-col space-y-8">
+    <div className="min-h-screen bg-slate-100/80 px-4 py-6 w-full">
+      <div className="w-full max-w-full">
+        <div className="flex flex-col space-y-6">
           <div className="flex items-center justify-between flex-wrap gap-4">
-            <div className="space-y-2">
-              <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
+            <div className="space-y-1">
+              <h1 className="text-3xl font-bold text-slate-800">
                 Appointments
               </h1>
-              <p className="text-slate-600">Manage and view all your appointments</p>
+              <p className="text-slate-500 text-sm">Manage and view all your appointments</p>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+              <div className="flex rounded-xl border border-slate-200 bg-white p-0.5 shadow-sm">
                 <Button
                   variant={view === "list" ? "default" : "ghost"}
                   size="sm"
                   onClick={() => setView("list")}
-                  className={`rounded-lg ${
+                  className={`rounded-lg transition-all duration-200 ${
                     view === "list"
-                      ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow"
+                      ? "bg-violet-600 text-white hover:bg-violet-700 shadow-sm"
                       : "text-slate-600 hover:bg-slate-50"
                   }`}
                 >
@@ -96,9 +96,9 @@ function AppointmentsContent() {
                   variant={view === "calendar" ? "default" : "ghost"}
                   size="sm"
                   onClick={() => setView("calendar")}
-                  className={`rounded-lg ${
+                  className={`rounded-lg transition-all duration-200 ${
                     view === "calendar"
-                      ? "bg-indigo-600 text-white hover:bg-indigo-700 shadow"
+                      ? "bg-violet-600 text-white hover:bg-violet-700 shadow-sm"
                       : "text-slate-600 hover:bg-slate-50"
                   }`}
                 >
@@ -106,15 +106,15 @@ function AppointmentsContent() {
                   Calendar
                 </Button>
               </div>
-              <Button asChild className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl px-6 py-3 font-semibold shadow-lg">
+              <Button asChild className="bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-5 py-2.5 font-semibold shadow-md shadow-violet-500/20 transition-all hover:shadow-lg">
                 <Link href="/appointments/new">
-                  <PlusCircle className="mr-2 h-5 w-5" />
+                  <PlusCircle className="mr-2 h-4 w-4" />
                   New Appointment
                 </Link>
               </Button>
             </div>
           </div>
-          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-2xl border border-white/20 p-8">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-4 sm:p-6 transition-opacity duration-300 w-full">
             {view === "list" ? (
               <AppointmentsCalendar ref={calendarRef} initialAppointmentId={selectedAppointmentId} />
             ) : (

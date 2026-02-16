@@ -194,6 +194,7 @@ export function StaffWorkingHoursContent() {
   const [blockTimes, setBlockTimes] = useState<BlockTimeEntry[]>([])
   const [selectedBlock, setSelectedBlock] = useState<BlockTimeEntry | null>(null)
   const [updatingBlock, setUpdatingBlock] = useState(false)
+  const [returnToOnClose, setReturnToOnClose] = useState<string | null>(null)
 
   const selectedDateObj = useMemo(
     () => (selectedDate ? new Date(`${selectedDate}T00:00:00`) : new Date()),
@@ -235,6 +236,25 @@ export function StaffWorkingHoursContent() {
   useEffect(() => {
     if (searchParams.get("addBlock") === "1") {
       setBlockTimeModalOpen(true)
+      const returnTo = searchParams.get("returnTo")
+      if (returnTo) setReturnToOnClose(returnTo)
+      const date = searchParams.get("date")
+      const time = searchParams.get("time")
+      const staffId = searchParams.get("staffId")
+      if (date) setBlockStartDate(date)
+      if (time) {
+        const mins = parseTimeToMinutes(time)
+        const h = Math.floor(mins / 60)
+        const m = mins % 60
+        const timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
+        setBlockStartTime(timeStr)
+        // Default end time: 30 min after start
+        const endMins = mins + 30
+        const eh = Math.floor(endMins / 60)
+        const em = endMins % 60
+        setBlockEndTime(`${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`)
+      }
+      if (staffId) setBlockStaffId(staffId)
       router.replace("/staff/working-hours", { scroll: false })
     }
   }, [searchParams, router])
@@ -631,6 +651,10 @@ export function StaffWorkingHoursContent() {
     setBlockStaffId("")
     setBlockEndDate("")
     setBlockDescription("")
+    if (returnToOnClose) {
+      router.push(returnToOnClose)
+      setReturnToOnClose(null)
+    }
   }
 
   const handleCreateBlockTime = async () => {
