@@ -282,6 +282,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   const blocksContainerRef = useRef<HTMLDivElement | null>(null)
   const justDraggedRef = useRef(false)
   const [showTimeChangeConfirm, setShowTimeChangeConfirm] = useState(false)
+  const [currentTime, setCurrentTime] = useState(() => new Date())
   const [pendingTimeChange, setPendingTimeChange] = useState<{
     id: string
     mode: "move" | "resize-top" | "resize-bottom" | "staff"
@@ -294,6 +295,12 @@ export const AppointmentsCalendarGrid = forwardRef<
     oldStaffName?: string
     newStaffName?: string
   } | null>(null)
+
+  // Update current time every minute for the red "now" line
+  useEffect(() => {
+    const interval = setInterval(() => setCurrentTime(new Date()), 60_000)
+    return () => clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     if (!selectedAppointment?._id) {
@@ -1348,6 +1355,37 @@ export const AppointmentsCalendarGrid = forwardRef<
               ))}
               </div>
             )}
+            {/* Current time indicator - red line across calendar (only when viewing today) */}
+            {(() => {
+              const todayStr = format(new Date(), "yyyy-MM-dd")
+              const isTodayView = selectedDate === todayStr
+              const currentMinutes =
+                currentTime.getHours() * 60 +
+                currentTime.getMinutes() +
+                currentTime.getSeconds() / 60
+              const showLine =
+                isTodayView &&
+                currentMinutes >= startMinutes &&
+                currentMinutes < endMinutes
+              if (!showLine) return null
+              const topPx =
+                44 +
+                ((currentMinutes - startMinutes) / SLOT_MINUTES) * SLOT_HEIGHT
+              return (
+                <div
+                  className="absolute left-0 right-0 z-30 pointer-events-none flex items-center"
+                  style={{ top: topPx }}
+                  aria-hidden
+                >
+                  <div className="flex-shrink-0 w-[80px] flex items-center justify-end pr-1">
+                    <span className="bg-red-600 text-white text-[10px] font-semibold px-2 py-0.5 rounded tabular-nums">
+                      {format(currentTime, "h:mm a")}
+                    </span>
+                  </div>
+                  <div className="flex-1 h-0.5 bg-red-600 min-w-0" />
+                </div>
+              )
+            })()}
           </div>
         </div>
       </div>

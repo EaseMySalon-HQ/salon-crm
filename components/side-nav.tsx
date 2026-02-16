@@ -49,6 +49,8 @@ export function SideNav() {
     if (!user) return false
     // Admin role gets full access (matches backend checkPermission behavior)
     if (user.role === "admin") return true
+    // Manager role gets Reports access by default (matches backend roleDefinitions)
+    if (user.role === "manager" && item.permissionModule === "reports") return true
     if (item.permissionModule === "settings") {
       return SETTINGS_MODULES.some((m) =>
         user.permissions?.some((p) => p.module === m && p.feature === "view" && p.enabled)
