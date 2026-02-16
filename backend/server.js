@@ -606,12 +606,13 @@ app.post('/api/auth/staff-login', async (req, res) => {
       updatedAt: new Date()
     });
 
-    // Generate token with staff info
+    // Generate token with staff info - ensure branchId is set (fallback to business._id for legacy staff)
+    const effectiveBranchId = staff.branchId || business._id;
     const token = generateToken({
       _id: staff._id,
       email: staff.email,
       role: staff.role,
-      branchId: staff.branchId,
+      branchId: effectiveBranchId,
       firstName: staff.name.split(' ')[0],
       lastName: staff.name.split(' ').slice(1).join(' ') || '',
       mobile: staff.phone,
@@ -640,7 +641,7 @@ app.post('/api/auth/staff-login', async (req, res) => {
           email: staff.email,
           mobile: staff.phone,
           role: staff.role,
-          branchId: staff.branchId,
+          branchId: effectiveBranchId,
           isOwner: false, // Staff are never owner
           hasLoginAccess: staff.hasLoginAccess,
           allowAppointmentScheduling: staff.allowAppointmentScheduling,
