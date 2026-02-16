@@ -6787,12 +6787,8 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
     let query = { status: { $nin: ['cancelled', 'Cancelled'] } };
     if (dateFrom || dateTo) {
       query.date = {};
-      if (dateFrom) query.date.$gte = new Date(dateFrom);
-      if (dateTo) {
-        const d = new Date(dateTo);
-        d.setHours(23, 59, 59, 999);
-        query.date.$lte = d;
-      }
+      if (dateFrom) query.date.$gte = getStartOfDayIST(dateFrom);
+      if (dateTo) query.date.$lte = getEndOfDayIST(dateTo);
     }
     const sales = await Sale.find(query).sort({ date: -1 }).lean();
     

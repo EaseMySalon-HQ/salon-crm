@@ -249,6 +249,59 @@
   }
 }
 
+/* Calendar premium animations */
+@keyframes timeDotPulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4);
+  }
+  50% {
+    opacity: 0.9;
+    box-shadow: 0 0 0 6px rgba(220, 38, 38, 0);
+  }
+}
+
+@keyframes calendarFadeIn {
+  from {
+    opacity: 0.6;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-time-dot-pulse {
+  animation: timeDotPulse 2s ease-in-out infinite;
+}
+
+.calendar-fade-transition {
+  animation: calendarFadeIn 0.25s ease-out;
+}
+
+/* Appointment card premium entrance */
+@keyframes appointmentCardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-appointment-card-enter {
+  animation: appointmentCardEnter 0.14s ease-out forwards;
+}
+
+/* Outside working hours - greyed out */
+.calendar-outside-hours {
+  background-color: rgb(226 232 240) !important;
+  color: rgb(148 163 184) !important;
+  border-right-color: rgb(203 213 225) !important; /* slate-300 - light column lines */
+  border-bottom-color: rgb(203 213 225) !important; /* slate-300 - light row lines */
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;
