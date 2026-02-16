@@ -14,7 +14,8 @@ import {
   Crown,
   Eye,
   EyeOff,
-  Search
+  Search,
+  HelpCircle
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -47,6 +48,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { UsersAPI } from "@/lib/api"
 import { UserForm } from "./user-form"
 import { UserAccessControlDialog } from "./user-access-control-dialog"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 interface User {
   _id: string
@@ -264,7 +266,21 @@ export function UsersTable() {
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Email</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Appointment</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Login Access</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Access Control</TableHead>
+              <TableHead className="font-semibold text-slate-700 py-4 px-6">
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1.5 cursor-help">
+                        Access Control (Beta)
+                        <HelpCircle className="h-3.5 w-3.5 text-slate-400" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs p-3">
+                      <p className="text-sm">Configure granular permissions for user roles, pages, and features. This feature is in beta.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </TableHead>
               <TableHead className="text-right font-semibold text-slate-700 py-4 px-6">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -343,7 +359,7 @@ export function UsersTable() {
                           ? "hover:bg-blue-50 hover:text-blue-700" 
                           : "cursor-not-allowed opacity-50"
                       }`}
-                      title={user.hasLoginAccess ? "Configure access permissions" : "Login access must be enabled to configure permissions"}
+                      title={user.hasLoginAccess ? "Configure granular permissions for user roles, pages, and features (Beta)" : "Login access must be enabled to configure permissions"}
                     >
                       {user.hasLoginAccess ? (
                         <Unlock className="h-5 w-5 text-blue-600" />
@@ -384,10 +400,10 @@ export function UsersTable() {
                               ? "text-gray-400 cursor-not-allowed" 
                               : "hover:bg-slate-50 cursor-pointer"
                           }`}
-                          title={user.hasLoginAccess ? "Configure access permissions" : "Login access must be enabled to configure permissions"}
+                          title={user.hasLoginAccess ? "Configure granular permissions for user roles, pages, and features (Beta)" : "Login access must be enabled to configure permissions"}
                         >
                           <Eye className="h-4 w-4 text-slate-600" />
-                          <span className="font-medium">Access Control</span>
+                          <span className="font-medium">Access Control (Beta)</span>
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => {

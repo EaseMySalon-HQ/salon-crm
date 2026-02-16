@@ -273,6 +273,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasPermission = (module: string, feature: string): boolean => {
     // Admin role gets full access (matches backend checkPermission behavior)
     if (user?.role === "admin") return true
+    // Manager role gets Reports access by default (matches backend roleDefinitions)
+    if (
+      user?.role === "manager" &&
+      module === "reports" &&
+      (feature === "view" || feature === "view_financial_reports" || feature === "view_staff_commission")
+    )
+      return true
     if (!user?.permissions?.length) return false
     const match = (p: { module: string; feature: string; enabled: boolean }) =>
       p.module === module && p.feature === feature && p.enabled

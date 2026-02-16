@@ -17,7 +17,8 @@ import {
   Search,
   Shield,
   CheckCircle2,
-  XCircle
+  XCircle,
+  HelpCircle
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -54,6 +55,7 @@ import { StaffPermissionsModal } from "./staff-permissions-modal"
 import { PasswordChangeForm } from "./password-change-form"
 import { PasswordSetupForm } from "./password-setup-form"
 import { StaffEmailPreferencesModal } from "@/components/settings/staff-email-preferences-modal"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useAuth } from "@/lib/auth-context"
 
 interface Staff {
@@ -535,7 +537,21 @@ export function StaffTable() {
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Appointment</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Login Access</TableHead>
               <TableHead className="font-semibold text-slate-700 py-4 px-6">Email Notifications</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Access Control</TableHead>
+              <TableHead className="font-semibold text-slate-700 py-4 px-6">
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1.5 cursor-help">
+                        Access Control (Beta)
+                        <HelpCircle className="h-3.5 w-3.5 text-slate-400" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs p-3">
+                      <p className="text-sm">Configure granular permissions for staff roles, pages, and features. This feature is in beta.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </TableHead>
               <TableHead className="text-right font-semibold text-slate-700 py-4 px-6">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -744,10 +760,10 @@ export function StaffTable() {
                               ? "text-gray-400 cursor-not-allowed" 
                               : "hover:bg-slate-50 cursor-pointer"
                           }`}
-                          title={member.isOwner && member.source === 'user' ? "Business owner permissions cannot be modified" : member.hasLoginAccess ? "Configure access permissions" : "Login access must be enabled to configure permissions"}
+                          title={member.isOwner && member.source === 'user' ? "Business owner permissions cannot be modified" : member.hasLoginAccess ? "Configure granular permissions for staff roles, pages, and features (Beta)" : "Login access must be enabled to configure permissions"}
                         >
                           <Eye className="h-4 w-4 text-slate-600" />
-                          <span className="font-medium">Access Control</span>
+                          <span className="font-medium">Access Control (Beta)</span>
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => handleDeleteStaff(member)}

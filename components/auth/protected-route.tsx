@@ -53,5 +53,10 @@ export function ProtectedRoute({ children, requiredModule }: ProtectedRouteProps
     )
   }
 
+  // Permission check in render - if we have permission, render immediately (avoids effect race)
+  if (requiredModule && !hasPermission(requiredModule, "view")) {
+    return null // Effect will redirect to /unauthorized
+  }
+
   return <>{children}</>
 }
