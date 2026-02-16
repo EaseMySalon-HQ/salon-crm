@@ -1,3 +1,5 @@
+"use client"
+
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -7,11 +9,17 @@ import { SalesReport } from "@/components/reports/sales-report"
 import { ExpenseReport } from "@/components/reports/expense-report"
 import { StaffPerformanceReport } from "@/components/reports/staff-performance-report"
 import { BarChart3, TrendingUp, Receipt, Users } from "lucide-react"
+import { useAuth } from "@/lib/auth-context"
 
 export default function ReportsPage() {
+  const { user, hasPermission } = useAuth()
+  const canViewFinancialReports = !user || hasPermission("reports", "view_financial_reports")
+  const canViewStaffCommission = !user || hasPermission("reports", "view_staff_commission")
+  const tabCount = (canViewFinancialReports ? 2 : 0) + (canViewStaffCommission ? 1 : 0)
+
   return (
-    <ProtectedRoute requiredRole="manager">
-      <ProtectedLayout>
+    <ProtectedRoute requiredModule="reports">
+      <ProtectedLayout requiredModule="reports">
         <div className="bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
           {/* Elegant Header Section */}
           <div className="mb-8">
@@ -56,59 +64,80 @@ export default function ReportsPage() {
           {/* Enhanced Tabs Section */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="p-6">
-              <Tabs defaultValue="sales" className="space-y-6">
-                <TabsList className="grid w-full grid-cols-3 bg-slate-100 p-1 rounded-lg">
-                  <TabsTrigger 
-                    value="sales" 
-                    className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
-                  >
-                    <TrendingUp className="h-4 w-4 mr-2" />
-                    Sales
-                  </TabsTrigger>
-                  <TabsTrigger 
-                    value="expense" 
-                    className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
-                  >
-                    <Receipt className="h-4 w-4 mr-2" />
-                    Expense Report
-                  </TabsTrigger>
-                  <TabsTrigger 
-                    value="staff" 
-                    className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
-                  >
-                    <Users className="h-4 w-4 mr-2" />
-                    Staff Performance
-                  </TabsTrigger>
+              <Tabs
+                defaultValue={
+                  canViewFinancialReports ? "sales" : canViewStaffCommission ? "staff" : "sales"
+                }
+                className="space-y-6"
+              >
+                <TabsList
+                  className={`grid w-full bg-slate-100 p-1 rounded-lg ${
+                    tabCount === 1 ? "grid-cols-1" : tabCount === 2 ? "grid-cols-2" : "grid-cols-3"
+                  }`}
+                >
+                  {canViewFinancialReports && (
+                    <>
+                      <TabsTrigger
+                        value="sales"
+                        className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                      >
+                        <TrendingUp className="h-4 w-4 mr-2" />
+                        Sales
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="expense"
+                        className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                      >
+                        <Receipt className="h-4 w-4 mr-2" />
+                        Expense Report
+                      </TabsTrigger>
+                    </>
+                  )}
+                  {canViewStaffCommission && (
+                    <TabsTrigger
+                      value="staff"
+                      className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                    >
+                      <Users className="h-4 w-4 mr-2" />
+                      Staff Performance
+                    </TabsTrigger>
+                  )}
                 </TabsList>
 
-                <TabsContent value="sales" className="space-y-6">
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardContent className="pt-6">
-                      <SalesReport />
-                    </CardContent>
-                  </Card>
-                </TabsContent>
+                {canViewFinancialReports && (
+                  <>
+                    <TabsContent value="sales" className="space-y-6">
+                      <Card className="border-0 shadow-sm bg-slate-50/50">
+                        <CardContent className="pt-6">
+                          <SalesReport />
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
 
-                <TabsContent value="expense" className="space-y-6">
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardContent className="pt-6">
-                      <ExpenseReport />
-                    </CardContent>
-                  </Card>
-                </TabsContent>
+                    <TabsContent value="expense" className="space-y-6">
+                      <Card className="border-0 shadow-sm bg-slate-50/50">
+                        <CardContent className="pt-6">
+                          <ExpenseReport />
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+                  </>
+                )}
 
-                <TabsContent value="staff" className="space-y-6">
-                  <FeatureGate 
-                    featureId="staff_commissions"
-                    upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to track staff commissions and performance analytics."
-                  >
-                    <Card className="border-0 shadow-sm bg-slate-50/50">
-                      <CardContent className="pt-6">
-                        <StaffPerformanceReport />
-                      </CardContent>
-                    </Card>
-                  </FeatureGate>
-                </TabsContent>
+                {canViewStaffCommission && (
+                  <TabsContent value="staff" className="space-y-6">
+                    <FeatureGate
+                      featureId="staff_commissions"
+                      upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to track staff commissions and performance analytics."
+                    >
+                      <Card className="border-0 shadow-sm bg-slate-50/50">
+                        <CardContent className="pt-6">
+                          <StaffPerformanceReport />
+                        </CardContent>
+                      </Card>
+                    </FeatureGate>
+                  </TabsContent>
+                )}
 
               </Tabs>
             </div>

@@ -14,7 +14,7 @@ export default function ProductsPage() {
   const [lowStockFilter, setLowStockFilter] = useState<boolean>(false)
 
   return (
-    <ProtectedRoute requiredRole="staff">
+    <ProtectedRoute requiredModule="products">
       <ProtectedLayout>
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-emerald-50 to-teal-50 p-4">
           {/* Elegant Header Section */}

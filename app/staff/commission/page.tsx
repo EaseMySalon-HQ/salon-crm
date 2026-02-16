@@ -7,7 +7,7 @@ import { CommissionProfileList } from "@/components/settings/commission-profile-
 
 export default function StaffCommissionPage() {
   return (
-    <ProtectedRoute>
+    <ProtectedRoute requiredModule="staff">
       <ProtectedLayout>
         <div className="flex flex-col space-y-6">
           <div>

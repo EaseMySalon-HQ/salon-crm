@@ -8,13 +8,14 @@ import { TopNav } from "@/components/top-nav"
 
 interface ProtectedLayoutProps {
   children: React.ReactNode
-  requiredRoles?: string[]
+  /** Permission module to check. Access granted only when user has view permission. */
+  requiredModule?: string
   topNavQuickAdd?: boolean
   topNavRightSlot?: React.ReactNode
 }
 
-export function ProtectedLayout({ children, requiredRoles, topNavQuickAdd = true, topNavRightSlot }: ProtectedLayoutProps) {
-  const { user, isLoading, hasRole } = useAuth()
+export function ProtectedLayout({ children, requiredModule, topNavQuickAdd = true, topNavRightSlot }: ProtectedLayoutProps) {
+  const { user, isLoading, hasPermission } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
@@ -48,8 +49,8 @@ export function ProtectedLayout({ children, requiredRoles, topNavQuickAdd = true
     )
   }
 
-  // Check role-based access
-  if (requiredRoles && !hasRole(requiredRoles)) {
+  // Check permission-based access
+  if (requiredModule && !hasPermission(requiredModule, "view")) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
@@ -57,11 +58,8 @@ export function ProtectedLayout({ children, requiredRoles, topNavQuickAdd = true
           <p className="text-gray-600 mb-4">
             You don&apos;t have permission to access this page.
           </p>
-          <p className="text-sm text-gray-500">
-            Required roles: {requiredRoles.join(", ")}
-          </p>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/dashboard")}
             className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
           >
             Go to Dashboard

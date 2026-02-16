@@ -6,7 +6,7 @@ import { QuickSale } from "@/components/appointments/quick-sale"
 
 export default function QuickSalePage() {
   return (
-    <ProtectedRoute allowedRoles={["admin", "staff"]}>
+    <ProtectedRoute requiredModule="sales">
       <ProtectedLayout>
         <QuickSale />
       </ProtectedLayout>

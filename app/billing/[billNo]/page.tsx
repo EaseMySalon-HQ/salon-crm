@@ -65,8 +65,8 @@ export default function BillingPage() {
 
   if (loading) {
     return (
-      <ProtectedRoute allowedRoles={["admin", "staff", "manager"]}>
-        <ProtectedLayout>
+      <ProtectedRoute requiredModule="sales">
+        <ProtectedLayout requiredModule="sales">
           <div className="min-h-screen bg-gray-50 flex items-center justify-center">
             <div className="text-center">
               <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-indigo-600" />
@@ -79,8 +79,8 @@ export default function BillingPage() {
   }
 
   return (
-    <ProtectedRoute allowedRoles={["admin", "staff", "manager"]}>
-      <ProtectedLayout>
+    <ProtectedRoute requiredModule="sales">
+      <ProtectedLayout requiredModule="sales">
         <QuickSale mode={mode} initialSale={initialSale} />
       </ProtectedLayout>
     </ProtectedRoute>

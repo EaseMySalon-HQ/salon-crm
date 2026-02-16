@@ -37,11 +37,10 @@ const authenticateToken = (req, res, next) => {
       const User = mainConnection.model('User', require('../models/User').schema);
       
       let user = await User.findById(decoded.id).select('-password');
+      let staffUser = null; // Set when user is from Staff (business DB)
       
       if (!user) {
         console.log('🔍 User not found in main database, checking if it\'s a staff user');
-        
-        let staffUser = null;
         let businessId = decoded.branchId || null;
         
         // If branchId is in token, directly check that business database
@@ -86,8 +85,15 @@ const authenticateToken = (req, res, next) => {
           console.log('🔍 User not found in any database for ID:', decoded.id);
           return res.status(401).json({ success: false, error: 'User not found' });
         }
+
+        // Use default permissions for role when staff has none configured
+        let staffPermissions = staffUser.permissions || [];
+        if (!staffPermissions.length && staffUser.role) {
+          const { roleDefinitions } = require('../models/Permission');
+          staffPermissions = roleDefinitions[staffUser.role]?.permissions || [];
+        }
         
-        // Convert staff user to user format
+        // Convert staff user to user format (Staff are never owner - only User from business creation)
         user = {
           _id: staffUser._id,
           firstName: staffUser.name?.split(' ')[0] || '',
@@ -99,6 +105,8 @@ const authenticateToken = (req, res, next) => {
           hasLoginAccess: staffUser.hasLoginAccess,
           allowAppointmentScheduling: staffUser.allowAppointmentScheduling,
           isActive: staffUser.isActive,
+          isOwner: false, // Staff are never owner
+          permissions: staffPermissions,
           specialties: staffUser.specialties,
           hourlyRate: staffUser.hourlyRate,
           commissionRate: staffUser.commissionRate,
@@ -117,12 +125,25 @@ const authenticateToken = (req, res, next) => {
       });
 
       // Ensure the user object has all required fields
+      // isOwner: only User created at business creation (main DB, has branchId); Staff are never owner
+      let isOwner = false;
+      if (staffUser === null && user.branchId && user.role === 'admin') {
+        try {
+          const Business = mainConnection.model('Business', require('../models/Business').schema);
+          const business = await Business.findById(user.branchId).select('owner').lean();
+          isOwner = business?.owner && business.owner.toString() === (user._id?.toString() || user.id?.toString());
+        } catch (e) {
+          // Fallback: User with branchId is typically the owner
+          isOwner = true;
+        }
+      }
       req.user = {
         _id: user._id,
         id: user._id,
         email: user.email,
         branchId: user.branchId,
         role: user.role,
+        isOwner,
         firstName: user.firstName,
         lastName: user.lastName,
         mobile: user.mobile,

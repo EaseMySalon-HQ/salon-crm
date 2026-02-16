@@ -56,6 +56,13 @@ const staffSchema = new mongoose.Schema({
     startTime: { type: String, default: '09:00' }, // 24h "HH:mm"
     endTime: { type: String, default: '21:00' }    // 24h "HH:mm"
   }],
+  permissions: [{
+    module: { type: String, required: true },
+    feature: { type: String, required: true },
+    enabled: { type: Boolean, default: false }
+  }],
+  // Last selected role template in permissions modal: "admin" | "manager" | "staff" | "custom"
+  permissionsTemplate: { type: String, default: null },
   branchId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Business',

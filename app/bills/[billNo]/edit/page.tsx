@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { SalesAPI } from "@/lib/api"
 import { createTaxCalculator, BillItem as TaxBillItem } from "@/lib/tax-calculator"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -278,16 +280,22 @@ export default function EditBillPage() {
 
   if (loading || !sale) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">Loading bill details...</p>
-        </div>
-      </div>
+      <ProtectedRoute requiredModule="sales">
+        <ProtectedLayout requiredModule="sales">
+          <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+              <p className="text-gray-600">Loading bill details...</p>
+            </div>
+          </div>
+        </ProtectedLayout>
+      </ProtectedRoute>
     )
   }
 
   return (
+    <ProtectedRoute requiredModule="sales">
+      <ProtectedLayout requiredModule="sales">
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
@@ -513,6 +521,8 @@ export default function EditBillPage() {
         </div>
       </div>
     </div>
+      </ProtectedLayout>
+    </ProtectedRoute>
   )
 }
 

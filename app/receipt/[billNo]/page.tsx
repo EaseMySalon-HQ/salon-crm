@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react"
 import { useParams, useSearchParams } from "next/navigation"
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { Button } from "@/components/ui/button"
 import { Printer, ArrowLeft, Thermometer } from "lucide-react"
@@ -255,38 +257,30 @@ export default function ReceiptPage() {
     printThermalReceipt()
   }
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading receipt...</p>
-        </div>
+  const pageContent = isLoading ? (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="text-center">
+        <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+        <p className="text-gray-600">Loading receipt...</p>
       </div>
-    )
-  }
-
-  if (error || !receipt) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <span className="text-2xl">❌</span>
-          </div>
-          <h1 className="text-xl font-semibold text-gray-900 mb-2">Receipt Not Found</h1>
-          <p className="text-gray-600 mb-6">{error || 'The requested receipt could not be found.'}</p>
-          <Link href="/reports">
-            <Button variant="outline" className="mr-2">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Reports
-            </Button>
-          </Link>
+    </div>
+  ) : error || !receipt ? (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="text-center">
+        <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <span className="text-2xl">❌</span>
         </div>
+        <h1 className="text-xl font-semibold text-gray-900 mb-2">Receipt Not Found</h1>
+        <p className="text-gray-600 mb-6">{error || 'The requested receipt could not be found.'}</p>
+        <Link href="/reports">
+          <Button variant="outline" className="mr-2">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Reports
+          </Button>
+        </Link>
       </div>
-    )
-  }
-
-  return (
+    </div>
+  ) : (
     <div className="min-h-screen bg-gray-50 p-6">
       {/* Header with Actions */}
       <div className="max-w-4xl mx-auto mb-6">
@@ -368,5 +362,13 @@ export default function ReceiptPage() {
         }
       `}</style>
     </div>
+  )
+
+  return (
+    <ProtectedRoute requiredModule="sales">
+      <ProtectedLayout requiredModule="sales">
+        {pageContent}
+      </ProtectedLayout>
+    </ProtectedRoute>
   )
 }

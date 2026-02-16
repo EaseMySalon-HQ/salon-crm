@@ -17,7 +17,7 @@ export default function NewProductPage() {
   }
 
   return (
-    <ProtectedRoute requiredRole="manager">
+    <ProtectedRoute requiredModule="products">
       <ProtectedLayout>
         <div className="flex flex-col space-y-6">
               <div className="flex items-center gap-4">
