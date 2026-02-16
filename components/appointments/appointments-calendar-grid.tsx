@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, forwardRef, useImperativeHandle, useMemo, Fragment, useRef } from "react"
+import { useState, useEffect, useCallback, forwardRef, useImperativeHandle, useMemo, Fragment, useRef } from "react"
 import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -185,18 +185,19 @@ function getStatusColor(status: string): string {
 function getStatusCardFill(status: string): string {
   switch (status) {
     case "scheduled":
-      return "bg-amber-100 border-amber-300 hover:bg-amber-200/80"
-    case "arrived":
+      return "bg-amber-50/90 border-amber-200/80 hover:bg-amber-100/90"
     case "confirmed":
-      return "bg-blue-100 border-blue-300 hover:bg-blue-200/80"
+      return "bg-blue-50/90 border-blue-200/80 hover:bg-blue-100/90"
+    case "arrived":
+      return "bg-blue-50/90 border-blue-200/80 hover:bg-blue-100/90"
     case "service_started":
-      return "bg-purple-100 border-purple-300 hover:bg-purple-200/80"
+      return "bg-violet-50/90 border-violet-200/80 hover:bg-violet-100/90"
     case "completed":
-      return "bg-emerald-100 border-emerald-300 hover:bg-emerald-200/80"
+      return "bg-emerald-50/90 border-emerald-200/80 hover:bg-emerald-100/90"
     case "cancelled":
-      return "bg-red-100 border-red-300 hover:bg-red-200/80"
+      return "bg-red-50/90 border-red-200/80 hover:bg-red-100/90"
     default:
-      return "bg-slate-100 border-slate-300 hover:bg-slate-200/80"
+      return "bg-slate-50/90 border-slate-200/80 hover:bg-slate-100/90"
   }
 }
 
@@ -239,12 +240,13 @@ function getStatusText(status: string): string {
 interface AppointmentsCalendarGridProps {
   initialAppointmentId?: string
   onSwitchToList?: () => void
+  onOpenAppointmentForm?: (params?: { date?: string; time?: string; staffId?: string; appointmentId?: string }) => void
 }
 
 export const AppointmentsCalendarGrid = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarGridProps
->(({ initialAppointmentId, onSwitchToList }, ref) => {
+>(({ initialAppointmentId, onSwitchToList, onOpenAppointmentForm }, ref) => {
   const router = useRouter()
   const [staffList, setStaffList] = useState<StaffMember[]>([])
   const [appointments, setAppointments] = useState<Appointment[]>([])
@@ -290,6 +292,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   const dragHoverSlotRef = useRef<{ colIndex: number; slotMinutes: number } | null>(null)
   const [showTimeChangeConfirm, setShowTimeChangeConfirm] = useState(false)
   const [currentTime, setCurrentTime] = useState(() => new Date())
+  const [scrollToNowRequested, setScrollToNowRequested] = useState(false)
   const [density, setDensity] = useState<"compact" | "comfortable">("comfortable")
   const [pendingTimeChange, setPendingTimeChange] = useState<{
     id: string
@@ -359,28 +362,31 @@ export const AppointmentsCalendarGrid = forwardRef<
     setPendingAppointmentId(initialAppointmentId ?? null)
   }, [initialAppointmentId])
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const [staffRes, aptRes] = await Promise.all([
-          StaffDirectoryAPI.getAll(),
-          AppointmentsAPI.getAll({ limit: 200 }),
-        ])
-        if (cancelled) return
-        if (staffRes?.data?.length) setStaffList(staffRes.data)
-        if (aptRes?.success && aptRes?.data) setAppointments(aptRes.data)
-      } catch (e) {
-        console.error(e)
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
-    return () => {
-      cancelled = true
+  const fetchAppointments = useCallback(async () => {
+    try {
+      setLoading(true)
+      const [staffRes, aptRes] = await Promise.all([
+        StaffDirectoryAPI.getAll(),
+        AppointmentsAPI.getAll({ limit: 200 }),
+      ])
+      if (staffRes?.data?.length) setStaffList(staffRes.data)
+      if (aptRes?.success && aptRes?.data) setAppointments(aptRes.data)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    fetchAppointments()
+  }, [fetchAppointments])
+
+  useEffect(() => {
+    const handler = () => fetchAppointments()
+    window.addEventListener("appointments-refresh", handler)
+    return () => window.removeEventListener("appointments-refresh", handler)
+  }, [fetchAppointments])
 
   useEffect(() => {
     if (!pendingAppointmentId || appointments.length === 0) return
@@ -609,6 +615,29 @@ export const AppointmentsCalendarGrid = forwardRef<
     const scrollTop = Math.max(0, topPx - containerHeight / 2)
     el.scrollTop = scrollTop
   }, [selectedDate, currentTime, extendedStartMinutes, extendedEndMinutes, slotHeight])
+
+  // Scroll to red "now" line when TIME header is clicked
+  useEffect(() => {
+    if (!scrollToNowRequested) return
+    const todayStr = format(new Date(), "yyyy-MM-dd")
+    if (selectedDate !== todayStr) return
+    const el = scrollContainerRef.current
+    if (!el) return
+    const now = new Date()
+    const currentMinutes =
+      now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60
+    if (currentMinutes < extendedStartMinutes || currentMinutes >= extendedEndMinutes) return
+    const topPx = 56 + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
+    const containerHeight = el.clientHeight
+    el.scrollTop = Math.max(0, topPx - containerHeight / 2)
+    setScrollToNowRequested(false)
+  }, [scrollToNowRequested, selectedDate, extendedStartMinutes, extendedEndMinutes, slotHeight])
+
+  const handleTimeHeaderClick = () => {
+    const todayStr = format(new Date(), "yyyy-MM-dd")
+    if (selectedDate !== todayStr) setSelectedDate(todayStr)
+    setScrollToNowRequested(true)
+  }
 
   const blocksByColumn = useMemo(() => {
     const map: Record<string, Array<{ apt: Appointment; top: number; height: number }>> = {}
@@ -1264,24 +1293,8 @@ export const AppointmentsCalendarGrid = forwardRef<
     <div className="space-y-5 calendar-fade-transition w-full">
       {/* Section 5: Top Control Bar - Premium hierarchy */}
       <div className="flex flex-wrap items-center gap-4">
-        {/* Primary CTA */}
-        <Button asChild size="default" className="rounded-xl h-10 gap-2 bg-violet-600 hover:bg-violet-700 text-white font-semibold shadow-md shadow-violet-500/25 transition-all hover:shadow-lg hover:shadow-violet-500/30">
-          <Link href="/appointments/new">
-            <CalendarPlus className="h-4 w-4" />
-            New Appointment
-          </Link>
-        </Button>
-
-        {/* Secondary: List/Calendar toggle - moved to page level, keep Block Time as secondary */}
-        <Button asChild size="sm" variant="outline" className="rounded-xl h-9 gap-1.5 border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300">
-          <Link href="/staff/working-hours?addBlock=1">
-            <Clock className="h-4 w-4" />
-            Block Time
-          </Link>
-        </Button>
-
-        {/* Tertiary: Staff filter, Date selector, Density toggle */}
-        <div className="flex items-center gap-3 pl-2 border-l border-slate-200">
+        {/* Staff filter, Date selector, Density toggle */}
+        <div className="flex items-center gap-3">
           <Select
             value={staffFilter ?? "all"}
             onValueChange={(v) => setStaffFilter(v === "all" ? null : v)}
@@ -1424,10 +1437,15 @@ export const AppointmentsCalendarGrid = forwardRef<
               gridTemplateRows: `56px repeat(${totalSlotsWithSales}, ${slotHeight}px)`,
             }}
           >
-            {/* Time column header */}
-            <div className="sticky top-0 z-20 border-b border-r border-slate-200/80 bg-slate-50 px-3 py-3 font-medium text-slate-500 text-xs uppercase tracking-wider text-left">
+            {/* Time column header - click to scroll to current time */}
+            <button
+              type="button"
+              onClick={handleTimeHeaderClick}
+              className="sticky top-0 z-20 border-b border-r border-slate-200/80 bg-slate-50 px-3 py-3 font-medium text-slate-500 text-xs uppercase tracking-wider text-left w-full hover:bg-slate-100/80 transition-colors cursor-pointer"
+              title="Scroll to current time"
+            >
               Time
-            </div>
+            </button>
             {/* Section 4: Staff column headers with avatars */}
             {columns.length === 0 ? (
               <div className="sticky top-0 z-20 border-b border-r border-slate-200/80 bg-slate-50 px-4 py-3 font-medium text-slate-400 text-center">
@@ -1649,8 +1667,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                     return slotMinutes < endM && slotMinutes + SLOT_MINUTES > startM
                   })
                   if (!inWorkWindow || isBlocked) return
-                  const params = new URLSearchParams({ date: selectedDate, time: slotMinutesToTimeString(slotMinutes), staffId: col._id })
-                  router.push(`/appointments/new?${params.toString()}`)
+                  if (onOpenAppointmentForm) {
+                    onOpenAppointmentForm({ date: selectedDate, time: slotMinutesToTimeString(slotMinutes), staffId: col._id })
+                  } else {
+                    const params = new URLSearchParams({ date: selectedDate, time: slotMinutesToTimeString(slotMinutes), staffId: col._id })
+                    router.push(`/appointments/new?form=1&${params.toString()}`)
+                  }
                 }}
               >
               {columns.map((col, colIndex) => {
@@ -1667,8 +1689,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                     const a = apt as any
                     const serviceName = a?.serviceId?.name || "Service"
                     const clientName = a?.clientId?.name || "Client"
-                    const cardFill = getStatusCardFill(apt.status)
-                    const darkStrip = getStatusColor(apt.status)
                     const isDragging = draggingApt?.id === apt._id
                     const isUpdating = updatingTimeForId === apt._id
                     const canDrag = apt.status !== "cancelled" && apt.status !== "completed"
@@ -1752,7 +1772,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                         </div>
                         {/* Main card body */}
                         <div
-                          className={`flex-1 pl-[14px] pr-3 pt-6 pb-3 min-h-0 overflow-hidden bg-white border border-slate-200/60 ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+                          className={`flex-1 pl-[14px] pr-3 pt-6 pb-3 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
                           onMouseDown={(e) => {
                             if (canDrag) handleTimeDragStart(e, apt)
                           }}
@@ -2053,12 +2073,20 @@ export const AppointmentsCalendarGrid = forwardRef<
                   variant="outline"
                   className="justify-start gap-3 h-12 text-left"
                   onClick={() => {
-                    const params = new URLSearchParams({
-                      date: slotActionDialog.date,
-                      time: slotActionDialog.time,
-                    })
-                    if (slotActionDialog.staffId) params.set("staffId", slotActionDialog.staffId)
-                    router.push(`/appointments/new?${params.toString()}`)
+                    if (onOpenAppointmentForm) {
+                      onOpenAppointmentForm({
+                        date: slotActionDialog.date,
+                        time: slotActionDialog.time,
+                        staffId: slotActionDialog.staffId ?? undefined,
+                      })
+                    } else {
+                      const params = new URLSearchParams({
+                        date: slotActionDialog.date,
+                        time: slotActionDialog.time,
+                      })
+                      if (slotActionDialog.staffId) params.set("staffId", slotActionDialog.staffId)
+                      router.push(`/appointments/new?${params.toString()}`)
+                    }
                     setSlotActionDialog(null)
                   }}
                 >

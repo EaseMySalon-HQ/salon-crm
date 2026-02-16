@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, forwardRef, useImperativeHandle } from "react"
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, startOfWeek, addWeeks, subWeeks } from "date-fns"
@@ -191,6 +191,15 @@ export const AppointmentsCalendar = forwardRef<
   useEffect(() => {
     fetchAppointments()
   }, [currentDate])
+
+  // Refresh when appointment is created/updated from drawer
+  const fetchRef = useRef(fetchAppointments)
+  fetchRef.current = fetchAppointments
+  useEffect(() => {
+    const handler = () => fetchRef.current()
+    window.addEventListener("appointments-refresh", handler)
+    return () => window.removeEventListener("appointments-refresh", handler)
+  }, [])
 
   const getAppointmentsForDate = (date: Date) => {
     const dateString = format(date, "yyyy-MM-dd")

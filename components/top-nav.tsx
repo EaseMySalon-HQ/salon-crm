@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Bell, Plus, User, Users, Briefcase, Package, Receipt, CreditCard, Settings, LogOut } from "lucide-react"
+import { Bell, Plus, User, Users, Briefcase, Package, Receipt, Settings, LogOut, Banknote } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -138,18 +138,11 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
 
         {/* Right side - Quick Add, Notifications, and User */}
         <div className="flex items-center gap-3">
-          {/* Add Entry Button */}
-          <Button
-            onClick={() => setShowCashRegistryModal(true)}
-            className="flex items-center gap-2 justify-center whitespace-nowrap text-sm font-medium bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 rounded-xl px-6 py-2"
-          >
-            Add Opening/Closing
-          </Button>
           {/* Session Status */}
           <SessionStatus showAlways={false} />
 
           {/* Quick Add */}
-          {showQuickAdd && (isManager() || isAdmin()) && (
+          {showQuickAdd && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button 
@@ -162,6 +155,17 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56 border-0 shadow-xl bg-white/95 backdrop-blur-sm rounded-xl">
+                <DropdownMenuItem 
+                  onClick={() => setShowCashRegistryModal(true)}
+                  className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
+                >
+                  <div className="p-2 bg-blue-100 rounded-lg">
+                    <Banknote className="h-4 w-4 text-blue-600" />
+                  </div>
+                  <span className="font-medium text-gray-700">Opening/Closing</span>
+                </DropdownMenuItem>
+                {(isManager() || isAdmin()) && (
+                  <>
                 <DropdownMenuItem 
                   onClick={() => handleQuickAdd("/clients/new")}
                   className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
@@ -209,6 +213,8 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                   </div>
                   <span className="font-medium text-gray-700">Expense</span>
                 </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}

@@ -1,13 +1,13 @@
 "use client"
 
-import Link from "next/link"
 import { PlusCircle, List, Calendar } from "lucide-react"
-import { useRef, Suspense, useState, useEffect } from "react"
+import { useRef, Suspense, useState, useEffect, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 
 import { Button } from "@/components/ui/button"
 import { AppointmentsCalendar } from "@/components/appointments/appointments-calendar"
 import { AppointmentsCalendarGrid } from "@/components/appointments/appointments-calendar-grid"
+import { AppointmentFormDrawer } from "@/components/appointments/appointment-form-drawer"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 
@@ -19,6 +19,34 @@ function AppointmentsContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const selectedAppointmentId = searchParams?.get("appointment") || undefined
+
+  const [formDrawerOpen, setFormDrawerOpen] = useState(false)
+  const [formDrawerParams, setFormDrawerParams] = useState<{
+    date?: string
+    time?: string
+    staffId?: string
+    appointmentId?: string
+  }>({})
+
+  const openAppointmentForm = useCallback(
+    (params?: { date?: string; time?: string; staffId?: string; appointmentId?: string }) => {
+      setFormDrawerParams(params ?? {})
+      setFormDrawerOpen(true)
+    },
+    []
+  )
+
+  useEffect(() => {
+    const formParam = searchParams?.get("form")
+    const date = searchParams?.get("date")
+    const time = searchParams?.get("time")
+    const staffId = searchParams?.get("staffId")
+    const edit = searchParams?.get("edit")
+    if (formParam === "1") {
+      openAppointmentForm({ date: date ?? undefined, time: time ?? undefined, staffId: staffId ?? undefined, appointmentId: edit ?? undefined })
+      router.replace("/appointments", { scroll: false })
+    }
+  }, [searchParams, router, openAppointmentForm])
 
   const viewParam = searchParams?.get("view")
   const [view, setViewState] = useState<"list" | "calendar">(() => {
@@ -106,11 +134,12 @@ function AppointmentsContent() {
                   Calendar
                 </Button>
               </div>
-              <Button asChild className="bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-5 py-2.5 font-semibold shadow-md shadow-violet-500/20 transition-all hover:shadow-lg">
-                <Link href="/appointments/new">
-                  <PlusCircle className="mr-2 h-4 w-4" />
-                  New Appointment
-                </Link>
+              <Button
+                onClick={() => openAppointmentForm()}
+                className="bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-5 py-2.5 font-semibold shadow-md shadow-violet-500/20 transition-all hover:shadow-lg"
+              >
+                <PlusCircle className="mr-2 h-4 w-4" />
+                New Appointment
               </Button>
             </div>
           </div>
@@ -118,11 +147,29 @@ function AppointmentsContent() {
             {view === "list" ? (
               <AppointmentsCalendar ref={calendarRef} initialAppointmentId={selectedAppointmentId} />
             ) : (
-              <AppointmentsCalendarGrid ref={gridRef} initialAppointmentId={selectedAppointmentId} onSwitchToList={() => setView("list")} />
+              <AppointmentsCalendarGrid
+                ref={gridRef}
+                initialAppointmentId={selectedAppointmentId}
+                onSwitchToList={() => setView("list")}
+                onOpenAppointmentForm={openAppointmentForm}
+              />
             )}
           </div>
         </div>
       </div>
+
+      <AppointmentFormDrawer
+        open={formDrawerOpen}
+        onOpenChange={setFormDrawerOpen}
+        initialDate={formDrawerParams.date}
+        initialTime={formDrawerParams.time}
+        initialStaffId={formDrawerParams.staffId}
+        appointmentId={formDrawerParams.appointmentId}
+        onSuccess={() => {
+          setFormDrawerOpen(false)
+          window.dispatchEvent(new CustomEvent("appointments-refresh"))
+        }}
+      />
     </div>
   )
 }

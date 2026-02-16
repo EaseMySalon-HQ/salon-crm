@@ -5,12 +5,12 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, TrendingUp, Loader2, Receipt, Calendar as CalendarIcon } from "lucide-react"
+import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, Loader2, Receipt, Calendar as CalendarIcon } from "lucide-react"
 import { format, isBefore, startOfDay } from "date-fns"
 import { DayPicker } from "react-day-picker"
 
 import { Button } from "@/components/ui/button"
-import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -30,6 +30,15 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
 import { ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, BlockTimeAPI } from "@/lib/api"
+
+/** Convert 24h time (e.g. "09:00") to 12h for API storage ("9:00 AM") for backward compatibility */
+function formatTimeForApi(time: string): string {
+  if (!time) return ""
+  const minutes = parseTimeToMinutes(time)
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return format(new Date(2000, 0, 1, h, m), "h:mm a")
+}
 
 /** Parse time string (e.g. "9:00 AM" or "09:00") to minutes from midnight */
 function parseTimeToMinutes(time: string): number {
@@ -59,28 +68,16 @@ function blockAppliesOnDate(block: { startDate: string; endDate?: string | null;
   return false
 }
 
-// Time slots for appointments (15-min intervals to match calendar grid)
-const timeSlots = [
-  "9:00 AM", "9:15 AM", "9:30 AM", "9:45 AM",
-  "10:00 AM", "10:15 AM", "10:30 AM", "10:45 AM",
-  "11:00 AM", "11:15 AM", "11:30 AM", "11:45 AM",
-  "12:00 PM", "12:15 PM", "12:30 PM", "12:45 PM",
-  "1:00 PM", "1:15 PM", "1:30 PM", "1:45 PM",
-  "2:00 PM", "2:15 PM", "2:30 PM", "2:45 PM",
-  "3:00 PM", "3:15 PM", "3:30 PM", "3:45 PM",
-  "4:00 PM", "4:15 PM", "4:30 PM", "4:45 PM",
-  "5:00 PM", "5:15 PM", "5:30 PM", "5:45 PM",
-]
-
-const LEAD_SOURCE_OPTIONS = [
-  "Walk-in",
-  "Phone",
-  "Instagram",
-  "Facebook",
-  "JustDial",
-  "Referral",
-  "Other",
-] as const
+// Time slots for appointments (15-min intervals, 24-hour format)
+const timeSlots = (() => {
+  const slots: string[] = []
+  for (let h = 0; h <= 23; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      slots.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`)
+    }
+  }
+  return slots
+})()
 
 const formSchema = z.object({
   date: z.date({
@@ -121,9 +118,15 @@ export interface AppointmentFormProps {
   appointmentId?: string
   /** Called when user selects or clears the client (for showing client details panel) */
   onClientSelect?: (client: Client | null) => void
+  /** Called when form is successfully submitted (e.g. to close drawer) */
+  onSuccess?: () => void
+  /** Called when user cancels (e.g. to close drawer) */
+  onCancel?: () => void
+  /** "drawer" = compact layout for right-side drawer; "page" = full card layout for standalone page */
+  variant?: "page" | "drawer"
 }
 
-export function AppointmentForm({ initialDate, initialTime, initialStaffId, appointmentId: appointmentIdProp, onClientSelect }: AppointmentFormProps = {}) {
+export function AppointmentForm({ initialDate, initialTime, initialStaffId, appointmentId: appointmentIdProp, onClientSelect, onSuccess, onCancel, variant = "page" }: AppointmentFormProps = {}) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const appointmentId = appointmentIdProp ?? searchParams?.get("edit") ?? undefined
@@ -138,10 +141,13 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   const urlTime = searchParams?.get("time") ?? initialTime
   const urlStaffId = searchParams?.get("staffId") ?? initialStaffId
 
-  // Normalize time to match a form timeSlot exactly so the Select displays it
+  // Normalize time to match a form timeSlot exactly so the Select displays it.
+  // Use parseTimeToMinutes so formats like "9:0 AM", "09:00 AM" from calendar all map correctly.
   const defaultTime = useMemo(() => {
     if (!urlTime) return ""
-    return timeSlots.find((t) => t.toLowerCase() === urlTime.toLowerCase()) ?? urlTime
+    const minutes = parseTimeToMinutes(urlTime)
+    const slot = timeSlots.find((t) => parseTimeToMinutes(t) === minutes)
+    return slot ?? (timeSlots.find((t) => t.toLowerCase() === urlTime.toLowerCase()) ?? urlTime)
   }, [urlTime])
 
   const defaultDate = useMemo(() => {
@@ -304,16 +310,20 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         if (a.date) {
           const parts = a.date.split("-").map(Number)
           if (parts.length >= 3) {
+            const apiTime = a.time || ""
+            const minutes = parseTimeToMinutes(apiTime)
+            const slot = apiTime ? timeSlots.find((t) => parseTimeToMinutes(t) === minutes) : ""
             form.reset({
               ...form.getValues(),
               date: new Date(parts[0], parts[1] - 1, parts[2]),
-              time: timeSlots.find((t) => t.toLowerCase() === (a.time || "").toLowerCase()) ?? a.time ?? "",
+              time: slot ?? apiTime ?? "",
               notes: a.notes || "",
             })
           }
         }
         if (a.time) {
-          const match = timeSlots.find((t) => t.toLowerCase() === a.time.toLowerCase())
+          const minutes = parseTimeToMinutes(a.time)
+          const match = timeSlots.find((t) => parseTimeToMinutes(t) === minutes)
           form.setValue("time", match ?? a.time)
         }
         form.setValue("notes", a.notes || "")
@@ -684,7 +694,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const svc = selectedServices[0]
         const response = await AppointmentsAPI.update(appointmentId, {
           date: format(values.date, "yyyy-MM-dd"),
-          time: values.time,
+          time: formatTimeForApi(values.time),
           staffId: svc?.staffId,
           staffAssignments: svc?.staffId ? [{ staffId: svc.staffId, percentage: 100, role: "primary" }] : undefined,
           leadSource: leadSourceValue || "",
@@ -692,7 +702,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         })
         if (response?.success) {
           toast({ title: "Appointment Updated", description: "Changes have been saved." })
-          router.push("/appointments")
+          onSuccess ? onSuccess() : router.push("/appointments")
         } else {
           toast({ title: "Error", description: response?.error || "Failed to update.", variant: "destructive" })
         }
@@ -701,7 +711,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           clientId: selectedCustomer._id || selectedCustomer.id,
           clientName: selectedCustomer.name,
           date: format(values.date, "yyyy-MM-dd"),
-          time: values.time,
+          time: formatTimeForApi(values.time),
           leadSource: leadSourceValue,
           services: selectedServices.map(service => ({
             serviceId: service.serviceId,
@@ -718,7 +728,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const response = await AppointmentsAPI.create(appointmentData)
         if (response.success) {
           toast({ title: "Appointment Created", description: "New appointment has been successfully scheduled." })
-          router.push("/appointments")
+          onSuccess ? onSuccess() : router.push("/appointments")
         } else {
           toast({ title: "Error", description: "Failed to create appointment. Please try again.", variant: "destructive" })
         }
@@ -735,32 +745,18 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     }
   }
 
-  return (
+  const isDrawer = variant === "drawer"
+
+  const formContent = (
     <>
-      <div className="w-full max-w-full">
-        <Card className="shadow-2xl border-0 bg-white/80 backdrop-blur-sm">
-          <CardHeader className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-t-lg">
-            <div className="flex items-center space-x-3">
-              <div className="p-2 bg-white/20 rounded-lg">
-                <CalendarDays className="h-6 w-6" />
-              </div>
-              <div>
-                <CardTitle className="text-2xl font-bold">{isEditMode ? "Edit Appointment" : "New Appointment"}</CardTitle>
-                <CardDescription className="text-indigo-100 mt-1">
-                  {isEditMode ? "Update appointment details" : "Schedule a new appointment with multiple services"}
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-8">
         {loadingAppointment ? (
-          <div className="flex flex-col items-center justify-center py-16 gap-4">
-            <Loader2 className="h-10 w-10 animate-spin text-indigo-600" />
-            <p className="text-slate-600">Loading appointment...</p>
+          <div className={cn("flex flex-col items-center justify-center gap-4", isDrawer ? "py-12" : "py-16")}>
+            <Loader2 className={cn("animate-spin text-indigo-600", isDrawer ? "h-8 w-8" : "h-10 w-10")} />
+            <p className="text-slate-600 text-sm">Loading appointment...</p>
           </div>
         ) : (
         <Form {...form}>
-          <form id="appointmentForm" onSubmit={form.handleSubmit(onSubmit)} className="space-y-10">
+          <form id="appointmentForm" onSubmit={form.handleSubmit(onSubmit)} className={cn(isDrawer ? "space-y-6" : "space-y-10")}>
             
             {/* Client Selection */}
             <div className="space-y-6">
@@ -769,7 +765,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                   <User className="h-4 w-4" />
                   Client *
                 </Label>
-                <p className="text-sm text-slate-500">{isEditMode ? "Client is locked when editing" : "Search and select a client for the appointment"}</p>
               </div>
               {isEditMode ? (
                 <div className="flex items-center gap-3 h-12 px-4 bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-medium">
@@ -862,19 +857,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
 
             {/* Date & Time */}
             <div className="space-y-6">
-              <div className="space-y-2">
-                <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-                  <CalendarDays className="h-5 w-5 text-slate-600" />
-                  Schedule Details
-                </h3>
-                <p className="text-sm text-slate-500">Select the date and time for the appointment</p>
-              </div>
-              <div className={cn(
-                "grid gap-6 pb-8 schedule-grid-transition",
-                (form.watch("leadSource") === "Referral" || form.watch("leadSource") === "Other")
-                  ? "md:grid-cols-4"
-                  : "md:grid-cols-3"
-              )}>
+              <div className="grid gap-6 pb-8 md:grid-cols-2">
                 <FormField
                 control={form.control}
                 name="date"
@@ -965,234 +948,161 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                   </FormItem>
                 )}
                 />
-                <FormField
-                  control={form.control}
-                  name="leadSource"
-                  render={({ field }) => (
-                    <FormItem className="flex flex-col space-y-2">
-                      <FormLabel className="text-sm font-semibold text-slate-700">Lead Source</FormLabel>
-                      <Select onValueChange={(v) => { field.onChange(v); form.setValue("leadSourceDetail", "") }} value={field.value || undefined}>
-                        <FormControl>
-                          <SelectTrigger className="h-12 px-4 border-slate-200 hover:border-slate-400 focus:border-slate-500 focus:ring-slate-500 rounded-xl font-medium text-slate-700 bg-white shadow-sm transition-all duration-200">
-                            <SelectValue placeholder="Select lead source" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent className="rounded-xl border-slate-200 shadow-lg">
-                          {LEAD_SOURCE_OPTIONS.map((opt) => (
-                            <SelectItem key={opt} value={opt}>
-                              {opt}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                {(form.watch("leadSource") === "Referral" || form.watch("leadSource") === "Other") && (
-                  <div className="animate-in slide-in-from-right-reveal">
-                    <FormField
-                      control={form.control}
-                      name="leadSourceDetail"
-                      render={({ field }) => (
-                        <FormItem className="flex flex-col space-y-2">
-                          <FormLabel className="text-sm font-semibold text-slate-700">
-                            {form.watch("leadSource") === "Referral" ? "Referred by" : "Please specify"}
-                          </FormLabel>
-                          <FormControl>
-                            <Input
-                              {...field}
-                              placeholder={form.watch("leadSource") === "Referral" ? "e.g. John Doe" : "Enter details"}
-                              className="h-12 px-4 border-slate-200 rounded-xl"
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-                )}
               </div>
             </div>
 
             {/* Services Section */}
-            <div className="space-y-6 mt-12">
-              <div className="space-y-2">
+            <div className={cn("space-y-4", isDrawer ? "mt-6" : "mt-12")}>
+              <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-                    <FileText className="h-5 w-5 text-slate-600" />
+                  <h3 className={cn("font-semibold text-slate-800 flex items-center gap-2", isDrawer ? "text-base" : "text-lg")}>
+                    <FileText className={cn("text-slate-600", isDrawer ? "h-4 w-4" : "h-5 w-5")} />
                     Services *
                   </h3>
                   {!isEditMode && (
-                    <Button type="button" onClick={addService} className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl px-4 py-2">
+                    <Button
+                      type="button"
+                      onClick={addService}
+                      className={cn(
+                        "text-white",
+                        isDrawer ? "bg-violet-600 hover:bg-violet-700 rounded-lg px-3 py-1.5" : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl px-4 py-2"
+                      )}
+                    >
                       <Plus className="h-4 w-4 mr-2" />
                       Add Service
                     </Button>
                   )}
                 </div>
-                <p className="text-sm text-slate-500">Add services and assign staff members for this appointment</p>
+                {!isDrawer && <p className="text-sm text-slate-500">Add services and assign staff members for this appointment</p>}
               </div>
 
               {selectedServices.length > 0 ? (
-                <div className="space-y-4">
+                <div className="space-y-2">
                   {selectedServices.map((service) => (
-                    <div key={service.id} className="bg-gradient-to-r from-slate-50 to-blue-50 border border-slate-200 rounded-xl p-6 space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 bg-indigo-100 rounded-lg">
-                            <FileText className="h-4 w-4 text-slate-600" />
+                    <div key={service.id} className="flex items-center gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                      <span className="text-xs font-medium text-slate-500 w-6 shrink-0">{selectedServices.indexOf(service) + 1}.</span>
+                      <div className="relative service-dropdown-container flex-1 min-w-0">
+                        {isEditMode ? (
+                          <div className="flex items-center h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 truncate">
+                            {service.name}
                           </div>
-                          <h4 className="font-semibold text-slate-800">Service {selectedServices.indexOf(service) + 1}</h4>
-                        </div>
-                        {!isEditMode && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => removeService(service.id)}
-                            className="text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                        ) : service.serviceId && service.name ? (
+                          <div className="flex items-center justify-between h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 min-w-0">
+                            <span className="truncate">{service.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                updateService(service.id, "serviceId", "")
+                                updateService(service.id, "name", "")
+                                updateDropdownState(service.id, { search: '', isOpen: false })
+                              }}
+                              className="ml-1.5 shrink-0 text-slate-400 hover:text-slate-600"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="relative">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                            <Input
+                              placeholder="Search service..."
+                              value={getDropdownState(service.id).search}
+                              onChange={(e) => updateDropdownState(service.id, { search: e.target.value, isOpen: true })}
+                              onFocus={() => updateDropdownState(service.id, { isOpen: true })}
+                              className="h-9 pl-8 pr-8 text-sm border-slate-200 rounded-md"
+                            />
+                            {getDropdownState(service.id).search && (
+                              <button
+                                type="button"
+                                onClick={() => updateDropdownState(service.id, { search: '', isOpen: false })}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
                         )}
-                      </div>
-
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label className="text-sm font-semibold text-slate-700">Service</Label>
-                          <div className="relative service-dropdown-container">
-                            {isEditMode ? (
-                              <div className="flex items-center h-10 px-3 py-2 bg-slate-100 rounded-lg text-sm border border-slate-200">
-                                <span className="truncate">{service.name}</span>
-                              </div>
-                            ) : service.serviceId && service.name ? (
-                              <div className="flex items-center justify-between h-10 px-3 py-2 bg-slate-100 rounded-lg text-sm border border-slate-200">
-                                <span className="truncate">{service.name}</span>
-                                <button
-                                  type="button"
+                        {getDropdownState(service.id).isOpen && !service.serviceId && (
+                          <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-48 overflow-auto">
+                            {loadingServices ? (
+                              <div className="p-2 text-center text-xs text-slate-500">Loading...</div>
+                            ) : getFilteredServices(service.id).length === 0 ? (
+                              <div className="p-2 text-center text-xs text-slate-500">No matches</div>
+                            ) : (
+                              getFilteredServices(service.id).map((s) => (
+                                <div
+                                  key={s._id || s.id}
+                                  className="px-2.5 py-2 hover:bg-slate-50 cursor-pointer border-b last:border-b-0 text-sm"
                                   onClick={() => {
-                                    updateService(service.id, "serviceId", "")
-                                    updateService(service.id, "name", "")
+                                    updateService(service.id, "serviceId", s._id || s.id)
                                     updateDropdownState(service.id, { search: '', isOpen: false })
                                   }}
-                                  className="ml-2 text-slate-500 hover:text-slate-700"
                                 >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="relative">
-                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
-                                <Input
-                                  placeholder="Search services..."
-                                  value={getDropdownState(service.id).search}
-                                  onChange={(e) => updateDropdownState(service.id, { search: e.target.value, isOpen: true })}
-                                  onFocus={() => updateDropdownState(service.id, { isOpen: true })}
-                                  className="pl-10 border-slate-200 hover:border-indigo-500 focus:border-indigo-500 focus:ring-indigo-500 rounded-lg"
-                                />
-                                {getDropdownState(service.id).search && (
-                                  <button
-                                    type="button"
-                                    onClick={() => updateDropdownState(service.id, { search: '', isOpen: false })}
-                                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                            
-                            {getDropdownState(service.id).isOpen && !service.serviceId && (
-                              <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-auto">
-                                {loadingServices ? (
-                                  <div className="p-3 text-center text-sm text-slate-500">Loading services...</div>
-                                ) : getFilteredServices(service.id).length === 0 ? (
-                                  <div className="p-3 text-center text-sm text-slate-500">
-                                    No services found matching "{getDropdownState(service.id).search}"
-                                  </div>
-                                ) : (
-                                  getFilteredServices(service.id).map((s) => (
-                                    <div
-                                      key={s._id || s.id}
-                                      className="p-3 hover:bg-slate-50 cursor-pointer border-b last:border-b-0 transition-colors"
-                                      onClick={() => {
-                                        updateService(service.id, "serviceId", s._id || s.id)
-                                        updateDropdownState(service.id, { search: '', isOpen: false })
-                                      }}
-                                    >
-                                      <div className="font-medium text-slate-800">{s.name}</div>
-                                      <div className="text-xs text-slate-500 mt-1">{s.duration} min - ₹{s.price}</div>
-                                    </div>
-                                  ))
-                                )}
-                              </div>
+                                  <div className="font-medium text-slate-800">{s.name}</div>
+                                  <div className="text-xs text-slate-500">{s.duration} min · ₹{s.price}</div>
+                                </div>
+                              ))
                             )}
                           </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label className="text-sm font-semibold text-slate-700">Staff Member</Label>
-                          <Select
-                            value={service.staffId}
-                            onValueChange={(value) => updateService(service.id, "staffId", value)}
-                          >
-                            <SelectTrigger className="border-slate-200 hover:border-indigo-500 focus:border-indigo-500 focus:ring-indigo-500 rounded-lg">
-                              <SelectValue placeholder="Select staff" />
-                            </SelectTrigger>
-                          <SelectContent>
-                             {loadingStaff ? (
-                              <SelectItem value="__loading__" disabled>
-                                Loading staff...
-                              </SelectItem>
-                            ) : staff.length === 0 ? (
-                              <SelectItem value="no-staff" disabled>
-                                No active staff available
-                              </SelectItem>
-                            ) : (
-                              (() => {
-                                const list = availableStaff.filter((member: any) => member._id || member.id)
-                                const selectedId = service.staffId
-                                const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
-                                const options = selectedNotInList
-                                  ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
-                                  : list
-                                return options.map((member: any) => {
-                                  const staffId = member._id || member.id
-                                  const isUnavailable = selectedNotInList && staffId === selectedId
-                                  return (
-                                    <SelectItem key={staffId} value={staffId}>
-                                      {member.name}
-                                      {isUnavailable ? " (unavailable for this date/time)" : ""}
-                                    </SelectItem>
-                                  )
-                                })
-                              })()
-                            )}
-                          </SelectContent>
-                          </Select>
-                        </div>
+                        )}
                       </div>
-
+                      <Select
+                        value={service.staffId}
+                        onValueChange={(value) => updateService(service.id, "staffId", value)}
+                      >
+                        <SelectTrigger className="h-9 w-[130px] shrink-0 border-slate-200 rounded-md text-sm">
+                          <SelectValue placeholder="Staff" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {loadingStaff ? (
+                            <SelectItem value="__loading__" disabled>Loading...</SelectItem>
+                          ) : staff.length === 0 ? (
+                            <SelectItem value="no-staff" disabled>No staff</SelectItem>
+                          ) : (
+                            (() => {
+                              const list = availableStaff.filter((member: any) => member._id || member.id)
+                              const selectedId = service.staffId
+                              const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
+                              const options = selectedNotInList
+                                ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
+                                : list
+                              return options.map((member: any) => {
+                                const staffId = member._id || member.id
+                                const isUnavailable = selectedNotInList && staffId === selectedId
+                                return (
+                                  <SelectItem key={staffId} value={staffId}>
+                                    {member.name}
+                                    {isUnavailable ? " (unavailable)" : ""}
+                                  </SelectItem>
+                                )
+                              })
+                            })()
+                          )}
+                        </SelectContent>
+                      </Select>
                       {service.name && (
-                        <div className="bg-white/60 rounded-lg p-4 space-y-2">
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm font-medium text-slate-600">Duration:</span>
-                            <span className="text-sm font-semibold text-slate-800">{service.duration} minutes</span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm font-medium text-slate-600">Price:</span>
-                            <span className="text-sm font-semibold text-green-600">₹{service.price}</span>
-                          </div>
-                        </div>
+                        <span className="text-xs text-slate-500 shrink-0 whitespace-nowrap">
+                          {service.duration}m · ₹{service.price}
+                        </span>
+                      )}
+                      {!isEditMode && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeService(service.id)}
+                          className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       )}
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-center p-8 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-                  <FileText className="h-12 w-12 text-slate-300 mx-auto mb-4" />
-                  <p className="text-slate-500 font-medium">No services added yet</p>
-                  <p className="text-sm text-slate-400 mt-1">Please add at least one service to continue</p>
+                <div className={cn("text-center border-2 border-dashed border-slate-200 rounded-lg bg-slate-50/50", isDrawer ? "p-4" : "p-8")}>
+                  <FileText className={cn("text-slate-300 mx-auto", isDrawer ? "h-8 w-8 mb-2" : "h-12 w-12 mb-4")} />
+                  <p className="text-slate-500 text-sm">No services added yet</p>
                 </div>
               )}
             </div>
@@ -1204,7 +1114,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                   <FileText className="h-5 w-5 text-slate-600" />
                   Additional Notes
                 </h3>
-                <p className="text-sm text-slate-500">Add any special requests or important information</p>
               </div>
               <FormField
                 control={form.control}
@@ -1218,111 +1127,137 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                         {...field}
                       />
                     </FormControl>
-                    <FormDescription className="text-slate-500">Include any special requests or important information.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             </div>
 
-            {/* Summary */}
-            {selectedServices.length > 0 && (
-              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-6 space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-indigo-100 rounded-lg">
-                    <TrendingUp className="h-5 w-5 text-slate-600" />
-                  </div>
-                  <h4 className="text-lg font-semibold text-slate-800">Appointment Summary</h4>
-                </div>
-                <div className="grid gap-3">
-                  <div className="flex justify-between items-center py-2 border-b border-indigo-100">
-                    <span className="text-slate-600 font-medium">Total Services:</span>
-                    <span className="text-slate-800 font-semibold">{selectedServices.length}</span>
-                  </div>
-                  <div className="flex justify-between items-center py-2 border-b border-indigo-100">
-                    <span className="text-slate-600 font-medium">Total Duration:</span>
-                    <span className="text-slate-800 font-semibold">{calculateTotalDuration()} minutes</span>
-                  </div>
-                  <div className="flex justify-between items-center py-2">
-                    <span className="text-slate-600 font-medium">Total Amount:</span>
-                    <span className="text-green-600 font-bold text-lg">₹{calculateTotalAmount()}</span>
-                  </div>
-                </div>
-              </div>
-            )}
           </form>
         </Form>
         )}
-          </CardContent>
-          <CardFooter className="bg-slate-50/50 px-8 py-8 border-t border-slate-200/50">
-            <div className="flex justify-end gap-4 w-full">
-              <Button 
-                variant="outline" 
-                type="button" 
-                onClick={() => router.push("/appointments")}
-                className="px-8 py-3 border-slate-300 text-slate-700 hover:bg-slate-100 rounded-xl font-medium min-w-[120px]"
-              >
-                Cancel
-              </Button>
-              <Button 
-                variant="outline"
-                type="button"
-                disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
-                onClick={() => {
-                  const values = form.getValues()
-                  if (!selectedCustomer || selectedServices.length === 0) return
-                  const saleData: Record<string, unknown> = {
-                    clientId: selectedCustomer._id || selectedCustomer.id,
-                    clientName: selectedCustomer.name,
-                    clientPhone: selectedCustomer.phone || "",
-                    clientEmail: selectedCustomer.email || "",
-                    date: values.date ? format(values.date, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
-                    time: values.time || "",
-                    notes: values.notes || "",
-                    services: selectedServices.map(s => {
-                      const staffMember = staff.find((st: any) => (st._id || st.id) === s.staffId)
-                      return {
-                        serviceId: s.serviceId,
-                        staffId: s.staffId,
-                        staffName: staffMember?.name || "",
-                        name: s.name,
-                        price: s.price,
-                        duration: s.duration,
-                      }
-                    }),
-                  }
-                  if (isEditMode && appointmentId) {
-                    saleData.appointmentId = appointmentId
-                  }
-                  router.push(`/quick-sale?appointment=${btoa(JSON.stringify(saleData))}`)
-                }}
-                className="px-8 py-3 border-emerald-300 text-emerald-700 hover:bg-emerald-50 rounded-xl font-medium min-w-[140px]"
-              >
-                <Receipt className="h-4 w-4 mr-2" />
-                Raise Sale
-              </Button>
-              <Button 
-                type="submit" 
-                form="appointmentForm" 
-                disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
-                className="px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-w-[200px]"
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {isEditMode ? "Updating..." : "Scheduling..."}
-                  </>
-                ) : (
-                  <>
-                    <CalendarDays className="h-4 w-4 mr-2" />
-                    {isEditMode ? "Update Appointment" : "Schedule Appointment"}
-                  </>
-                )}
-              </Button>
-            </div>
-          </CardFooter>
-        </Card>
-      </div>
+    </>
+  )
+
+  const footerButtons = (
+    <div className={cn("flex justify-end gap-3 w-full flex-nowrap", isDrawer ? "pt-4 border-t border-border/60" : "")}>
+      <Button
+        variant="outline"
+        type="button"
+        onClick={() => (onCancel ? onCancel() : router.push("/appointments"))}
+        className={cn(
+          "font-medium min-w-[100px]",
+          isDrawer ? "rounded-lg" : "px-8 py-3 border-slate-300 text-slate-700 hover:bg-slate-100 rounded-xl"
+        )}
+      >
+        Cancel
+      </Button>
+      <Button
+        variant="outline"
+        type="button"
+        disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
+        onClick={() => {
+          const values = form.getValues()
+          if (!selectedCustomer || selectedServices.length === 0) return
+          const saleData: Record<string, unknown> = {
+            clientId: selectedCustomer._id || selectedCustomer.id,
+            clientName: selectedCustomer.name,
+            clientPhone: selectedCustomer.phone || "",
+            clientEmail: selectedCustomer.email || "",
+            date: values.date ? format(values.date, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
+            time: values.time || "",
+            notes: values.notes || "",
+            services: selectedServices.map(s => {
+              const staffMember = staff.find((st: any) => (st._id || st.id) === s.staffId)
+              return {
+                serviceId: s.serviceId,
+                staffId: s.staffId,
+                staffName: staffMember?.name || "",
+                name: s.name,
+                price: s.price,
+                duration: s.duration,
+              }
+            }),
+          }
+          if (isEditMode && appointmentId) {
+            saleData.appointmentId = appointmentId
+          }
+          router.push(`/quick-sale?appointment=${btoa(JSON.stringify(saleData))}`)
+        }}
+        className={cn(
+          "font-medium min-w-[120px]",
+          isDrawer ? "rounded-lg border-emerald-300 text-emerald-700 hover:bg-emerald-50" : "px-8 py-3 border-emerald-300 text-emerald-700 hover:bg-emerald-50 rounded-xl"
+        )}
+      >
+        <Receipt className="h-4 w-4 mr-2" />
+        Raise Sale
+      </Button>
+      <Button
+        type="submit"
+        form="appointmentForm"
+        disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
+        className={cn(
+          "font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]",
+          isDrawer ? "rounded-lg bg-violet-600 hover:bg-violet-700 text-white" : "px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl"
+        )}
+      >
+        {isSubmitting ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            {isEditMode ? "Updating..." : "Scheduling..."}
+          </>
+        ) : (
+          <>
+            <CalendarDays className="h-4 w-4 mr-2" />
+            {isEditMode ? "Update Appointment" : "Schedule Appointment"}
+          </>
+        )}
+      </Button>
+    </div>
+  )
+
+  return (
+    <>
+      {isDrawer ? (
+        <div className="flex flex-col min-h-0 flex-1">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
+            {formContent}
+          </div>
+          <div className="shrink-0">
+            {selectedServices.length > 0 && (
+              <div className="flex items-center justify-between gap-4 py-3 text-sm border-b border-border/60">
+                <span className="text-slate-600">Total Duration: <span className="font-medium text-slate-800">{calculateTotalDuration()} min</span></span>
+                <span className="text-slate-600">Total Amount: <span className="font-semibold text-slate-800">₹{calculateTotalAmount()}</span></span>
+              </div>
+            )}
+            {footerButtons}
+          </div>
+        </div>
+      ) : (
+        <div className="w-full max-w-full">
+          <Card className="shadow-2xl border-0 bg-white/80 backdrop-blur-sm">
+            <CardHeader className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-t-lg">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-white/20 rounded-lg">
+                  <CalendarDays className="h-6 w-6" />
+                </div>
+                <div>
+                  <CardTitle className="text-2xl font-bold">{isEditMode ? "Edit Appointment" : "New Appointment"}</CardTitle>
+                  <CardDescription className="text-indigo-100 mt-1">
+                    {isEditMode ? "Update appointment details" : "Schedule a new appointment with multiple services"}
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="p-8">
+              {formContent}
+            </CardContent>
+            <CardFooter className="bg-slate-50/50 px-8 py-8 border-t border-slate-200/50">
+              {footerButtons}
+            </CardFooter>
+          </Card>
+        </div>
+      )}
 
       {/* New Client Dialog */}
       <Dialog open={showNewClientDialog} onOpenChange={setShowNewClientDialog}>
