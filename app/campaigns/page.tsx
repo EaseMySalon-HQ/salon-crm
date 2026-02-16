@@ -4,7 +4,7 @@ import { ProtectedRoute } from "@/components/auth/protected-route"
 
 export default function CampaignsPage() {
   return (
-    <ProtectedRoute requiredRole="manager">
+    <ProtectedRoute requiredModule="campaigns">
       <ProtectedLayout>
         <CampaignsListPage />
       </ProtectedLayout>

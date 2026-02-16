@@ -3,15 +3,20 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { AuthAPI } from "@/lib/api"
+import { SETTINGS_MODULES } from "@/lib/permission-mappings"
 import { SessionTimeoutManager } from "@/components/auth/session-timeout-manager"
 import { AUTH_LOGOUT_EVENT, clearAuthStorage } from "@/lib/auth-utils"
 
 export interface User {
   _id: string
-  name: string
+  name?: string
+  firstName?: string
+  lastName?: string
   email: string
   role: "admin" | "manager" | "staff"
+  isOwner?: boolean
   avatar?: string
+  permissions?: Array<{ module: string; feature: string; enabled: boolean }>
   createdAt?: string
   updatedAt?: string
 }
@@ -24,6 +29,7 @@ interface AuthContextType {
   updateUser: (userData: Partial<User>) => void
   isLoading: boolean
   hasRole: (roles: string[]) => boolean
+  hasPermission: (module: string, feature: string) => boolean
   isAdmin: () => boolean
   isManager: () => boolean
   isStaff: () => boolean
@@ -263,6 +269,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return user ? roles.includes(user.role) : false
   }
 
+  // Permission-based check: does user have this module+feature enabled?
+  const hasPermission = (module: string, feature: string): boolean => {
+    // Admin role gets full access (matches backend checkPermission behavior)
+    if (user?.role === "admin") return true
+    if (!user?.permissions?.length) return false
+    const match = (p: { module: string; feature: string; enabled: boolean }) =>
+      p.module === module && p.feature === feature && p.enabled
+    if (user.permissions.some(match)) return true
+    // Reports "view": grant when any granular report view is enabled
+    if (module === "reports" && feature === "view") {
+      return user.permissions.some(
+        (p) =>
+          p.module === module &&
+          p.enabled &&
+          (p.feature === "view_financial_reports" || p.feature === "view_staff_commission")
+      )
+    }
+    // Settings "view": grant when any settings subcategory has view
+    if (module === "settings" && feature === "view") {
+      return SETTINGS_MODULES.some((m) =>
+        user.permissions!.some((p) => p.module === m && p.feature === "view" && p.enabled)
+      )
+    }
+    return false
+  }
+
   const isAdmin = (): boolean => {
     return hasRole(['admin'])
   }
@@ -284,6 +316,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       updateUser,
       isLoading, 
       hasRole, 
+      hasPermission,
       isAdmin, 
       isManager, 
       isStaff 

@@ -557,6 +557,11 @@ export class StaffAPI {
     const response = await apiClient.delete(`/staff/${id}`)
     return response.data
   }
+
+  static async changePassword(id: string, newPassword: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/staff/${id}/change-password`, { newPassword })
+    return response.data
+  }
 }
 
 export class StaffDirectoryAPI {

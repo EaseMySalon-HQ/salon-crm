@@ -8,6 +8,7 @@ import { CalendarDays, Home, PieChart, Settings, Users, Receipt, Scissors, Packa
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context"
+import { SETTINGS_MODULES } from "@/lib/permission-mappings"
 
 export function SideNav() {
   const pathname = usePathname()
@@ -29,95 +30,47 @@ export function SideNav() {
   }, [isCollapsed])
 
   const navigationItems = [
-    {
-      title: "Dashboard",
-      href: "/dashboard",
-      icon: Home,
-      requiredRole: null, // All users can access
-    },
-    {
-      title: "Quick Sale",
-      href: "/quick-sale",
-      icon: Receipt,
-      requiredRole: null, // All users can access
-    },
-    {
-      title: "Appointments",
-      href: "/appointments",
-      icon: CalendarDays,
-      requiredRole: "manager", // Manager and above
-    },
-    {
-      title: "Clients",
-      href: "/clients",
-      icon: Users,
-      requiredRole: "manager", // Manager and above
-    },
-    {
-      title: "Leads",
-      href: "/leads",
-      icon: Phone,
-      requiredRole: "manager", // Manager and above
-    },
-    {
-      title: "Campaigns",
-      href: "/campaigns",
-      icon: Megaphone,
-      requiredRole: "manager", // Manager and above
-    },
-    {
-      title: "Services",
-      href: "/services",
-      icon: Wrench,
-      requiredRole: "staff", // Staff can view, manager+ can edit
-    },
-    {
-      title: "Products",
-      href: "/products",
-      icon: Package,
-      requiredRole: "staff", // Staff can view, manager+ can edit
-    },
-    {
-      title: "Cash Register",
-      href: "/cash-registry",
-      icon: Banknote,
-      requiredRole: "manager", // Manager and above
-    },
-    {
-      title: "Analytics",
-      href: "/analytics",
-      icon: PieChart,
-      requiredRole: "manager", // Manager and above
-    },
-    {
-      title: "Reports",
-      href: "/reports",
-      icon: PieChart,
-      requiredRole: "manager", // Manager and above
-    },
-    {
-      title: "Staff Directory",
-      href: "/staff",
-      icon: Users,
-      requiredRole: "admin", // Admin only
-    },
-    {
-      title: "Settings",
-      href: "/settings",
-      icon: Settings,
-      requiredRole: null, // All users can access (but specific settings are restricted)
-    },
+    { title: "Dashboard", href: "/dashboard", icon: Home, permissionModule: "dashboard" },
+    { title: "Quick Sale", href: "/quick-sale", icon: Receipt, permissionModule: "sales" },
+    { title: "Appointments", href: "/appointments", icon: CalendarDays, permissionModule: "appointments" },
+    { title: "Clients", href: "/clients", icon: Users, permissionModule: "clients" },
+    { title: "Leads", href: "/leads", icon: Phone, permissionModule: "lead_management" },
+    { title: "Campaigns", href: "/campaigns", icon: Megaphone, permissionModule: "campaigns" },
+    { title: "Services", href: "/services", icon: Wrench, permissionModule: "services" },
+    { title: "Products", href: "/products", icon: Package, permissionModule: "products" },
+    { title: "Cash Register", href: "/cash-registry", icon: Banknote, permissionModule: "cash_registry" },
+    { title: "Analytics", href: "/analytics", icon: PieChart, permissionModule: "analytics" },
+    { title: "Reports", href: "/reports", icon: PieChart, permissionModule: "reports" },
+    { title: "Staff Directory", href: "/staff", icon: Users, permissionModule: "staff" },
+    { title: "Settings", href: "/settings", icon: Settings, permissionModule: "settings" },
   ]
 
-  const hasAccess = (requiredRole: string | null) => {
-    if (!requiredRole) return true
+  const hasAccess = (item: (typeof navigationItems)[0]) => {
     if (!user) return false
-
-    const roleHierarchy = { admin: 3, manager: 2, staff: 1 }
-    const userLevel = roleHierarchy[user.role as keyof typeof roleHierarchy] || 0
-    const requiredLevel = roleHierarchy[requiredRole as keyof typeof roleHierarchy] || 0
-
-    return userLevel >= requiredLevel
+    // Admin role gets full access (matches backend checkPermission behavior)
+    if (user.role === "admin") return true
+    if (item.permissionModule === "settings") {
+      return SETTINGS_MODULES.some((m) =>
+        user.permissions?.some((p) => p.module === m && p.feature === "view" && p.enabled)
+      )
+    }
+    if (item.permissionModule === "reports") {
+      return (
+        user.permissions?.some(
+          (p) =>
+            p.module === "reports" &&
+            p.enabled &&
+            (p.feature === "view" ||
+              p.feature === "view_financial_reports" ||
+              p.feature === "view_staff_commission")
+        ) ?? false
+      )
+    }
+    return (
+      user.permissions?.some(
+        (p) => p.module === item.permissionModule && p.feature === "view" && p.enabled
+      ) ?? false
+    )
   }
 
   return (
@@ -174,7 +127,7 @@ export function SideNav() {
         <div className="flex-1 py-2 overflow-y-auto">
           <nav className="grid gap-2.5">
             {navigationItems.map((item) => {
-              const hasPermission = hasAccess(item.requiredRole)
+              const canAccess = hasAccess(item)
               const Icon = item.icon
               const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href))
 
@@ -182,17 +135,17 @@ export function SideNav() {
                 <div key={item.href} className="relative">
                   {isCollapsed ? (
                     <Link 
-                      href={hasPermission ? item.href : "#"} 
+                      href={canAccess ? item.href : "#"} 
                       className={cn(
                         "flex items-center justify-center w-full h-12 rounded-xl transition-all duration-300 group",
-                        !hasPermission && "opacity-50 cursor-not-allowed",
+                        !canAccess && "opacity-50 cursor-not-allowed",
                         isActive 
                           ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25" 
                           : "hover:bg-indigo-50 hover:text-indigo-600 text-gray-600"
                       )}
                       onClick={(e) => {
                         e.stopPropagation()
-                        if (!hasPermission) {
+                        if (!canAccess) {
                           e.preventDefault()
                         }
                       }}
@@ -210,16 +163,16 @@ export function SideNav() {
                       variant={isActive ? "secondary" : "ghost"}
                       className={cn(
                         "w-full h-12 rounded-xl transition-all duration-300 group justify-start text-left px-4",
-                        !hasPermission && "opacity-50 cursor-not-allowed",
+                        !canAccess && "opacity-50 cursor-not-allowed",
                         isActive 
                           ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25 !text-white" 
                           : "hover:bg-gradient-to-r hover:from-indigo-50 hover:to-purple-50 hover:text-indigo-700 hover:shadow-md text-gray-700"
                       )}
-                      disabled={!hasPermission}
+                      disabled={!canAccess}
                       asChild
                     >
                       <Link 
-                        href={hasPermission ? item.href : "#"} 
+                        href={canAccess ? item.href : "#"} 
                         className="flex items-center w-full"
                       >
                         <div className={cn(
@@ -234,9 +187,9 @@ export function SideNav() {
                           "font-medium flex-1",
                           isActive ? "text-white" : "text-gray-700"
                         )}>{item.title}</span>
-                        {!hasPermission && (
+                        {!canAccess && (
                           <span className="ml-auto text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full flex-shrink-0">
-                            {item.requiredRole}
+                            restricted
                           </span>
                         )}
                         {isActive && (
@@ -247,7 +200,7 @@ export function SideNav() {
                   )}
                   
                   {/* Hover indicator */}
-                  {!isActive && hasPermission && !isCollapsed && (
+                  {!isActive && canAccess && !isCollapsed && (
                     <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-0 bg-gradient-to-b from-indigo-500 to-purple-600 rounded-r-full opacity-0 group-hover:opacity-100 group-hover:h-8 transition-all duration-300" />
                   )}
                 </div>

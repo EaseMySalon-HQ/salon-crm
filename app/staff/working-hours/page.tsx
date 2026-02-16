@@ -6,7 +6,7 @@ import { StaffWorkingHoursContent } from "@/components/staff/staff-working-hours
 
 export default function StaffWorkingHoursPage() {
   return (
-    <ProtectedRoute requiredRole="manager">
+    <ProtectedRoute requiredModule="staff">
       <ProtectedLayout>
         <StaffWorkingHoursContent />
       </ProtectedLayout>

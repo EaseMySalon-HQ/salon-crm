@@ -9,7 +9,7 @@ import { StaffForm } from "@/components/staff/staff-form"
 
 export default function NewStaffPage() {
   return (
-    <ProtectedRoute requiredRole="manager">
+    <ProtectedRoute requiredModule="staff">
       <ProtectedLayout>
         <div className="flex flex-col space-y-6 min-h-0 flex-1 overflow-y-auto">
               <div className="flex items-center gap-4 shrink-0">

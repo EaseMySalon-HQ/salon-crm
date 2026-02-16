@@ -104,7 +104,7 @@ function NewAppointmentContent() {
 
 export default function NewAppointmentPage() {
   return (
-    <ProtectedRoute>
+    <ProtectedRoute requiredModule="appointments">
       <ProtectedLayout>
         <Suspense fallback={
           <div className="flex flex-col space-y-6">
