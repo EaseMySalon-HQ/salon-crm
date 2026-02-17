@@ -2074,60 +2074,51 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const totalPaid = cashAmount + cardAmount + onlineAmount
   const change = totalPaid - roundedTotal
 
-  // Generate receipt number with proper increment
+  // Generate receipt number with proper increment.
+  // No fallback to cached number - if the API fails after retries, we surface the error
+  // to avoid duplicate invoice IDs (INV-000122, etc.) when multiple bills use the same cached value.
   const generateReceiptNumber = async () => {
-    try {
-      console.log('=== RECEIPT NUMBER GENERATION DEBUG ===')
-      
-      // First, increment the receipt number atomically
-      const incrementResponse = await SettingsAPI.incrementReceiptNumber()
-      if (incrementResponse.success) {
-        const newReceiptNumber = incrementResponse.data.receiptNumber
-        console.log('✅ Receipt number incremented successfully:', newReceiptNumber)
-        
-        // Get fresh business settings to get the prefix
-        const settingsResponse = await SettingsAPI.getBusinessSettings()
-        if (settingsResponse.success) {
-          const currentSettings = settingsResponse.data
-        const prefix = currentSettings?.invoicePrefix || currentSettings?.receiptPrefix || "INV"
-        
-        console.log('Fresh business settings:', currentSettings)
-          console.log('New receipt number from increment:', newReceiptNumber)
-        console.log('Final prefix used:', prefix)
-          
+    const maxRetries = 3
+    let lastError: unknown = null
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`=== RECEIPT NUMBER GENERATION (attempt ${attempt}/${maxRetries}) ===`)
+
+        const incrementResponse = await SettingsAPI.incrementReceiptNumber()
+        if (incrementResponse.success) {
+          const newReceiptNumber = incrementResponse.data.receiptNumber
+          console.log('✅ Receipt number incremented successfully:', newReceiptNumber)
+
+          let prefix = 'INV'
+          const settingsResponse = await SettingsAPI.getBusinessSettings()
+          if (settingsResponse.success && settingsResponse.data) {
+            prefix = settingsResponse.data.invoicePrefix || settingsResponse.data.receiptPrefix || 'INV'
+          } else {
+            prefix = posSettings?.invoicePrefix || businessSettings?.invoicePrefix || businessSettings?.receiptPrefix || 'INV'
+          }
+
           const formattedReceiptNumber = `${prefix}-${newReceiptNumber.toString().padStart(6, '0')}`
-          console.log('Final receipt number generated:', formattedReceiptNumber)
-          
-          // Update local state with new receipt number
+
           setBusinessSettings((prev: any) => ({
             ...prev,
             receiptNumber: newReceiptNumber
           }))
-          
+
           return formattedReceiptNumber
         }
-      } else {
-        console.error('Failed to increment receipt number:', incrementResponse.error)
-        throw new Error(incrementResponse.error || 'Failed to increment receipt number')
+        lastError = new Error(incrementResponse.error || 'Failed to increment receipt number')
+      } catch (error) {
+        lastError = error
+        console.error(`Receipt number generation attempt ${attempt} failed:`, error)
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 500 * attempt))
+        }
       }
-    } catch (error) {
-      console.error('Failed to generate receipt number:', error)
-    
-    // Fallback to cached settings if API call fails
-    const prefix = posSettings?.invoicePrefix || businessSettings?.invoicePrefix || businessSettings?.receiptPrefix || "INV"
-      const receiptNumber = (posSettings?.receiptNumber || businessSettings?.receiptNumber || 1)
-    
-    console.log('=== FALLBACK RECEIPT NUMBER GENERATION ===')
-    console.log('Using cached settings - posSettings:', posSettings)
-    console.log('Using cached settings - businessSettings:', businessSettings)
-    console.log('Final prefix used:', prefix)
-    console.log('Final receipt number used:', receiptNumber)
-      
-      const formattedReceiptNumber = `${prefix}-${receiptNumber.toString().padStart(6, '0')}`
-      console.log('Final receipt number generated (fallback):', formattedReceiptNumber)
-      
-      return formattedReceiptNumber
     }
+
+    console.error('Failed to generate receipt number after retries:', lastError)
+    throw lastError instanceof Error ? lastError : new Error('Failed to generate receipt number. Please check your connection and try again.')
   }
 
   // Handle checkout
