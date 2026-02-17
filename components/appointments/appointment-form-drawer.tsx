@@ -28,6 +28,16 @@ export function AppointmentFormDrawer({
 }: AppointmentFormDrawerProps) {
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [panelVisible, setPanelVisible] = useState(false)
+  const [formOpenKey, setFormOpenKey] = useState(0)
+
+  // Reset form and client panel when opening for new appointment (no appointmentId)
+  useEffect(() => {
+    if (open && !appointmentId) {
+      setFormOpenKey((k) => k + 1)
+      setSelectedClient(null)
+      setPanelVisible(false)
+    }
+  }, [open, appointmentId])
 
   const handleClientSelect = useCallback((client: Client | null) => {
     setSelectedClient(client)
@@ -70,9 +80,7 @@ export function AppointmentFormDrawer({
                 key={
                   appointmentId
                     ? `form-edit-${appointmentId}`
-                    : initialDate && initialTime
-                    ? `form-${initialDate}-${initialTime}-${initialStaffId ?? ""}`
-                    : "form-new"
+                    : `form-new-${formOpenKey}`
                 }
                 variant="drawer"
                 initialDate={initialDate}

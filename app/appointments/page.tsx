@@ -145,7 +145,11 @@ function AppointmentsContent() {
           </div>
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-4 sm:p-6 transition-opacity duration-300 w-full">
             {view === "list" ? (
-              <AppointmentsCalendar ref={calendarRef} initialAppointmentId={selectedAppointmentId} />
+              <AppointmentsCalendar
+                ref={calendarRef}
+                initialAppointmentId={selectedAppointmentId}
+                onOpenAppointmentForm={openAppointmentForm}
+              />
             ) : (
               <AppointmentsCalendarGrid
                 ref={gridRef}

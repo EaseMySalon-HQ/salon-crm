@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -263,6 +263,8 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [appointmentToCancel, setAppointmentToCancel] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  const [showDeleteInvoiceConfirm, setShowDeleteInvoiceConfirm] = useState(false)
+  const [deletingInvoice, setDeletingInvoice] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [showColorLegend, setShowColorLegend] = useState(false)
   const [blockTimes, setBlockTimes] = useState<BlockTime[]>([])
@@ -288,6 +290,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   const blocksContainerRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const userHasScrolledRef = useRef(false)
+  const isProgrammaticScrollRef = useRef(false)
   const justDraggedRef = useRef(false)
   const dragHoverSlotRef = useRef<{ colIndex: number; slotMinutes: number } | null>(null)
   const [showTimeChangeConfirm, setShowTimeChangeConfirm] = useState(false)
@@ -439,6 +442,7 @@ export const AppointmentsCalendarGrid = forwardRef<
           const dateNorm = selectedDate?.slice(0, 10) || ""
           let walkIns = sales.filter((s: any) => {
             if (!s.items?.some((i: any) => i.type === "service")) return false
+            if (s.appointmentId) return false // Sale from appointment – appointment card shows it, no walk-in card
             const saleDate = s.date ? format(new Date(s.date), "yyyy-MM-dd") : ""
             return !dateNorm || saleDate === dateNorm
           })
@@ -610,10 +614,35 @@ export const AppointmentsCalendarGrid = forwardRef<
       currentTime.getMinutes() +
       currentTime.getSeconds() / 60
     if (currentMinutes < extendedStartMinutes || currentMinutes >= extendedEndMinutes) return
-    const topPx = 56 + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
-    const containerHeight = el.clientHeight
-    const scrollTop = Math.max(0, topPx - containerHeight / 2)
-    el.scrollTop = scrollTop
+    // Defer scroll until after layout is complete (fixes staging/hydration timing)
+    let cancelled = false
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const doScroll = () => {
+      if (cancelled) return false
+      const container = scrollContainerRef.current
+      if (!container) return false
+      const containerHeight = container.clientHeight
+      if (containerHeight === 0) return false // Layout not ready
+      const topPx = 56 + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
+      const scrollTop = Math.max(0, topPx - containerHeight / 2)
+      isProgrammaticScrollRef.current = true
+      container.scrollTop = scrollTop
+      return true
+    }
+    const tryScroll = () => {
+      if (cancelled) return
+      if (!doScroll()) {
+        timeoutId = setTimeout(tryScroll, 150)
+      }
+    }
+    const raf = requestAnimationFrame(() => {
+      requestAnimationFrame(tryScroll)
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+      if (timeoutId) clearTimeout(timeoutId)
+    }
   }, [selectedDate, currentTime, extendedStartMinutes, extendedEndMinutes, slotHeight])
 
   // Scroll to red "now" line when TIME header is clicked
@@ -629,6 +658,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     if (currentMinutes < extendedStartMinutes || currentMinutes >= extendedEndMinutes) return
     const topPx = 56 + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
     const containerHeight = el.clientHeight
+    isProgrammaticScrollRef.current = true
     el.scrollTop = Math.max(0, topPx - containerHeight / 2)
     setScrollToNowRequested(false)
   }, [scrollToNowRequested, selectedDate, extendedStartMinutes, extendedEndMinutes, slotHeight])
@@ -824,6 +854,36 @@ export const AppointmentsCalendarGrid = forwardRef<
       alert("Failed to cancel appointment. Please try again.")
     } finally {
       setCancelling(false)
+    }
+  }
+
+  const handleDeleteInvoiceClick = () => {
+    setShowDeleteInvoiceConfirm(true)
+  }
+
+  const confirmDeleteInvoice = async () => {
+    if (!linkedSale?._id || !selectedAppointment?._id) return
+    setDeletingInvoice(true)
+    try {
+      const saleRes = await SalesAPI.delete(linkedSale._id)
+      if (!saleRes?.success) {
+        alert("Failed to delete invoice. Please try again.")
+        return
+      }
+      const aptRes = await AppointmentsAPI.delete(selectedAppointment._id)
+      if (aptRes?.success) {
+        setAppointments((prev) => prev.filter((a) => a._id !== selectedAppointment._id))
+      }
+      setLinkedSale(null)
+      setShowDetails(false)
+      setShowDeleteInvoiceConfirm(false)
+      window.dispatchEvent(new CustomEvent("appointments-refresh"))
+      alert("Invoice and appointment deleted successfully")
+    } catch (e) {
+      console.error(e)
+      alert("Failed to delete invoice. Please try again.")
+    } finally {
+      setDeletingInvoice(false)
     }
   }
 
@@ -1428,7 +1488,10 @@ export const AppointmentsCalendarGrid = forwardRef<
         <div
           ref={scrollContainerRef}
           className="overflow-auto max-h-[calc(100vh-320px)] min-h-[400px] bg-white/50"
-          onScroll={() => { userHasScrolledRef.current = true }}
+          onScroll={() => {
+            if (!isProgrammaticScrollRef.current) userHasScrolledRef.current = true
+            isProgrammaticScrollRef.current = false
+          }}
         >
           <div
             className="grid w-full min-w-[600px] relative calendar-fade-transition"
@@ -1815,45 +1878,50 @@ export const AppointmentsCalendarGrid = forwardRef<
                               {apt.notes}
                             </div>
                           )}
-                          {/* Hover quick actions */}
-                          <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex items-center gap-0.5">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setSelectedAppointment(apt)
-                                setShowDetails(true)
-                              }}
-                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
-                              title="Edit"
-                            >
-                              <PencilIcon className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                router.push(`/appointments/new?edit=${apt._id}`)
-                              }}
-                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
-                              title="Reschedule"
-                            >
-                              <CalendarClock className="h-3.5 w-3.5" />
-                            </button>
-                            {apt.status !== "cancelled" && (
+                          {/* Hover quick actions - Edit & Reschedule open edit form, Cancel asks confirmation */}
+                          {apt.status !== "completed" && (
+                            <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex items-center gap-0.5">
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  handleCancelClick(apt._id)
+                                  onOpenAppointmentForm
+                                    ? onOpenAppointmentForm({ appointmentId: apt._id })
+                                    : router.push(`/appointments/new?edit=${apt._id}`)
                                 }}
-                                className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors"
-                                title="Cancel"
+                                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
+                                title="Edit"
                               >
-                                <XCircle className="h-3.5 w-3.5" />
+                                <PencilIcon className="h-3.5 w-3.5" />
                               </button>
-                            )}
-                          </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  onOpenAppointmentForm
+                                    ? onOpenAppointmentForm({ appointmentId: apt._id })
+                                    : router.push(`/appointments/new?edit=${apt._id}`)
+                                }}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
+                                title="Reschedule"
+                              >
+                                <CalendarClock className="h-3.5 w-3.5" />
+                              </button>
+                              {apt.status !== "cancelled" && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleCancelClick(apt._id)
+                                  }}
+                                  className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors"
+                                  title="Cancel"
+                                >
+                                  <XCircle className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
                         {/* Resize handle - bottom */}
                         <div
@@ -2219,49 +2287,86 @@ export const AppointmentsCalendarGrid = forwardRef<
               })()}
               <Separator />
               <div className="flex flex-wrap items-center justify-between gap-4 w-full">
-                <Button
-                  variant="destructive"
-                  onClick={() => selectedAppointment && handleCancelClick(selectedAppointment._id)}
-                  disabled={cancelling || selectedAppointment?.status === "cancelled"}
-                  className="bg-red-600 hover:bg-red-700 text-white shrink-0"
-                >
-                  {cancelling ? "Cancelling..." : "Cancel Appointment"}
-                </Button>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button
-                    variant="outline"
-                    asChild
-                  >
-                    <Link
-                      href={selectedAppointment ? `/appointments/new?edit=${selectedAppointment._id}` : "#"}
-                      onClick={() => setShowDetails(false)}
+                {selectedAppointment?.status === "completed" ? (
+                  <>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {linkedSale?._id && (
+                        <Button
+                          variant="destructive"
+                          onClick={handleDeleteInvoiceClick}
+                          disabled={deletingInvoice}
+                          className="bg-red-600 hover:bg-red-700 text-white shrink-0"
+                        >
+                          {deletingInvoice ? "Deleting..." : "Delete Invoice"}
+                        </Button>
+                      )}
+                      {linkedSale && (linkedSale.billNo || linkedSale.receiptNumber) && (
+                        <Button
+                          variant="outline"
+                          asChild
+                          className="shrink-0"
+                        >
+                          <Link
+                            href={`/receipt/${linkedSale.billNo || linkedSale.receiptNumber}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Eye className="h-4 w-4 mr-2" />
+                            View Invoice
+                          </Link>
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      variant="destructive"
+                      onClick={() => selectedAppointment && handleCancelClick(selectedAppointment._id)}
+                      disabled={cancelling || selectedAppointment?.status === "cancelled"}
+                      className="bg-red-600 hover:bg-red-700 text-white shrink-0"
                     >
-                      <Pencil className="h-4 w-4 mr-2" />
-                      Edit
-                    </Link>
-                  </Button>
-                  <Button
-                  onClick={() => {
-                    if (!selectedAppointment) return
-                    const a = selectedAppointment as any
-                    const appointmentData = {
-                      appointmentId: a._id,
-                      clientId: a.clientId?._id || a.clientId,
-                      clientName: a.clientId?.name || "",
-                      serviceId: a.serviceId?._id || a.serviceId,
-                      serviceName: a.serviceId?.name || "",
-                      servicePrice: a.price || 0,
-                      serviceDuration: a.duration || 0,
-                      staffId: a.staffId?._id || a.staffId,
-                      staffName: a.staffId?.name || "",
-                    }
-                    setShowDetails(false)
-                    router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
-                  }}
-                  >
-                    Raise Sale
-                  </Button>
-                </div>
+                      {cancelling ? "Cancelling..." : "Cancel Appointment"}
+                    </Button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          if (selectedAppointment) {
+                            setShowDetails(false)
+                            onOpenAppointmentForm
+                              ? onOpenAppointmentForm({ appointmentId: selectedAppointment._id })
+                              : router.push(`/appointments/new?edit=${selectedAppointment._id}`)
+                          }
+                        }}
+                      >
+                        <Pencil className="h-4 w-4 mr-2" />
+                        Edit
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          if (!selectedAppointment) return
+                          const a = selectedAppointment as any
+                          const appointmentData = {
+                            appointmentId: a._id,
+                            clientId: a.clientId?._id || a.clientId,
+                            clientName: a.clientId?.name || "",
+                            serviceId: a.serviceId?._id || a.serviceId,
+                            serviceName: a.serviceId?.name || "",
+                            servicePrice: a.price || 0,
+                            serviceDuration: a.duration || 0,
+                            staffId: a.staffId?._id || a.staffId,
+                            staffName: a.staffId?.name || "",
+                          }
+                          setShowDetails(false)
+                          router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                        }}
+                      >
+                        Raise Sale
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -2569,6 +2674,75 @@ export const AppointmentsCalendarGrid = forwardRef<
                 </>
               ) : (
                 "Yes, Cancel Appointment"
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showDeleteInvoiceConfirm} onOpenChange={setShowDeleteInvoiceConfirm}>
+        <DialogContent className="rounded-2xl border-0 shadow-2xl max-w-md">
+          <DialogHeader className="text-center pb-4">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+              <svg
+                className="h-6 w-6 text-red-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth="1.5"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
+                />
+              </svg>
+            </div>
+            <DialogTitle className="text-xl font-bold text-slate-900">Delete Invoice</DialogTitle>
+            <DialogDescription className="text-slate-600 mt-2">
+              This will delete the invoice and the appointment. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setShowDeleteInvoiceConfirm(false)}
+              disabled={deletingInvoice}
+              className="border-slate-300 text-slate-700 hover:bg-slate-50"
+            >
+              Keep Invoice
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDeleteInvoice}
+              disabled={deletingInvoice}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deletingInvoice ? (
+                <>
+                  <svg
+                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  Deleting...
+                </>
+              ) : (
+                "Yes, Delete Invoice"
               )}
             </Button>
           </div>
