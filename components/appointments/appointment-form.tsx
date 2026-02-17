@@ -732,21 +732,58 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         : undefined
 
       if (isEditMode && appointmentId) {
-        const svc = selectedServices[0]
-        const response = await AppointmentsAPI.update(appointmentId, {
-          date: format(values.date, "yyyy-MM-dd"),
-          time: formatTimeForApi(values.time),
-          staffId: svc?.staffId,
-          staffAssignments: svc?.staffId ? [{ staffId: svc.staffId, percentage: 100, role: "primary" }] : undefined,
-          leadSource: leadSourceValue || "",
-          notes: values.notes,
-        })
-        if (response?.success) {
-          toast({ title: "Appointment Updated", description: "Changes have been saved." })
-          onSuccess ? onSuccess() : router.push("/appointments")
+        const dateStr = format(values.date, "yyyy-MM-dd")
+        const timeStr = formatTimeForApi(values.time)
+        const originalService = selectedServices.find((s) => s.id === "edit-service")
+        const newServices = selectedServices.filter((s) => s.id !== "edit-service")
+
+        if (originalService) {
+          const updateRes = await AppointmentsAPI.update(appointmentId, {
+            date: dateStr,
+            time: timeStr,
+            serviceId: originalService.serviceId,
+            staffId: originalService.staffId,
+            staffAssignments: originalService.staffId ? [{ staffId: originalService.staffId, percentage: 100, role: "primary" }] : undefined,
+            duration: originalService.duration,
+            price: originalService.price,
+            leadSource: leadSourceValue || "",
+            notes: values.notes,
+          })
+          if (!updateRes?.success) {
+            toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
+            return
+          }
         } else {
-          toast({ title: "Error", description: response?.error || "Failed to update.", variant: "destructive" })
+          await AppointmentsAPI.delete(appointmentId)
         }
+
+        if (newServices.length > 0) {
+          const createRes = await AppointmentsAPI.create({
+            clientId: selectedCustomer._id || selectedCustomer.id,
+            clientName: selectedCustomer.name,
+            date: dateStr,
+            time: timeStr,
+            leadSource: leadSourceValue,
+            services: newServices.map((s) => ({
+              serviceId: s.serviceId,
+              staffId: s.staffId,
+              name: s.name,
+              duration: s.duration,
+              price: s.price,
+            })),
+            totalDuration: newServices.reduce((sum, s) => sum + (s.duration || 0), 0),
+            totalAmount: newServices.reduce((sum, s) => sum + (s.price || 0), 0),
+            notes: values.notes,
+            status: "scheduled",
+          })
+          if (!createRes?.success) {
+            toast({ title: originalService ? "Partially updated" : "Error", description: originalService ? "Original updated, but failed to add new services." : "Failed to create appointments.", variant: "destructive" })
+            return
+          }
+        }
+
+        toast({ title: "Appointment Updated", description: newServices.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
+        onSuccess ? onSuccess() : router.push("/appointments")
       } else {
         const appointmentData = {
           clientId: selectedCustomer._id || selectedCustomer.id,
@@ -1000,19 +1037,17 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                     <FileText className={cn("text-slate-600", isDrawer ? "h-4 w-4" : "h-5 w-5")} />
                     Services *
                   </h3>
-                  {!isEditMode && (
-                    <Button
-                      type="button"
-                      onClick={addService}
-                      className={cn(
-                        "text-white",
-                        isDrawer ? "bg-violet-600 hover:bg-violet-700 rounded-lg px-3 py-1.5" : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl px-4 py-2"
-                      )}
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add Service
-                    </Button>
-                  )}
+                  <Button
+                    type="button"
+                    onClick={addService}
+                    className={cn(
+                      "text-white",
+                      isDrawer ? "bg-violet-600 hover:bg-violet-700 rounded-lg px-3 py-1.5" : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl px-4 py-2"
+                    )}
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Service
+                  </Button>
                 </div>
                 {!isDrawer && <p className="text-sm text-slate-500">Add services and assign staff members for this appointment</p>}
               </div>
@@ -1023,11 +1058,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                     <div key={service.id} className="flex items-center gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
                       <span className="text-xs font-medium text-slate-500 w-6 shrink-0">{selectedServices.indexOf(service) + 1}.</span>
                       <div className="relative service-dropdown-container flex-1 min-w-0">
-                        {isEditMode ? (
-                          <div className="flex items-center h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 truncate">
-                            {service.name}
-                          </div>
-                        ) : service.serviceId && service.name ? (
+                        {service.serviceId && service.name ? (
                           <div className="flex items-center justify-between h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 min-w-0">
                             <span className="truncate">{service.name}</span>
                             <button
@@ -1121,17 +1152,15 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           )}
                         </SelectContent>
                       </Select>
-                      {!isEditMode && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeService(service.id)}
-                          className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeService(service.id)}
+                        className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
                   ))}
                 </div>
