@@ -75,6 +75,15 @@ class ModelFactory {
       
       // Supplier model
       Supplier: this.getModel('Supplier', require('./Supplier').schema, connection),
+
+      // PurchaseOrder model
+      PurchaseOrder: this.getModel('PurchaseOrder', require('./PurchaseOrder').schema, connection),
+
+      // SupplierPayable model
+      SupplierPayable: this.getModel('SupplierPayable', require('./SupplierPayable').schema, connection),
+
+      // SupplierPayment model
+      SupplierPayment: this.getModel('SupplierPayment', require('./SupplierPayment').schema, connection),
       
       // Category model
       Category: this.getModel('Category', require('./Category').schema, connection),
