@@ -168,6 +168,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   const [services, setServices] = useState<any[]>([])
   const [staff, setStaff] = useState<any[]>([])
   const [blockTimesForDate, setBlockTimesForDate] = useState<any[]>([])
+  const [appointmentsForDate, setAppointmentsForDate] = useState<any[]>([])
   const [loadingServices, setLoadingServices] = useState(true)
   const [loadingStaff, setLoadingStaff] = useState(true)
 
@@ -220,10 +221,11 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   const formDate = form.watch("date")
   const formTime = form.watch("time")
 
-  // Fetch block times when date is set (for availability filtering)
+  // Fetch block times and appointments when date is set (for availability filtering)
   useEffect(() => {
     if (!formDate) {
       setBlockTimesForDate([])
+      setAppointmentsForDate([])
       return
     }
     const dateStr = format(formDate, "yyyy-MM-dd")
@@ -233,14 +235,27 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         else setBlockTimesForDate([])
       })
       .catch(() => setBlockTimesForDate([]))
+    AppointmentsAPI.getAll({ date: dateStr, limit: 500 })
+      .then((res) => {
+        if (res?.success && Array.isArray(res?.data)) setAppointmentsForDate(res.data)
+        else setAppointmentsForDate([])
+      })
+      .catch(() => setAppointmentsForDate([]))
   }, [formDate])
 
-  // Staff available on the selected date and time (work schedule + not blocked)
+  // Total duration of selected services (for availability window; min 15 min for check)
+  const totalDuration = useMemo(() => {
+    const sum = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
+    return Math.max(sum || 60, 15)
+  }, [selectedServices])
+
+  // Staff available on the selected date and time (work schedule + not blocked + no overlapping appointments)
   const availableStaff = useMemo(() => {
     if (!formDate || !formTime) return staff
     const dateStr = format(formDate, "yyyy-MM-dd")
     const dayIndex = formDate.getDay()
-    const timeMinutes = parseTimeToMinutes(formTime)
+    const slotStartM = parseTimeToMinutes(formTime)
+    const slotEndM = slotStartM + (totalDuration || 60)
 
     return staff.filter((member: any) => {
       const staffId = member._id || member.id
@@ -251,9 +266,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       if (dayRow && dayRow.enabled === false) return false
       const startStr = dayRow?.startTime ?? "09:00"
       const endStr = dayRow?.endTime ?? "21:00"
-      const startM = parseTimeToMinutes(startStr)
-      const endM = parseTimeToMinutes(endStr)
-      if (timeMinutes < startM || timeMinutes >= endM) return false
+      const workStartM = parseTimeToMinutes(startStr)
+      const workEndM = parseTimeToMinutes(endStr)
+      if (slotStartM < workStartM || slotEndM > workEndM) return false
 
       const isBlocked = blockTimesForDate.some((block: any) => {
         const blockStaffId = typeof block.staffId === "object" && block.staffId?._id ? block.staffId._id : String(block.staffId)
@@ -261,11 +276,29 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         if (!blockAppliesOnDate(block, dateStr)) return false
         const blockStartM = parseTimeToMinutes(block.startTime)
         const blockEndM = parseTimeToMinutes(block.endTime)
-        return timeMinutes >= blockStartM && timeMinutes < blockEndM
+        return slotStartM < blockEndM && slotEndM > blockStartM
       })
-      return !isBlocked
+      if (isBlocked) return false
+
+      const hasOverlappingAppointment = appointmentsForDate.some((apt: any) => {
+        if (apt.status === "cancelled") return false
+        if (appointmentId && (apt._id || apt.id) === appointmentId) return false
+        const aptStaffId = apt.staffId?._id || apt.staffId?.id || apt.staffId
+        const aptStaffIds = new Set<string>()
+        if (aptStaffId) aptStaffIds.add(String(aptStaffId))
+        for (const a of apt.staffAssignments || []) {
+          const sid = a.staffId?._id || a.staffId?.id || a.staffId
+          if (sid) aptStaffIds.add(String(sid))
+        }
+        if (!aptStaffIds.has(String(staffId))) return false
+        const aptStartM = parseTimeToMinutes(apt.time || "0:00")
+        const aptDuration = apt.duration ?? 60
+        const aptEndM = aptStartM + aptDuration
+        return slotStartM < aptEndM && slotEndM > aptStartM
+      })
+      return !hasOverlappingAppointment
     })
-  }, [staff, formDate, formTime, blockTimesForDate])
+  }, [staff, formDate, formTime, totalDuration, blockTimesForDate, appointmentsForDate, appointmentId])
 
   // Load services and staff on component mount
   useEffect(() => {
@@ -356,6 +389,14 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
 
     return unsubscribe
   }, [])
+
+  // Hide client details panel when search box is empty (no number/name)
+  useEffect(() => {
+    if (!isEditMode && !customerSearch.trim() && selectedCustomer) {
+      setSelectedCustomer(null)
+      onClientSelect?.(null)
+    }
+  }, [isEditMode, customerSearch, selectedCustomer, onClientSelect])
 
   // Handle click outside to close dropdown
   useEffect(() => {
@@ -1080,11 +1121,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           )}
                         </SelectContent>
                       </Select>
-                      {service.name && (
-                        <span className="text-xs text-slate-500 shrink-0 whitespace-nowrap">
-                          {service.duration}m · ₹{service.price}
-                        </span>
-                      )}
                       {!isEditMode && (
                         <Button
                           type="button"

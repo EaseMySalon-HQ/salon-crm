@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "re
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, startOfWeek, addWeeks, subWeeks } from "date-fns"
-import { ChevronLeft, ChevronRight, Pencil } from "lucide-react"
+import { ChevronLeft, ChevronRight, Pencil, Eye } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -78,12 +78,13 @@ function getPrimaryStaffName(apt: Appointment): string {
 interface AppointmentsCalendarProps {
   onShowCancelled?: () => void
   initialAppointmentId?: string
+  onOpenAppointmentForm?: (params?: { date?: string; time?: string; staffId?: string; appointmentId?: string }) => void
 }
 
 export const AppointmentsCalendar = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarProps
->(({ onShowCancelled, initialAppointmentId }, ref) => {
+>(({ onShowCancelled, initialAppointmentId, onOpenAppointmentForm }, ref) => {
   const router = useRouter()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [appointments, setAppointments] = useState<Appointment[]>([])
@@ -97,6 +98,8 @@ export const AppointmentsCalendar = forwardRef<
   }, [initialAppointmentId])
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set())
   const [cancelling, setCancelling] = useState(false)
+  const [showDeleteInvoiceConfirm, setShowDeleteInvoiceConfirm] = useState(false)
+  const [deletingInvoice, setDeletingInvoice] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [showCancelledModal, setShowCancelledModal] = useState(false)
   const [showUpcomingModal, setShowUpcomingModal] = useState(false)
@@ -429,6 +432,33 @@ export const AppointmentsCalendar = forwardRef<
   const cancelCancelAppointment = () => {
     setShowCancelConfirm(false)
     setAppointmentToCancel(null)
+  }
+
+  const handleDeleteInvoiceClick = () => {
+    setShowDeleteInvoiceConfirm(true)
+  }
+
+  const confirmDeleteInvoice = async () => {
+    if (!linkedSale?._id || !selectedAppointment?._id) return
+    setDeletingInvoice(true)
+    try {
+      const saleRes = await SalesAPI.delete(linkedSale._id)
+      if (!saleRes?.success) {
+        alert('Failed to delete invoice. Please try again.')
+        return
+      }
+      const aptRes = await AppointmentsAPI.delete(selectedAppointment._id)
+      setLinkedSale(null)
+      setShowDetails(false)
+      setShowDeleteInvoiceConfirm(false)
+      await fetchAppointments()
+      alert(aptRes?.success ? 'Invoice and appointment deleted successfully' : 'Invoice deleted. Failed to delete appointment.')
+    } catch (e) {
+      console.error(e)
+      alert('Failed to delete invoice. Please try again.')
+    } finally {
+      setDeletingInvoice(false)
+    }
   }
 
   const handleMarkStatus = async (newStatus: 'arrived' | 'service_started') => {
@@ -859,59 +889,89 @@ export const AppointmentsCalendar = forwardRef<
               })()}
               <Separator />
               <div className="flex flex-wrap items-center justify-between gap-4 w-full">
-                <Button
-                  variant="destructive"
-                  onClick={() => {
-                    if (!selectedAppointment) return
-                    const anySel: any = selectedAppointment as any
-                    handleCancelClick(anySel._id)
-                  }}
-                  disabled={cancelling || selectedAppointment?.status === 'cancelled'}
-                  className="bg-red-600 hover:bg-red-700 text-white shrink-0"
-                >
-                  {cancelling ? 'Cancelling...' : 'Cancel Appointment'}
-                </Button>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button
-                    variant="outline"
-                    asChild
-                  >
-                    <Link
-                      href={selectedAppointment ? `/appointments/new?edit=${selectedAppointment._id}` : '#'}
-                      onClick={() => setShowDetails(false)}
+                {selectedAppointment?.status === 'completed' ? (
+                  <div className="flex items-center gap-2 shrink-0">
+                    {linkedSale?._id && (
+                      <Button
+                        variant="destructive"
+                        onClick={handleDeleteInvoiceClick}
+                        disabled={deletingInvoice}
+                        className="bg-red-600 hover:bg-red-700 text-white shrink-0"
+                      >
+                        {deletingInvoice ? 'Deleting...' : 'Delete Invoice'}
+                      </Button>
+                    )}
+                    {linkedSale && (linkedSale.billNo || linkedSale.receiptNumber) && (
+                      <Button
+                        variant="outline"
+                        asChild
+                        className="shrink-0"
+                      >
+                        <Link
+                          href={`/receipt/${linkedSale.billNo || linkedSale.receiptNumber}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          View Invoice
+                        </Link>
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <Button
+                      variant="destructive"
+                      onClick={() => {
+                        if (!selectedAppointment) return
+                        const anySel: any = selectedAppointment as any
+                        handleCancelClick(anySel._id)
+                      }}
+                      disabled={cancelling || selectedAppointment?.status === 'cancelled'}
+                      className="bg-red-600 hover:bg-red-700 text-white shrink-0"
                     >
-                      <Pencil className="h-4 w-4 mr-2" />
-                      Edit
-                    </Link>
-                  </Button>
-                  <Button
-                  onClick={() => {
-                    if (!selectedAppointment) return
-                    const anySel: any = selectedAppointment as any
-                    
-                    // Prepare appointment data to pass to quick sale
-                    const appointmentData = {
-                      appointmentId: anySel._id,
-                      clientId: anySel.clientId?._id || anySel.clientId,
-                      clientName: anySel.clientId?.name || '',
-                      serviceId: anySel.serviceId?._id || anySel.serviceId,
-                      serviceName: anySel.serviceId?.name || '',
-                      servicePrice: anySel.price || 0,
-                      serviceDuration: anySel.duration || 0,
-                      staffId: anySel.staffId?._id || anySel.staffId,
-                      staffName: anySel.staffId?.name || '',
-                    }
-                    
-                    // Encode data as base64 to pass via URL
-                    const encodedData = btoa(JSON.stringify(appointmentData))
-                    
-                    setShowDetails(false)
-                    router.push(`/quick-sale?appointment=${encodedData}`)
-                  }}
-                  >
-                    Raise Sale
-                  </Button>
-                </div>
+                      {cancelling ? 'Cancelling...' : 'Cancel Appointment'}
+                    </Button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          if (selectedAppointment) {
+                            setShowDetails(false)
+                            onOpenAppointmentForm
+                              ? onOpenAppointmentForm({ appointmentId: selectedAppointment._id })
+                              : router.push(`/appointments/new?edit=${selectedAppointment._id}`)
+                          }
+                        }}
+                      >
+                        <Pencil className="h-4 w-4 mr-2" />
+                        Edit
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          if (!selectedAppointment) return
+                          const anySel: any = selectedAppointment as any
+                          const appointmentData = {
+                            appointmentId: anySel._id,
+                            clientId: anySel.clientId?._id || anySel.clientId,
+                            clientName: anySel.clientId?.name || '',
+                            serviceId: anySel.serviceId?._id || anySel.serviceId,
+                            serviceName: anySel.serviceId?.name || '',
+                            servicePrice: anySel.price || 0,
+                            serviceDuration: anySel.duration || 0,
+                            staffId: anySel.staffId?._id || anySel.staffId,
+                            staffName: anySel.staffId?.name || '',
+                          }
+                          const encodedData = btoa(JSON.stringify(appointmentData))
+                          setShowDetails(false)
+                          router.push(`/quick-sale?appointment=${encodedData}`)
+                        }}
+                      >
+                        Raise Sale
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -1031,6 +1091,51 @@ export const AppointmentsCalendar = forwardRef<
                 </>
               ) : (
                 'Yes, Cancel Appointment'
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Invoice Confirmation Modal */}
+      <Dialog open={showDeleteInvoiceConfirm} onOpenChange={setShowDeleteInvoiceConfirm}>
+        <DialogContent className="rounded-2xl border-0 shadow-2xl max-w-md">
+          <DialogHeader className="text-center pb-4">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+              <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+            </div>
+            <DialogTitle className="text-xl font-bold text-slate-900">Delete Invoice</DialogTitle>
+            <DialogDescription className="text-slate-600 mt-2">
+              This will delete the invoice and the appointment. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setShowDeleteInvoiceConfirm(false)}
+              disabled={deletingInvoice}
+              className="border-slate-300 text-slate-700 hover:bg-slate-50"
+            >
+              Keep Invoice
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDeleteInvoice}
+              disabled={deletingInvoice}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deletingInvoice ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Deleting...
+                </>
+              ) : (
+                'Yes, Delete Invoice'
               )}
             </Button>
           </div>
