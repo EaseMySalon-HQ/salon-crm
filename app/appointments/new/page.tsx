@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useCallback, useEffect } from "react"
 import Link from "next/link"
-import { useSearchParams } from "next/navigation"
+import { useSearchParams, useRouter } from "next/navigation"
 import { ArrowLeft } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -30,11 +30,23 @@ function useIsLg() {
 
 function NewAppointmentContent() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const initialDate = searchParams?.get("date") ?? undefined
   const initialTime = searchParams?.get("time") ?? undefined
   const initialStaffId = searchParams?.get("staffId") ?? undefined
   const editAppointmentId = searchParams?.get("edit") ?? undefined
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
+
+  // Redirect edit to appointments page with drawer (same as new appointment)
+  useEffect(() => {
+    if (editAppointmentId) {
+      const params = new URLSearchParams({ form: "1", edit: editAppointmentId })
+      if (initialDate) params.set("date", initialDate)
+      if (initialTime) params.set("time", initialTime)
+      if (initialStaffId) params.set("staffId", initialStaffId)
+      router.replace(`/appointments?${params.toString()}`, { scroll: false })
+    }
+  }, [editAppointmentId, initialDate, initialTime, initialStaffId, router])
   const [panelVisible, setPanelVisible] = useState(false)
   const isLg = useIsLg()
 
@@ -59,6 +71,14 @@ function NewAppointmentContent() {
       onClientSelect={handleClientSelect}
     />
   )
+
+  if (editAppointmentId) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-2 border-indigo-600 border-t-transparent" />
+      </div>
+    )
+  }
 
   const hasPanel = !!selectedClient
   const gridCols = isLg
@@ -104,7 +124,7 @@ function NewAppointmentContent() {
 
 export default function NewAppointmentPage() {
   return (
-    <ProtectedRoute>
+    <ProtectedRoute requiredModule="appointments">
       <ProtectedLayout>
         <Suspense fallback={
           <div className="flex flex-col space-y-6">

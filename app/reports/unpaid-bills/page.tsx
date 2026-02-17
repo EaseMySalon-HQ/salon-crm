@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -150,16 +152,22 @@ export default function UnpaidBillsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading unpaid bills...</p>
-        </div>
-      </div>
+      <ProtectedRoute requiredModule="reports">
+        <ProtectedLayout requiredModule="reports">
+          <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+              <p className="text-gray-600">Loading unpaid bills...</p>
+            </div>
+          </div>
+        </ProtectedLayout>
+      </ProtectedRoute>
     )
   }
 
   return (
+    <ProtectedRoute requiredModule="reports">
+      <ProtectedLayout requiredModule="reports">
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
@@ -392,5 +400,7 @@ export default function UnpaidBillsPage() {
       />
 
     </div>
+      </ProtectedLayout>
+    </ProtectedRoute>
   )
 }

@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useState, useEffect } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -14,6 +14,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
+import { getRememberedBusinessCode, setRememberedBusinessCode, clearRememberedBusinessCode } from "@/lib/auth-utils"
 import { AccountSuspended } from "@/components/auth/account-suspended"
 
 const loginSchema = z.object({
@@ -31,6 +32,7 @@ export function LoginForm() {
   const [suspensionMessage, setSuspensionMessage] = useState("")
   const { login, staffLogin } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -41,6 +43,16 @@ export function LoginForm() {
     },
   })
 
+  // Pre-fill business code on mount: URL param (?code=BIZ0001) > localStorage
+  useEffect(() => {
+    const fromUrl = searchParams.get("code")?.trim()
+    const fromStorage = getRememberedBusinessCode()
+    const initial = fromUrl || fromStorage || ""
+    if (initial) {
+      form.setValue("businessCode", initial)
+    }
+  }, [searchParams])
+
   async function onSubmit(values: z.infer<typeof loginSchema>) {
     setIsSubmitting(true)
     setIsSuspended(false) // Reset suspension state
@@ -49,7 +61,7 @@ export function LoginForm() {
       let result: any = false
 
       if (activeTab === "staff") {
-        if (!values.businessCode) {
+        if (!values.businessCode?.trim()) {
           toast({
             title: "Business Code Required",
             description: "Please enter your business code for staff login.",
@@ -58,7 +70,7 @@ export function LoginForm() {
           setIsSubmitting(false)
           return
         }
-        result = await staffLogin(values.email, values.password, values.businessCode)
+        result = await staffLogin(values.email, values.password, values.businessCode.trim())
       } else {
         result = await login(values.email, values.password)
       }
@@ -67,6 +79,9 @@ export function LoginForm() {
       if (typeof result === 'boolean') {
         // Staff login returns boolean
         if (result) {
+          if (activeTab === "staff" && values.businessCode?.trim()) {
+            setRememberedBusinessCode(values.businessCode.trim())
+          }
           toast({
             title: "Login successful",
             description: "Welcome back to Ease My Salon!",
@@ -267,10 +282,26 @@ export function LoginForm() {
                       name="businessCode"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Business Code</FormLabel>
+                          <div className="flex items-center justify-between">
+                            <FormLabel>Business Code</FormLabel>
+                            {field.value && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-auto p-0 text-xs text-slate-500 hover:text-slate-700"
+                                onClick={() => {
+                                  clearRememberedBusinessCode()
+                                  form.setValue("businessCode", "")
+                                }}
+                              >
+                                Clear saved
+                              </Button>
+                            )}
+                          </div>
                           <FormControl>
                             <Input
-                              placeholder="Enter your business code"
+                              placeholder="Enter your business code (e.g. BIZ0001)"
                               {...field}
                             />
                           </FormControl>

@@ -16,75 +16,23 @@ import { NotificationSettings } from "./notification-settings"
 import { POSSettings } from "./pos-settings"
 import { PlanBilling } from "./plan-billing"
 
+import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
+
 const settingsCategories = [
-  {
-    id: "general",
-    title: "General Settings",
-    description: "Basic application preferences and configurations",
-    icon: Settings,
-    requiredRole: null, // Staff can access
-  },
-  {
-    id: "business",
-    title: "Business Settings",
-    description: "Company information, branding, and business details",
-    icon: Building2,
-    requiredRole: "admin",
-  },
-  {
-    id: "appointments",
-    title: "Appointment Settings",
-    description: "Booking rules, time slots, and appointment preferences",
-    icon: Calendar,
-    requiredRole: "manager",
-  },
-  {
-    id: "currency",
-    title: "Currency Settings",
-    description: "Default currency, symbols, and formatting options",
-    icon: DollarSign,
-    requiredRole: "admin", // Only admin can access
-  },
-  {
-    id: "tax",
-    title: "Tax Settings",
-    description: "Tax rates, GST configuration, and calculation methods",
-    icon: Calculator,
-    requiredRole: "admin", // Only admin can access
-  },
-  {
-    id: "payments",
-    title: "Payment Settings",
-    description: "Payment methods and processing configuration",
-    icon: CreditCard,
-    requiredRole: "admin", // Only admin can access
-  },
-  {
-    id: "pos",
-    title: "POS Settings",
-    description: "Invoice sequence management and custom prefix configuration",
-    icon: Receipt,
-    requiredRole: "admin", // Only admin can access
-  },
-  {
-    id: "notifications",
-    title: "Notifications",
-    description: "Email alerts, SMS notifications, and reminder settings",
-    icon: Bell,
-    requiredRole: "manager",
-  },
-  {
-    id: "plan-billing",
-    title: "Plan & Billing",
-    description: "View plan details, billing information, and manage subscription",
-    icon: Wallet,
-    requiredRole: "admin", // Only admin can access
-  },
+  { id: "general", title: "General Settings", description: "Basic application preferences and configurations", icon: Settings },
+  { id: "business", title: "Business Settings", description: "Company information, branding, and business details", icon: Building2 },
+  { id: "appointments", title: "Appointment Settings", description: "Booking rules, time slots, and appointment preferences", icon: Calendar },
+  { id: "currency", title: "Currency Settings", description: "Default currency, symbols, and formatting options", icon: DollarSign },
+  { id: "tax", title: "Tax Settings", description: "Tax rates, GST configuration, and calculation methods", icon: Calculator },
+  { id: "payments", title: "Payment Settings", description: "Payment methods and processing configuration", icon: CreditCard },
+  { id: "pos", title: "POS Settings", description: "Invoice sequence management and custom prefix configuration", icon: Receipt },
+  { id: "notifications", title: "Notifications", description: "Email alerts, SMS notifications, and reminder settings", icon: Bell },
+  { id: "plan-billing", title: "Plan & Billing", description: "View plan details, billing information, and manage subscription", icon: Wallet },
 ]
 
 export function SettingsPage() {
   const [activeSection, setActiveSection] = useState<string | null>(null)
-  const { user, isLoading } = useAuth()
+  const { user, isLoading, hasPermission } = useAuth()
   const router = useRouter()
 
   // Basic authentication check
@@ -111,15 +59,13 @@ export function SettingsPage() {
     return null
   }
 
-  const canAccessSetting = (requiredRole: string | null) => {
-    if (!requiredRole) return true
+  const canAccessSetting = (categoryId: string) => {
     if (!user) return false
 
-    const roleHierarchy = { admin: 3, manager: 2, staff: 1 }
-    const userLevel = roleHierarchy[user.role as keyof typeof roleHierarchy] || 0
-    const requiredLevel = roleHierarchy[requiredRole as keyof typeof roleHierarchy] || 0
-
-    return userLevel >= requiredLevel
+    // Permission-only check
+    const permissionModule = SETTINGS_PERMISSION_MAP[categoryId]
+    if (!permissionModule) return false
+    return hasPermission(permissionModule, "view")
   }
 
   const renderSettingComponent = () => {
@@ -182,7 +128,7 @@ export function SettingsPage() {
             <div className="mt-6 grid gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {settingsCategories.map((category) => {
                 const Icon = category.icon
-                const hasAccess = canAccessSetting(category.requiredRole)
+                const hasAccess = canAccessSetting(category.id)
 
                 return (
                   <button
@@ -229,7 +175,7 @@ export function SettingsPage() {
                           variant="secondary"
                           className="self-start text-xs bg-white text-slate-600"
                         >
-                          {category.requiredRole}
+                          restricted
                         </Badge>
                       )}
                     </div>
@@ -255,7 +201,7 @@ export function SettingsPage() {
               <CardContent className="space-y-2">
                 {settingsCategories.map((category) => {
                   const Icon = category.icon
-                  const hasAccess = canAccessSetting(category.requiredRole)
+                  const hasAccess = canAccessSetting(category.id)
 
                   return (
                     <button
@@ -305,7 +251,7 @@ export function SettingsPage() {
                             variant="secondary"
                             className="text-xs bg-slate-200 text-slate-600 px-2 py-1"
                           >
-                            {category.requiredRole}
+                            restricted
                           </Badge>
                         )}
                         <ChevronRight
@@ -326,7 +272,13 @@ export function SettingsPage() {
           {/* Settings Content - Right Panel */}
           <div className="lg:col-span-3">
             <Card className="border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
-              <CardContent className="p-6">{renderSettingComponent()}</CardContent>
+              <CardContent className="p-6">
+                {activeSection && !canAccessSetting(activeSection) ? (
+                  <p className="text-slate-600">You don&apos;t have permission to access this setting.</p>
+                ) : (
+                  renderSettingComponent()
+                )}
+              </CardContent>
             </Card>
           </div>
         </div>

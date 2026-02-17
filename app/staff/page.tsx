@@ -6,8 +6,8 @@ import { StaffDirectory } from "@/components/settings/staff-directory"
 
 export default function StaffDirectoryPage() {
   return (
-    <ProtectedRoute>
-      <ProtectedLayout requiredRoles={["admin"]}>
+    <ProtectedRoute requiredModule="staff">
+      <ProtectedLayout requiredModule="staff">
         <div className="flex flex-col space-y-6">
           <StaffDirectory />
         </div>

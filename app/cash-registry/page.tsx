@@ -10,7 +10,7 @@ export default function CashRegistryPage() {
   const [isVerificationModalOpen, setIsVerificationModalOpen] = useState(false)
 
   return (
-    <ProtectedRoute requiredRole="manager">
+    <ProtectedRoute requiredModule="cash_registry">
       <ProtectedLayout>
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-4">
           {/* Elegant Header Section */}

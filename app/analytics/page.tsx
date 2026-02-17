@@ -9,7 +9,7 @@ import { FeatureGate } from "@/components/ui/feature-gate"
 
 export default function AnalyticsPage() {
   return (
-    <ProtectedRoute requiredRole="manager">
+    <ProtectedRoute requiredModule="analytics">
       <ProtectedLayout>
         <FeatureGate 
           featureId="analytics"

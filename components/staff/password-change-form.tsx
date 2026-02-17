@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { useToast } from "@/hooks/use-toast"
-import { UsersAPI } from "@/lib/api"
+import { UsersAPI, StaffAPI } from "@/lib/api"
 
 const passwordChangeSchema = z.object({
   newPassword: z.string().min(6, "New password must be at least 6 characters"),
@@ -45,7 +45,10 @@ export function PasswordChangeForm({ staff, onSuccess, onCancel }: PasswordChang
 
     setIsSubmitting(true)
     try {
-      const response = await UsersAPI.changePassword(staff._id, values.newPassword)
+      // Business owner is in User collection; staff are in Staff collection
+      const response = staff.isOwner
+        ? await UsersAPI.changePassword(staff._id, values.newPassword)
+        : await StaffAPI.changePassword(staff._id, values.newPassword)
 
       if (response.success) {
         onSuccess()

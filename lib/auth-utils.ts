@@ -5,6 +5,7 @@
 
 export const AUTH_LOGOUT_EVENT = 'salon-auth-logout'
 export const SESSION_EXPIRED_KEY = 'salon-session-expired'
+export const REMEMBERED_BUSINESS_CODE_KEY = 'salon-remembered-business-code'
 
 /**
  * Clear all salon auth data from storage.
@@ -47,6 +48,32 @@ export function consumeSessionExpiredFlag(): boolean {
 export function dispatchAuthLogout(): void {
   if (typeof window === 'undefined') return
   window.dispatchEvent(new CustomEvent(AUTH_LOGOUT_EVENT))
+}
+
+/**
+ * Get remembered business code for staff login (from localStorage).
+ */
+export function getRememberedBusinessCode(): string | null {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem(REMEMBERED_BUSINESS_CODE_KEY)
+}
+
+/**
+ * Save business code for future staff logins.
+ */
+export function setRememberedBusinessCode(code: string): void {
+  if (typeof window === 'undefined') return
+  if (code?.trim()) {
+    localStorage.setItem(REMEMBERED_BUSINESS_CODE_KEY, code.trim())
+  }
+}
+
+/**
+ * Clear remembered business code.
+ */
+export function clearRememberedBusinessCode(): void {
+  if (typeof window === 'undefined') return
+  localStorage.removeItem(REMEMBERED_BUSINESS_CODE_KEY)
 }
 
 /**

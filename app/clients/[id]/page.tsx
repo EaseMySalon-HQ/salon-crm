@@ -10,7 +10,7 @@ interface ClientDetailsPageProps {
 export default async function ClientDetailsRoute({ params }: ClientDetailsPageProps) {
   const { id } = await params
   return (
-    <ProtectedRoute>
+    <ProtectedRoute requiredModule="clients">
       <ClientDetailsPage clientId={id} />
     </ProtectedRoute>
   )

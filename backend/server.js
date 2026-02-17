@@ -606,12 +606,13 @@ app.post('/api/auth/staff-login', async (req, res) => {
       updatedAt: new Date()
     });
 
-    // Generate token with staff info
+    // Generate token with staff info - ensure branchId is set (fallback to business._id for legacy staff)
+    const effectiveBranchId = staff.branchId || business._id;
     const token = generateToken({
       _id: staff._id,
       email: staff.email,
       role: staff.role,
-      branchId: staff.branchId,
+      branchId: effectiveBranchId,
       firstName: staff.name.split(' ')[0],
       lastName: staff.name.split(' ').slice(1).join(' ') || '',
       mobile: staff.phone,
@@ -622,20 +623,30 @@ app.post('/api/auth/staff-login', async (req, res) => {
 
     const { password: _, ...staffWithoutPassword } = staff.toObject();
 
+    // Use default permissions for role when staff has none configured
+    let staffPermissions = staff.permissions || [];
+    if (!staffPermissions.length && staff.role) {
+      const { roleDefinitions } = require('./models/Permission');
+      staffPermissions = roleDefinitions[staff.role]?.permissions || [];
+    }
+
     res.json({
       success: true,
       data: {
         user: {
           _id: staff._id,
+          name: staff.name,
           firstName: staff.name.split(' ')[0],
           lastName: staff.name.split(' ').slice(1).join(' ') || '',
           email: staff.email,
           mobile: staff.phone,
           role: staff.role,
-          branchId: staff.branchId,
+          branchId: effectiveBranchId,
+          isOwner: false, // Staff are never owner
           hasLoginAccess: staff.hasLoginAccess,
           allowAppointmentScheduling: staff.allowAppointmentScheduling,
           isActive: staff.isActive,
+          permissions: staffPermissions,
           specialties: staff.specialties,
           commissionProfileIds: staff.commissionProfileIds,
           notes: staff.notes,
@@ -689,9 +700,11 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           mobile: req.user.mobile,
           role: req.user.role,
           branchId: req.user.branchId,
+          isOwner: req.user.isOwner === true,
           hasLoginAccess: req.user.hasLoginAccess,
           allowAppointmentScheduling: req.user.allowAppointmentScheduling,
           isActive: req.user.isActive,
+          permissions: req.user.permissions || [],
           specialties: req.user.specialties,
           commissionProfileIds: req.user.commissionProfileIds,
           notes: req.user.notes,
@@ -4620,13 +4633,14 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
     const { Staff } = req.businessModels;
     const { search = '' } = req.query;
 
-    // Get business owner from main database
+    // Get business owner from main database (only person created at business creation)
     const mainConnection = await databaseManager.getMainConnection();
     const User = mainConnection.model('User', require('./models/User').schema);
-    const businessOwner = await User.findOne({ 
-      branchId: req.user.branchId,
-      role: 'admin'
-    });
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+    const business = await Business.findById(req.user.branchId).select('owner').lean();
+    const businessOwner = business?.owner
+      ? await User.findById(business.owner).select('-password')
+      : await User.findOne({ branchId: req.user.branchId, role: 'admin' }); // fallback for legacy
 
     // Get staff members from business database
     let staffQuery = {};
@@ -4669,12 +4683,13 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
           permissions: businessOwner.permissions || [],
           createdAt: businessOwner.createdAt,
           updatedAt: businessOwner.updatedAt,
-          isOwner: true // Flag to identify business owner
+          isOwner: true,
+          source: 'user' // User owner from main DB - edit via profile, not Staff API
         });
       }
     }
 
-    // Add staff members
+    // Add staff members (Staff are never owner - only User from business creation is owner)
     allStaff.push(...staffMembers.map(staff => ({
       ...staff.toObject(),
       salary: staff.salary || 0,
@@ -4682,7 +4697,8 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
       hasLoginAccess: staff.hasLoginAccess || false,
       allowAppointmentScheduling: staff.allowAppointmentScheduling || false,
       permissions: staff.permissions || [],
-      isOwner: false
+      isOwner: false, // Staff are never owner
+      source: 'staff' // Staff from business DB - edit via Staff API
     })));
 
     res.json({
@@ -4732,11 +4748,17 @@ app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, a
       });
     }
 
+    // Use default permissions for role when not provided
+    const { roleDefinitions } = require('./models/Permission');
+    const defaultPermissions = roleDefinitions[role]?.permissions || [];
+
     const staffData = {
       name,
       email,
       phone,
       role,
+      permissions: defaultPermissions,
+      permissionsTemplate: role,
       specialties: specialties || [],
       salary: parseFloat(salary) || 0,
       commissionProfileIds: commissionProfileIds || [],
@@ -4791,14 +4813,24 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       });
     }
 
-    // Check authorization: staff can only update their own profile, admins can update anyone
+    // Check authorization: staff can only update their own profile; only owner can edit other admins
     const isSelfUpdate = req.user._id?.toString() === req.params.id || req.user.id === req.params.id
     const isAdmin = req.user.role === 'admin'
-    
+    const isOwner = req.user.isOwner === true
+    const targetIsAdmin = existingStaff.role === 'admin'
+
     if (!isSelfUpdate && !isAdmin) {
       return res.status(403).json({
         success: false,
         error: 'Unauthorized: You can only update your own profile'
+      });
+    }
+
+    // Only owner can edit other admins (non-owner admins cannot edit other admins)
+    if (!isSelfUpdate && targetIsAdmin && !isOwner) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only the business owner can edit other admins'
       });
     }
 
@@ -4815,6 +4847,23 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
         { workSchedule },
         { new: true }
       );
+      if (!updatedStaff) {
+        return res.status(404).json({ success: false, error: 'Staff member not found' });
+      }
+      return res.json({ success: true, data: updatedStaff });
+    }
+
+    // Admin permissions-only update (e.g. from Staff Permissions modal)
+    if (isAdmin && Array.isArray(req.body.permissions) && req.body.name === undefined) {
+      const updateData = { permissions: req.body.permissions };
+      if (req.body.permissionsTemplate != null) {
+        updateData.permissionsTemplate = req.body.permissionsTemplate;
+      }
+      const updatedStaff = await Staff.findByIdAndUpdate(
+        req.params.id,
+        updateData,
+        { new: true }
+      ).select('-password');
       if (!updatedStaff) {
         return res.status(404).json({ success: false, error: 'Staff member not found' });
       }
@@ -4892,7 +4941,7 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       allowAppointmentScheduling: allowAppointmentScheduling !== undefined ? allowAppointmentScheduling : false,
       isActive: isActive !== undefined ? isActive : true,
     };
-    const { workSchedule } = req.body;
+    const { workSchedule, permissions } = req.body;
     if (Array.isArray(workSchedule)) {
       updateData.workSchedule = workSchedule.map(ws => ({
         day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
@@ -4900,6 +4949,9 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
         startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
         endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
       }));
+    }
+    if (Array.isArray(permissions)) {
+      updateData.permissions = permissions;
     }
 
     // Add password if provided
@@ -4937,14 +4989,27 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
 app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
   try {
     const { Staff } = req.businessModels;
-    const deletedStaff = await Staff.findByIdAndDelete(req.params.id);
-    
-    if (!deletedStaff) {
+    const staffToDelete = await Staff.findById(req.params.id);
+
+    if (!staffToDelete) {
       return res.status(404).json({
         success: false,
         error: 'Staff member not found'
       });
     }
+
+    const isOwner = req.user.isOwner === true;
+    const targetIsAdmin = staffToDelete.role === 'admin';
+
+    // Only owner (created at business creation) can delete other admins
+    if (targetIsAdmin && !isOwner) {
+      return res.status(403).json({
+        success: false,
+        error: 'Only the business owner can delete other admins'
+      });
+    }
+
+    await Staff.findByIdAndDelete(req.params.id);
 
     res.json({
       success: true,
@@ -4952,6 +5017,47 @@ app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAd
     });
   } catch (error) {
     console.error('Error deleting staff:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Change staff password (admin or manager can reset)
+app.post('/api/staff/:id/change-password', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    const { Staff } = req.businessModels;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: 'New password must be at least 6 characters'
+      });
+    }
+
+    const staff = await Staff.findById(req.params.id);
+    if (!staff) {
+      return res.status(404).json({
+        success: false,
+        error: 'Staff member not found'
+      });
+    }
+
+    const hashedPassword = await hashPassword(newPassword);
+    await Staff.findByIdAndUpdate(
+      req.params.id,
+      { password: hashedPassword },
+      { new: true, runValidators: true }
+    );
+
+    res.json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    console.error('Change staff password error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -6681,12 +6787,8 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
     let query = { status: { $nin: ['cancelled', 'Cancelled'] } };
     if (dateFrom || dateTo) {
       query.date = {};
-      if (dateFrom) query.date.$gte = new Date(dateFrom);
-      if (dateTo) {
-        const d = new Date(dateTo);
-        d.setHours(23, 59, 59, 999);
-        query.date.$lte = d;
-      }
+      if (dateFrom) query.date.$gte = getStartOfDayIST(dateFrom);
+      if (dateTo) query.date.$lte = getEndOfDayIST(dateTo);
     }
     const sales = await Sale.find(query).sort({ date: -1 }).lean();
     

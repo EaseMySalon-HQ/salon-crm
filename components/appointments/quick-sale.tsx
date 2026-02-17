@@ -657,8 +657,10 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   }, [])
 
   // Initialize from initialSale when in edit/exchange mode
+  // Use loading flags (not length checks) so initialization runs even when business has empty catalogs
   useEffect(() => {
-    if ((mode === "edit" || mode === "exchange") && initialSale && !isInitialized && services.length > 0 && products.length > 0 && staff.length > 0 && clients.length > 0) {
+    const catalogsLoaded = !loadingServices && !loadingProducts && !loadingStaff && !loadingClients
+    if ((mode === "edit" || mode === "exchange") && initialSale && !isInitialized && catalogsLoaded) {
       console.log("Initializing QuickSale from initialSale:", initialSale)
       
       // Set customer
@@ -699,11 +701,14 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       const productItemsData: ProductItem[] = []
 
       if (initialSale.items && Array.isArray(initialSale.items)) {
+        const normalizeId = (id: any) => (id != null ? String(id) : "")
+        const normalizeName = (n: any) => (n || "").trim().toLowerCase()
+
         initialSale.items.forEach((item: any, index: number) => {
           if (item.type === "service") {
-            const service = services.find(s => 
-              (s._id || s.id) === item.serviceId ||
-              s.name === item.name
+            const service = services.find(s =>
+              normalizeId(s._id || s.id) === normalizeId(item.serviceId) ||
+              normalizeName(s.name) === normalizeName(item.name)
             )
             if (service) {
               serviceItemsData.push({
@@ -718,9 +723,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               })
             }
           } else if (item.type === "product") {
-            const product = products.find(p => 
-              (p._id || p.id) === item.productId ||
-              p.name === item.name
+            const product = products.find(p =>
+              normalizeId(p._id || p.id) === normalizeId(item.productId) ||
+              normalizeName(p.name) === normalizeName(item.name)
             )
             if (product) {
               productItemsData.push({
@@ -783,7 +788,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       setIsInitialized(true)
       console.log("QuickSale initialized from initialSale")
     }
-  }, [mode, initialSale, isInitialized, services, products, staff, clients])
+  }, [mode, initialSale, isInitialized, services, products, staff, clients, loadingServices, loadingProducts, loadingStaff, loadingClients])
 
   // Pre-fill form from appointment data in URL
   useEffect(() => {

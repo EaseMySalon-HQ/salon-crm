@@ -10,7 +10,7 @@ import { Scissors, Sparkles, TrendingUp, FolderTree } from "lucide-react"
 
 export default function Services() {
   return (
-    <ProtectedRoute requiredRole="staff">
+    <ProtectedRoute requiredModule="services">
       <ProtectedLayout>
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-4">
           {/* Elegant Header Section */}

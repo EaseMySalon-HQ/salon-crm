@@ -12,7 +12,7 @@ import { ProtectedLayout } from "@/components/layout/protected-layout"
 
 export default function DashboardPage() {
   return (
-    <ProtectedLayout>
+    <ProtectedLayout requiredModule="dashboard">
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
         <div className="mb-8 animate-in fade-in" style={{ animationDelay: "200ms" }}>
           <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 rounded-2xl p-8 text-white shadow-2xl hover:shadow-3xl transition-all duration-500 transform hover:scale-[1.01]">

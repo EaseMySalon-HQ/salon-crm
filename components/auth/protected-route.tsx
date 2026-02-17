@@ -8,34 +8,26 @@ import { useAuth } from "@/lib/auth-context"
 
 interface ProtectedRouteProps {
   children: React.ReactNode
-  requiredRole?: "admin" | "manager" | "staff"
+  /** Permission module to check. Access granted only when user has view permission. */
+  requiredModule?: string
 }
 
-export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
-  const { user, isLoading } = useAuth()
+export function ProtectedRoute({ children, requiredModule }: ProtectedRouteProps) {
+  const { user, isLoading, hasPermission } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
     if (!isLoading) {
       if (!user) {
-        // Use replace instead of push to prevent back button issues
         router.replace("/login")
         return
       }
-
-      // Check role-based access
-      if (requiredRole) {
-        const roleHierarchy = { admin: 3, manager: 2, staff: 1 }
-        const userLevel = roleHierarchy[user.role]
-        const requiredLevel = roleHierarchy[requiredRole]
-
-        if (userLevel < requiredLevel) {
-          router.replace("/unauthorized")
-          return
-        }
+      if (requiredModule && !hasPermission(requiredModule, "view")) {
+        router.replace("/unauthorized")
+        return
       }
     }
-  }, [user, isLoading, router, requiredRole])
+  }, [user, isLoading, router, requiredModule, hasPermission])
 
   // Show loading spinner while checking authentication
   if (isLoading) {
@@ -59,6 +51,11 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
         </div>
       </div>
     )
+  }
+
+  // Permission check in render - if we have permission, render immediately (avoids effect race)
+  if (requiredModule && !hasPermission(requiredModule, "view")) {
+    return null // Effect will redirect to /unauthorized
   }
 
   return <>{children}</>
