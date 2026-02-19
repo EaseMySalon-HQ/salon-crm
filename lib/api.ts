@@ -135,7 +135,12 @@ apiClient.interceptors.response.use(
         if (errorInfo.url && errorInfo.url !== 'Unknown URL') errorDetails.url = errorInfo.url
         if (errorInfo.method && errorInfo.method !== 'Unknown method') errorDetails.method = errorInfo.method
         if (errorInfo.data !== undefined && errorInfo.data !== null) errorDetails.data = errorInfo.data
-        
+        // For 400/4xx, ensure we capture message from response body for debugging
+        if (errorInfo.status >= 400 && errorInfo.status < 500 && errorInfo.data && typeof errorInfo.data === 'object') {
+          const msg = errorInfo.data.message || errorInfo.data.error || errorInfo.data.details
+          if (msg && !errorDetails.error) errorDetails.error = typeof msg === 'string' ? msg : JSON.stringify(msg)
+        }
+
         // Only log if we have at least one meaningful property (avoid "Error response: {}")
         const hasValidProperties = Object.keys(errorDetails).some(key => {
           const value = errorDetails[key]

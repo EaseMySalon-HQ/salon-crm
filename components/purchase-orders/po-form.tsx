@@ -347,7 +347,12 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
                   <tbody>
                     {items.map((item, idx) => (
                         <tr key={idx} className="border-b">
-                          <td className="p-2">{item.productName}</td>
+                          <td className="p-2">
+                            <div>
+                              <div className="font-medium">{item.productName}</div>
+                              <div className="text-xs text-muted-foreground">Available: {products.find((p) => p._id === item.productId)?.stock ?? 0}</div>
+                            </div>
+                          </td>
                           <td className="p-2 text-right">
                             <Input
                               type="number"

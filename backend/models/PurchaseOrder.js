@@ -16,6 +16,17 @@ const receivedItemSchema = new mongoose.Schema({
   unitCost: { type: Number, required: true, min: 0 }
 }, { _id: false });
 
+const deliveryEventSchema = new mongoose.Schema({
+  receivedAt: { type: Date, required: true, default: Date.now },
+  receivedItems: [{
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    productName: { type: String, default: '' },
+    receivedQty: { type: Number, required: true, min: 0 },
+    unitCost: { type: Number, required: true, min: 0 }
+  }],
+  grnNotes: { type: String, default: '' }
+}, { _id: false });
+
 const purchaseOrderSchema = new mongoose.Schema({
   poNumber: {
     type: String,
@@ -80,6 +91,10 @@ const purchaseOrderSchema = new mongoose.Schema({
   grnNotes: {
     type: String,
     default: ''
+  },
+  deliveryHistory: {
+    type: [deliveryEventSchema],
+    default: []
   },
   branchId: {
     type: mongoose.Schema.Types.ObjectId,
