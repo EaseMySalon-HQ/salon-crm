@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI } from "@/lib/api"
+import { BlockTimeModal, getBlockReasonIcon } from "@/components/appointments/block-time-modal"
 
 interface Appointment {
   _id: string
@@ -326,6 +327,19 @@ export const AppointmentsCalendarGrid = forwardRef<
     clientX: number
     clientY: number
   } | null>(null)
+  const [blockTimeModalOpen, setBlockTimeModalOpen] = useState(false)
+  const [blockTimeModalData, setBlockTimeModalData] = useState<{
+    date: string
+    time: string
+    staffId: string | null
+    staffName?: string
+  } | null>(null)
+  const [blockTimesRefreshKey, setBlockTimesRefreshKey] = useState(0)
+  const [blockContextMenu, setBlockContextMenu] = useState<{
+    block: BlockTime
+    clientX: number
+    clientY: number
+  } | null>(null)
 
   // Update current time every minute for the red "now" line
   useEffect(() => {
@@ -425,7 +439,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     return () => {
       cancelled = true
     }
-  }, [selectedDate, staffFilter])
+  }, [selectedDate, staffFilter, blockTimesRefreshKey])
 
   useEffect(() => {
     let cancelled = false
@@ -975,20 +989,15 @@ export const AppointmentsCalendarGrid = forwardRef<
     const isValidDropTarget = (colIndex: number, slotMinutes: number, duration: number): boolean => {
       const col = columns[colIndex]
       if (!col) return false
-      const todayStr = format(new Date(), "yyyy-MM-dd")
-      const isToday = selectedDate === todayStr
-      const isPastDate = selectedDate < todayStr
-      const currentMinutes = new Date().getHours() * 60 + new Date().getMinutes()
       const windowForStaff = staffWindowsById[col._id]
       for (let m = slotMinutes; m < slotMinutes + duration; m += SLOT_MINUTES) {
-        const past = isPastDate || (isToday && m < currentMinutes)
         const inWindow = !windowForStaff || (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
         const blocked = (blockTimesByColumn[col._id] || []).some(({ block }) => {
           const startM = parseTimeToMinutes(block.startTime)
           const endM = parseTimeToMinutes(block.endTime)
           return m < endM && m + SLOT_MINUTES > startM
         })
-        if (past || !inWindow || blocked) return false
+        if (!inWindow || blocked) return false
       }
       return true
     }
@@ -1256,6 +1265,24 @@ export const AppointmentsCalendarGrid = forwardRef<
     }
   }, [draggingBlock, startMinutes, endMinutes, slotHeight])
 
+  const handleDeleteBlockTime = useCallback(async (block: BlockTime) => {
+    if (!confirm("Delete this blocked time?")) return
+    setUpdatingBlockForId(block._id)
+    try {
+      const res = await BlockTimeAPI.delete(block._id)
+      if (res?.success) {
+        setBlockTimes((prev) => prev.filter((b) => b._id !== block._id))
+      } else {
+        alert("Failed to delete. Please try again.")
+      }
+    } catch (e) {
+      console.error(e)
+      alert("Failed to delete. Please try again.")
+    } finally {
+      setUpdatingBlockForId(null)
+    }
+  }, [])
+
   const confirmTimeChange = async () => {
     const pending = pendingTimeChange
     if (!pending) return
@@ -1429,6 +1456,7 @@ export const AppointmentsCalendarGrid = forwardRef<
           </div>
         </div>
         <div className="flex-1" />
+        {/* Color Code - right side, above table */}
         <div className="relative">
           <Button
             variant="outline"
@@ -1443,11 +1471,11 @@ export const AppointmentsCalendarGrid = forwardRef<
           {showColorLegend && (
             <>
               <div
-                className="fixed inset-0 z-10"
+                className="fixed inset-0 z-[100]"
                 aria-hidden
                 onClick={() => setShowColorLegend(false)}
               />
-              <div className="absolute right-0 top-full mt-1 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg min-w-[180px]">
+              <div className="absolute right-0 top-full mt-1 z-[101] rounded-xl border border-slate-200 bg-white p-3 shadow-lg min-w-[180px]">
                 <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
                   Status
                 </div>
@@ -1549,9 +1577,7 @@ export const AppointmentsCalendarGrid = forwardRef<
               const now = new Date()
               const todayStr = format(now, "yyyy-MM-dd")
               const isToday = selectedDate === todayStr
-              const isPastDate = selectedDate < todayStr
               const currentMinutes = now.getHours() * 60 + now.getMinutes()
-              const isPastSlot = isPastDate || (isToday && slot.minutes < currentMinutes)
               const isCurrentHourRow = isToday && isHourBoundary && Math.floor(currentMinutes / 60) === slot.minutes / 60
               return (
                 <Fragment key={`row-${slot.minutes}`}>
@@ -1566,7 +1592,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                       key={`empty-${slot.minutes}`}
                       type="button"
                       onClick={(e) => {
-                        if (isPastSlot) return
                         setSlotActionDialog({
                           date: selectedDate,
                           time: slotMinutesToTimeString(slot.minutes),
@@ -1575,13 +1600,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                           clientY: e.clientY,
                         })
                       }}
-                      className={`w-full border-r border-slate-200/80 last:border-r-0 text-left ${rowBorderClass} transition-colors duration-150 ${
-                        isPastSlot
-                          ? "calendar-outside-hours cursor-not-allowed"
-                          : "hover:bg-violet-100/90 hover:ring-1 hover:ring-violet-200/60 hover:ring-inset cursor-pointer"
-                      } ${!isPastSlot ? rowBgClass : ""} ${!isPastSlot && isCurrentHourRow ? "!bg-amber-50/20" : ""}`}
+                      className={`w-full border-r border-slate-200/80 last:border-r-0 text-left ${rowBorderClass} transition-colors duration-150 hover:bg-violet-100/90 hover:ring-1 hover:ring-violet-200/60 hover:ring-inset cursor-pointer ${rowBgClass} ${isCurrentHourRow ? "!bg-amber-50/20" : ""}`}
                       style={{ height: slotHeight, minHeight: slotHeight }}
-                      title={isPastSlot ? "Past slot – unavailable" : "New appointment"}
+                      title="New appointment"
                     />
                   ) : (
                     columns.map((col, colIndex) => {
@@ -1598,7 +1619,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           return slot.minutes < endM && slot.minutes + SLOT_MINUTES > startM
                         }
                       )
-                      const inWindow = inWorkWindow && !isBlockedByTime && !isPastSlot
+                      const inWindow = inWorkWindow && !isBlockedByTime
                       const duration = draggingApt?.duration ?? 60
                       const isInDragHighlight =
                         draggingApt &&
@@ -1611,14 +1632,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                         isInDragHighlight &&
                         (() => {
                           for (let m = dragHoverSlot!.slotMinutes; m < dragHoverSlot!.slotMinutes + duration; m += SLOT_MINUTES) {
-                            const past = isPastDate || (isToday && m < currentMinutes)
                             const w = !windowForStaff || (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
                             const blocked = (blockTimesByColumn[col._id] || []).some(({ block }) => {
                               const startM = parseTimeToMinutes(block.startTime)
                               const endM = parseTimeToMinutes(block.endTime)
                               return m < endM && m + SLOT_MINUTES > startM
                             })
-                            if (past || !w || blocked) return false
+                            if (!w || blocked) return false
                           }
                           return true
                         })()
@@ -1647,7 +1667,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                             : "calendar-outside-hours cursor-not-allowed"
                         } ${!isInDragHighlight && inWindow ? rowBgClass : ""} ${!isInDragHighlight && inWindow && isCurrentHourRow ? "!bg-amber-50/20" : ""}`}
                         style={{ height: slotHeight, minHeight: slotHeight }}
-                        title={inWindow ? `New appointment with ${col.name}` : isPastSlot ? "Past slot – unavailable" : "Unavailable (blocked or outside working hours)"}
+                        title={inWindow ? `New appointment with ${col.name}` : "Unavailable (blocked or outside working hours)"}
                       />
                       );
                     })
@@ -1661,20 +1681,15 @@ export const AppointmentsCalendarGrid = forwardRef<
               const col = columns[dragHoverSlot.colIndex]
               if (!col) return null
               const windowForStaff = staffWindowsById[col._id]
-              const todayStr = format(new Date(), "yyyy-MM-dd")
-              const isToday = selectedDate === todayStr
-              const isPastDate = selectedDate < todayStr
-              const currentMinutes = new Date().getHours() * 60 + new Date().getMinutes()
               let isValid = true
               for (let m = dragHoverSlot.slotMinutes; m < dragHoverSlot.slotMinutes + duration; m += SLOT_MINUTES) {
-                const past = isPastDate || (isToday && m < currentMinutes)
                 const w = !windowForStaff || (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
                 const blocked = (blockTimesByColumn[col._id] || []).some(({ block }) => {
                   const startM = parseTimeToMinutes(block.startTime)
                   const endM = parseTimeToMinutes(block.endTime)
                   return m < endM && m + SLOT_MINUTES > startM
                 })
-                if (past || !w || blocked) { isValid = false; break }
+                if (!w || blocked) { isValid = false; break }
               }
               const slotCount = Math.ceil(duration / SLOT_MINUTES)
               const topPx = ((dragHoverSlot.slotMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
@@ -1716,9 +1731,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                   const slotIndex = Math.floor(relY / slotHeight)
                   const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
                   if (slotMinutes < extendedStartMinutes || slotMinutes >= extendedEndMinutes) return
-                  const todayStr = format(new Date(), "yyyy-MM-dd")
-                  const isPast = selectedDate < todayStr || (selectedDate === todayStr && slotMinutes < new Date().getHours() * 60 + new Date().getMinutes())
-                  if (isPast) return
                   const colIndex = Math.floor((e.clientX - rect.left) / (rect.width / columns.length))
                   const col = columns[colIndex]
                   if (!col) return
@@ -1978,6 +1990,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                     )
                   })}
                   {(blockTimesByColumn[col._id] || []).map(({ block, top, height }) => {
+                    const BlockReasonIcon = getBlockReasonIcon(block.title)
                     const isResizing = draggingBlock?.id === block._id
                     const isResizeTop = isResizing && draggingBlock?.mode === "resize-top"
                     const isResizeBottom = isResizing && draggingBlock?.mode === "resize-bottom"
@@ -1998,7 +2011,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           top: displayTop,
                           height: displayHeight,
                         }}
-                        title={block.title}
+                        title={`${block.title} – Click for options`}
                       >
                         {/* Top resize handle */}
                         <div
@@ -2010,15 +2023,25 @@ export const AppointmentsCalendarGrid = forwardRef<
                           <div className="pointer-events-none w-5 h-0.5 rounded-full bg-red-400/60" aria-hidden />
                         </div>
                         <div className="absolute left-0 top-0 bottom-0 w-1 bg-red-500 shrink-0" aria-hidden />
-                        <div className="pl-4 pr-3 pt-6 pb-2 text-xs overflow-hidden text-left flex-1 min-w-0">
-                          <div className="font-medium text-red-800 truncate">
-                            {block.title}
+                        <button
+                          type="button"
+                          className="flex items-stretch flex-1 min-w-0 pt-6 pb-2 cursor-pointer hover:bg-red-100/50 transition-colors text-left border-0 bg-transparent w-full"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setBlockContextMenu({ block, clientX: e.clientX, clientY: e.clientY })
+                          }}
+                        >
+                          <div className="pl-4 pr-2 pt-0 text-xs overflow-hidden text-left flex-1 min-w-0">
+                            <div className="font-medium text-red-800 truncate">{block.title}</div>
+                            <div className="text-red-600 text-[10px] tabular-nums mt-0.5">
+                              {format(new Date(2000, 0, 1, Math.floor(parseTimeToMinutes(block.startTime) / 60), parseTimeToMinutes(block.startTime) % 60), "h:mma").toLowerCase()}
+                              – {format(new Date(2000, 0, 1, Math.floor(parseTimeToMinutes(block.endTime) / 60), parseTimeToMinutes(block.endTime) % 60), "h:mma").toLowerCase()}
+                            </div>
                           </div>
-                          <div className="text-red-600 text-[10px] tabular-nums mt-0.5">
-                            {format(new Date(2000, 0, 1, Math.floor(parseTimeToMinutes(block.startTime) / 60), parseTimeToMinutes(block.startTime) % 60), "h:mma").toLowerCase()}
-                            – {format(new Date(2000, 0, 1, Math.floor(parseTimeToMinutes(block.endTime) / 60), parseTimeToMinutes(block.endTime) % 60), "h:mma").toLowerCase()}
+                          <div className="flex items-center justify-center pr-3 shrink-0">
+                            <BlockReasonIcon className="h-8 w-8 text-red-400/80" />
                           </div>
-                        </div>
+                        </button>
                         {/* Bottom resize handle */}
                         <div
                           className="absolute bottom-0 left-0 right-0 z-20 h-2.5 flex flex-col items-center justify-center cursor-s-resize hover:bg-red-200/40 active:bg-red-200/60"
@@ -2116,6 +2139,49 @@ export const AppointmentsCalendarGrid = forwardRef<
         )
       })()}
 
+      <BlockTimeModal
+        open={blockTimeModalOpen}
+        onOpenChange={setBlockTimeModalOpen}
+        initialDate={blockTimeModalData?.date ?? ""}
+        initialTime={blockTimeModalData?.time ?? ""}
+        initialStaffId={blockTimeModalData?.staffId ?? null}
+        initialStaffName={blockTimeModalData?.staffName}
+        staffOptions={staffWithScheduling}
+        onSuccess={() => setBlockTimesRefreshKey((k) => k + 1)}
+      />
+
+      {blockContextMenu &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50"
+            onClick={() => setBlockContextMenu(null)}
+            aria-hidden
+          >
+            <div className="absolute inset-0 bg-transparent" />
+            <div
+              className="absolute z-10 min-w-[180px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+              style={{
+                left: blockContextMenu.clientX,
+                top: blockContextMenu.clientY + 8,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors text-left"
+                onClick={() => {
+                  handleDeleteBlockTime(blockContextMenu.block)
+                  setBlockContextMenu(null)
+                }}
+              >
+                <Trash2 className="h-4 w-4 shrink-0" />
+                Delete Blocked Time
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
+
       {slotActionDialog &&
         createPortal(
           <div
@@ -2165,10 +2231,14 @@ export const AppointmentsCalendarGrid = forwardRef<
                   variant="outline"
                   className="justify-start gap-3 h-12 text-left"
                   onClick={() => {
-                    const params = new URLSearchParams({ addBlock: "1", returnTo: "/appointments", date: slotActionDialog.date, time: slotActionDialog.time })
-                    if (slotActionDialog.staffId) params.set("staffId", slotActionDialog.staffId)
-                    router.push(`/staff/working-hours?${params.toString()}`)
+                    setBlockTimeModalData({
+                      date: slotActionDialog.date,
+                      time: slotActionDialog.time,
+                      staffId: slotActionDialog.staffId,
+                      staffName: slotActionDialog.staffName,
+                    })
                     setSlotActionDialog(null)
+                    setBlockTimeModalOpen(true)
                   }}
                 >
                   <CalendarClock className="h-5 w-5 shrink-0 text-amber-600" />

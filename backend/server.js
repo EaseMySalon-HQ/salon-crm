@@ -4556,10 +4556,32 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
       return res.status(400).json({ success: false, error: 'At least one item must have received quantity > 0' });
     }
 
-    po.receivedAt = new Date();
+    const receivedAt = new Date();
+    po.receivedAt = receivedAt;
     po.receivedItems = processedItems;
     po.invoiceUrl = invoiceUrl || '';
     po.grnNotes = grnNotes || '';
+
+    // Build delivery event for this receive (what was received in THIS delivery)
+    const thisDeliveryItems = [];
+    for (const item of po.items) {
+      const pid = item.productId.toString();
+      const rec = receivedMap[pid];
+      const thisDeliveryQty = rec ? rec.receivedQty : 0;
+      const unitCost = rec ? rec.unitCost : item.unitCost;
+      if (thisDeliveryQty > 0) {
+        thisDeliveryItems.push({
+          productId: item.productId,
+          productName: item.productName,
+          receivedQty: thisDeliveryQty,
+          unitCost
+        });
+      }
+    }
+    const deliveryEvent = { receivedAt, receivedItems: thisDeliveryItems, grnNotes: grnNotes || '' };
+    if (!po.deliveryHistory) po.deliveryHistory = [];
+    po.deliveryHistory.push(deliveryEvent);
+
     po.status = allReceived ? 'received' : 'partially_received';
     await po.save();
 
@@ -10485,14 +10507,24 @@ app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, a
     if (!cashRegistry) {
       return res.status(404).json({ message: 'Cash registry entry not found' });
     }
-    
-    // Only allow deletion of unverified entries, unless user is admin
-    if (cashRegistry.isVerified && req.user.role !== 'admin') {
-      return res.status(400).json({ 
-        message: 'Cannot delete verified cash registry entries. Only administrators can delete verified entries.' 
+
+    // Ensure entry belongs to user's branch
+    const userBranchId = req.user.branchId?.toString?.();
+    const entryBranchId = cashRegistry.branchId?.toString?.();
+    if (userBranchId && entryBranchId && userBranchId !== entryBranchId) {
+      return res.status(403).json({
+        message: 'You do not have permission to delete this cash registry entry.',
       });
     }
-    
+
+    // Only allow deletion of unverified entries, unless user is admin or manager
+    const canDeleteVerified = ['admin', 'manager'].includes(req.user.role);
+    if (cashRegistry.isVerified && !canDeleteVerified) {
+      return res.status(400).json({
+        message: 'Cannot delete verified cash registry entries. Only administrators or managers can delete verified entries.',
+      });
+    }
+
     await CashRegistry.findByIdAndDelete(req.params.id);
     res.json({ message: 'Cash registry entry deleted successfully' });
   } catch (error) {

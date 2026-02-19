@@ -1212,15 +1212,18 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       
     } catch (error: any) {
       console.error("Delete error:", error)
-      
-      // Handle different types of errors
+
+      // Handle different types of errors - check responseData (attached by interceptor) and response.data
       let errorMessage = "Failed to delete entry"
-      if (error.response?.data?.message) {
-        errorMessage = error.response.data.message
+      const responseData = error.responseData ?? error.response?.data
+      if (responseData?.message) {
+        errorMessage = responseData.message
+      } else if (responseData?.error) {
+        errorMessage = typeof responseData.error === "string" ? responseData.error : error.message
       } else if (error.message) {
         errorMessage = error.message
       }
-      
+
       toast({
         title: "Error",
         description: errorMessage,

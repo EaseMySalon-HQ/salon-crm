@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Package, Loader2 } from "lucide-react"
+import { Package, Loader2, Circle } from "lucide-react"
 import {
   Sheet,
   SheetContent,
@@ -153,11 +153,43 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
                   </div>
                 </div>
 
-                {detail.receivedAt && (
+                {(detail.receivedAt || (detail.deliveryHistory && detail.deliveryHistory.length > 0)) && (
                   <div>
-                    <h4 className="text-sm font-medium text-muted-foreground mb-1">Received</h4>
-                    <p>{format(new Date(detail.receivedAt), "dd MMM yyyy")}</p>
-                    {detail.grnNotes && <p className="text-sm text-muted-foreground mt-1">{detail.grnNotes}</p>}
+                    <h4 className="text-sm font-medium text-muted-foreground mb-2">Delivery Timeline</h4>
+                    {(() => {
+                      const events = detail.deliveryHistory && detail.deliveryHistory.length > 0
+                        ? detail.deliveryHistory
+                        : detail.receivedAt
+                        ? [{ receivedAt: detail.receivedAt, receivedItems: detail.receivedItems || [], grnNotes: detail.grnNotes || '' }]
+                        : []
+                      return events.length > 0 ? (
+                        <div className="relative pl-4 border-l-2 border-muted space-y-4">
+                          {[...events].sort((a, b) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime()).map((evt: any, idx: number) => (
+                            <div key={idx} className="relative flex gap-3">
+                              <Circle className="absolute -left-[21px] top-0.5 h-3 w-3 fill-primary text-primary" />
+                              <div className="flex-1 min-w-0 pb-2">
+                                <p className="text-sm font-medium">
+                                  {format(new Date(evt.receivedAt), "dd MMM yyyy")}
+                                </p>
+                                {(evt.receivedItems || []).filter((i: any) => (i.receivedQty || 0) > 0).length > 0 && (
+                                  <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                                    {(evt.receivedItems || []).filter((i: any) => (i.receivedQty || 0) > 0).map((ri: any, i: number) => {
+                                      const item = (detail.items || []).find((it: any) => (it.productId?._id || it.productId)?.toString() === (ri.productId?._id || ri.productId)?.toString())
+                                      return (
+                                        <li key={i}>
+                                          {(ri.productName || item?.productName || "Product")}: {ri.receivedQty} × ₹{(ri.unitCost || 0).toFixed(2)}
+                                        </li>
+                                      )
+                                    })}
+                                  </ul>
+                                )}
+                                {evt.grnNotes && <p className="text-xs text-muted-foreground mt-1 italic">{evt.grnNotes}</p>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null
+                    })()}
                   </div>
                 )}
 

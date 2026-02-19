@@ -13,6 +13,7 @@ const itemSchema = new mongoose.Schema({
   quantity: { type: Number, required: true },
   price: { type: Number, required: true },
   total: { type: Number, required: true },
+  discount: { type: Number, default: 0 }, // Line-level discount (percentage)
   // Product reference for inventory tracking
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' }, // For products only
   // Service reference for auto consumption (type === 'service')
