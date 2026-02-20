@@ -78,6 +78,12 @@ const appointmentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Business',
     required: true
+  },
+  // Links service-level cards that belong to the same logical booking (arrival is appointment-level)
+  bookingGroupId: {
+    type: String,
+    default: null,
+    sparse: true
   }
 }, {
   timestamps: true

@@ -10,7 +10,7 @@ const cron = require('node-cron');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
-const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST } = require('./utils/date-utils');
+const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -5960,7 +5960,8 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
     appointment.status = 'completed';
 
     // Sync appointment services with actual services performed (e.g. Service B in addition to A)
-    if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
+    // Skip for multi-staff bookings: each appointment in the group has its own service; don't overwrite with first sale item
+    if (!appointment.bookingGroupId && sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
       const serviceItems = sale.items.filter((i) => i.type === 'service' && i.serviceId);
       if (serviceItems.length > 0) {
         const serviceIds = serviceItems.map((i) => i.serviceId._id || i.serviceId);
@@ -5988,6 +5989,17 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
 
     await appointment.save();
     console.log(`✅ Appointment ${appointmentId} marked as completed after sale.`);
+
+    // Mark all appointments in the same booking group as completed (multi-staff cards)
+    if (appointment.bookingGroupId) {
+      const groupUpdated = await AppointmentModel.updateMany(
+        { bookingGroupId: appointment.bookingGroupId, _id: { $ne: appointmentId } },
+        { $set: { status: 'completed' } }
+      );
+      if (groupUpdated.modifiedCount > 0) {
+        console.log(`✅ ${groupUpdated.modifiedCount} related appointment(s) in group marked as completed.`);
+      }
+    }
   } catch (error) {
     console.error('❌ Failed to mark appointment as completed:', error);
   }
@@ -6119,55 +6131,60 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       });
     }
 
-    // Create appointments for each service
+    const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
+
+    // Helper: get primary staff ID from a service for comparison
+    const getPrimaryStaffId = (s) => {
+      const id = s.staffId || (s.staffAssignments && s.staffAssignments[0] && s.staffAssignments[0].staffId);
+      return id ? String(id) : null;
+    };
+
+    // When all services have the same staff: create single appointment card listing all services
+    const allSameStaff = services.length > 1 && services.every((s, i) => {
+      const a = getPrimaryStaffId(services[0]);
+      const b = getPrimaryStaffId(s);
+      return a && b && a === b;
+    });
+
     const createdAppointments = [];
-    
-    for (const service of services) {
-      const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
+
+    if (allSameStaff && services.length > 1) {
+      // Single appointment with multiple services (same staff)
+      const first = services[0];
+      const additionalIds = services.slice(1).map((s) => s.serviceId);
+      const totalDur = services.reduce((sum, s) => sum + (s.duration || 0), 0);
+      const totalPrice = services.reduce((sum, s) => sum + (s.price || 0), 0);
+
       const appointmentData = {
         clientId,
-        serviceId: service.serviceId,
+        serviceId: first.serviceId,
+        additionalServiceIds: additionalIds,
         date,
         time,
-        duration: service.duration,
+        duration: totalDur,
         status,
         notes,
         leadSource: leadSource || '',
         createdBy,
-        price: service.price,
+        price: totalPrice,
         branchId: req.user.branchId
       };
 
-      // Handle multiple staff assignments
-      if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
-        appointmentData.staffAssignments = service.staffAssignments;
-        // Validate that percentages add up to 100%
-        const totalPercentage = service.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+      if (first.staffAssignments && Array.isArray(first.staffAssignments)) {
+        appointmentData.staffAssignments = first.staffAssignments;
+        const totalPercentage = first.staffAssignments.reduce((sum, a) => sum + a.percentage, 0);
         if (Math.abs(totalPercentage - 100) > 0.01) {
-          return res.status(400).json({
-            success: false,
-            error: 'Staff assignment percentages must add up to 100%'
-          });
+          return res.status(400).json({ success: false, error: 'Staff assignment percentages must add up to 100%' });
         }
-      } else if (service.staffId) {
-        // Legacy support - single staff member
-        appointmentData.staffId = service.staffId;
-        appointmentData.staffAssignments = [{
-          staffId: service.staffId,
-          percentage: 100,
-          role: 'primary'
-        }];
+      } else if (first.staffId) {
+        appointmentData.staffId = first.staffId;
+        appointmentData.staffAssignments = [{ staffId: first.staffId, percentage: 100, role: 'primary' }];
       } else {
-        return res.status(400).json({
-          success: false,
-          error: 'Either staffId or staffAssignments is required'
-        });
+        return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
       }
 
       const newAppointment = new Appointment(appointmentData);
       const savedAppointment = await newAppointment.save();
-      
-      // Populate the saved appointment with related data
       const populatedAppointment = await Appointment.findById(savedAppointment._id)
         .populate('clientId', 'name phone email')
         .populate('serviceId', 'name price duration')
@@ -6175,6 +6192,66 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         .populate('staffAssignments.staffId', 'name role');
 
       createdAppointments.push(populatedAppointment);
+    } else {
+      // Different staff per service (or single service): create one appointment per service
+      // Each service starts after the previous ends (sequential: Service A 9:00–9:30, Service B 9:30–10:00)
+      const bookingGroupId = uuidv4();
+      const baseTimeMinutes = parseTimeToMinutes(time);
+      let cumulativeMinutes = 0;
+      for (let i = 0; i < services.length; i++) {
+        const service = services[i];
+        const serviceStartMinutes = baseTimeMinutes + cumulativeMinutes;
+        const serviceTime = minutesToTimeString(serviceStartMinutes);
+        cumulativeMinutes += service.duration || 0;
+        const appointmentData = {
+          clientId,
+          serviceId: service.serviceId,
+          date,
+          time: serviceTime,
+          duration: service.duration,
+          status,
+          notes,
+          leadSource: leadSource || '',
+          createdBy,
+          price: service.price,
+          branchId: req.user.branchId,
+          bookingGroupId
+        };
+
+        if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
+          appointmentData.staffAssignments = service.staffAssignments;
+          const totalPercentage = service.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+          if (Math.abs(totalPercentage - 100) > 0.01) {
+            return res.status(400).json({
+              success: false,
+              error: 'Staff assignment percentages must add up to 100%'
+            });
+          }
+        } else if (service.staffId) {
+          appointmentData.staffId = service.staffId;
+          appointmentData.staffAssignments = [{
+            staffId: service.staffId,
+            percentage: 100,
+            role: 'primary'
+          }];
+        } else {
+          return res.status(400).json({
+            success: false,
+            error: 'Either staffId or staffAssignments is required'
+          });
+        }
+
+        const newAppointment = new Appointment(appointmentData);
+        const savedAppointment = await newAppointment.save();
+
+        const populatedAppointment = await Appointment.findById(savedAppointment._id)
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role')
+          .populate('staffAssignments.staffId', 'name role');
+
+        createdAppointments.push(populatedAppointment);
+      }
     }
 
     // Send email notifications if enabled
@@ -7040,9 +7117,17 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     const ownerId = businessOwner?._id?.toString();
     const ownerName = businessOwner ? `${businessOwner.firstName || ''} ${businessOwner.lastName || ''}`.trim() || 'Owner' : null;
 
+    // Fetch related appointments first (for multi-staff booking) so we can resolve all staff
+    let relatedRaw = [];
+    if (raw.bookingGroupId) {
+      relatedRaw = await Appointment.find({ bookingGroupId: raw.bookingGroupId, _id: { $ne: id } }).lean();
+    }
+    const allAppointmentsForStaff = [raw, ...relatedRaw];
     const staffIds = [];
-    if (raw.staffId) staffIds.push(raw.staffId);
-    (raw.staffAssignments || []).forEach((as) => { if (as.staffId) staffIds.push(as.staffId); });
+    allAppointmentsForStaff.forEach((apt) => {
+      if (apt.staffId) staffIds.push(apt.staffId);
+      (apt.staffAssignments || []).forEach((as) => { if (as.staffId) staffIds.push(as.staffId); });
+    });
     const staffFromDb = staffIds.length ? await Staff.find({ _id: { $in: staffIds } }).select('_id name role').lean() : [];
     const staffMap = new Map(staffFromDb.map((s) => [s._id.toString(), { _id: s._id, name: s.name, role: s.role }]));
     const resolveStaff = (sid) => {
@@ -7076,7 +7161,38 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       appointment.additionalServices = [];
     }
 
-    res.json({ success: true, data: appointment });
+    // When editing multi-staff booking: return all appointments in the same group
+    let relatedAppointments = [];
+    if (raw.bookingGroupId && relatedRaw.length) {
+      const relatedServiceIds = relatedRaw.map((r) => r.serviceId).filter(Boolean);
+      const relatedServices = relatedServiceIds.length
+        ? await Service.find({ _id: { $in: relatedServiceIds } }).select('name price duration').lean()
+        : [];
+      const serviceMap = new Map(relatedServices.map((s) => [s._id.toString(), s]));
+      relatedAppointments = relatedRaw
+        .sort((a, b) => {
+          const am = parseTimeToMinutes(a.time || '');
+          const bm = parseTimeToMinutes(b.time || '');
+          return am - bm;
+        })
+        .map((r) => {
+          const rApp = { ...r };
+          rApp.staffId = r.staffId ? resolveStaff(r.staffId) : null;
+          rApp.staffAssignments = (r.staffAssignments || []).map((as) => ({
+            ...as,
+            staffId: as.staffId ? resolveStaff(as.staffId) : null,
+          }));
+          const svc = r.serviceId ? serviceMap.get(r.serviceId.toString()) : null;
+          rApp.serviceId = svc || r.serviceId;
+          return rApp;
+        });
+    }
+
+    res.json({
+      success: true,
+      data: appointment,
+      relatedAppointments: relatedAppointments.length ? relatedAppointments : undefined,
+    });
   } catch (error) {
     console.error('Error fetching appointment:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch appointment' });
@@ -7106,7 +7222,19 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     // Check if status is being changed to cancelled
     const previousStatus = appointment.status;
     const isBeingCancelled = updateData.status === 'cancelled' && previousStatus !== 'cancelled';
-    
+
+    // Arrival, scheduled, and completed are appointment-level: sync across all cards in the same booking group
+    const appointmentLevelStatuses = ['arrived', 'scheduled', 'completed'];
+    const isAppointmentLevelStatus = updateData.status && appointmentLevelStatuses.includes(updateData.status);
+    const bookingGroupId = appointment.bookingGroupId;
+
+    if (isAppointmentLevelStatus && bookingGroupId) {
+      await Appointment.updateMany(
+        { bookingGroupId },
+        { $set: { status: updateData.status } }
+      );
+    }
+
     console.log('📧 Appointment Update Check:', {
       appointmentId: id,
       previousStatus: previousStatus,

@@ -53,10 +53,15 @@ interface Appointment {
   createdAt: string
   createdBy?: string
   leadSource?: string
+  bookingGroupId?: string | null
 }
 
-function getServiceDisplayNames(apt: { serviceId?: { name?: string }; additionalServices?: Array<{ name?: string }> }): string[] {
-  const primary = apt?.serviceId?.name || "Service"
+function getServiceDisplayNames(apt: { serviceId?: { name?: string; _id?: unknown }; additionalServices?: Array<{ name?: string }>; bookingGroupId?: string | null }): string[] {
+  // Use this appointment's serviceId only (multi-staff: each card has its own service)
+  const svc = apt?.serviceId
+  const primary = (typeof svc === "object" && svc?.name) || "Service"
+  // Multi-staff: each card has one service, no bullet list
+  if (apt?.bookingGroupId) return [primary]
   const additional = (apt?.additionalServices || []).map((s) => s?.name).filter(Boolean) as string[]
   return [primary, ...additional]
 }
@@ -883,6 +888,16 @@ export const AppointmentsCalendarGrid = forwardRef<
     setShowCancelConfirm(true)
   }
 
+  const aptToCancel = appointmentToCancel ? appointments.find((a) => a._id === appointmentToCancel) : null
+  const hasMultipleInGroup = aptToCancel?.bookingGroupId
+    ? appointments.filter((a) => (a as Appointment).bookingGroupId === aptToCancel.bookingGroupId).length > 1
+    : false
+  const groupIdsToCancel = hasMultipleInGroup && aptToCancel?.bookingGroupId
+    ? appointments
+        .filter((a) => (a as Appointment).bookingGroupId === aptToCancel.bookingGroupId)
+        .map((a) => a._id)
+    : []
+
   const confirmCancelAppointment = async () => {
     if (!appointmentToCancel) return
     setCancelling(true)
@@ -908,6 +923,36 @@ export const AppointmentsCalendarGrid = forwardRef<
     }
   }
 
+  const confirmCancelAllAppointments = async () => {
+    if (!appointmentToCancel || groupIdsToCancel.length === 0) return
+    setCancelling(true)
+    try {
+      let allSuccess = true
+      for (const id of groupIdsToCancel) {
+        const res = await AppointmentsAPI.update(id, { status: "cancelled" })
+        if (!res?.success) allSuccess = false
+      }
+      if (allSuccess) {
+        const idsSet = new Set(groupIdsToCancel)
+        const list = appointments.map((a) =>
+          idsSet.has(a._id) ? { ...a, status: "cancelled" as const } : a
+        )
+        setAppointments(list)
+        setShowDetails(false)
+        setShowCancelConfirm(false)
+        setAppointmentToCancel(null)
+        alert("All appointments cancelled successfully")
+      } else {
+        alert("Failed to cancel some appointments. Please try again.")
+      }
+    } catch (e) {
+      console.error(e)
+      alert("Failed to cancel appointments. Please try again.")
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   const handleDeleteInvoiceClick = () => {
     setShowDeleteInvoiceConfirm(true)
   }
@@ -921,15 +966,24 @@ export const AppointmentsCalendarGrid = forwardRef<
         alert("Failed to delete invoice. Please try again.")
         return
       }
-      const aptRes = await AppointmentsAPI.delete(selectedAppointment._id)
-      if (aptRes?.success) {
-        setAppointments((prev) => prev.filter((a) => a._id !== selectedAppointment._id))
+      const a = selectedAppointment as any
+      const idsToDelete = a.bookingGroupId
+        ? appointments.filter((apt) => (apt as Appointment).bookingGroupId === a.bookingGroupId).map((apt) => apt._id)
+        : [selectedAppointment._id]
+      let allAptDeleted = true
+      for (const id of idsToDelete) {
+        const aptRes = await AppointmentsAPI.delete(id)
+        if (!aptRes?.success) allAptDeleted = false
+      }
+      if (allAptDeleted) {
+        const idsSet = new Set(idsToDelete)
+        setAppointments((prev) => prev.filter((apt) => !idsSet.has(apt._id)))
       }
       setLinkedSale(null)
       setShowDetails(false)
       setShowDeleteInvoiceConfirm(false)
       window.dispatchEvent(new CustomEvent("appointments-refresh"))
-      alert("Invoice and appointment deleted successfully")
+      alert(allAptDeleted ? "Invoice and appointment(s) deleted successfully" : "Invoice deleted. Failed to delete some appointment(s).")
     } catch (e) {
       console.error(e)
       alert("Failed to delete invoice. Please try again.")
@@ -947,7 +1001,19 @@ export const AppointmentsCalendarGrid = forwardRef<
         const list = appointments.map((a) =>
           a._id === selectedAppointment._id ? { ...a, status: newStatus } : a
         )
-        setAppointments(list)
+        if (newStatus === 'arrived') {
+          const groupId = selectedAppointment.bookingGroupId
+          if (groupId) {
+            const updatedList = list.map((a) =>
+              a.bookingGroupId === groupId ? { ...a, status: newStatus } : a
+            )
+            setAppointments(updatedList)
+          } else {
+            setAppointments(list)
+          }
+        } else {
+          setAppointments(list)
+        }
         setSelectedAppointment({ ...selectedAppointment, status: newStatus })
         if (newStatus === "arrived") {
           // no alert; user may click "Service Started" next
@@ -1907,12 +1973,16 @@ export const AppointmentsCalendarGrid = forwardRef<
                           <div className="font-semibold text-slate-800 text-[14px] truncate leading-tight pr-16">
                             {clientName}
                           </div>
-                          {/* Line 2: Service name(s) - 13-14px, medium; bullet list */}
-                          <ul className="text-slate-600 text-[13px] font-medium mt-1 list-disc list-inside space-y-0.5">
-                            {serviceNames.map((name, i) => (
-                              <li key={i} className="truncate">{name}</li>
-                            ))}
-                          </ul>
+                          {/* Line 2: Service name(s) - multi-staff: single service; same-staff multi: bullet list */}
+                          {serviceNames.length === 1 ? (
+                            <div className="text-slate-600 text-[13px] font-medium mt-1 truncate">{serviceNames[0]}</div>
+                          ) : (
+                            <ul className="text-slate-600 text-[13px] font-medium mt-1 list-disc list-inside space-y-0.5">
+                              {serviceNames.map((name, i) => (
+                                <li key={i} className="truncate">{name}</li>
+                              ))}
+                            </ul>
+                          )}
                           {/* Line 3: Time range - 12-13px, muted, with clock icon */}
                           <div className="flex items-center gap-1.5 mt-2 text-slate-500 text-[12px] tabular-nums">
                             <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" />
@@ -2160,9 +2230,13 @@ export const AppointmentsCalendarGrid = forwardRef<
             <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor}`} />
             <div className="pl-[14px] pr-3 pt-6 pb-3 h-full flex flex-col justify-center">
               <div className="font-semibold text-slate-800 text-[14px] truncate">{clientName}</div>
-              <ul className="text-slate-600 text-[13px] font-medium mt-1 list-disc list-inside space-y-0.5">
-                {serviceNames.map((name, i) => <li key={i} className="truncate">{name}</li>)}
-              </ul>
+              {serviceNames.length === 1 ? (
+                <div className="text-slate-600 text-[13px] font-medium mt-1 truncate">{serviceNames[0]}</div>
+              ) : (
+                <ul className="text-slate-600 text-[13px] font-medium mt-1 list-disc list-inside space-y-0.5">
+                  {serviceNames.map((name, i) => <li key={i} className="truncate">{name}</li>)}
+                </ul>
+              )}
               <div className="flex items-center gap-1.5 mt-2 text-slate-500 text-[12px]">
                 <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" />
                 <span>{timeRangeStr}</span>
@@ -2350,9 +2424,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                       <div>
                         <div className="text-muted-foreground text-xs">Service Name</div>
-                        <ul className="font-medium list-disc list-inside space-y-0.5">
-                          {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
-                        </ul>
+                        {serviceNames.length === 1 ? (
+                          <div className="font-medium">{serviceNames[0]}</div>
+                        ) : (
+                          <ul className="font-medium list-disc list-inside space-y-0.5">
+                            {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                          </ul>
+                        )}
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Service Price</div>
@@ -2416,9 +2494,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           className="shrink-0"
                         >
                           <Link
-                            href={`/receipt/${linkedSale.billNo || linkedSale.receiptNumber}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            href={`/receipt/${linkedSale.billNo || linkedSale.receiptNumber}?returnTo=appointments`}
                           >
                             <Eye className="h-4 w-4 mr-2" />
                             View Invoice
@@ -2456,16 +2532,59 @@ export const AppointmentsCalendarGrid = forwardRef<
                         onClick={() => {
                           if (!selectedAppointment) return
                           const a = selectedAppointment as any
+                          const staffId = a.staffId?._id || a.staffId
+                          const staffName = a.staffId?.name || ""
+                          let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
+                          if (a.bookingGroupId) {
+                            const groupApts = appointments.filter(
+                              (apt) => (apt as Appointment).bookingGroupId === a.bookingGroupId
+                            )
+                            for (const apt of groupApts) {
+                              const svc = (apt as any).serviceId
+                              const sid = (apt as any).staffId?._id || (apt as any).staffId
+                              const sname = (apt as any).staffId?.name || ""
+                              services.push({
+                                serviceId: svc?._id || svc,
+                                staffId: sid || "",
+                                staffName: sname,
+                                price: (apt as any).price ?? (typeof svc === "object" && svc?.price) ?? 0,
+                              })
+                            }
+                          } else if (a.additionalServices && a.additionalServices.length > 0) {
+                            const primary = a.serviceId
+                            services.push({
+                              serviceId: primary?._id || primary,
+                              staffId: staffId || "",
+                              staffName,
+                              price: (typeof primary === "object" && primary?.price) ?? a.price ?? 0,
+                            })
+                            for (const s of a.additionalServices) {
+                              services.push({
+                                serviceId: s._id || s,
+                                staffId: staffId || "",
+                                staffName,
+                                price: s.price ?? 0,
+                              })
+                            }
+                          } else {
+                            services = [{
+                              serviceId: a.serviceId?._id || a.serviceId,
+                              staffId: staffId || "",
+                              staffName,
+                              price: a.price ?? (typeof a.serviceId === "object" && a.serviceId?.price) ?? 0,
+                            }]
+                          }
                           const appointmentData = {
                             appointmentId: a._id,
                             clientId: a.clientId?._id || a.clientId,
                             clientName: a.clientId?.name || "",
-                            serviceId: a.serviceId?._id || a.serviceId,
+                            services: services.length > 0 ? services : undefined,
+                            serviceId: services.length === 1 ? services[0].serviceId : undefined,
                             serviceName: a.serviceId?.name || "",
                             servicePrice: a.price || 0,
                             serviceDuration: a.duration || 0,
-                            staffId: a.staffId?._id || a.staffId,
-                            staffName: a.staffId?.name || "",
+                            staffId: staffId || "",
+                            staffName,
                           }
                           setShowDetails(false)
                           router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
@@ -2521,9 +2640,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                           </Badge>
                         </div>
                         <div className="space-y-3">
-                          <ul className="font-semibold text-slate-800 text-lg list-disc list-inside space-y-0.5">
-                            {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
-                          </ul>
+                          {serviceNames.length === 1 ? (
+                            <div className="font-semibold text-slate-800 text-lg">{serviceNames[0]}</div>
+                          ) : (
+                            <ul className="font-semibold text-slate-800 text-lg list-disc list-inside space-y-0.5">
+                              {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                            </ul>
+                          )}
                           <div className="flex items-center">
                             <Avatar className="h-8 w-8 mr-3 border border-indigo-200">
                               <AvatarFallback className="text-sm font-medium bg-indigo-100 text-indigo-700">
@@ -2600,9 +2723,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                           </div>
                         </div>
                         <div className="space-y-3">
-                          <ul className="font-semibold text-slate-800 text-lg line-through opacity-75 list-disc list-inside space-y-0.5">
-                            {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
-                          </ul>
+                          {serviceNames.length === 1 ? (
+                            <div className="font-semibold text-slate-800 text-lg line-through opacity-75">{serviceNames[0]}</div>
+                          ) : (
+                            <ul className="font-semibold text-slate-800 text-lg line-through opacity-75 list-disc list-inside space-y-0.5">
+                              {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                            </ul>
+                          )}
                           <div className="flex items-center">
                             <Avatar className="h-8 w-8 mr-3 border border-red-200">
                               <AvatarFallback className="text-sm font-medium bg-red-100 text-red-700">
@@ -2742,7 +2869,7 @@ export const AppointmentsCalendarGrid = forwardRef<
               Are you sure you want to cancel this appointment? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex gap-3 justify-end">
+          <div className="flex gap-3 justify-end flex-nowrap">
             <Button
               variant="outline"
               onClick={() => {
@@ -2784,9 +2911,19 @@ export const AppointmentsCalendarGrid = forwardRef<
                   Cancelling...
                 </>
               ) : (
-                "Yes, Cancel Appointment"
+                "Cancel"
               )}
             </Button>
+            {hasMultipleInGroup && (
+              <Button
+                variant="destructive"
+                onClick={confirmCancelAllAppointments}
+                disabled={cancelling}
+                className="bg-red-700 hover:bg-red-800 text-white"
+              >
+                Cancel All
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>

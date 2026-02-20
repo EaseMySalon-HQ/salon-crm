@@ -2740,13 +2740,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               console.warn('⚠️ No WhatsApp status in response')
             }
             
-            // Mark linked appointment as completed if fully paid
+            // Mark linked appointment (and all in same booking group) as completed if fully paid
             if (linkedAppointmentId && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
               try {
                 await AppointmentsAPI.update(linkedAppointmentId, { status: "completed" })
+                window.dispatchEvent(new CustomEvent("appointments-refresh"))
                 toast({
                   title: "Appointment Completed",
-                  description: "Linked appointment has been marked as completed.",
+                  description: "Linked appointment(s) have been marked as completed.",
                 })
               } catch (error) {
                 console.error("Failed to update appointment status:", error)
@@ -2809,7 +2810,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             // Open receipt in new tab - Use business receipt page (with Print/Thermal Print buttons)
             try {
               // Always use business receipt URL for internal use (has Print/Thermal Print buttons)
-              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&t=${Date.now()}`
+              const returnTo = linkedAppointmentId ? 'appointments' : 'quick-sale'
+              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&returnTo=${returnTo}&t=${Date.now()}`
               console.log('🎯 Opening business receipt URL (with print options):', receiptUrl)
               
               const newWindow = window.open(receiptUrl, '_blank')
@@ -5365,7 +5367,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => router.push(`/receipt/${bill.receiptNumber || bill.id}`)}
+                            onClick={() => router.push(`/receipt/${bill.receiptNumber || bill.id}?returnTo=/quick-sale`)}
                             title="View Receipt"
                             className="h-8"
                           >

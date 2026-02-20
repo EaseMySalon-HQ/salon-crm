@@ -101,7 +101,7 @@ export function SalesReport() {
 
   // Function to navigate to receipt page
   const handleViewReceipt = (sale: SalesRecord) => {
-    router.push(`/receipt/${sale.billNo}`)
+    router.push(`/receipt/${sale.billNo}?returnTo=/reports`)
   }
 
   const handleEditBill = (sale: SalesRecord) => {
