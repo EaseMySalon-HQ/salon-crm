@@ -24,6 +24,7 @@ import {
   FileText,
   Minus,
   Pencil,
+  Trash2,
   ChevronDown,
   ChevronUp,
   Edit,
@@ -256,9 +257,10 @@ function getAvailableStaffIds(
 interface QuickSaleProps {
   mode?: BillingMode
   initialSale?: any
+  billLoading?: boolean
 }
 
-export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {}) {
+export function QuickSale({ mode = "create", initialSale, billLoading = false }: QuickSaleProps = {}) {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -790,6 +792,16 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         setCashAmount(cash)
         setCardAmount(card)
         setOnlineAmount(online)
+      }
+
+      // Set tip amount and tip staff (if any)
+      if (initialSale.tip && initialSale.tip > 0) {
+        setTip(Number(initialSale.tip))
+        const tipStaff = initialSale.tipStaffId
+        const tipStaffIdStr = typeof tipStaff === "object" && tipStaff?._id ? tipStaff._id : String(tipStaff || "")
+        if (tipStaffIdStr) {
+          setTipStaffId(tipStaffIdStr)
+        }
       }
 
       // Set linked appointment
@@ -2155,8 +2167,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     throw lastError instanceof Error ? lastError : new Error('Failed to generate receipt number. Please check your connection and try again.')
   }
 
-  // Handle checkout
-  const handleCheckout = async () => {
+  // Handle checkout (reasonOverride: when called from modal, pass reason directly since setState is async)
+  const handleCheckout = async (reasonOverride?: string) => {
     console.log('🚀 handleCheckout function called!')
     console.log('🚀 Mode:', mode)
     console.log('🚀 selectedCustomer:', selectedCustomer)
@@ -2169,8 +2181,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       return
     }
     
+    const effectiveReason = (reasonOverride ?? editReason).trim()
     // Validate edit reason for edit mode
-    if (mode === "edit" && !editReason.trim()) {
+    if (mode === "edit" && !effectiveReason) {
       toast({
         title: "Edit Reason Required",
         description: "Please provide a reason for editing this bill",
@@ -2652,7 +2665,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
             result = await SalesAPI.update(saleId!, {
               ...saleData,
-              editReason: editReason.trim(),
+              editReason: effectiveReason,
             })
             console.log('📊 SalesAPI.update response:', result)
             console.log('💳 Payment details in response:', {
@@ -3448,6 +3461,15 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto bg-white/80 backdrop-blur-sm pr-96">
         <div className="p-8 space-y-8 max-h-screen overflow-y-auto">
+          {billLoading ? (
+            <div className="flex items-center justify-center min-h-[60vh]">
+              <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+                <p className="text-sm font-medium">Loading bill details...</p>
+              </div>
+            </div>
+          ) : (
+          <>
           {/* Header */}
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-2">
@@ -3470,6 +3492,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                   </p>
                   <p className="text-sm text-amber-700">
                     Original Date: {initialSale.date ? format(new Date(initialSale.date), "dd MMM yyyy") : "N/A"}
+                    {initialSale.tip && initialSale.tip > 0 && (
+                      <span className="ml-2">• Tip: {formatCurrency(initialSale.tip)}</span>
+                    )}
                   </p>
                 </div>
               </div>
@@ -3800,7 +3825,13 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
                     <MultiStaffSelector
                       key={`service-${item.id}-staff`}
-                      staffList={getAvailableStaffList(services.find((s) => (s._id || s.id) === item.serviceId)?.duration ?? 60, (item.staffContributions || []).map((c) => c.staffId).filter(Boolean))}
+                      staffList={getAvailableStaffList(
+                        services.find((s) => (s._id || s.id) === item.serviceId)?.duration ?? 60,
+                        [...new Set([
+                          ...(item.staffContributions || []).map((c) => c.staffId).filter(Boolean),
+                          ...serviceItems.filter((s) => s.id !== item.id).flatMap((s) => (s.staffContributions || []).map((c) => c.staffId).filter(Boolean)),
+                        ])]
+                      )}
                       serviceTotal={item.total}
                       compact
                       selectStaffFlex={1.5}
@@ -4207,6 +4238,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               </div>
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
 
@@ -4325,6 +4358,13 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                       title="Edit tip amount"
                     >
                       <Pencil className="h-3 w-3 text-gray-500 hover:text-gray-700" />
+                    </button>
+                    <button
+                      onClick={() => { setTip(0); setTipStaffId(null) }}
+                      className="p-1 hover:bg-red-50 rounded-md transition-colors"
+                      title="Remove tip"
+                    >
+                      <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-600" />
                     </button>
                   </div>
                 ) : (
@@ -4674,7 +4714,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             </Button>
             <Button
               onClick={() => {
-                if (!tempEditReason.trim()) {
+                const reason = tempEditReason.trim()
+                if (!reason) {
                   toast({
                     title: "Edit Reason Required",
                     description: "Please provide a reason for editing this bill",
@@ -4682,13 +4723,13 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                   })
                   return
                 }
-                setEditReason(tempEditReason.trim())
+                setEditReason(reason)
                 setShowEditReasonModal(false)
                 setTempEditReason("")
                 if (totalPaid < roundedTotal) {
                   setShowPaymentModal(true)
                 } else {
-                  handleCheckout()
+                  handleCheckout(reason)
                 }
               }}
               className="flex-1 bg-indigo-600 hover:bg-indigo-700"

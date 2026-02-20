@@ -37,6 +37,7 @@ interface Appointment {
     price: number
     duration: number
   }
+  additionalServices?: Array<{ _id: string; name: string; price?: number; duration?: number }>
   staffId: {
     _id: string
     name: string
@@ -52,6 +53,19 @@ interface Appointment {
   createdAt: string
   createdBy?: string
   leadSource?: string
+}
+
+function getServiceDisplayNames(apt: { serviceId?: { name?: string }; additionalServices?: Array<{ name?: string }> }): string[] {
+  const primary = apt?.serviceId?.name || "Service"
+  const additional = (apt?.additionalServices || []).map((s) => s?.name).filter(Boolean) as string[]
+  return [primary, ...additional]
+}
+
+/** Total duration for multi-service appointments: primary + sum of additional services */
+function getTotalDuration(apt: { duration?: number; serviceId?: { duration?: number }; additionalServices?: Array<{ duration?: number }> }): number {
+  const primary = apt?.serviceId?.duration ?? apt?.duration ?? 60
+  const additional = (apt?.additionalServices || []).reduce((sum, s) => sum + (s.duration ?? 0), 0)
+  return primary + additional
 }
 
 interface StaffWorkDay {
@@ -113,13 +127,22 @@ function parseHHMMToMinutes(time?: string | null): number | null {
 }
 
 function parseTimeToMinutes(time: string): number {
-  if (!time) return 0
-  const cleaned = time.replace(/\s*(am|pm)/i, "").trim()
+  if (!time || typeof time !== "string") return 0
+  const str = String(time).trim()
+  // Handle ISO date strings (e.g. "2025-02-19T20:30:00.000Z") - extract time part
+  const isoMatch = str.match(/T(\d{1,2}):(\d{2})/)
+  if (isoMatch) {
+    const h = parseInt(isoMatch[1], 10)
+    const m = parseInt(isoMatch[2], 10)
+    return (h >= 0 && h < 24 && m >= 0 && m < 60) ? h * 60 + m : 0
+  }
+  const cleaned = str.replace(/\s*(am|pm)/i, "").trim()
   const parts = cleaned.split(":")
   const h = parseInt(parts[0] || "0", 10)
   const m = parseInt(parts[1] || "0", 10)
-  const isPm = /pm/i.test(time) && h < 12
-  const hour = isPm ? h + 12 : /am/i.test(time) && h === 12 ? 0 : h
+  if (h < 0 || h > 23 || m < 0 || m > 59) return 0
+  const isPm = /pm/i.test(str) && h < 12
+  const hour = isPm ? h + 12 : /am/i.test(str) && h === 12 ? 0 : h
   return hour * 60 + m
 }
 
@@ -590,7 +613,15 @@ export const AppointmentsCalendarGrid = forwardRef<
     let extStart = startMinutes
     let extEnd = endMinutes
     walkInSales.forEach((sale) => {
-      const checkoutEndM = parseTimeToMinutes(sale.time || "9:00")
+      // Prefer sale.time; fallback to extracting time from sale.date (ISO string) when time is missing/invalid
+      let timeStr = sale.time
+      if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
+        const d = sale.date ? new Date(sale.date) : new Date()
+        if (!Number.isNaN(d.getTime())) {
+          timeStr = format(d, "HH:mm")
+        }
+      }
+      const checkoutEndM = parseTimeToMinutes(timeStr || "9:00")
       const startM = checkoutEndM - 30
       if (startM < extStart) extStart = startM
       if (checkoutEndM > extEnd) extEnd = checkoutEndM
@@ -608,9 +639,10 @@ export const AppointmentsCalendarGrid = forwardRef<
     const slots: { label: string; minutes: number; isHourStart: boolean; showTimeLabel: boolean }[] = []
     for (let minutes = extendedStartMinutes; minutes < extendedEndMinutes; minutes += SLOT_MINUTES) {
       const h = Math.floor(minutes / 60)
-      const m = minutes % 60
+      const m = ((minutes % 60) + 60) % 60 // Handle negative minutes correctly
       const isHourStart = m === 0
-      const showTimeLabel = m % 30 === 0
+      // Show label at :00, :30, and first slot so time column is never empty when walk-in extends range outside staff hours
+      const showTimeLabel = m % 30 === 0 || minutes === extendedStartMinutes || minutes === extendedEndMinutes - SLOT_MINUTES
       const label = format(new Date(2000, 0, 1, h, m), "h:mma").toLowerCase()
       slots.push({ label, minutes, isHourStart, showTimeLabel })
     }
@@ -692,7 +724,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       const staffId = getPrimaryStaffId(apt)
       if (!staffId || !map[staffId]) return
       const startM = parseTimeToMinutes(apt.time)
-      const duration = apt.duration ?? 60
+      const duration = getTotalDuration(apt as any)
       const top = ((startM - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
       const height = Math.max(slotHeight * 0.6, (duration / SLOT_MINUTES) * slotHeight)
       map[staffId].push({ apt, top, height })
@@ -739,7 +771,12 @@ export const AppointmentsCalendarGrid = forwardRef<
     walkInSales.forEach((sale) => {
       const serviceItems = (sale.items || []).filter((i: any) => i.type === "service")
       if (serviceItems.length === 0) return
-      const checkoutEndM = parseTimeToMinutes(sale.time || "9:00")
+      let timeStr = sale.time
+      if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
+        const d = sale.date ? new Date(sale.date) : new Date()
+        if (!Number.isNaN(d.getTime())) timeStr = format(d, "HH:mm")
+      }
+      const checkoutEndM = parseTimeToMinutes(timeStr || "9:00")
       const duration = WALK_IN_SALE_DURATION
       const endM = checkoutEndM
       const startM = endM - duration
@@ -942,7 +979,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       startX: e.clientX,
       startY: e.clientY,
       startTimeMinutes: parseTimeToMinutes(apt.time),
-      duration: apt.duration ?? 60,
+      duration: getTotalDuration(apt as any),
       mode: "move",
       sourceStaffId,
     })
@@ -962,7 +999,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       startX: e.clientX,
       startY: e.clientY,
       startTimeMinutes: parseTimeToMinutes(apt.time),
-      duration: apt.duration ?? 60,
+      duration: getTotalDuration(apt as any),
       mode,
       sourceStaffId,
     })
@@ -1762,7 +1799,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                 >
                   {(blocksByColumnWithLayout[col._id] || []).map(({ apt, top, height, left, width }) => {
                     const a = apt as any
-                    const serviceName = a?.serviceId?.name || "Service"
+                    const serviceNames = getServiceDisplayNames(a)
                     const clientName = a?.clientId?.name || "Client"
                     const isDragging = draggingApt?.id === apt._id
                     const isUpdating = updatingTimeForId === apt._id
@@ -1801,7 +1838,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                     }
                     const accentColor = accentColorMap[apt.status] || "bg-slate-500"
                     const statusDotColor = statusDotColorMap[apt.status] || "bg-slate-400"
-                    const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + (apt.duration ?? 60))
+                    const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(apt as any))
                     const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
                     return (
                       <div
@@ -1870,10 +1907,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                           <div className="font-semibold text-slate-800 text-[14px] truncate leading-tight pr-16">
                             {clientName}
                           </div>
-                          {/* Line 2: Service name - 13-14px, medium */}
-                          <div className="text-slate-600 text-[13px] font-medium truncate mt-1">
-                            {serviceName}
-                          </div>
+                          {/* Line 2: Service name(s) - 13-14px, medium; bullet list */}
+                          <ul className="text-slate-600 text-[13px] font-medium mt-1 list-disc list-inside space-y-0.5">
+                            {serviceNames.map((name, i) => (
+                              <li key={i} className="truncate">{name}</li>
+                            ))}
+                          </ul>
                           {/* Line 3: Time range - 12-13px, muted, with clock icon */}
                           <div className="flex items-center gap-1.5 mt-2 text-slate-500 text-[12px] tabular-nums">
                             <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" />
@@ -1882,7 +1921,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           {/* Line 4: Metadata - duration pill, secondary */}
                           <div className="flex items-center justify-between gap-2 mt-2">
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80">
-                              {apt.duration ?? 60} min
+                              {getTotalDuration(apt as any)} min
                             </span>
                           </div>
                           {apt.notes && (
@@ -2081,12 +2120,8 @@ export const AppointmentsCalendarGrid = forwardRef<
                   style={{ top: topPx }}
                   aria-hidden
                 >
-                  <div className="flex-shrink-0 w-[88px] flex items-center justify-end gap-2 pr-2">
-                    <span
-                      className="animate-time-dot-pulse h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]"
-                      aria-hidden
-                    />
-                    <span className="text-[10px] font-semibold text-red-600 tabular-nums">
+                  <div className="flex-shrink-0 w-[88px] flex items-center justify-end pr-2">
+                    <span className="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-semibold tabular-nums">
                       {format(currentTime, "h:mm a")}
                     </span>
                   </div>
@@ -2103,14 +2138,14 @@ export const AppointmentsCalendarGrid = forwardRef<
         const apt = appointments.find((a) => a._id === draggingApt.id)
         if (!apt) return null
         const a = apt as any
-        const serviceName = a?.serviceId?.name || "Service"
+        const serviceNames = getServiceDisplayNames(a)
         const clientName = a?.clientId?.name || "Client"
         const accentColorMap: Record<string, string> = {
           scheduled: "bg-amber-500", arrived: "bg-blue-500", confirmed: "bg-emerald-500",
           service_started: "bg-violet-500", completed: "bg-slate-400", cancelled: "bg-red-500",
         }
         const accentColor = accentColorMap[apt.status] || "bg-slate-500"
-        const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + (apt.duration ?? 60))
+        const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(a))
         const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
         return createPortal(
           <div
@@ -2125,13 +2160,15 @@ export const AppointmentsCalendarGrid = forwardRef<
             <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor}`} />
             <div className="pl-[14px] pr-3 pt-6 pb-3 h-full flex flex-col justify-center">
               <div className="font-semibold text-slate-800 text-[14px] truncate">{clientName}</div>
-              <div className="text-slate-600 text-[13px] font-medium truncate mt-1">{serviceName}</div>
+              <ul className="text-slate-600 text-[13px] font-medium mt-1 list-disc list-inside space-y-0.5">
+                {serviceNames.map((name, i) => <li key={i} className="truncate">{name}</li>)}
+              </ul>
               <div className="flex items-center gap-1.5 mt-2 text-slate-500 text-[12px]">
                 <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" />
                 <span>{timeRangeStr}</span>
               </div>
               <span className="inline-flex mt-2 px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80 w-fit">
-                {apt.duration ?? 60} min
+                {getTotalDuration(a)} min
               </span>
             </div>
           </div>,
@@ -2264,10 +2301,10 @@ export const AppointmentsCalendarGrid = forwardRef<
             <div className="space-y-4 text-sm">
               {(() => {
                 const a = selectedAppointment as any
-                const serviceName = a?.serviceId?.name || "Service"
+                const serviceNames = getServiceDisplayNames(a)
                 const clientName = a?.clientId?.name || "Client"
                 const staffName = getPrimaryStaffName(selectedAppointment)
-                const duration = a?.duration ?? 0
+                const duration = getTotalDuration(a)
                 const price = a?.price ?? 0
                 const timeFrom = a?.time || ""
                 const timeTo = timeFrom ? slotMinutesToTimeString(parseTimeToMinutes(timeFrom) + duration) : ""
@@ -2313,7 +2350,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                       <div>
                         <div className="text-muted-foreground text-xs">Service Name</div>
-                        <div className="font-medium">{serviceName}</div>
+                        <ul className="font-medium list-disc list-inside space-y-0.5">
+                          {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                        </ul>
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Service Price</div>
@@ -2324,7 +2363,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                         <div>{timeFrom && timeTo ? `${timeFrom} – ${timeTo}` : timeFrom || "—"}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground text-xs">Service Duration</div>
+                        <div className="text-muted-foreground text-xs">Total Duration</div>
                         <div>{duration} min</div>
                       </div>
                       <div>
@@ -2456,12 +2495,12 @@ export const AppointmentsCalendarGrid = forwardRef<
               {getUpcomingAppointments().length > 0 ? (
                 getUpcomingAppointments().map((appointment) => {
                   const a = appointment as any
-                  const serviceName = a?.serviceId?.name || "Service"
+                  const serviceNames = getServiceDisplayNames(a)
                   const clientName = a?.clientId?.name || "Client"
                   const clientInitial = clientName?.charAt?.(0) || "?"
                   const staffName = a?.staffId?.name || "Unassigned Staff"
                   const price = a?.price ?? 0
-                  const duration = a?.duration ?? 0
+                  const duration = getTotalDuration(a)
                   return (
                     <Card
                       key={appointment._id}
@@ -2482,7 +2521,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                           </Badge>
                         </div>
                         <div className="space-y-3">
-                          <div className="font-semibold text-slate-800 text-lg">{serviceName}</div>
+                          <ul className="font-semibold text-slate-800 text-lg list-disc list-inside space-y-0.5">
+                            {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                          </ul>
                           <div className="flex items-center">
                             <Avatar className="h-8 w-8 mr-3 border border-indigo-200">
                               <AvatarFallback className="text-sm font-medium bg-indigo-100 text-indigo-700">
@@ -2532,12 +2573,12 @@ export const AppointmentsCalendarGrid = forwardRef<
               {getCancelledAppointments().length > 0 ? (
                 getCancelledAppointments().map((appointment) => {
                   const a = appointment as any
-                  const serviceName = a?.serviceId?.name || "Service"
+                  const serviceNames = getServiceDisplayNames(a)
                   const clientName = a?.clientId?.name || "Client"
                   const clientInitial = clientName?.charAt?.(0) || "?"
                   const staffName = a?.staffId?.name || "Unassigned Staff"
                   const price = a?.price ?? 0
-                  const duration = a?.duration ?? 0
+                  const duration = getTotalDuration(a)
                   return (
                     <Card
                       key={appointment._id}
@@ -2559,9 +2600,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                           </div>
                         </div>
                         <div className="space-y-3">
-                          <div className="font-semibold text-slate-800 text-lg line-through opacity-75">
-                            {serviceName}
-                          </div>
+                          <ul className="font-semibold text-slate-800 text-lg line-through opacity-75 list-disc list-inside space-y-0.5">
+                            {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                          </ul>
                           <div className="flex items-center">
                             <Avatar className="h-8 w-8 mr-3 border border-red-200">
                               <AvatarFallback className="text-sm font-medium bg-red-100 text-red-700">

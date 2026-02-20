@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
-import { toDateStringIST, formatInIST } from "@/lib/date-utils"
+import { toDateStringIST, formatInIST, getStartOfDayIST, getEndOfDayIST } from "@/lib/date-utils"
 import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -541,10 +541,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       console.log("🔄 Fetching real-time expenses data...")
       console.log("Current dateRange:", dateRange)
       
-      // Fetch all expenses with a high limit to get all data
+      // Fetch only Cash expenses - non-Cash expenses (Card, UPI, etc.) do not affect cash balance
       const response = await ExpensesAPI.getAll({ 
         page: 1, 
-        limit: 1000 // High limit to get all expenses
+        limit: 1000, // High limit to get all expenses
+        paymentMethod: 'Cash'
       })
       console.log("📊 Expenses API Response:", response)
       
@@ -642,13 +643,37 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
         }
       case "custom":
-        // For custom, don't set a date range automatically - let user select
-        return undefined
+        // Default to last 7 days when switching to custom; user can change via picker
+        const last7 = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+        return {
+          from: last7,
+          to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+        }
       default:
         return {
           from: new Date(0), // Start of epoch
           to: new Date() // Current date
         }
+    }
+  }
+
+  // Convert calendar-picked dates to effective range (start of from-day, end of to-day)
+  const getEffectiveDateParams = (from?: Date, to?: Date): { dateFrom?: string; dateTo?: string } => {
+    if (!from || !to) return {}
+    const fromStr = toDateStringIST(from)
+    const toStr = toDateStringIST(to)
+    return {
+      dateFrom: getStartOfDayIST(fromStr),
+      dateTo: getEndOfDayIST(toStr)
+    }
+  }
+  const getEffectiveDateRange = (from?: Date, to?: Date): { from: Date; to: Date } | null => {
+    if (!from || !to) return null
+    const fromStr = toDateStringIST(from)
+    const toStr = toDateStringIST(to)
+    return {
+      from: new Date(getStartOfDayIST(fromStr)),
+      to: new Date(getEndOfDayIST(toStr))
     }
   }
 
@@ -664,10 +689,12 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   }
 
   // Filter data for stats calculations (ALWAYS use unfiltered data, only affected by date range)
+  const effectiveRange = dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null
+  const rangeForPeriod = datePeriod !== "custom" ? getDateRangeFromPeriod(datePeriod) : null
+  const activeDateRange = effectiveRange || (rangeForPeriod?.from && rangeForPeriod?.to ? { from: rangeForPeriod.from, to: rangeForPeriod.to } : null)
   const statsFilteredData = cashRegistryData.filter(entry => {
-    const matchesDateRange = !dateRange?.from || !dateRange?.to || 
-      (new Date(entry.date) >= dateRange.from && new Date(entry.date) <= dateRange.to)
-    
+    const matchesDateRange = !activeDateRange || 
+      (new Date(entry.date) >= activeDateRange.from && new Date(entry.date) <= activeDateRange.to)
     return matchesDateRange
   })
 
@@ -690,19 +717,18 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       matchesReportType = true
     }
     
-    const matchesDateRange = !dateRange?.from || !dateRange?.to || 
-      (new Date(entry.date) >= dateRange.from && new Date(entry.date) <= dateRange.to)
-    
+    const matchesDateRange = !activeDateRange || 
+      (new Date(entry.date) >= activeDateRange.from && new Date(entry.date) <= activeDateRange.to)
     return matchesSearch && matchesShift && matchesReportType && matchesDateRange
   })
 
   // Calculate real-time stats from sales and expenses data
   const getRealTimeCashSales = () => {
-    if (!dateRange?.from || !dateRange?.to) return 0
+    if (!activeDateRange) return 0
     
     return salesData.reduce((sum: number, sale: any) => {
       const saleDate = new Date(sale.date)
-      if (saleDate >= dateRange.from! && saleDate <= dateRange.to!) {
+      if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
         let cashAmt = 0
         let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
@@ -726,11 +752,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   }
 
   const getRealTimeOnlineSales = () => {
-    if (!dateRange?.from || !dateRange?.to) return 0
+    if (!activeDateRange) return 0
     
     return salesData.reduce((sum: number, sale: any) => {
       const saleDate = new Date(sale.date)
-      if (saleDate >= dateRange.from! && saleDate <= dateRange.to!) {
+      if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
         if (sale.payments && sale.payments.length > 0) {
           // Split payment structure
           return sum + sale.payments
@@ -746,11 +772,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   }
 
   const getRealTimeExpenses = () => {
-    if (!dateRange?.from || !dateRange?.to) return 0
+    if (!activeDateRange) return 0
     
     return Object.entries(expensesData).reduce((sum: number, [date, amount]) => {
       const expenseDate = new Date(date)
-      if (expenseDate >= dateRange.from! && expenseDate <= dateRange.to!) {
+      if (expenseDate >= activeDateRange.from && expenseDate <= activeDateRange.to) {
         return sum + amount
       }
       return sum
@@ -988,10 +1014,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     try {
       const { ReportsAPI } = await import('@/lib/api');
       
+      const dateParams = dateRange?.from && dateRange?.to ? getEffectiveDateParams(dateRange.from, dateRange.to) : {}
       const result = await ReportsAPI.exportCashRegistry('pdf', {
         reportType: reportType,
-        dateFrom: dateRange?.from?.toISOString(),
-        dateTo: dateRange?.to?.toISOString()
+        dateFrom: dateParams.dateFrom,
+        dateTo: dateParams.dateTo
       });
       
       if (result && result.success) {
@@ -1017,10 +1044,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     try {
       const { ReportsAPI } = await import('@/lib/api');
       
+      const dateParams = dateRange?.from && dateRange?.to ? getEffectiveDateParams(dateRange.from, dateRange.to) : {}
       const result = await ReportsAPI.exportCashRegistry('xlsx', {
         reportType: reportType,
-        dateFrom: dateRange?.from?.toISOString(),
-        dateTo: dateRange?.to?.toISOString()
+        dateFrom: dateParams.dateFrom,
+        dateTo: dateParams.dateTo
       });
       
       if (result && result.success) {
@@ -1508,36 +1536,52 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
               </Select>
               
               {datePeriod === "custom" && (
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className="w-[220px] justify-start text-left font-normal"
-                    >
-                      {dateRange?.from ? (
-                        dateRange.to ? (
-                          <>
-                            {format(dateRange.from, "MMM dd")} - {format(dateRange.to, "MMM dd, y")}
-                          </>
-                        ) : (
-                          format(dateRange.from, "MMM dd, y")
-                        )
-                      ) : (
-                        <span>Pick a date range</span>
-                      )}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <CalendarComponent
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={dateRange}
-                      onSelect={(range) => setDateRange(range)}
-                      numberOfMonths={2}
-                    />
-                  </PopoverContent>
-                </Popover>
+                <div className="flex items-center gap-2">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-[140px] justify-start text-left font-normal"
+                      >
+                        <Calendar className="mr-2 h-4 w-4 shrink-0" />
+                        <span className="truncate">
+                          {dateRange?.from ? format(dateRange.from, "dd MMM yyyy") : "From"}
+                        </span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarComponent
+                        initialFocus
+                        mode="single"
+                        selected={dateRange?.from}
+                        onSelect={(d) => setDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                        disabled={(d) => d > new Date() || (dateRange?.to ? d > dateRange.to : false)}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-[140px] justify-start text-left font-normal"
+                      >
+                        <Calendar className="mr-2 h-4 w-4 shrink-0" />
+                        <span className="truncate">
+                          {dateRange?.to ? format(dateRange.to, "dd MMM yyyy") : "To"}
+                        </span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarComponent
+                        initialFocus
+                        mode="single"
+                        selected={dateRange?.to}
+                        onSelect={(d) => setDateRange((r) => ({ from: r?.from, to: d }))}
+                        disabled={(d) => d > new Date() || (dateRange?.from ? d < dateRange.from : false)}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
               )}
               
               <Select value={shiftFilter} onValueChange={setShiftFilter}>

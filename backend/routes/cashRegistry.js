@@ -187,8 +187,8 @@ router.post('/', auth, async (req, res) => {
         date: {
           $gte: startOfDay,
           $lt: endOfDay
-      },
-        paymentMethod: 'Cash'
+        },
+        paymentMode: 'Cash'
       });
       
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -497,7 +497,7 @@ router.get('/summary/dashboard', auth, async (req, res) => {
     
     const todayExpenses = await Expense.find({
       date: { $gte: today, $lt: tomorrow },
-      paymentMethod: 'Cash'
+      paymentMode: 'Cash'
     });
     
     const totalCashCollected = todaySales.reduce((sum, sale) => sum + sale.netTotal, 0);

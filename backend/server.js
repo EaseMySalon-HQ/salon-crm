@@ -5944,7 +5944,7 @@ app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
+const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = null, businessModels = null) => {
   if (!AppointmentModel || !appointmentId) return;
   try {
     const appointment = await AppointmentModel.findById(appointmentId);
@@ -5958,6 +5958,34 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
     }
 
     appointment.status = 'completed';
+
+    // Sync appointment services with actual services performed (e.g. Service B in addition to A)
+    if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
+      const serviceItems = sale.items.filter((i) => i.type === 'service' && i.serviceId);
+      if (serviceItems.length > 0) {
+        const serviceIds = serviceItems.map((i) => i.serviceId._id || i.serviceId);
+        const firstServiceId = serviceIds[0];
+        const firstItem = serviceItems[0];
+        const firstService = await businessModels.Service.findById(firstServiceId).lean();
+        if (firstService) {
+          appointment.serviceId = firstServiceId;
+          appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
+          // Additional services (B, C, ...) shown below primary on card
+          appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
+          // Total duration = sum of all service durations (card size reflects total time)
+          let totalDuration = firstService.duration ?? appointment.duration ?? 60;
+          if (serviceIds.length > 1) {
+            const additionalServices = await businessModels.Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
+            totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
+            console.log(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} services, total duration ${totalDuration} min`);
+          } else {
+            console.log(`✅ Appointment ${appointmentId} updated with actual service: ${firstService.name}`);
+          }
+          appointment.duration = totalDuration;
+        }
+      }
+    }
+
     await appointment.save();
     console.log(`✅ Appointment ${appointmentId} marked as completed after sale.`);
   } catch (error) {
@@ -6036,19 +6064,28 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
       return a;
     });
 
-    // Populate clientId and serviceId (they're in business DB)
+    // Populate clientId, serviceId, and additionalServiceIds (they're in business DB)
     const clientIds = [...new Set(appointments.map((a) => a.clientId).filter(Boolean))];
-    const serviceIds = [...new Set(appointments.map((a) => a.serviceId).filter(Boolean))];
+    const primaryServiceIds = [...new Set(appointments.map((a) => a.serviceId).filter(Boolean))];
+    const additionalIds = appointments.flatMap((a) => a.additionalServiceIds || []).filter(Boolean);
+    const allServiceIds = [...new Set([...primaryServiceIds.map((id) => id.toString()), ...additionalIds.map((id) => id.toString())])];
     const { Client, Service } = req.businessModels;
     const [clients, services] = await Promise.all([
       clientIds.length ? Client.find({ _id: { $in: clientIds } }).select('name phone email').lean() : [],
-      serviceIds.length ? Service.find({ _id: { $in: serviceIds } }).select('name price duration').lean() : [],
+      allServiceIds.length ? Service.find({ _id: { $in: allServiceIds } }).select('name price duration').lean() : [],
     ]);
     const clientMap = new Map(clients.map((c) => [c._id.toString(), c]));
     const serviceMap = new Map(services.map((s) => [s._id.toString(), s]));
     appointments.forEach((a) => {
       if (a.clientId) a.clientId = clientMap.get(a.clientId.toString()) || a.clientId;
       if (a.serviceId) a.serviceId = serviceMap.get(a.serviceId.toString()) || a.serviceId;
+      if (a.additionalServiceIds && a.additionalServiceIds.length) {
+        a.additionalServices = a.additionalServiceIds
+          .map((id) => serviceMap.get(id.toString()))
+          .filter(Boolean);
+      } else {
+        a.additionalServices = [];
+      }
     });
 
     res.json({
@@ -7032,6 +7069,12 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       const service = await Service.findById(raw.serviceId).select('name price duration').lean();
       appointment.serviceId = service || raw.serviceId;
     }
+    if (raw.additionalServiceIds && raw.additionalServiceIds.length) {
+      const additionalServices = await Service.find({ _id: { $in: raw.additionalServiceIds } }).select('name price duration').lean();
+      appointment.additionalServices = additionalServices;
+    } else {
+      appointment.additionalServices = [];
+    }
 
     res.json({ success: true, data: appointment });
   } catch (error) {
@@ -7469,6 +7512,13 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
       status: { $in: ['approved', 'pending'] }
     }).lean();
 
+    const pettyCashExpenses = await Expense.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      paymentMode: 'Petty Cash Wallet',
+      status: { $in: ['approved', 'pending'] }
+    }).lean();
+
     const totalBillCount = sales.length;
     const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
     const totalCustomerCount = uniqueCustomers.size || totalBillCount;
@@ -7507,6 +7557,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     });
     // Use Expense collection as source of truth for cash expenses; closingRegistry.expenseValue is 0 when not yet closed
     const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const pettyCashExpense = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     // Tip collected: sum from Sales (Quick Sale flow) + Receipts (manual receipt flow), for selected date range, all staff
     const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
     const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
@@ -7527,6 +7578,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         duesCollected,
         cashDuesCollected,
         cashExpense,
+        pettyCashExpense,
         tipCollected,
         cashBalance,
         openingBalance,
@@ -7644,7 +7696,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     }
 
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
-      await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
     }
 
     // Auto consumption: deduct inventory for completed service lines (only when bill status is completed)
@@ -8318,6 +8370,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'payments',
       'paymentMode',
       'status', // Allow updating status when payments change
+      'tip',
+      'tipStaffId',
+      'tipStaffName',
     ];
 
     editableRootFields.forEach((field) => {
@@ -8326,9 +8381,14 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           // Only allow adjusting dueDate and totalAmount; keep paidAmount as is
           const currentPaymentStatus = existingSale.paymentStatus || {};
           const incoming = updateData.paymentStatus || {};
+          // totalAmount = netTotal (grossTotal + tip) - use incoming when provided so tip removal is reflected
+          const totalAmount = incoming.totalAmount != null
+            ? Number(incoming.totalAmount)
+            : Number(updateData.netTotal ?? updateData.grossTotal ?? currentPaymentStatus.totalAmount);
           existingSale.paymentStatus = {
             ...currentPaymentStatus,
-            totalAmount: Number(updateData.grossTotal ?? currentPaymentStatus.totalAmount),
+            totalAmount,
+            remainingAmount: totalAmount - Number(incoming.paidAmount ?? currentPaymentStatus.paidAmount ?? 0),
             dueDate: incoming.dueDate || currentPaymentStatus.dueDate,
           };
         } else if (field === 'items') {
@@ -8347,6 +8407,14 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           console.log('💳 Updating paymentMode:', updateData.paymentMode);
           existingSale.paymentMode = updateData.paymentMode || '';
           console.log('💳 Updated paymentMode on sale:', existingSale.paymentMode);
+        } else if (field === 'tip') {
+          existingSale.tip = Number(updateData.tip) || 0;
+          existingSale.tipStaffId = existingSale.tip > 0 ? (updateData.tipStaffId || null) : null;
+          existingSale.tipStaffName = existingSale.tip > 0 ? (updateData.tipStaffName || '') : '';
+        } else if (field === 'tipStaffId') {
+          existingSale.tipStaffId = updateData.tipStaffId ?? null;
+        } else if (field === 'tipStaffName') {
+          existingSale.tipStaffName = updateData.tipStaffName ?? '';
         } else {
           existingSale[field] = updateData[field];
         }
@@ -8363,7 +8431,8 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       }, 0);
       
       console.log('💰 Calculated newPaidAmount:', newPaidAmount);
-      const totalAmount = Number(updateData.grossTotal || existingSale.grossTotal || existingSale.paymentStatus?.totalAmount || 0);
+      // totalAmount = netTotal (grossTotal + tip) so tip removal is reflected
+      const totalAmount = Number(updateData.netTotal ?? updateData.paymentStatus?.totalAmount ?? updateData.grossTotal ?? existingSale.paymentStatus?.totalAmount ?? existingSale.grossTotal ?? 0);
       console.log('💰 Total amount:', totalAmount);
       
       if (!existingSale.paymentStatus) {
@@ -8454,7 +8523,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     // Mark linked appointment as completed if now fully paid
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       const { Appointment } = req.businessModels;
-      await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
     }
 
     const newStatus = String(savedSale.status || '').toLowerCase();
@@ -8864,7 +8933,7 @@ app.post('/api/sales/:id/payment', authenticateToken, setupBusinessDatabase, req
     const updatedSale = await sale.addPayment(paymentData);
 
     if (updatedSale.appointmentId && String(updatedSale.status).toLowerCase() === 'completed') {
-      await markAppointmentCompleted(Appointment, updatedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, updatedSale.appointmentId, updatedSale, req.businessModels);
     }
     
     res.json({ 
@@ -9228,9 +9297,18 @@ app.get('/api/expenses', authenticateToken, setupBusinessDatabase, requireManage
 app.post('/api/expenses', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Expense } = req.businessModels;
+    const { category, paymentMode, description, amount, date, status, vendor, notes, approvedBy } = req.body;
     const expenseData = {
-      ...req.body,
-      createdBy: req.user.id,
+      category,
+      paymentMode,
+      description: (description || '').trim() || 'No description',
+      amount: Number(amount),
+      date: date ? new Date(date) : new Date(),
+      status: status || 'pending',
+      vendor: (vendor || '').trim(),
+      notes: (notes || '').trim(),
+      approvedBy: (approvedBy || '').trim(),
+      createdBy: req.user._id || req.user.id,
       branchId: req.user.branchId
     };
     
@@ -10167,6 +10245,93 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
 
 // Cash Registry Routes
 // Note: Specific routes must come before parameterized routes
+app.get('/api/cash-registry/petty-cash-summary', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Expense, PettyCashTransaction } = req.businessModels;
+    const { date } = req.query;
+    const dateStr = date || new Date().toISOString().split('T')[0];
+    const endOfDay = getEndOfDayIST(dateStr);
+
+    // Total additions (all time up to end of date)
+    const additions = await PettyCashTransaction.aggregate([
+      { $match: { branchId: req.user.branchId, date: { $lte: endOfDay } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const totalAdditions = additions[0]?.total ?? 0;
+
+    // Total deductions from expenses (all time up to end of date)
+    const pettyCashExpenses = await Expense.find({
+      branchId: req.user.branchId,
+      paymentMode: 'Petty Cash Wallet',
+      date: { $lte: endOfDay }
+    });
+    const totalDeductions = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+    const expectedBalance = Math.max(0, totalAdditions - totalDeductions);
+    res.json({
+      success: true,
+      data: {
+        totalAdditions,
+        pettyCashExpenses: totalDeductions,
+        expectedBalance
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching petty cash summary:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Petty Cash - Add balance
+app.post('/api/petty-cash', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PettyCashTransaction } = req.businessModels;
+    const { amount, date } = req.body;
+    const amt = Number(amount) || 0;
+    if (amt <= 0) {
+      return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    }
+    const txDate = date ? new Date(date) : new Date();
+    const tx = new PettyCashTransaction({
+      type: 'add',
+      amount: amt,
+      date: txDate,
+      createdBy: req.user._id || req.user.id,
+      branchId: req.user.branchId
+    });
+    await tx.save();
+    res.status(201).json({ success: true, data: tx });
+  } catch (error) {
+    console.error('Error adding petty cash:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Petty Cash - View logs (additions + deductions)
+app.get('/api/petty-cash/logs', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Expense, PettyCashTransaction } = req.businessModels;
+    const branchId = req.user.branchId;
+
+    const additions = await PettyCashTransaction.find({ branchId })
+      .sort({ date: -1 })
+      .lean();
+    const deductions = await Expense.find({ branchId, paymentMode: 'Petty Cash Wallet' })
+      .sort({ date: -1 })
+      .lean();
+
+    const logs = [
+      ...additions.map(a => ({ type: 'add', amount: a.amount, date: a.date })),
+      ...deductions.map(d => ({ type: 'deduct', amount: -d.amount, date: d.date }))
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error('Error fetching petty cash logs:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 app.get('/api/cash-registry/summary/dashboard', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     console.log('🔍 Cash Registry Summary request for user:', req.user?.email, 'branchId:', req.user?.branchId);
@@ -10299,6 +10464,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       closingBalance,
       onlineCash,
       posCash,
+      pettyCashOpeningBalance,
+      pettyCashClosingBalance,
       createdBy
     } = req.body;
     
@@ -10337,7 +10504,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
           $gte: startOfDay,
           $lt: endOfDay
         },
-        paymentMethod: 'Cash'
+        paymentMode: 'Cash'
       });
       
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -10366,6 +10533,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       posCash: shiftType === 'closing' ? posCash : 0,
       onlinePosDifference,
       onlineCashDifferenceReason: onlinePosDifference !== 0 ? 'Difference detected' : 'Balanced',
+      pettyCashOpeningBalance: shiftType === 'opening' ? (pettyCashOpeningBalance ?? 0) : 0,
+      pettyCashClosingBalance: shiftType === 'closing' ? (pettyCashClosingBalance ?? 0) : 0,
       notes,
       branchId: req.user.branchId
     });

@@ -28,6 +28,7 @@ interface Appointment {
     price: number
     duration: number
   }
+  additionalServices?: Array<{ _id: string; name: string; price?: number; duration?: number }>
   staffId: {
     _id: string
     name: string
@@ -43,6 +44,18 @@ interface Appointment {
   createdAt: string
   createdBy?: string
   leadSource?: string
+}
+
+function getServiceDisplayNames(apt: { serviceId?: { name?: string }; additionalServices?: Array<{ name?: string }> }): string[] {
+  const primary = apt?.serviceId?.name || "Service"
+  const additional = (apt?.additionalServices || []).map((s) => s?.name).filter(Boolean) as string[]
+  return [primary, ...additional]
+}
+
+function getTotalDuration(apt: { duration?: number; serviceId?: { duration?: number }; additionalServices?: Array<{ duration?: number }> }): number {
+  const primary = apt?.serviceId?.duration ?? apt?.duration ?? 60
+  const additional = (apt?.additionalServices || []).reduce((sum, s) => sum + (s.duration ?? 0), 0)
+  return primary + additional
 }
 
 function parseTimeToMinutes(time: string): number {
@@ -719,12 +732,12 @@ export const AppointmentsCalendar = forwardRef<
                 {col.list.length > 0 ? (
                   col.list.map((appointment) => {
                     const anyAppt: any = appointment as any
-                    const serviceName = anyAppt?.serviceId?.name || 'Service'
+                    const serviceNames = getServiceDisplayNames(anyAppt)
                     const clientName = anyAppt?.clientId?.name || 'Client'
                     const clientInitial = clientName?.charAt?.(0) || '?'
                     const staffName = anyAppt?.staffId?.name || 'Unassigned Staff'
                     const price = anyAppt?.price ?? 0
-                    const duration = anyAppt?.duration ?? 0
+                    const duration = getTotalDuration(anyAppt)
                     const isDraggable = appointment.status !== 'completed'
                     const isDragging = draggingAppointmentId === appointment._id
                     return (
@@ -752,7 +765,9 @@ export const AppointmentsCalendar = forwardRef<
                               {appointment.time}
                             </Badge>
                           </div>
-                          <div className="font-medium text-slate-800 text-sm truncate">{serviceName}</div>
+                          <ul className="font-medium text-slate-800 text-sm list-disc list-inside space-y-0.5">
+                            {serviceNames.map((name, i) => <li key={i} className="truncate">{name}</li>)}
+                          </ul>
                           <div className="flex items-center mt-1">
                             <Avatar className={`h-5 w-5 mr-1.5 border ${col.avatarClass}`}>
                               <AvatarFallback className="text-[10px]">{clientInitial}</AvatarFallback>
@@ -796,10 +811,10 @@ export const AppointmentsCalendar = forwardRef<
             <div className="space-y-4 text-sm">
               {(() => {
                 const a: any = selectedAppointment as any
-                const serviceName = a?.serviceId?.name || 'Service'
+                const serviceNames = getServiceDisplayNames(a)
                 const clientName = a?.clientId?.name || 'Client'
                 const staffName = getPrimaryStaffName(selectedAppointment)
-                const duration = a?.duration ?? 0
+                const duration = getTotalDuration(a)
                 const price = a?.price ?? 0
                 const timeFrom = a?.time || ''
                 const timeTo = timeFrom ? slotMinutesToTimeString(parseTimeToMinutes(timeFrom) + duration) : ''
@@ -845,7 +860,9 @@ export const AppointmentsCalendar = forwardRef<
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                       <div>
                         <div className="text-muted-foreground text-xs">Service Name</div>
-                        <div className="font-medium">{serviceName}</div>
+                        <ul className="font-medium list-disc list-inside space-y-0.5">
+                          {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                        </ul>
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Service Price</div>
@@ -992,7 +1009,7 @@ export const AppointmentsCalendar = forwardRef<
               {getUpcomingAppointments().length > 0 ? (
                 getUpcomingAppointments().map((appointment) => {
                   const anyAppt: any = appointment as any
-                  const serviceName = anyAppt?.serviceId?.name || 'Service'
+                  const serviceNames = getServiceDisplayNames(anyAppt)
                   const clientName = anyAppt?.clientId?.name || 'Client'
                   const clientInitial = clientName?.charAt?.(0) || '?'
                   const staffName = anyAppt?.staffId?.name || 'Unassigned Staff'
@@ -1018,7 +1035,9 @@ export const AppointmentsCalendar = forwardRef<
                           </Badge>
                         </div>
                         <div className="space-y-3">
-                          <div className="font-semibold text-slate-800 text-lg">{serviceName}</div>
+                          <ul className="font-semibold text-slate-800 text-lg list-disc list-inside space-y-0.5">
+                            {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                          </ul>
                           <div className="flex items-center">
                             <Avatar className="h-8 w-8 mr-3 border border-indigo-200">
                               <AvatarFallback className="text-sm font-medium bg-indigo-100 text-indigo-700">{clientInitial}</AvatarFallback>

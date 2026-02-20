@@ -11,6 +11,11 @@ const appointmentSchema = new mongoose.Schema({
     ref: 'Service',
     required: true
   },
+  // Additional services performed (e.g. B done in addition to A) - shown below primary on card
+  additionalServiceIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Service'
+  }],
   // Legacy field for backward compatibility
   staffId: {
     type: mongoose.Schema.Types.ObjectId,

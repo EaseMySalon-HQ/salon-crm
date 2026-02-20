@@ -60,6 +60,9 @@ class ModelFactory {
       
       // Expense model
       Expense: this.getModel('Expense', require('./Expense').schema, connection),
+
+      // PettyCashTransaction model
+      PettyCashTransaction: this.getModel('PettyCashTransaction', require('./PettyCashTransaction').schema, connection),
       
       // InventoryTransaction model
       InventoryTransaction: this.getModel('InventoryTransaction', require('./InventoryTransaction').schema, connection),

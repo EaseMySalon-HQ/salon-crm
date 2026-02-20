@@ -139,6 +139,10 @@ apiClient.interceptors.response.use(
         if (errorInfo.status >= 400 && errorInfo.status < 500 && errorInfo.data && typeof errorInfo.data === 'object') {
           const msg = errorInfo.data.message || errorInfo.data.error || errorInfo.data.details
           if (msg && !errorDetails.error) errorDetails.error = typeof msg === 'string' ? msg : JSON.stringify(msg)
+          // Always set error from response for 4xx so we never log empty {}
+          if (!errorDetails.error && errorInfo.data) {
+            errorDetails.error = typeof errorInfo.data === 'string' ? errorInfo.data : JSON.stringify(errorInfo.data)
+          }
         }
 
         // Only log if we have at least one meaningful property (avoid "Error response: {}")
@@ -1182,6 +1186,24 @@ export class CashRegistryAPI {
 
   static async getDashboardSummary(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/cash-registry/summary/dashboard')
+    return response.data
+  }
+
+  static async getPettyCashSummary(date?: string): Promise<ApiResponse<{ totalAdditions: number; pettyCashExpenses: number; expectedBalance: number }>> {
+    const params = date ? { date } : {}
+    const response = await apiClient.get('/cash-registry/petty-cash-summary', { params })
+    return response.data
+  }
+}
+
+export class PettyCashAPI {
+  static async addBalance(amount: number, date?: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/petty-cash', { amount, date })
+    return response.data
+  }
+
+  static async getLogs(): Promise<ApiResponse<{ type: string; amount: number; date: string }[]>> {
+    const response = await apiClient.get('/petty-cash/logs')
     return response.data
   }
 }
