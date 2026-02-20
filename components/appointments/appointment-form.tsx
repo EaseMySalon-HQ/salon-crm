@@ -61,6 +61,21 @@ function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
   return format(new Date(2000, 0, 1, h, m), "h:mm a")
 }
 
+/** Sequential service time: Service 0 = baseTime, Service 1 = baseTime + dur0, Service 2 = baseTime + dur0 + dur1, etc.
+ * Use for both create and edit flows to ensure no overlapping. */
+function getSequentialServiceStartTime(
+  services: Array<{ duration?: number }>,
+  baseTime: string,
+  serviceIndex: number
+): string {
+  if (serviceIndex <= 0) return baseTime
+  let cumulativeM = 0
+  for (let i = 0; i < serviceIndex; i++) {
+    cumulativeM += services[i]?.duration ?? 60
+  }
+  return addMinutesToTime(baseTime, cumulativeM)
+}
+
 /** Check if a block applies on a given date (recurring logic) */
 function blockAppliesOnDate(block: { startDate: string; endDate?: string | null; recurringFrequency?: string }, dateStr: string): boolean {
   const rec = block.recurringFrequency || "none"
@@ -358,9 +373,10 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         let servicesToShow: Array<{ id: string; serviceId: string; staffId: string; name: string; duration: number; price: number }> = []
         const related = (res as any).relatedAppointments as any[] | undefined
 
-        if (related && related.length > 0) {
-          // Multi-staff: merge main + related, sort by time
-          const allApts = [{ ...a, _id: a._id }, ...related.map((r: any) => ({ ...r, _id: r._id }))]
+        const nonCancelledRelated = (related ?? []).filter((r: any) => r.status !== "cancelled")
+        if (nonCancelledRelated.length > 0) {
+          // Multi-staff: merge main + related, sort by time. Exclude cancelled (should not appear when editing).
+          const allApts = [{ ...a, _id: a._id }, ...nonCancelledRelated.map((r: any) => ({ ...r, _id: r._id }))]
           const byTime = [...allApts].sort((x, y) => {
             const xm = parseTimeToMinutes(x.time || "")
             const ym = parseTimeToMinutes(y.time || "")
@@ -380,13 +396,18 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           })
         } else if (a.additionalServices && a.additionalServices.length > 0) {
           // Same staff, multiple services: primary + additional
+          // Use primary service's duration from catalog (a.duration is TOTAL when there are additional services)
+          // Use primary price = total - sum(additional); a.price is the stored TOTAL for primary+additional
+          const additionalPrices = (a.additionalServices as any[]).map((s: any) => s?.price ?? 0)
+          const additionalTotal = additionalPrices.reduce((sum, p) => sum + p, 0)
+          const primaryPrice = Math.max(0, (a.price ?? 0) - additionalTotal)
           const primary = {
             id: "edit-service",
             serviceId: svc?._id || svc,
             staffId: staffIdVal || "",
             name: (typeof svc === "object" && svc?.name) || "Service",
-            duration: a.duration ?? (typeof svc === "object" && svc?.duration) ?? 60,
-            price: a.price ?? (typeof svc === "object" && svc?.price) ?? 0,
+            duration: (typeof svc === "object" && svc?.duration) ?? a.duration ?? 60,
+            price: primaryPrice || ((typeof svc === "object" && svc?.price) ?? 0),
           }
           const additional = (a.additionalServices as any[]).map((s: any, idx: number) => ({
             id: `additional-${idx}`,
@@ -414,8 +435,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           if (parts.length >= 3) {
             // Use earliest time when multiple appointments (first service start)
             let apiTime = a.time || ""
-            if (related && related.length > 0) {
-              const allApts = [a, ...related]
+            if (nonCancelledRelated.length > 0) {
+              const allApts = [a, ...nonCancelledRelated]
               const sorted = [...allApts].sort((x, y) => parseTimeToMinutes(x.time || "") - parseTimeToMinutes(y.time || ""))
               apiTime = sorted[0]?.time || apiTime
             }
@@ -431,8 +452,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         }
         if (a.time) {
           let apiTime = a.time
-          if (related && related.length > 0) {
-            const allApts = [a, ...related]
+          if (nonCancelledRelated.length > 0) {
+            const allApts = [a, ...nonCancelledRelated]
             const sorted = [...allApts].sort((x, y) => parseTimeToMinutes(x.time || "") - parseTimeToMinutes(y.time || ""))
             apiTime = sorted[0]?.time || apiTime
           }
@@ -822,16 +843,20 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const hasAdditional = selectedServices.some((s) => s.id.startsWith("additional-"))
         const hasRelated = selectedServices.some((s) => s.id.startsWith("related-"))
         const newServices = selectedServices.filter((s) => !["edit-service"].includes(s.id) && !s.id.startsWith("related-") && !s.id.startsWith("additional-"))
+        const primary = selectedServices.find((s) => s.id === "edit-service")
+        const existingAdditional = selectedServices.filter((s) => s.id.startsWith("additional-"))
+        // Newly added services (via Add Service) with same staff as primary → merge into same card
+        const newServicesSameStaff = primary ? newServices.filter((s) => s.staffId && s.staffId === primary.staffId) : []
+        const newServicesDifferentStaff = primary ? newServices.filter((s) => !s.staffId || s.staffId !== primary.staffId) : newServices
 
-        if (hasAdditional) {
-          // Same staff, multiple services: update single appointment with primary + additionalServiceIds
-          const primary = selectedServices.find((s) => s.id === "edit-service")
-          const additional = selectedServices.filter((s) => s.id.startsWith("additional-"))
+        if (hasAdditional || newServicesSameStaff.length > 0) {
+          // Same staff, multiple services: update single appointment with primary + additionalServiceIds (including newly added same-staff services)
           if (!primary) {
             toast({ title: "Error", description: "Invalid edit state.", variant: "destructive" })
             return
           }
-          const additionalIds = additional.map((s) => s.serviceId)
+          const allAdditional = [...existingAdditional, ...newServicesSameStaff]
+          const additionalIds = allAdditional.map((s) => s.serviceId)
           const totalDur = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
           const totalPrice = selectedServices.reduce((sum, s) => sum + (s.price || 0), 0)
           const updateRes = await AppointmentsAPI.update(appointmentId, {
@@ -852,12 +877,10 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
         } else if (hasRelated) {
           // Multi staff: update each appointment with its service and sequential time
-          let cumulativeM = 0
           for (let i = 0; i < selectedServices.length; i++) {
             const s = selectedServices[i]
-            const serviceTime = i === 0 ? values.time : addMinutesToTime(values.time, cumulativeM)
+            const serviceTime = getSequentialServiceStartTime(selectedServices, values.time, i)
             const apiTime = formatTimeForApi(serviceTime)
-            cumulativeM += s.duration || 0
             const aptId = s.id === "edit-service" ? appointmentId : s.id.startsWith("related-") ? s.id.replace("related-", "") : null
             if (!aptId) continue
             const updateRes = await AppointmentsAPI.update(aptId, {
@@ -901,22 +924,31 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
         }
 
-        if (newServices.length > 0) {
+        if (newServicesDifferentStaff.length > 0) {
+          // New services must start after all existing services (sequential, no overlap)
+          const firstNewIdx = selectedServices.findIndex((s) =>
+            newServicesDifferentStaff.some((n) => n.serviceId === s.serviceId && n.staffId === s.staffId)
+          )
+          const baseTimeForNew =
+            firstNewIdx >= 0
+              ? getSequentialServiceStartTime(selectedServices, values.time, firstNewIdx)
+              : values.time
+          const timeStrForNew = formatTimeForApi(baseTimeForNew)
           const createRes = await AppointmentsAPI.create({
             clientId: selectedCustomer._id || selectedCustomer.id,
             clientName: selectedCustomer.name,
             date: dateStr,
-            time: timeStr,
+            time: timeStrForNew,
             leadSource: leadSourceValue,
-            services: newServices.map((s) => ({
+            services: newServicesDifferentStaff.map((s) => ({
               serviceId: s.serviceId,
               staffId: s.staffId,
               name: s.name,
               duration: s.duration,
               price: s.price,
             })),
-            totalDuration: newServices.reduce((sum, s) => sum + (s.duration || 0), 0),
-            totalAmount: newServices.reduce((sum, s) => sum + (s.price || 0), 0),
+            totalDuration: newServicesDifferentStaff.reduce((sum, s) => sum + (s.duration || 0), 0),
+            totalAmount: newServicesDifferentStaff.reduce((sum, s) => sum + (s.price || 0), 0),
             notes: values.notes,
             status: "scheduled",
           })
@@ -926,7 +958,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
         }
 
-        toast({ title: "Appointment Updated", description: newServices.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
+        toast({ title: "Appointment Updated", description: newServicesSameStaff.length > 0 || newServicesDifferentStaff.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
         onSuccess ? onSuccess() : router.push("/appointments")
       } else {
         const appointmentData = {

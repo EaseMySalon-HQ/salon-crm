@@ -211,23 +211,24 @@ function blockAppliesOnDate(block: { startDate: string; endDate?: string | null;
   return false
 }
 
-/** Get staff IDs that are available for a slot [startM, startM + duration] on dateStr */
+/** Get staff IDs that are available for a slot [startM, startM + duration] on dateStr.
+ * When considerAllAppointments is true (from linked appointment), check all non-cancelled appointments for conflicts. */
 function getAvailableStaffIds(
   dateStr: string,
   timeStr: string,
   durationMinutes: number,
   appointments: any[],
   blockTimes: any[],
-  allStaffIds: string[]
+  allStaffIds: string[],
+  considerAllAppointments = false
 ): string[] {
   const startM = parseTimeToMinutes(timeStr)
   const endM = startM + durationMinutes
   const busyStaffIds = new Set<string>()
 
-  // Appointments: only mark staff unavailable when client has arrived (Quick Sale uses current time)
   for (const apt of appointments) {
     if (apt.status === "cancelled") continue
-    if (apt.status !== "arrived" && apt.status !== "service_started") continue
+    if (!considerAllAppointments && apt.status !== "arrived" && apt.status !== "service_started") continue
     const aptStartM = parseTimeToMinutes(apt.time || "0:00")
     const aptDuration = apt.duration ?? 60
     const aptEndM = aptStartM + aptDuration
@@ -265,6 +266,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const router = useRouter()
   const searchParams = useSearchParams()
   const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
+  const [linkedAppointmentTime, setLinkedAppointmentTime] = useState<string | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
@@ -430,21 +432,52 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const currentTimeStr = format(new Date(), "HH:mm")
   const allStaffIds = staff.map((s) => String(s._id || s.id)).filter(Boolean)
 
-  /** Available staff for a given duration (uses current time for billing) */
-  const getAvailableStaffForSlot = (durationMinutes: number) => {
+  /** Available staff for a given duration. When from linked appointment, uses appointment time + offset and considers all appointments. */
+  const getAvailableStaffForSlot = (
+    durationMinutes: number,
+    slotTimeStr?: string,
+    slotDateStr?: string,
+    considerAll = false
+  ) => {
     return getAvailableStaffIds(
-      dateStr,
-      currentTimeStr,
+      slotDateStr ?? dateStr,
+      slotTimeStr ?? currentTimeStr,
       durationMinutes,
       appointmentsForDate,
       blockTimesForDate,
-      allStaffIds
+      allStaffIds,
+      considerAll
     )
   }
 
-  /** Staff list filtered by availability for a given duration. Excludes staff marked absent (Full Day Off). Pass includeIds to keep selected staff in list. */
-  const getAvailableStaffList = (durationMinutes: number, includeIds?: string[]) => {
-    const availableIds = getAvailableStaffForSlot(durationMinutes)
+  /** Staff list filtered by availability. Services are sequential: Service 0 at base, Service 1 at base+dur0, Service 2 at base+dur0+dur1, etc. */
+  const getAvailableStaffList = (
+    durationMinutes: number,
+    includeIds?: string[],
+    serviceIndex?: number
+  ) => {
+    let slotTimeStr = currentTimeStr
+    let considerAll = false
+    const baseTime = linkedAppointmentTime ?? currentTimeStr
+    if (serviceIndex != null) {
+      if (serviceIndex === 0) {
+        slotTimeStr = baseTime
+      } else {
+        let cumulativeM = 0
+        for (let i = 0; i < serviceIndex; i++) {
+          const item = serviceItems[i]
+          const raw = item?.serviceId
+        const sid = typeof raw === "object" && raw && "_id" in raw ? (raw as { _id: string })._id : raw
+          const svc = sid ? services.find((s) => (s._id || s.id) === sid) : null
+          cumulativeM += svc?.duration ?? 60
+        }
+        const baseM = parseTimeToMinutes(baseTime)
+        const slotM = baseM + cumulativeM
+        slotTimeStr = `${Math.floor(slotM / 60)}:${String(slotM % 60).padStart(2, "0")}`
+      }
+    }
+    if (linkedAppointmentId && linkedAppointmentTime) considerAll = true
+    const availableIds = getAvailableStaffForSlot(durationMinutes, slotTimeStr, dateStr, considerAll)
     const includeSet = new Set(includeIds?.map(String) || [])
     const dayOfWeek = selectedDate.getDay() // 0 = Sunday, 6 = Saturday
     return staff.filter((s) => {
@@ -827,6 +860,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
         if (appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id) {
           setLinkedAppointmentId(appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id)
+        }
+        if (appointmentData.time) {
+          setLinkedAppointmentTime(appointmentData.time)
         }
 
         // Find and set the client
@@ -3739,7 +3775,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
 
                 <div style={{ overflow: 'visible' }}>
-                  {serviceItems.map((item) => (
+                  {serviceItems.map((item, serviceIndex) => (
                   <div
                     key={item.id}
                     className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200"
@@ -3832,7 +3868,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         [...new Set([
                           ...(item.staffContributions || []).map((c) => c.staffId).filter(Boolean),
                           ...serviceItems.filter((s) => s.id !== item.id).flatMap((s) => (s.staffContributions || []).map((c) => c.staffId).filter(Boolean)),
-                        ])]
+                        ])],
+                        serviceIndex
                       )}
                       serviceTotal={item.total}
                       compact

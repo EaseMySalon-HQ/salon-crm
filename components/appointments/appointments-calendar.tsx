@@ -1038,7 +1038,9 @@ export const AppointmentsCalendar = forwardRef<
                           let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
                           if (a.bookingGroupId) {
                             const groupApts = appointments.filter(
-                              (apt) => apt.bookingGroupId === a.bookingGroupId
+                              (apt) =>
+                                apt.bookingGroupId === a.bookingGroupId &&
+                                (apt as any).status !== "cancelled"
                             )
                             for (const apt of groupApts) {
                               const svc = apt.serviceId
@@ -1079,6 +1081,8 @@ export const AppointmentsCalendar = forwardRef<
                             appointmentId: a._id,
                             clientId: a.clientId?._id || a.clientId,
                             clientName: a.clientId?.name || '',
+                            date: a.date,
+                            time: a.time,
                             services: services.length > 0 ? services : undefined,
                             serviceId: services.length === 1 ? services[0].serviceId : undefined,
                             serviceName: a.serviceId?.name || '',

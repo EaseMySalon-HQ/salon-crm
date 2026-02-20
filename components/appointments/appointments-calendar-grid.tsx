@@ -66,9 +66,11 @@ function getServiceDisplayNames(apt: { serviceId?: { name?: string; _id?: unknow
   return [primary, ...additional]
 }
 
-/** Total duration for multi-service appointments: primary + sum of additional services */
+/** Total duration for multi-service appointments: primary + sum of additional services.
+ * Uses apt.duration when set (e.g. from resize) so user overrides take precedence over service defaults. */
 function getTotalDuration(apt: { duration?: number; serviceId?: { duration?: number }; additionalServices?: Array<{ duration?: number }> }): number {
-  const primary = apt?.serviceId?.duration ?? apt?.duration ?? 60
+  if (apt?.duration != null && apt.duration > 0) return apt.duration
+  const primary = apt?.serviceId?.duration ?? 60
   const additional = (apt?.additionalServices || []).reduce((sum, s) => sum + (s.duration ?? 0), 0)
   return primary + additional
 }
@@ -1823,7 +1825,7 @@ export const AppointmentsCalendarGrid = forwardRef<
             {columns.length > 0 && (
               <div
                 ref={blocksContainerRef}
-                className="absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] pointer-events-none"
+                className="absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] z-[5] pointer-events-none"
                 style={{ height: totalSlotsWithSales * slotHeight }}
                 onClick={(e) => {
                   if (justDraggedRef.current) return
@@ -1937,7 +1939,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                         />
                         {/* Drag handle - top */}
                         <div
-                          className={`absolute top-0 left-0 right-0 z-20 h-2.5 flex flex-col items-center justify-center ${canDrag ? "!cursor-grab active:!cursor-grabbing hover:bg-black/[0.03]" : ""}`}
+                          className={`absolute top-0 left-0 right-0 z-20 h-3 flex flex-col items-center justify-center ${canDrag ? "!cursor-grab active:!cursor-grabbing hover:bg-black/[0.06]" : ""}`}
                           aria-hidden
                           onMouseDown={(e) => {
                             if (canDrag) handleResizeStart(e, apt, "resize-top")
@@ -1945,12 +1947,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                           title={canDrag ? "Drag to change start time or reassign staff" : undefined}
                         >
                           {canDrag && (
-                            <div className="pointer-events-none w-5 h-0.5 rounded-full bg-slate-400/40" aria-hidden />
+                            <div className="pointer-events-none w-6 h-0.5 rounded-full bg-slate-400/50" aria-hidden />
                           )}
                         </div>
                         {/* Main card body */}
                         <div
-                          className={`flex-1 pl-[14px] pr-3 pt-6 pb-3 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+                          className={`flex-1 pl-[14px] pr-3 pt-6 pb-4 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
                           onMouseDown={(e) => {
                             if (canDrag) handleTimeDragStart(e, apt)
                           }}
@@ -2046,15 +2048,16 @@ export const AppointmentsCalendarGrid = forwardRef<
                         </div>
                         {/* Resize handle - bottom */}
                         <div
-                          className={`h-2.5 min-h-2.5 shrink-0 flex items-center justify-center bg-slate-50/90 ${canDrag ? "hover:bg-slate-100 cursor-n-resize" : ""}`}
+                          className={`absolute bottom-0 left-0 right-0 z-20 h-4 flex items-center justify-center bg-slate-100/80 ${canDrag ? "hover:bg-slate-200/80 cursor-n-resize active:bg-slate-300/80" : ""}`}
                           aria-hidden
                           onMouseDown={(e) => {
+                            e.stopPropagation()
                             if (canDrag) handleResizeStart(e, apt, "resize-bottom")
                           }}
-                          title={canDrag ? "Drag to change duration" : undefined}
+                          title={canDrag ? "Drag to extend or shorten duration" : undefined}
                         >
                           {canDrag && (
-                            <div className="w-5 h-0.5 rounded-full bg-slate-400/50" aria-hidden />
+                            <div className="pointer-events-none w-8 h-1 rounded-full bg-slate-400/60" aria-hidden />
                           )}
                         </div>
                       </div>
@@ -2537,7 +2540,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                           let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
                           if (a.bookingGroupId) {
                             const groupApts = appointments.filter(
-                              (apt) => (apt as Appointment).bookingGroupId === a.bookingGroupId
+                              (apt) =>
+                                (apt as Appointment).bookingGroupId === a.bookingGroupId &&
+                                (apt as any).status !== "cancelled"
                             )
                             for (const apt of groupApts) {
                               const svc = (apt as any).serviceId
@@ -2578,6 +2583,8 @@ export const AppointmentsCalendarGrid = forwardRef<
                             appointmentId: a._id,
                             clientId: a.clientId?._id || a.clientId,
                             clientName: a.clientId?.name || "",
+                            date: a.date,
+                            time: a.time,
                             services: services.length > 0 ? services : undefined,
                             serviceId: services.length === 1 ? services[0].serviceId : undefined,
                             serviceName: a.serviceId?.name || "",

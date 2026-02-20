@@ -5959,30 +5959,103 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
 
     appointment.status = 'completed';
 
-    // Sync appointment services with actual services performed (e.g. Service B in addition to A)
-    // Skip for multi-staff bookings: each appointment in the group has its own service; don't overwrite with first sale item
-    if (!appointment.bookingGroupId && sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
-      const serviceItems = sale.items.filter((i) => i.type === 'service' && i.serviceId);
+    const aptStaffId = appointment.staffId ? String(appointment.staffId) : null;
+    const aptStaffFromAssignments = (appointment.staffAssignments || [])[0]?.staffId;
+    const linkedStaffId = aptStaffId || (aptStaffFromAssignments ? String(aptStaffFromAssignments) : null);
+
+    // Sync appointment services with actual services performed (added during checkout)
+    // Same staff: update this card with primary + additional. Different staff: create new card(s).
+    if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
+      const serviceItems = sale.items
+        .filter((i) => i.type === 'service' && i.serviceId)
+        .map((i) => {
+          const contrib = (i.staffContributions || [])[0];
+          const staffId = contrib ? String(contrib.staffId) : (i.staffId ? String(i.staffId) : null);
+          return { ...i, _primaryStaffId: staffId };
+        });
+
       if (serviceItems.length > 0) {
-        const serviceIds = serviceItems.map((i) => i.serviceId._id || i.serviceId);
-        const firstServiceId = serviceIds[0];
-        const firstItem = serviceItems[0];
-        const firstService = await businessModels.Service.findById(firstServiceId).lean();
-        if (firstService) {
-          appointment.serviceId = firstServiceId;
-          appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
-          // Additional services (B, C, ...) shown below primary on card
-          appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
-          // Total duration = sum of all service durations (card size reflects total time)
-          let totalDuration = firstService.duration ?? appointment.duration ?? 60;
-          if (serviceIds.length > 1) {
-            const additionalServices = await businessModels.Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
-            totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
-            console.log(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} services, total duration ${totalDuration} min`);
-          } else {
-            console.log(`✅ Appointment ${appointmentId} updated with actual service: ${firstService.name}`);
+        const { Service } = businessModels;
+        const servicesByStaff = new Map();
+        serviceItems.forEach((item, idx) => {
+          const sid = item._primaryStaffId || 'unknown';
+          if (!servicesByStaff.has(sid)) servicesByStaff.set(sid, []);
+          servicesByStaff.get(sid).push({ ...item, _order: idx });
+        });
+
+        const linkedServices = linkedStaffId ? (servicesByStaff.get(linkedStaffId) || []) : [];
+        const otherStaffServices = [];
+        servicesByStaff.forEach((items, sid) => {
+          if (sid !== 'unknown' && (!linkedStaffId || sid !== linkedStaffId)) {
+            otherStaffServices.push(...items);
           }
-          appointment.duration = totalDuration;
+        });
+
+        if (linkedServices.length > 0) {
+          const serviceIds = linkedServices.map((i) => i.serviceId._id || i.serviceId);
+          const firstServiceId = serviceIds[0];
+          const firstItem = linkedServices[0];
+          const firstService = await Service.findById(firstServiceId).lean();
+          if (firstService) {
+            appointment.serviceId = firstServiceId;
+            appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
+            appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
+            let totalDuration = firstService.duration ?? appointment.duration ?? 60;
+            if (serviceIds.length > 1) {
+              const additionalServices = await Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
+              totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
+            }
+            appointment.duration = totalDuration;
+            console.log(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
+          }
+        }
+
+        // Create new appointment cards for services with different staff (skip if staff already has a card in group)
+        if (otherStaffServices.length > 0) {
+          const existingGroupStaffIds = new Set();
+          if (appointment.bookingGroupId) {
+            const groupApts = await AppointmentModel.find({ bookingGroupId: appointment.bookingGroupId }).lean();
+            groupApts.forEach((a) => {
+              if (a.staffId) existingGroupStaffIds.add(String(a.staffId));
+              (a.staffAssignments || []).forEach((as) => { if (as.staffId) existingGroupStaffIds.add(String(as.staffId)); });
+            });
+          }
+          const baseTimeM = parseTimeToMinutes(appointment.time || '09:00');
+          const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+          const bookingGroupId = appointment.bookingGroupId || uuidv4();
+          if (!appointment.bookingGroupId) appointment.bookingGroupId = bookingGroupId;
+
+          for (const item of otherStaffServices) {
+            const contrib = (item.staffContributions || [])[0];
+            const staffId = contrib?.staffId || item.staffId;
+            if (!staffId || existingGroupStaffIds.has(String(staffId))) continue;
+            const idx = allOrdered.findIndex((o) => (o.serviceId._id || o.serviceId) === (item.serviceId._id || item.serviceId));
+            let cumulativeM = 0;
+            for (let i = 0; i < idx; i++) {
+              const s = await Service.findById(allOrdered[i].serviceId._id || allOrdered[i].serviceId).select('duration').lean();
+              cumulativeM += s?.duration ?? 60;
+            }
+            const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
+            const service = await Service.findById(item.serviceId._id || item.serviceId).lean();
+            if (!service) continue;
+
+            existingGroupStaffIds.add(String(staffId));
+            const newApt = new AppointmentModel({
+              clientId: appointment.clientId,
+              serviceId: item.serviceId._id || item.serviceId,
+              date: appointment.date,
+              time: serviceTime,
+              duration: service.duration ?? 60,
+              status: 'completed',
+              price: item.price ?? item.total ?? service.price ?? 0,
+              branchId: appointment.branchId,
+              bookingGroupId,
+              staffId,
+              staffAssignments: [{ staffId, percentage: 100, role: 'primary' }],
+            });
+            await newApt.save();
+            console.log(`✅ Created new appointment card for different-staff service: ${service.name}`);
+          }
         }
       }
     }
@@ -7118,9 +7191,14 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     const ownerName = businessOwner ? `${businessOwner.firstName || ''} ${businessOwner.lastName || ''}`.trim() || 'Owner' : null;
 
     // Fetch related appointments first (for multi-staff booking) so we can resolve all staff
+    // Exclude cancelled appointments - they should not appear when editing
     let relatedRaw = [];
     if (raw.bookingGroupId) {
-      relatedRaw = await Appointment.find({ bookingGroupId: raw.bookingGroupId, _id: { $ne: id } }).lean();
+      relatedRaw = await Appointment.find({
+        bookingGroupId: raw.bookingGroupId,
+        _id: { $ne: id },
+        status: { $ne: 'cancelled' }
+      }).lean();
     }
     const allAppointmentsForStaff = [raw, ...relatedRaw];
     const staffIds = [];
