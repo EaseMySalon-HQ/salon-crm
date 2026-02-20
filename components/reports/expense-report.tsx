@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Search, Download, Filter, Receipt, DollarSign, TrendingUp, MoreHorizontal, Eye, Pencil, Trash2, FileText, FileSpreadsheet, ChevronDown } from "lucide-react"
+import { Search, Download, Filter, Receipt, DollarSign, TrendingUp, MoreHorizontal, Eye, Pencil, Trash2, FileText, FileSpreadsheet, ChevronDown, Wallet } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -11,7 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { format } from "date-fns"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { ExpensesAPI } from "@/lib/api"
+import { ExpensesAPI, CashRegistryAPI, PettyCashAPI } from "@/lib/api"
+import { ExpenseForm } from "@/components/expenses/expense-form"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
 import jsPDF from "jspdf"
@@ -27,6 +28,7 @@ interface ExpenseRecord {
   date: string
   staffName?: string
   notes?: string
+  vendor?: string
 }
 
 type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "all"
@@ -44,31 +46,103 @@ export function ExpenseReport() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [pettyCashBalance, setPettyCashBalance] = useState<number | null>(null)
+  const [isAddPettyCashOpen, setIsAddPettyCashOpen] = useState(false)
+  const [isViewLogsOpen, setIsViewLogsOpen] = useState(false)
+  const [addPettyCashAmount, setAddPettyCashAmount] = useState("")
+  const [addPettyCashDate, setAddPettyCashDate] = useState(format(new Date(), "yyyy-MM-dd"))
+  const [pettyCashLogs, setPettyCashLogs] = useState<{ type: string; amount: number; date: string }[]>([])
+  const [pettyCashLogsLoading, setPettyCashLogsLoading] = useState(false)
 
-  // Mock data - replace with actual API call
-  useEffect(() => {
-    async function fetchExpenses() {
-      setLoading(true)
-      try {
-        const res = await ExpensesAPI.getAll()
-        const apiData = res.data || []
+  const fetchExpenses = async () => {
+    setLoading(true)
+    try {
+      const res = await ExpensesAPI.getAll()
+      const apiData = res.data || []
         const mapped = apiData.map((expense: any) => ({
           id: expense._id,
           category: expense.category,
           description: expense.description,
           amount: expense.amount,
-          paymentMethod: expense.paymentMethod,
+          paymentMethod: expense.paymentMode || expense.paymentMethod || '',
           date: expense.date,
           staffName: expense.staffName,
           notes: expense.notes,
+          vendor: expense.vendor,
         }))
-        setExpensesData(mapped)
-      } catch (err) {
-        setExpensesData([])
-      }
-      setLoading(false)
+      setExpensesData(mapped)
+    } catch (err) {
+      setExpensesData([])
     }
+    setLoading(false)
+  }
+
+  useEffect(() => {
     fetchExpenses()
+  }, [])
+
+  const fetchPettyCash = async () => {
+    try {
+      const today = format(new Date(), "yyyy-MM-dd")
+      const res = await CashRegistryAPI.getPettyCashSummary(today)
+      if (res.success && res.data) {
+        setPettyCashBalance(res.data.expectedBalance)
+      } else {
+        setPettyCashBalance(null)
+      }
+    } catch {
+      setPettyCashBalance(null)
+    }
+  }
+
+  useEffect(() => {
+    fetchPettyCash()
+  }, [expensesData])
+
+  const handleAddPettyCash = async () => {
+    const amt = parseFloat(addPettyCashAmount)
+    if (!amt || amt <= 0) {
+      toast({ title: "Invalid amount", description: "Please enter a valid amount.", variant: "destructive" })
+      return
+    }
+    try {
+      const res = await PettyCashAPI.addBalance(amt, addPettyCashDate)
+      if (res.success) {
+        toast({ title: "Success", description: `₹${amt.toFixed(2)} added to petty cash.` })
+        setIsAddPettyCashOpen(false)
+        setAddPettyCashAmount("")
+        setAddPettyCashDate(format(new Date(), "yyyy-MM-dd"))
+        fetchPettyCash()
+      } else {
+        throw new Error(res.error)
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error || (err as Error)?.message || "Failed to add petty cash"
+      toast({ title: "Error", description: String(msg), variant: "destructive" })
+    }
+  }
+
+  const handleOpenViewLogs = async () => {
+    setIsViewLogsOpen(true)
+    setPettyCashLogsLoading(true)
+    try {
+      const res = await PettyCashAPI.getLogs()
+      if (res.success && res.data) {
+        setPettyCashLogs(res.data)
+      } else {
+        setPettyCashLogs([])
+      }
+    } catch {
+      setPettyCashLogs([])
+    } finally {
+      setPettyCashLogsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    const handler = () => fetchExpenses()
+    window.addEventListener('expense-added', handler)
+    return () => window.removeEventListener('expense-added', handler)
   }, [])
 
   // Function to get date range based on selected period
@@ -402,11 +476,15 @@ export function ExpenseReport() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
-                  <SelectItem value="Utilities">Utilities</SelectItem>
-                  <SelectItem value="Rent">Rent</SelectItem>
                   <SelectItem value="Supplies">Supplies</SelectItem>
+                  <SelectItem value="Equipment">Equipment</SelectItem>
+                  <SelectItem value="Utilities">Utilities</SelectItem>
                   <SelectItem value="Marketing">Marketing</SelectItem>
+                  <SelectItem value="Rent">Rent</SelectItem>
+                  <SelectItem value="Insurance">Insurance</SelectItem>
                   <SelectItem value="Maintenance">Maintenance</SelectItem>
+                  <SelectItem value="Professional Services">Professional Services</SelectItem>
+                  <SelectItem value="Travel">Travel</SelectItem>
                   <SelectItem value="Other">Other</SelectItem>
                 </SelectContent>
               </Select>
@@ -419,7 +497,9 @@ export function ExpenseReport() {
                   <SelectItem value="Cash">Cash</SelectItem>
                   <SelectItem value="Card">Card</SelectItem>
                   <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
-                  <SelectItem value="Check">Check</SelectItem>
+                  <SelectItem value="UPI">UPI</SelectItem>
+                  <SelectItem value="Cheque">Cheque</SelectItem>
+                  <SelectItem value="Petty Cash Wallet">Petty Cash Wallet</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -464,7 +544,7 @@ export function ExpenseReport() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-sm font-medium text-gray-900">Total Expenses</CardTitle>
@@ -505,6 +585,29 @@ export function ExpenseReport() {
             <p className="text-sm text-gray-500">Per transaction</p>
           </CardContent>
         </Card>
+
+        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-medium text-gray-900">Petty Cash Balance</CardTitle>
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <Wallet className="h-4 w-4 text-gray-600" />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="text-2xl font-bold text-gray-900">
+              {pettyCashBalance !== null ? formatAmount(pettyCashBalance) : "—"}
+            </div>
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <button type="button" onClick={() => setIsAddPettyCashOpen(true)} className="hover:underline hover:text-gray-700">
+                Add Petty Cash
+              </button>
+              <span className="text-gray-400">·</span>
+              <button type="button" onClick={handleOpenViewLogs} className="hover:underline hover:text-gray-700">
+                View Logs
+              </button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Expense Table – same layout as Service List / Sales */}
@@ -514,9 +617,11 @@ export function ExpenseReport() {
             <TableHeader>
               <TableRow className="bg-slate-50 border-b border-slate-200">
                 <TableHead className="font-semibold text-slate-800">Category</TableHead>
-                <TableHead className="font-semibold text-slate-800">Description</TableHead>
+                <TableHead className="font-semibold text-slate-800">Vendor</TableHead>
                 <TableHead className="font-semibold text-slate-800">Amount</TableHead>
                 <TableHead className="font-semibold text-slate-800">Payment Method</TableHead>
+                <TableHead className="font-semibold text-slate-800">Transaction Id</TableHead>
+                <TableHead className="font-semibold text-slate-800">Description</TableHead>
                 <TableHead className="font-semibold text-slate-800">Date</TableHead>
                 <TableHead className="font-semibold text-slate-800">Actions</TableHead>
               </TableRow>
@@ -524,7 +629,7 @@ export function ExpenseReport() {
             <TableBody>
               {filteredData.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-12 text-slate-500">
+                  <TableCell colSpan={8} className="text-center py-12 text-slate-500">
                     No expenses found for the selected filters.
                   </TableCell>
                 </TableRow>
@@ -536,14 +641,18 @@ export function ExpenseReport() {
                         {expense.category}
                       </span>
                     </TableCell>
-                    <TableCell className="max-w-[200px] truncate text-slate-800" title={expense.description}>
-                      {expense.description}
+                    <TableCell className="max-w-[120px] truncate text-slate-800" title={expense.vendor || ''}>
+                      {expense.vendor || '—'}
                     </TableCell>
                     <TableCell className="font-mono font-semibold text-red-700">{formatAmount(expense.amount)}</TableCell>
                     <TableCell>
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
                         {expense.paymentMethod}
                       </span>
+                    </TableCell>
+                    <TableCell className="text-slate-600 font-mono text-sm">{expense.notes || '—'}</TableCell>
+                    <TableCell className="max-w-[200px] truncate text-slate-800" title={expense.description}>
+                      {expense.description}
                     </TableCell>
                     <TableCell className="text-slate-600">{format(new Date(expense.date), 'MMM dd, yyyy')}</TableCell>
                     <TableCell>
@@ -612,6 +721,10 @@ export function ExpenseReport() {
                   <label className="text-sm font-medium text-muted-foreground">Date</label>
                   <p className="text-lg">{format(new Date(selectedExpense.date), 'MMM dd, yyyy')}</p>
                 </div>
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground">Vendor</label>
+                  <p className="text-lg">{selectedExpense.vendor || '—'}</p>
+                </div>
                 <div className="col-span-2">
                   <label className="text-sm font-medium text-muted-foreground">Description</label>
                   <p className="text-lg">{selectedExpense.description}</p>
@@ -622,12 +735,10 @@ export function ExpenseReport() {
                     <p className="text-lg">{selectedExpense.staffName}</p>
                   </div>
                 )}
-                {selectedExpense.notes && (
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Notes</label>
-                    <p className="text-lg">{selectedExpense.notes}</p>
-                  </div>
-                )}
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground">Transaction Id</label>
+                  <p className="text-lg">{selectedExpense.notes || '—'}</p>
+                </div>
               </div>
             </div>
           )}
@@ -636,6 +747,43 @@ export function ExpenseReport() {
               Close
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Expense Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={(open) => {
+        setIsEditDialogOpen(open)
+        if (!open) setSelectedExpense(null)
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Expense</DialogTitle>
+            <DialogDescription>
+              Update the expense details below.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedExpense && (
+            <ExpenseForm
+              key={selectedExpense.id}
+              expense={{
+                id: selectedExpense.id,
+                category: selectedExpense.category,
+                description: selectedExpense.description,
+                amount: selectedExpense.amount,
+                paymentMode: selectedExpense.paymentMethod,
+                paymentMethod: selectedExpense.paymentMethod,
+                date: selectedExpense.date,
+                notes: selectedExpense.notes,
+                vendor: selectedExpense.vendor,
+              }}
+              isEditMode={true}
+              onClose={() => {
+                setIsEditDialogOpen(false)
+                setSelectedExpense(null)
+                fetchExpenses()
+              }}
+            />
+          )}
         </DialogContent>
       </Dialog>
 
@@ -657,6 +805,93 @@ export function ExpenseReport() {
               Delete
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Petty Cash Dialog */}
+      <Dialog open={isAddPettyCashOpen} onOpenChange={setIsAddPettyCashOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Petty Cash</DialogTitle>
+            <DialogDescription>
+              Add amount to the petty cash balance.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Amount (₹)</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={addPettyCashAmount}
+                  onChange={(e) => setAddPettyCashAmount(e.target.value)}
+                  className="pl-8"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Date</label>
+              <Input
+                type="date"
+                value={addPettyCashDate}
+                onChange={(e) => setAddPettyCashDate(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAddPettyCashOpen(false)}>Cancel</Button>
+            <Button onClick={handleAddPettyCash}>Add</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Petty Cash Logs Dialog */}
+      <Dialog open={isViewLogsOpen} onOpenChange={setIsViewLogsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Petty Cash Logs</DialogTitle>
+            <DialogDescription>
+              History of petty cash additions and deductions.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[400px] overflow-y-auto">
+            {pettyCashLogsLoading ? (
+              <p className="text-sm text-muted-foreground py-8 text-center">Loading...</p>
+            ) : pettyCashLogs.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-8 text-center">No logs yet.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>Date</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pettyCashLogs.map((log, i) => (
+                    <TableRow key={i}>
+                      <TableCell>
+                        <Badge variant={log.type === "add" ? "default" : "secondary"}>
+                          {log.type === "add" ? "Added" : "Deducted"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className={`text-right font-mono ${log.amount >= 0 ? "text-green-600" : "text-red-600"}`}>
+                        {log.amount >= 0 ? "+" : ""}{formatAmount(log.amount)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {format(new Date(log.date), "MMM dd, yyyy")}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

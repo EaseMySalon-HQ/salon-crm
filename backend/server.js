@@ -10,7 +10,7 @@ const cron = require('node-cron');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
-const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST } = require('./utils/date-utils');
+const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -5944,7 +5944,7 @@ app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
+const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = null, businessModels = null) => {
   if (!AppointmentModel || !appointmentId) return;
   try {
     const appointment = await AppointmentModel.findById(appointmentId);
@@ -5958,8 +5958,121 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
     }
 
     appointment.status = 'completed';
+
+    const aptStaffId = appointment.staffId ? String(appointment.staffId) : null;
+    const aptStaffFromAssignments = (appointment.staffAssignments || [])[0]?.staffId;
+    const linkedStaffId = aptStaffId || (aptStaffFromAssignments ? String(aptStaffFromAssignments) : null);
+
+    // Sync appointment services with actual services performed (added during checkout)
+    // Same staff: update this card with primary + additional. Different staff: create new card(s).
+    if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
+      const serviceItems = sale.items
+        .filter((i) => i.type === 'service' && i.serviceId)
+        .map((i) => {
+          const contrib = (i.staffContributions || [])[0];
+          const staffId = contrib ? String(contrib.staffId) : (i.staffId ? String(i.staffId) : null);
+          return { ...i, _primaryStaffId: staffId };
+        });
+
+      if (serviceItems.length > 0) {
+        const { Service } = businessModels;
+        const servicesByStaff = new Map();
+        serviceItems.forEach((item, idx) => {
+          const sid = item._primaryStaffId || 'unknown';
+          if (!servicesByStaff.has(sid)) servicesByStaff.set(sid, []);
+          servicesByStaff.get(sid).push({ ...item, _order: idx });
+        });
+
+        const linkedServices = linkedStaffId ? (servicesByStaff.get(linkedStaffId) || []) : [];
+        const otherStaffServices = [];
+        servicesByStaff.forEach((items, sid) => {
+          if (sid !== 'unknown' && (!linkedStaffId || sid !== linkedStaffId)) {
+            otherStaffServices.push(...items);
+          }
+        });
+
+        if (linkedServices.length > 0) {
+          const serviceIds = linkedServices.map((i) => i.serviceId._id || i.serviceId);
+          const firstServiceId = serviceIds[0];
+          const firstItem = linkedServices[0];
+          const firstService = await Service.findById(firstServiceId).lean();
+          if (firstService) {
+            appointment.serviceId = firstServiceId;
+            appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
+            appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
+            let totalDuration = firstService.duration ?? appointment.duration ?? 60;
+            if (serviceIds.length > 1) {
+              const additionalServices = await Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
+              totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
+            }
+            appointment.duration = totalDuration;
+            console.log(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
+          }
+        }
+
+        // Create new appointment cards for services with different staff (skip if staff already has a card in group)
+        if (otherStaffServices.length > 0) {
+          const existingGroupStaffIds = new Set();
+          if (appointment.bookingGroupId) {
+            const groupApts = await AppointmentModel.find({ bookingGroupId: appointment.bookingGroupId }).lean();
+            groupApts.forEach((a) => {
+              if (a.staffId) existingGroupStaffIds.add(String(a.staffId));
+              (a.staffAssignments || []).forEach((as) => { if (as.staffId) existingGroupStaffIds.add(String(as.staffId)); });
+            });
+          }
+          const baseTimeM = parseTimeToMinutes(appointment.time || '09:00');
+          const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+          const bookingGroupId = appointment.bookingGroupId || uuidv4();
+          if (!appointment.bookingGroupId) appointment.bookingGroupId = bookingGroupId;
+
+          for (const item of otherStaffServices) {
+            const contrib = (item.staffContributions || [])[0];
+            const staffId = contrib?.staffId || item.staffId;
+            if (!staffId || existingGroupStaffIds.has(String(staffId))) continue;
+            const idx = allOrdered.findIndex((o) => (o.serviceId._id || o.serviceId) === (item.serviceId._id || item.serviceId));
+            let cumulativeM = 0;
+            for (let i = 0; i < idx; i++) {
+              const s = await Service.findById(allOrdered[i].serviceId._id || allOrdered[i].serviceId).select('duration').lean();
+              cumulativeM += s?.duration ?? 60;
+            }
+            const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
+            const service = await Service.findById(item.serviceId._id || item.serviceId).lean();
+            if (!service) continue;
+
+            existingGroupStaffIds.add(String(staffId));
+            const newApt = new AppointmentModel({
+              clientId: appointment.clientId,
+              serviceId: item.serviceId._id || item.serviceId,
+              date: appointment.date,
+              time: serviceTime,
+              duration: service.duration ?? 60,
+              status: 'completed',
+              price: item.price ?? item.total ?? service.price ?? 0,
+              branchId: appointment.branchId,
+              bookingGroupId,
+              staffId,
+              staffAssignments: [{ staffId, percentage: 100, role: 'primary' }],
+            });
+            await newApt.save();
+            console.log(`✅ Created new appointment card for different-staff service: ${service.name}`);
+          }
+        }
+      }
+    }
+
     await appointment.save();
     console.log(`✅ Appointment ${appointmentId} marked as completed after sale.`);
+
+    // Mark all appointments in the same booking group as completed (multi-staff cards)
+    if (appointment.bookingGroupId) {
+      const groupUpdated = await AppointmentModel.updateMany(
+        { bookingGroupId: appointment.bookingGroupId, _id: { $ne: appointmentId } },
+        { $set: { status: 'completed' } }
+      );
+      if (groupUpdated.modifiedCount > 0) {
+        console.log(`✅ ${groupUpdated.modifiedCount} related appointment(s) in group marked as completed.`);
+      }
+    }
   } catch (error) {
     console.error('❌ Failed to mark appointment as completed:', error);
   }
@@ -6036,19 +6149,28 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
       return a;
     });
 
-    // Populate clientId and serviceId (they're in business DB)
+    // Populate clientId, serviceId, and additionalServiceIds (they're in business DB)
     const clientIds = [...new Set(appointments.map((a) => a.clientId).filter(Boolean))];
-    const serviceIds = [...new Set(appointments.map((a) => a.serviceId).filter(Boolean))];
+    const primaryServiceIds = [...new Set(appointments.map((a) => a.serviceId).filter(Boolean))];
+    const additionalIds = appointments.flatMap((a) => a.additionalServiceIds || []).filter(Boolean);
+    const allServiceIds = [...new Set([...primaryServiceIds.map((id) => id.toString()), ...additionalIds.map((id) => id.toString())])];
     const { Client, Service } = req.businessModels;
     const [clients, services] = await Promise.all([
       clientIds.length ? Client.find({ _id: { $in: clientIds } }).select('name phone email').lean() : [],
-      serviceIds.length ? Service.find({ _id: { $in: serviceIds } }).select('name price duration').lean() : [],
+      allServiceIds.length ? Service.find({ _id: { $in: allServiceIds } }).select('name price duration').lean() : [],
     ]);
     const clientMap = new Map(clients.map((c) => [c._id.toString(), c]));
     const serviceMap = new Map(services.map((s) => [s._id.toString(), s]));
     appointments.forEach((a) => {
       if (a.clientId) a.clientId = clientMap.get(a.clientId.toString()) || a.clientId;
       if (a.serviceId) a.serviceId = serviceMap.get(a.serviceId.toString()) || a.serviceId;
+      if (a.additionalServiceIds && a.additionalServiceIds.length) {
+        a.additionalServices = a.additionalServiceIds
+          .map((id) => serviceMap.get(id.toString()))
+          .filter(Boolean);
+      } else {
+        a.additionalServices = [];
+      }
     });
 
     res.json({
@@ -6082,55 +6204,60 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       });
     }
 
-    // Create appointments for each service
+    const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
+
+    // Helper: get primary staff ID from a service for comparison
+    const getPrimaryStaffId = (s) => {
+      const id = s.staffId || (s.staffAssignments && s.staffAssignments[0] && s.staffAssignments[0].staffId);
+      return id ? String(id) : null;
+    };
+
+    // When all services have the same staff: create single appointment card listing all services
+    const allSameStaff = services.length > 1 && services.every((s, i) => {
+      const a = getPrimaryStaffId(services[0]);
+      const b = getPrimaryStaffId(s);
+      return a && b && a === b;
+    });
+
     const createdAppointments = [];
-    
-    for (const service of services) {
-      const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
+
+    if (allSameStaff && services.length > 1) {
+      // Single appointment with multiple services (same staff)
+      const first = services[0];
+      const additionalIds = services.slice(1).map((s) => s.serviceId);
+      const totalDur = services.reduce((sum, s) => sum + (s.duration || 0), 0);
+      const totalPrice = services.reduce((sum, s) => sum + (s.price || 0), 0);
+
       const appointmentData = {
         clientId,
-        serviceId: service.serviceId,
+        serviceId: first.serviceId,
+        additionalServiceIds: additionalIds,
         date,
         time,
-        duration: service.duration,
+        duration: totalDur,
         status,
         notes,
         leadSource: leadSource || '',
         createdBy,
-        price: service.price,
+        price: totalPrice,
         branchId: req.user.branchId
       };
 
-      // Handle multiple staff assignments
-      if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
-        appointmentData.staffAssignments = service.staffAssignments;
-        // Validate that percentages add up to 100%
-        const totalPercentage = service.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+      if (first.staffAssignments && Array.isArray(first.staffAssignments)) {
+        appointmentData.staffAssignments = first.staffAssignments;
+        const totalPercentage = first.staffAssignments.reduce((sum, a) => sum + a.percentage, 0);
         if (Math.abs(totalPercentage - 100) > 0.01) {
-          return res.status(400).json({
-            success: false,
-            error: 'Staff assignment percentages must add up to 100%'
-          });
+          return res.status(400).json({ success: false, error: 'Staff assignment percentages must add up to 100%' });
         }
-      } else if (service.staffId) {
-        // Legacy support - single staff member
-        appointmentData.staffId = service.staffId;
-        appointmentData.staffAssignments = [{
-          staffId: service.staffId,
-          percentage: 100,
-          role: 'primary'
-        }];
+      } else if (first.staffId) {
+        appointmentData.staffId = first.staffId;
+        appointmentData.staffAssignments = [{ staffId: first.staffId, percentage: 100, role: 'primary' }];
       } else {
-        return res.status(400).json({
-          success: false,
-          error: 'Either staffId or staffAssignments is required'
-        });
+        return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
       }
 
       const newAppointment = new Appointment(appointmentData);
       const savedAppointment = await newAppointment.save();
-      
-      // Populate the saved appointment with related data
       const populatedAppointment = await Appointment.findById(savedAppointment._id)
         .populate('clientId', 'name phone email')
         .populate('serviceId', 'name price duration')
@@ -6138,6 +6265,66 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         .populate('staffAssignments.staffId', 'name role');
 
       createdAppointments.push(populatedAppointment);
+    } else {
+      // Different staff per service (or single service): create one appointment per service
+      // Each service starts after the previous ends (sequential: Service A 9:00–9:30, Service B 9:30–10:00)
+      const bookingGroupId = uuidv4();
+      const baseTimeMinutes = parseTimeToMinutes(time);
+      let cumulativeMinutes = 0;
+      for (let i = 0; i < services.length; i++) {
+        const service = services[i];
+        const serviceStartMinutes = baseTimeMinutes + cumulativeMinutes;
+        const serviceTime = minutesToTimeString(serviceStartMinutes);
+        cumulativeMinutes += service.duration || 0;
+        const appointmentData = {
+          clientId,
+          serviceId: service.serviceId,
+          date,
+          time: serviceTime,
+          duration: service.duration,
+          status,
+          notes,
+          leadSource: leadSource || '',
+          createdBy,
+          price: service.price,
+          branchId: req.user.branchId,
+          bookingGroupId
+        };
+
+        if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
+          appointmentData.staffAssignments = service.staffAssignments;
+          const totalPercentage = service.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+          if (Math.abs(totalPercentage - 100) > 0.01) {
+            return res.status(400).json({
+              success: false,
+              error: 'Staff assignment percentages must add up to 100%'
+            });
+          }
+        } else if (service.staffId) {
+          appointmentData.staffId = service.staffId;
+          appointmentData.staffAssignments = [{
+            staffId: service.staffId,
+            percentage: 100,
+            role: 'primary'
+          }];
+        } else {
+          return res.status(400).json({
+            success: false,
+            error: 'Either staffId or staffAssignments is required'
+          });
+        }
+
+        const newAppointment = new Appointment(appointmentData);
+        const savedAppointment = await newAppointment.save();
+
+        const populatedAppointment = await Appointment.findById(savedAppointment._id)
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role')
+          .populate('staffAssignments.staffId', 'name role');
+
+        createdAppointments.push(populatedAppointment);
+      }
     }
 
     // Send email notifications if enabled
@@ -7003,9 +7190,22 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     const ownerId = businessOwner?._id?.toString();
     const ownerName = businessOwner ? `${businessOwner.firstName || ''} ${businessOwner.lastName || ''}`.trim() || 'Owner' : null;
 
+    // Fetch related appointments first (for multi-staff booking) so we can resolve all staff
+    // Exclude cancelled appointments - they should not appear when editing
+    let relatedRaw = [];
+    if (raw.bookingGroupId) {
+      relatedRaw = await Appointment.find({
+        bookingGroupId: raw.bookingGroupId,
+        _id: { $ne: id },
+        status: { $ne: 'cancelled' }
+      }).lean();
+    }
+    const allAppointmentsForStaff = [raw, ...relatedRaw];
     const staffIds = [];
-    if (raw.staffId) staffIds.push(raw.staffId);
-    (raw.staffAssignments || []).forEach((as) => { if (as.staffId) staffIds.push(as.staffId); });
+    allAppointmentsForStaff.forEach((apt) => {
+      if (apt.staffId) staffIds.push(apt.staffId);
+      (apt.staffAssignments || []).forEach((as) => { if (as.staffId) staffIds.push(as.staffId); });
+    });
     const staffFromDb = staffIds.length ? await Staff.find({ _id: { $in: staffIds } }).select('_id name role').lean() : [];
     const staffMap = new Map(staffFromDb.map((s) => [s._id.toString(), { _id: s._id, name: s.name, role: s.role }]));
     const resolveStaff = (sid) => {
@@ -7032,8 +7232,45 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       const service = await Service.findById(raw.serviceId).select('name price duration').lean();
       appointment.serviceId = service || raw.serviceId;
     }
+    if (raw.additionalServiceIds && raw.additionalServiceIds.length) {
+      const additionalServices = await Service.find({ _id: { $in: raw.additionalServiceIds } }).select('name price duration').lean();
+      appointment.additionalServices = additionalServices;
+    } else {
+      appointment.additionalServices = [];
+    }
 
-    res.json({ success: true, data: appointment });
+    // When editing multi-staff booking: return all appointments in the same group
+    let relatedAppointments = [];
+    if (raw.bookingGroupId && relatedRaw.length) {
+      const relatedServiceIds = relatedRaw.map((r) => r.serviceId).filter(Boolean);
+      const relatedServices = relatedServiceIds.length
+        ? await Service.find({ _id: { $in: relatedServiceIds } }).select('name price duration').lean()
+        : [];
+      const serviceMap = new Map(relatedServices.map((s) => [s._id.toString(), s]));
+      relatedAppointments = relatedRaw
+        .sort((a, b) => {
+          const am = parseTimeToMinutes(a.time || '');
+          const bm = parseTimeToMinutes(b.time || '');
+          return am - bm;
+        })
+        .map((r) => {
+          const rApp = { ...r };
+          rApp.staffId = r.staffId ? resolveStaff(r.staffId) : null;
+          rApp.staffAssignments = (r.staffAssignments || []).map((as) => ({
+            ...as,
+            staffId: as.staffId ? resolveStaff(as.staffId) : null,
+          }));
+          const svc = r.serviceId ? serviceMap.get(r.serviceId.toString()) : null;
+          rApp.serviceId = svc || r.serviceId;
+          return rApp;
+        });
+    }
+
+    res.json({
+      success: true,
+      data: appointment,
+      relatedAppointments: relatedAppointments.length ? relatedAppointments : undefined,
+    });
   } catch (error) {
     console.error('Error fetching appointment:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch appointment' });
@@ -7063,7 +7300,19 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     // Check if status is being changed to cancelled
     const previousStatus = appointment.status;
     const isBeingCancelled = updateData.status === 'cancelled' && previousStatus !== 'cancelled';
-    
+
+    // Arrival, scheduled, and completed are appointment-level: sync across all cards in the same booking group
+    const appointmentLevelStatuses = ['arrived', 'scheduled', 'completed'];
+    const isAppointmentLevelStatus = updateData.status && appointmentLevelStatuses.includes(updateData.status);
+    const bookingGroupId = appointment.bookingGroupId;
+
+    if (isAppointmentLevelStatus && bookingGroupId) {
+      await Appointment.updateMany(
+        { bookingGroupId },
+        { $set: { status: updateData.status } }
+      );
+    }
+
     console.log('📧 Appointment Update Check:', {
       appointmentId: id,
       previousStatus: previousStatus,
@@ -7469,6 +7718,13 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
       status: { $in: ['approved', 'pending'] }
     }).lean();
 
+    const pettyCashExpenses = await Expense.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      paymentMode: 'Petty Cash Wallet',
+      status: { $in: ['approved', 'pending'] }
+    }).lean();
+
     const totalBillCount = sales.length;
     const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
     const totalCustomerCount = uniqueCustomers.size || totalBillCount;
@@ -7507,6 +7763,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     });
     // Use Expense collection as source of truth for cash expenses; closingRegistry.expenseValue is 0 when not yet closed
     const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const pettyCashExpense = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     // Tip collected: sum from Sales (Quick Sale flow) + Receipts (manual receipt flow), for selected date range, all staff
     const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
     const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
@@ -7527,6 +7784,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         duesCollected,
         cashDuesCollected,
         cashExpense,
+        pettyCashExpense,
         tipCollected,
         cashBalance,
         openingBalance,
@@ -7644,7 +7902,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     }
 
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
-      await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
     }
 
     // Auto consumption: deduct inventory for completed service lines (only when bill status is completed)
@@ -8318,6 +8576,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'payments',
       'paymentMode',
       'status', // Allow updating status when payments change
+      'tip',
+      'tipStaffId',
+      'tipStaffName',
     ];
 
     editableRootFields.forEach((field) => {
@@ -8326,9 +8587,14 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           // Only allow adjusting dueDate and totalAmount; keep paidAmount as is
           const currentPaymentStatus = existingSale.paymentStatus || {};
           const incoming = updateData.paymentStatus || {};
+          // totalAmount = netTotal (grossTotal + tip) - use incoming when provided so tip removal is reflected
+          const totalAmount = incoming.totalAmount != null
+            ? Number(incoming.totalAmount)
+            : Number(updateData.netTotal ?? updateData.grossTotal ?? currentPaymentStatus.totalAmount);
           existingSale.paymentStatus = {
             ...currentPaymentStatus,
-            totalAmount: Number(updateData.grossTotal ?? currentPaymentStatus.totalAmount),
+            totalAmount,
+            remainingAmount: totalAmount - Number(incoming.paidAmount ?? currentPaymentStatus.paidAmount ?? 0),
             dueDate: incoming.dueDate || currentPaymentStatus.dueDate,
           };
         } else if (field === 'items') {
@@ -8347,6 +8613,14 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           console.log('💳 Updating paymentMode:', updateData.paymentMode);
           existingSale.paymentMode = updateData.paymentMode || '';
           console.log('💳 Updated paymentMode on sale:', existingSale.paymentMode);
+        } else if (field === 'tip') {
+          existingSale.tip = Number(updateData.tip) || 0;
+          existingSale.tipStaffId = existingSale.tip > 0 ? (updateData.tipStaffId || null) : null;
+          existingSale.tipStaffName = existingSale.tip > 0 ? (updateData.tipStaffName || '') : '';
+        } else if (field === 'tipStaffId') {
+          existingSale.tipStaffId = updateData.tipStaffId ?? null;
+        } else if (field === 'tipStaffName') {
+          existingSale.tipStaffName = updateData.tipStaffName ?? '';
         } else {
           existingSale[field] = updateData[field];
         }
@@ -8363,7 +8637,8 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       }, 0);
       
       console.log('💰 Calculated newPaidAmount:', newPaidAmount);
-      const totalAmount = Number(updateData.grossTotal || existingSale.grossTotal || existingSale.paymentStatus?.totalAmount || 0);
+      // totalAmount = netTotal (grossTotal + tip) so tip removal is reflected
+      const totalAmount = Number(updateData.netTotal ?? updateData.paymentStatus?.totalAmount ?? updateData.grossTotal ?? existingSale.paymentStatus?.totalAmount ?? existingSale.grossTotal ?? 0);
       console.log('💰 Total amount:', totalAmount);
       
       if (!existingSale.paymentStatus) {
@@ -8454,7 +8729,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     // Mark linked appointment as completed if now fully paid
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       const { Appointment } = req.businessModels;
-      await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
     }
 
     const newStatus = String(savedSale.status || '').toLowerCase();
@@ -8864,7 +9139,7 @@ app.post('/api/sales/:id/payment', authenticateToken, setupBusinessDatabase, req
     const updatedSale = await sale.addPayment(paymentData);
 
     if (updatedSale.appointmentId && String(updatedSale.status).toLowerCase() === 'completed') {
-      await markAppointmentCompleted(Appointment, updatedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, updatedSale.appointmentId, updatedSale, req.businessModels);
     }
     
     res.json({ 
@@ -9228,9 +9503,18 @@ app.get('/api/expenses', authenticateToken, setupBusinessDatabase, requireManage
 app.post('/api/expenses', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Expense } = req.businessModels;
+    const { category, paymentMode, description, amount, date, status, vendor, notes, approvedBy } = req.body;
     const expenseData = {
-      ...req.body,
-      createdBy: req.user.id,
+      category,
+      paymentMode,
+      description: (description || '').trim() || 'No description',
+      amount: Number(amount),
+      date: date ? new Date(date) : new Date(),
+      status: status || 'pending',
+      vendor: (vendor || '').trim(),
+      notes: (notes || '').trim(),
+      approvedBy: (approvedBy || '').trim(),
+      createdBy: req.user._id || req.user.id,
       branchId: req.user.branchId
     };
     
@@ -10167,6 +10451,93 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
 
 // Cash Registry Routes
 // Note: Specific routes must come before parameterized routes
+app.get('/api/cash-registry/petty-cash-summary', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Expense, PettyCashTransaction } = req.businessModels;
+    const { date } = req.query;
+    const dateStr = date || new Date().toISOString().split('T')[0];
+    const endOfDay = getEndOfDayIST(dateStr);
+
+    // Total additions (all time up to end of date)
+    const additions = await PettyCashTransaction.aggregate([
+      { $match: { branchId: req.user.branchId, date: { $lte: endOfDay } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const totalAdditions = additions[0]?.total ?? 0;
+
+    // Total deductions from expenses (all time up to end of date)
+    const pettyCashExpenses = await Expense.find({
+      branchId: req.user.branchId,
+      paymentMode: 'Petty Cash Wallet',
+      date: { $lte: endOfDay }
+    });
+    const totalDeductions = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+    const expectedBalance = Math.max(0, totalAdditions - totalDeductions);
+    res.json({
+      success: true,
+      data: {
+        totalAdditions,
+        pettyCashExpenses: totalDeductions,
+        expectedBalance
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching petty cash summary:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Petty Cash - Add balance
+app.post('/api/petty-cash', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PettyCashTransaction } = req.businessModels;
+    const { amount, date } = req.body;
+    const amt = Number(amount) || 0;
+    if (amt <= 0) {
+      return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    }
+    const txDate = date ? new Date(date) : new Date();
+    const tx = new PettyCashTransaction({
+      type: 'add',
+      amount: amt,
+      date: txDate,
+      createdBy: req.user._id || req.user.id,
+      branchId: req.user.branchId
+    });
+    await tx.save();
+    res.status(201).json({ success: true, data: tx });
+  } catch (error) {
+    console.error('Error adding petty cash:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Petty Cash - View logs (additions + deductions)
+app.get('/api/petty-cash/logs', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Expense, PettyCashTransaction } = req.businessModels;
+    const branchId = req.user.branchId;
+
+    const additions = await PettyCashTransaction.find({ branchId })
+      .sort({ date: -1 })
+      .lean();
+    const deductions = await Expense.find({ branchId, paymentMode: 'Petty Cash Wallet' })
+      .sort({ date: -1 })
+      .lean();
+
+    const logs = [
+      ...additions.map(a => ({ type: 'add', amount: a.amount, date: a.date })),
+      ...deductions.map(d => ({ type: 'deduct', amount: -d.amount, date: d.date }))
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error('Error fetching petty cash logs:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 app.get('/api/cash-registry/summary/dashboard', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     console.log('🔍 Cash Registry Summary request for user:', req.user?.email, 'branchId:', req.user?.branchId);
@@ -10299,6 +10670,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       closingBalance,
       onlineCash,
       posCash,
+      pettyCashOpeningBalance,
+      pettyCashClosingBalance,
       createdBy
     } = req.body;
     
@@ -10337,7 +10710,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
           $gte: startOfDay,
           $lt: endOfDay
         },
-        paymentMethod: 'Cash'
+        paymentMode: 'Cash'
       });
       
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -10366,6 +10739,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       posCash: shiftType === 'closing' ? posCash : 0,
       onlinePosDifference,
       onlineCashDifferenceReason: onlinePosDifference !== 0 ? 'Difference detected' : 'Balanced',
+      pettyCashOpeningBalance: shiftType === 'opening' ? (pettyCashOpeningBalance ?? 0) : 0,
+      pettyCashClosingBalance: shiftType === 'closing' ? (pettyCashClosingBalance ?? 0) : 0,
       notes,
       branchId: req.user.branchId
     });

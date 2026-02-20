@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -50,6 +50,30 @@ function parseTimeToMinutes(time: string): number {
   const isPm = /pm/i.test(time) && h < 12
   const hour = isPm ? h + 12 : /am/i.test(time) && h === 12 ? 0 : h
   return hour * 60 + m
+}
+
+/** Add minutes to a time string, return "9:30 AM" format */
+function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
+  const baseM = parseTimeToMinutes(timeStr)
+  const totalM = baseM + minutesToAdd
+  const h = Math.floor(totalM / 60) % 24
+  const m = totalM % 60
+  return format(new Date(2000, 0, 1, h, m), "h:mm a")
+}
+
+/** Sequential service time: Service 0 = baseTime, Service 1 = baseTime + dur0, Service 2 = baseTime + dur0 + dur1, etc.
+ * Use for both create and edit flows to ensure no overlapping. */
+function getSequentialServiceStartTime(
+  services: Array<{ duration?: number }>,
+  baseTime: string,
+  serviceIndex: number
+): string {
+  if (serviceIndex <= 0) return baseTime
+  let cumulativeM = 0
+  for (let i = 0; i < serviceIndex; i++) {
+    cumulativeM += services[i]?.duration ?? 60
+  }
+  return addMinutesToTime(baseTime, cumulativeM)
 }
 
 /** Check if a block applies on a given date (recurring logic) */
@@ -243,19 +267,30 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       .catch(() => setAppointmentsForDate([]))
   }, [formDate])
 
-  // Total duration of selected services (for availability window; min 15 min for check)
+  // Total duration of selected services
   const totalDuration = useMemo(() => {
     const sum = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
     return Math.max(sum || 60, 15)
   }, [selectedServices])
 
-  // Staff available on the selected date and time (work schedule + not blocked + no overlapping appointments)
-  const availableStaff = useMemo(() => {
+  /**
+   * Get staff available for a specific service's time block only.
+   * Services are sequential: Service 0 = formTime to formTime+dur0, Service 1 = formTime+dur0 to formTime+dur0+dur1, etc.
+   * Availability is checked per service time block - NOT against full appointment duration.
+   * Excludes: current appointment when editing (so editing one service doesn't invalidate others).
+   */
+  const getAvailableStaffForService = useCallback((serviceIndex: number) => {
     if (!formDate || !formTime) return staff
     const dateStr = format(formDate, "yyyy-MM-dd")
     const dayIndex = formDate.getDay()
-    const slotStartM = parseTimeToMinutes(formTime)
-    const slotEndM = slotStartM + (totalDuration || 60)
+
+    // Compute this service's start and end (sequential)
+    let serviceStartM = parseTimeToMinutes(formTime)
+    for (let i = 0; i < serviceIndex; i++) {
+      serviceStartM += selectedServices[i]?.duration ?? 60
+    }
+    const serviceDuration = selectedServices[serviceIndex]?.duration ?? 60
+    const serviceEndM = serviceStartM + serviceDuration
 
     return staff.filter((member: any) => {
       const staffId = member._id || member.id
@@ -268,7 +303,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       const endStr = dayRow?.endTime ?? "21:00"
       const workStartM = parseTimeToMinutes(startStr)
       const workEndM = parseTimeToMinutes(endStr)
-      if (slotStartM < workStartM || slotEndM > workEndM) return false
+      if (serviceStartM < workStartM || serviceEndM > workEndM) return false
 
       const isBlocked = blockTimesForDate.some((block: any) => {
         const blockStaffId = typeof block.staffId === "object" && block.staffId?._id ? block.staffId._id : String(block.staffId)
@@ -276,10 +311,11 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         if (!blockAppliesOnDate(block, dateStr)) return false
         const blockStartM = parseTimeToMinutes(block.startTime)
         const blockEndM = parseTimeToMinutes(block.endTime)
-        return slotStartM < blockEndM && slotEndM > blockStartM
+        return serviceStartM < blockEndM && serviceEndM > blockStartM
       })
       if (isBlocked) return false
 
+      // Only check conflicts for THIS service's time block; exclude current appointment when editing
       const hasOverlappingAppointment = appointmentsForDate.some((apt: any) => {
         if (apt.status === "cancelled") return false
         if (appointmentId && (apt._id || apt.id) === appointmentId) return false
@@ -294,11 +330,11 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const aptStartM = parseTimeToMinutes(apt.time || "0:00")
         const aptDuration = apt.duration ?? 60
         const aptEndM = aptStartM + aptDuration
-        return slotStartM < aptEndM && slotEndM > aptStartM
+        return serviceStartM < aptEndM && serviceEndM > aptStartM
       })
       return !hasOverlappingAppointment
     })
-  }, [staff, formDate, formTime, totalDuration, blockTimesForDate, appointmentsForDate, appointmentId])
+  }, [staff, formDate, formTime, selectedServices, blockTimesForDate, appointmentsForDate, appointmentId])
 
   // Load services and staff on component mount
   useEffect(() => {
@@ -332,18 +368,78 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         }
         const svc = a.serviceId
         const staffIdVal = a.staffId?._id || a.staffId || (a.staffAssignments?.[0]?.staffId?._id ?? a.staffAssignments?.[0]?.staffId)
-        setSelectedServices([{
-          id: "edit-service",
-          serviceId: svc?._id || svc,
-          staffId: staffIdVal || "",
-          name: svc?.name || "Service",
-          duration: a.duration ?? svc?.duration ?? 60,
-          price: a.price ?? svc?.price ?? 0,
-        }])
+
+        // Build selectedServices: multi-staff group OR primary+additional (same staff)
+        let servicesToShow: Array<{ id: string; serviceId: string; staffId: string; name: string; duration: number; price: number }> = []
+        const related = (res as any).relatedAppointments as any[] | undefined
+
+        const nonCancelledRelated = (related ?? []).filter((r: any) => r.status !== "cancelled")
+        if (nonCancelledRelated.length > 0) {
+          // Multi-staff: merge main + related, sort by time. Exclude cancelled (should not appear when editing).
+          const allApts = [{ ...a, _id: a._id }, ...nonCancelledRelated.map((r: any) => ({ ...r, _id: r._id }))]
+          const byTime = [...allApts].sort((x, y) => {
+            const xm = parseTimeToMinutes(x.time || "")
+            const ym = parseTimeToMinutes(y.time || "")
+            return xm - ym
+          })
+          servicesToShow = byTime.map((apt: any, idx: number) => {
+            const s = apt.serviceId
+            const sid = apt.staffId?._id || apt.staffId || (apt.staffAssignments?.[0]?.staffId?._id ?? apt.staffAssignments?.[0]?.staffId)
+            return {
+              id: apt._id === appointmentId ? "edit-service" : `related-${apt._id}`,
+              serviceId: s?._id || s,
+              staffId: sid || "",
+              name: (typeof s === "object" && s?.name) || "Service",
+              duration: apt.duration ?? (typeof s === "object" && s?.duration) ?? 60,
+              price: apt.price ?? (typeof s === "object" && s?.price) ?? 0,
+            }
+          })
+        } else if (a.additionalServices && a.additionalServices.length > 0) {
+          // Same staff, multiple services: primary + additional
+          // Use primary service's duration from catalog (a.duration is TOTAL when there are additional services)
+          // Use primary price = total - sum(additional); a.price is the stored TOTAL for primary+additional
+          const additionalPrices = (a.additionalServices as any[]).map((s: any) => s?.price ?? 0)
+          const additionalTotal = additionalPrices.reduce((sum, p) => sum + p, 0)
+          const primaryPrice = Math.max(0, (a.price ?? 0) - additionalTotal)
+          const primary = {
+            id: "edit-service",
+            serviceId: svc?._id || svc,
+            staffId: staffIdVal || "",
+            name: (typeof svc === "object" && svc?.name) || "Service",
+            duration: (typeof svc === "object" && svc?.duration) ?? a.duration ?? 60,
+            price: primaryPrice || ((typeof svc === "object" && svc?.price) ?? 0),
+          }
+          const additional = (a.additionalServices as any[]).map((s: any, idx: number) => ({
+            id: `additional-${idx}`,
+            serviceId: s._id || s,
+            staffId: staffIdVal || "",
+            name: s?.name || "Service",
+            duration: s?.duration ?? 60,
+            price: s?.price ?? 0,
+          }))
+          servicesToShow = [primary, ...additional]
+        } else {
+          servicesToShow = [{
+            id: "edit-service",
+            serviceId: svc?._id || svc,
+            staffId: staffIdVal || "",
+            name: (typeof svc === "object" && svc?.name) || "Service",
+            duration: a.duration ?? (typeof svc === "object" && svc?.duration) ?? 60,
+            price: a.price ?? (typeof svc === "object" && svc?.price) ?? 0,
+          }]
+        }
+
+        setSelectedServices(servicesToShow)
         if (a.date) {
           const parts = a.date.split("-").map(Number)
           if (parts.length >= 3) {
-            const apiTime = a.time || ""
+            // Use earliest time when multiple appointments (first service start)
+            let apiTime = a.time || ""
+            if (nonCancelledRelated.length > 0) {
+              const allApts = [a, ...nonCancelledRelated]
+              const sorted = [...allApts].sort((x, y) => parseTimeToMinutes(x.time || "") - parseTimeToMinutes(y.time || ""))
+              apiTime = sorted[0]?.time || apiTime
+            }
             const minutes = parseTimeToMinutes(apiTime)
             const slot = apiTime ? timeSlots.find((t) => parseTimeToMinutes(t) === minutes) : ""
             form.reset({
@@ -355,9 +451,15 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
         }
         if (a.time) {
-          const minutes = parseTimeToMinutes(a.time)
+          let apiTime = a.time
+          if (nonCancelledRelated.length > 0) {
+            const allApts = [a, ...nonCancelledRelated]
+            const sorted = [...allApts].sort((x, y) => parseTimeToMinutes(x.time || "") - parseTimeToMinutes(y.time || ""))
+            apiTime = sorted[0]?.time || apiTime
+          }
+          const minutes = parseTimeToMinutes(apiTime)
           const match = timeSlots.find((t) => parseTimeToMinutes(t) === minutes)
-          form.setValue("time", match ?? a.time)
+          form.setValue("time", match ?? apiTime)
         }
         form.setValue("notes", a.notes || "")
         const ls = a.leadSource || ""
@@ -710,12 +812,16 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     }
 
     if (values.date && values.time) {
-      const availableIds = new Set(availableStaff.map((m: any) => m._id || m.id))
-      const unavailable = selectedServices.filter((s) => s.staffId && !availableIds.has(s.staffId))
+      const unavailable = selectedServices.filter((s, idx) => {
+        if (!s.staffId) return false
+        const availableForService = getAvailableStaffForService(idx)
+        const availableIds = new Set(availableForService.map((m: any) => m._id || m.id))
+        return !availableIds.has(s.staffId)
+      })
       if (unavailable.length > 0) {
         toast({
           title: "Error",
-          description: "One or more selected staff are not available on the chosen date and time. Please pick a different time or staff.",
+          description: "One or more selected staff are not available for their assigned service time. Please pick a different time or staff.",
           variant: "destructive",
         })
         return
@@ -734,18 +840,34 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       if (isEditMode && appointmentId) {
         const dateStr = format(values.date, "yyyy-MM-dd")
         const timeStr = formatTimeForApi(values.time)
-        const originalService = selectedServices.find((s) => s.id === "edit-service")
-        const newServices = selectedServices.filter((s) => s.id !== "edit-service")
+        const hasAdditional = selectedServices.some((s) => s.id.startsWith("additional-"))
+        const hasRelated = selectedServices.some((s) => s.id.startsWith("related-"))
+        const newServices = selectedServices.filter((s) => !["edit-service"].includes(s.id) && !s.id.startsWith("related-") && !s.id.startsWith("additional-"))
+        const primary = selectedServices.find((s) => s.id === "edit-service")
+        const existingAdditional = selectedServices.filter((s) => s.id.startsWith("additional-"))
+        // Newly added services (via Add Service) with same staff as primary → merge into same card
+        const newServicesSameStaff = primary ? newServices.filter((s) => s.staffId && s.staffId === primary.staffId) : []
+        const newServicesDifferentStaff = primary ? newServices.filter((s) => !s.staffId || s.staffId !== primary.staffId) : newServices
 
-        if (originalService) {
+        if (hasAdditional || newServicesSameStaff.length > 0) {
+          // Same staff, multiple services: update single appointment with primary + additionalServiceIds (including newly added same-staff services)
+          if (!primary) {
+            toast({ title: "Error", description: "Invalid edit state.", variant: "destructive" })
+            return
+          }
+          const allAdditional = [...existingAdditional, ...newServicesSameStaff]
+          const additionalIds = allAdditional.map((s) => s.serviceId)
+          const totalDur = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
+          const totalPrice = selectedServices.reduce((sum, s) => sum + (s.price || 0), 0)
           const updateRes = await AppointmentsAPI.update(appointmentId, {
             date: dateStr,
             time: timeStr,
-            serviceId: originalService.serviceId,
-            staffId: originalService.staffId,
-            staffAssignments: originalService.staffId ? [{ staffId: originalService.staffId, percentage: 100, role: "primary" }] : undefined,
-            duration: originalService.duration,
-            price: originalService.price,
+            serviceId: primary.serviceId,
+            additionalServiceIds: additionalIds,
+            staffId: primary.staffId,
+            staffAssignments: primary.staffId ? [{ staffId: primary.staffId, percentage: 100, role: "primary" }] : undefined,
+            duration: totalDur,
+            price: totalPrice,
             leadSource: leadSourceValue || "",
             notes: values.notes,
           })
@@ -753,36 +875,90 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
             return
           }
+        } else if (hasRelated) {
+          // Multi staff: update each appointment with its service and sequential time
+          for (let i = 0; i < selectedServices.length; i++) {
+            const s = selectedServices[i]
+            const serviceTime = getSequentialServiceStartTime(selectedServices, values.time, i)
+            const apiTime = formatTimeForApi(serviceTime)
+            const aptId = s.id === "edit-service" ? appointmentId : s.id.startsWith("related-") ? s.id.replace("related-", "") : null
+            if (!aptId) continue
+            const updateRes = await AppointmentsAPI.update(aptId, {
+              date: dateStr,
+              time: apiTime,
+              serviceId: s.serviceId,
+              staffId: s.staffId,
+              staffAssignments: s.staffId ? [{ staffId: s.staffId, percentage: 100, role: "primary" }] : undefined,
+              duration: s.duration,
+              price: s.price,
+              leadSource: leadSourceValue || "",
+              notes: values.notes,
+            })
+            if (!updateRes?.success) {
+              toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
+              return
+            }
+          }
         } else {
-          await AppointmentsAPI.delete(appointmentId)
+          // Single service or edit-service only
+          const originalService = selectedServices.find((s) => s.id === "edit-service")
+          if (originalService) {
+            const updateRes = await AppointmentsAPI.update(appointmentId, {
+              date: dateStr,
+              time: timeStr,
+              serviceId: originalService.serviceId,
+              additionalServiceIds: [],
+              staffId: originalService.staffId,
+              staffAssignments: originalService.staffId ? [{ staffId: originalService.staffId, percentage: 100, role: "primary" }] : undefined,
+              duration: originalService.duration,
+              price: originalService.price,
+              leadSource: leadSourceValue || "",
+              notes: values.notes,
+            })
+            if (!updateRes?.success) {
+              toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
+              return
+            }
+          } else {
+            await AppointmentsAPI.delete(appointmentId)
+          }
         }
 
-        if (newServices.length > 0) {
+        if (newServicesDifferentStaff.length > 0) {
+          // New services must start after all existing services (sequential, no overlap)
+          const firstNewIdx = selectedServices.findIndex((s) =>
+            newServicesDifferentStaff.some((n) => n.serviceId === s.serviceId && n.staffId === s.staffId)
+          )
+          const baseTimeForNew =
+            firstNewIdx >= 0
+              ? getSequentialServiceStartTime(selectedServices, values.time, firstNewIdx)
+              : values.time
+          const timeStrForNew = formatTimeForApi(baseTimeForNew)
           const createRes = await AppointmentsAPI.create({
             clientId: selectedCustomer._id || selectedCustomer.id,
             clientName: selectedCustomer.name,
             date: dateStr,
-            time: timeStr,
+            time: timeStrForNew,
             leadSource: leadSourceValue,
-            services: newServices.map((s) => ({
+            services: newServicesDifferentStaff.map((s) => ({
               serviceId: s.serviceId,
               staffId: s.staffId,
               name: s.name,
               duration: s.duration,
               price: s.price,
             })),
-            totalDuration: newServices.reduce((sum, s) => sum + (s.duration || 0), 0),
-            totalAmount: newServices.reduce((sum, s) => sum + (s.price || 0), 0),
+            totalDuration: newServicesDifferentStaff.reduce((sum, s) => sum + (s.duration || 0), 0),
+            totalAmount: newServicesDifferentStaff.reduce((sum, s) => sum + (s.price || 0), 0),
             notes: values.notes,
             status: "scheduled",
           })
           if (!createRes?.success) {
-            toast({ title: originalService ? "Partially updated" : "Error", description: originalService ? "Original updated, but failed to add new services." : "Failed to create appointments.", variant: "destructive" })
+            toast({ title: "Error", description: "Failed to create new services.", variant: "destructive" })
             return
           }
         }
 
-        toast({ title: "Appointment Updated", description: newServices.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
+        toast({ title: "Appointment Updated", description: newServicesSameStaff.length > 0 || newServicesDifferentStaff.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
         onSuccess ? onSuccess() : router.push("/appointments")
       } else {
         const appointmentData = {
@@ -1132,7 +1308,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                             <SelectItem value="no-staff" disabled>No staff</SelectItem>
                           ) : (
                             (() => {
-                              const list = availableStaff.filter((member: any) => member._id || member.id)
+                              const serviceIndex = selectedServices.indexOf(service)
+                              const list = getAvailableStaffForService(serviceIndex).filter((member: any) => member._id || member.id)
                               const selectedId = service.staffId
                               const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
                               const options = selectedNotInList

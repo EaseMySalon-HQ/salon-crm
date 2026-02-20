@@ -8,16 +8,14 @@ import { FeatureGate } from "@/components/ui/feature-gate"
 import { SalesReport } from "@/components/reports/sales-report"
 import { ExpenseReport } from "@/components/reports/expense-report"
 import { StaffPerformanceReport } from "@/components/reports/staff-performance-report"
-import { SupplierReport } from "@/components/reports/supplier-report"
-import { PurchaseReport } from "@/components/reports/purchase-report"
-import { BarChart3, TrendingUp, Receipt, Users, Truck, ShoppingCart } from "lucide-react"
+import { BarChart3, TrendingUp, Receipt, Users } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 
 export default function ReportsPage() {
   const { user, hasPermission } = useAuth()
   const canViewFinancialReports = !user || hasPermission("reports", "view_financial_reports")
   const canViewStaffCommission = !user || hasPermission("reports", "view_staff_commission")
-  const tabCount = (canViewFinancialReports ? 4 : 0) + (canViewStaffCommission ? 1 : 0)
+  const tabCount = (canViewFinancialReports ? 2 : 0) + (canViewStaffCommission ? 1 : 0)
 
   return (
     <ProtectedRoute requiredModule="reports">
@@ -74,7 +72,7 @@ export default function ReportsPage() {
               >
                 <TabsList
                   className={`grid w-full bg-slate-100 p-1 rounded-lg ${
-                    tabCount === 1 ? "grid-cols-1" : tabCount === 2 ? "grid-cols-2" : tabCount === 4 ? "grid-cols-4" : "grid-cols-5"
+                    tabCount === 1 ? "grid-cols-1" : tabCount === 2 ? "grid-cols-2" : "grid-cols-3"
                   }`}
                 >
                   {canViewFinancialReports && (
@@ -92,20 +90,6 @@ export default function ReportsPage() {
                       >
                         <Receipt className="h-4 w-4 mr-2" />
                         Expense
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="supplier"
-                        className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
-                      >
-                        <Truck className="h-4 w-4 mr-2" />
-                        Supplier
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="purchase"
-                        className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
-                      >
-                        <ShoppingCart className="h-4 w-4 mr-2" />
-                        Purchase
                       </TabsTrigger>
                     </>
                   )}
@@ -134,22 +118,6 @@ export default function ReportsPage() {
                       <Card className="border-0 shadow-sm bg-slate-50/50">
                         <CardContent className="pt-6">
                           <ExpenseReport />
-                        </CardContent>
-                      </Card>
-                    </TabsContent>
-
-                    <TabsContent value="supplier" className="space-y-6">
-                      <Card className="border-0 shadow-sm bg-slate-50/50">
-                        <CardContent className="pt-6">
-                          <SupplierReport />
-                        </CardContent>
-                      </Card>
-                    </TabsContent>
-
-                    <TabsContent value="purchase" className="space-y-6">
-                      <Card className="border-0 shadow-sm bg-slate-50/50">
-                        <CardContent className="pt-6">
-                          <PurchaseReport />
                         </CardContent>
                       </Card>
                     </TabsContent>

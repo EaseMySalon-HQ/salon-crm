@@ -77,6 +77,35 @@ function getTodayIST() {
   return toDateStringIST(new Date());
 }
 
+/**
+ * Parse time string (e.g. "9:00 AM", "9:30 AM") to minutes from midnight
+ * @param {string} timeStr - Time in "9:00 AM" or "09:00" format
+ * @returns {number} Minutes from midnight
+ */
+function parseTimeToMinutes(timeStr) {
+  if (!timeStr || typeof timeStr !== 'string') return 0;
+  const cleaned = timeStr.replace(/\s*(am|pm)/i, '').trim();
+  const parts = cleaned.split(':');
+  let h = parseInt(parts[0] || '0', 10);
+  const m = parseInt(parts[1] || '0', 10);
+  if (/pm/i.test(timeStr) && h < 12) h += 12;
+  if (/am/i.test(timeStr) && h === 12) h = 0;
+  return h * 60 + m;
+}
+
+/**
+ * Convert minutes from midnight to "9:30 AM" format
+ * @param {number} totalMinutes - Minutes from midnight
+ * @returns {string} Time string
+ */
+function minutesToTimeString(totalMinutes) {
+  const h = Math.floor(totalMinutes / 60) % 24;
+  const m = totalMinutes % 60;
+  const hour = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  const ampm = h < 12 ? 'AM' : 'PM';
+  return `${hour}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
 module.exports = {
   parseDateIST,
   getStartOfDayIST,
@@ -84,5 +113,7 @@ module.exports = {
   formatInIST,
   toDateStringIST,
   getTodayIST,
+  parseTimeToMinutes,
+  minutesToTimeString,
   IST_TIMEZONE: 'Asia/Kolkata'
 };

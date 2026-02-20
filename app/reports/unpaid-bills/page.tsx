@@ -108,7 +108,7 @@ export default function UnpaidBillsPage() {
   }
 
   const handleViewReceipt = (bill: UnpaidBill) => {
-    router.push(`/receipt/${bill.billNo}`)
+    router.push(`/receipt/${bill.billNo}?returnTo=/reports/unpaid-bills`)
   }
 
   const handleEditBill = (bill: UnpaidBill) => {

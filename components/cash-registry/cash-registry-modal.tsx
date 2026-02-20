@@ -70,7 +70,6 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
   }, [shift, open, onlineSalesAmount])
 
 
-
   const validateForm = () => {
     const newErrors: { [key: string]: string } = {}
     

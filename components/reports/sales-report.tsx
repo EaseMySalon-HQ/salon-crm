@@ -91,6 +91,7 @@ export function SalesReport() {
     duesCollected: number
     cashDuesCollected?: number
     cashExpense: number
+    pettyCashExpense?: number
     tipCollected: number
     cashBalance: number
     openingBalance?: number
@@ -100,7 +101,7 @@ export function SalesReport() {
 
   // Function to navigate to receipt page
   const handleViewReceipt = (sale: SalesRecord) => {
-    router.push(`/receipt/${sale.billNo}`)
+    router.push(`/receipt/${sale.billNo}?returnTo=/reports`)
   }
 
   const handleEditBill = (sale: SalesRecord) => {
@@ -176,6 +177,27 @@ export function SalesReport() {
       .catch(() => { if (!cancelled) setSalesStaff([]) })
     return () => { cancelled = true }
   }, [reportType])
+
+  // Convert calendar-picked dates to effective range (start of from-day, end of to-day)
+  // Fixes same-day selection: calendar gives midnight for both, so we need end-of-day for "to"
+  const getEffectiveDateParams = (from?: Date, to?: Date): { dateFrom?: string; dateTo?: string } => {
+    if (!from || !to) return {}
+    const fromStr = toDateStringIST(from)
+    const toStr = toDateStringIST(to)
+    return {
+      dateFrom: getStartOfDayIST(fromStr),
+      dateTo: getEndOfDayIST(toStr)
+    }
+  }
+  const getEffectiveDateRange = (from?: Date, to?: Date): { from: Date; to: Date } | null => {
+    if (!from || !to) return null
+    const fromStr = toDateStringIST(from)
+    const toStr = toDateStringIST(to)
+    return {
+      from: new Date(getStartOfDayIST(fromStr)),
+      to: new Date(getEndOfDayIST(toStr))
+    }
+  }
 
   // Function to get date range based on selected period (all dates in IST)
   const getDateRangeFromPeriod = (period: DatePeriod) => {
@@ -296,8 +318,9 @@ export function SalesReport() {
     let cancelled = false
     setSummaryLoading(true)
     const params: { dateFrom?: string; dateTo?: string } = {}
-    if (dateRange.from) params.dateFrom = dateRange.from.toISOString()
-    if (dateRange.to) params.dateTo = dateRange.to.toISOString()
+    if (dateRange.from && dateRange.to) {
+      Object.assign(params, getEffectiveDateParams(dateRange.from, dateRange.to))
+    }
     // When "all" time, pass full year to date so backend returns a range
     if (!params.dateFrom && !params.dateTo && datePeriod === "all") {
       const now = new Date()
@@ -333,10 +356,8 @@ export function SalesReport() {
     }
     let cancelled = false
     setTipPayoutsLoading(true)
-    ReportsAPI.getTipPayouts({
-      dateFrom: from.toISOString(),
-      dateTo: to.toISOString()
-    })
+    const { dateFrom: df, dateTo: dt } = getEffectiveDateParams(from, to)
+    ReportsAPI.getTipPayouts({ dateFrom: df, dateTo: dt })
       .then((res) => {
         if (!cancelled && res?.success && res?.data) setTipPayouts(Array.isArray(res.data) ? res.data : [])
         else if (!cancelled) setTipPayouts([])
@@ -348,12 +369,12 @@ export function SalesReport() {
 
   // Staff Tip aggregated rows: staff name, tip amount, paid state
   const staffTipDateRange = reportType === "staff-tip"
-    ? (dateRange.from && dateRange.to ? { from: dateRange.from, to: dateRange.to } : datePeriod !== "all" && datePeriod !== "custom" ? getDateRangeFromPeriod(datePeriod) : null)
+    ? (dateRange.from && dateRange.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : datePeriod !== "all" && datePeriod !== "custom" ? getDateRangeFromPeriod(datePeriod) : null)
     : null
   const staffTipSales = reportType === "staff-tip" && staffTipDateRange && staffTipDateRange.from != null && staffTipDateRange.to != null
     ? salesData.filter((sale) => {
         const saleDate = new Date(sale.date)
-        const inRange = saleDate >= staffTipDateRange.from! && saleDate <= staffTipDateRange.to!
+        const inRange = saleDate >= staffTipDateRange!.from && saleDate <= staffTipDateRange!.to
         const hasTip = !!(sale.tip && sale.tip > 0) && (sale.tipStaffId || sale.tipStaffName)
         const matchesStaff = staffTipFilter === "all" || sale.tipStaffId === staffTipFilter
         return inRange && hasTip && matchesStaff
@@ -474,11 +495,12 @@ export function SalesReport() {
     const matchesStaffTip =
       staffTipFilter === "all" || (!!(sale.tip && sale.tip > 0) && sale.tipStaffId === staffTipFilter)
     
-    // Date range filtering
+    // Date range filtering (use effective range so same-day selection includes full day)
     const saleDate = new Date(sale.date)
-    const matchesDateRange = 
-      (!dateRange.from || saleDate >= dateRange.from) &&
-      (!dateRange.to || saleDate <= dateRange.to)
+    const effectiveRange = dateRange.from && dateRange.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null
+    const rangeForPeriod = datePeriod !== "all" && datePeriod !== "custom" ? getDateRangeFromPeriod(datePeriod) : null
+    const activeRange = effectiveRange || (rangeForPeriod?.from && rangeForPeriod?.to ? { from: rangeForPeriod.from, to: rangeForPeriod.to } : null)
+    const matchesDateRange = !activeRange || (saleDate >= activeRange.from && saleDate <= activeRange.to)
     
     return matchesSearch && matchesPayment && matchesStatus && matchesStaffTip && matchesDateRange
   })
@@ -568,6 +590,16 @@ export function SalesReport() {
           dateFrom = new Date(today.getFullYear(), today.getMonth(), 1);
           dateTo = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
           break;
+        case 'custom':
+          if (dateRange.from && dateRange.to) {
+            const eff = getEffectiveDateParams(dateRange.from, dateRange.to);
+            dateFrom = eff.dateFrom ? new Date(eff.dateFrom) : undefined;
+            dateTo = eff.dateTo ? new Date(eff.dateTo) : undefined;
+          } else {
+            dateFrom = undefined;
+            dateTo = undefined;
+          }
+          break;
         default:
           dateFrom = undefined;
           dateTo = undefined;
@@ -637,6 +669,16 @@ export function SalesReport() {
           dateFrom = new Date(today.getFullYear(), today.getMonth(), 1);
           dateTo = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
           break;
+        case 'custom':
+          if (dateRange.from && dateRange.to) {
+            const eff = getEffectiveDateParams(dateRange.from, dateRange.to);
+            dateFrom = eff.dateFrom ? new Date(eff.dateFrom) : undefined;
+            dateTo = eff.dateTo ? new Date(eff.dateTo) : undefined;
+          } else {
+            dateFrom = undefined;
+            dateTo = undefined;
+          }
+          break;
         default:
           dateFrom = undefined;
           dateTo = undefined;
@@ -673,18 +715,12 @@ export function SalesReport() {
       ? serviceListDateRange
       : getServiceListDateRangeFromPeriod(serviceListDatePeriod)
     if (!range.from || !range.to) return {}
-    return {
-      dateFrom: range.from.toISOString(),
-      dateTo: range.to.toISOString()
-    }
+    return getEffectiveDateParams(range.from, range.to)
   }
 
   function getSummaryExportDateRange(): { dateFrom?: string; dateTo?: string } {
     if (dateRange?.from && dateRange?.to) {
-      return {
-        dateFrom: dateRange.from.toISOString(),
-        dateTo: dateRange.to.toISOString()
-      }
+      return getEffectiveDateParams(dateRange.from, dateRange.to)
     }
     if (datePeriod === "all") {
       const now = new Date()
@@ -977,21 +1013,44 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" className="w-40 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
-                          <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
-                          <span className="truncate">
-                            {dateRange?.from ? (dateRange?.to && dateRange.from.getTime() !== dateRange.to.getTime()
-                              ? `${format(dateRange.from, "dd MMM")} – ${format(dateRange.to, "dd MMM")}`
-                              : format(dateRange.from, "dd MMM yyyy")) : "Pick dates"}
-                          </span>
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="range" selected={dateRange as never} onSelect={(r) => setDateRange(r || {})} numberOfMonths={2} />
-                      </PopoverContent>
-                    </Popover>
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {dateRange?.from ? format(dateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={dateRange?.from}
+                            onSelect={(d) => setDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (dateRange?.to ? d > dateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {dateRange?.to ? format(dateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={dateRange?.to}
+                            onSelect={(d) => setDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (dateRange?.from ? d < dateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
                   )}
                 </>
               )}
@@ -1018,21 +1077,44 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" className="w-40 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
-                          <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
-                          <span className="truncate">
-                            {dateRange?.from ? (dateRange?.to && dateRange.from.getTime() !== dateRange.to.getTime()
-                              ? `${format(dateRange.from, "dd MMM")} – ${format(dateRange.to, "dd MMM")}`
-                              : format(dateRange.from, "dd MMM yyyy")) : "Pick dates"}
-                          </span>
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="range" selected={dateRange as never} onSelect={(r) => setDateRange(r || {})} numberOfMonths={2} />
-                      </PopoverContent>
-                    </Popover>
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {dateRange?.from ? format(dateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={dateRange?.from}
+                            onSelect={(d) => setDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (dateRange?.to ? d > dateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {dateRange?.to ? format(dateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={dateRange?.to}
+                            onSelect={(d) => setDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (dateRange?.from ? d < dateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
                   )}
                   <Select value={paymentFilter} onValueChange={setPaymentFilter}>
                     <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
@@ -1076,21 +1158,44 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" className="w-40 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
-                          <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
-                          <span className="truncate">
-                            {dateRange?.from ? (dateRange?.to && dateRange.from.getTime() !== dateRange.to.getTime()
-                              ? `${format(dateRange.from, "dd MMM")} – ${format(dateRange.to, "dd MMM")}`
-                              : format(dateRange.from, "dd MMM yyyy")) : "Pick dates"}
-                          </span>
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="range" selected={dateRange as never} onSelect={(r) => setDateRange(r || {})} numberOfMonths={2} />
-                      </PopoverContent>
-                    </Popover>
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {dateRange?.from ? format(dateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={dateRange?.from}
+                            onSelect={(d) => setDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (dateRange?.to ? d > dateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {dateRange?.to ? format(dateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={dateRange?.to}
+                            onSelect={(d) => setDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (dateRange?.from ? d < dateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
                   )}
                   <Select value={staffTipFilter} onValueChange={setStaffTipFilter}>
                     <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
@@ -1133,21 +1238,44 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {serviceListDatePeriod === "custom" && (
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" className="w-40 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
-                          <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
-                          <span className="truncate">
-                            {serviceListDateRange?.from ? (serviceListDateRange?.to && serviceListDateRange.from.getTime() !== serviceListDateRange.to.getTime()
-                              ? `${format(serviceListDateRange.from, "dd MMM")} – ${format(serviceListDateRange.to, "dd MMM")}`
-                              : format(serviceListDateRange.from, "dd MMM yyyy")) : "Pick dates"}
-                          </span>
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="range" selected={serviceListDateRange as never} onSelect={(r) => setServiceListDateRange(r || {})} numberOfMonths={2} />
-                      </PopoverContent>
-                    </Popover>
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {serviceListDateRange?.from ? format(serviceListDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={serviceListDateRange?.from}
+                            onSelect={(d) => setServiceListDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (serviceListDateRange?.to ? d > serviceListDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {serviceListDateRange?.to ? format(serviceListDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={serviceListDateRange?.to}
+                            onSelect={(d) => setServiceListDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (serviceListDateRange?.from ? d < serviceListDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
                   )}
                   <Select value={serviceListStaffFilter} onValueChange={setServiceListStaffFilter}>
                     <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
@@ -1394,21 +1522,39 @@ export function SalesReport() {
                     <Wallet className="h-4 w-4 text-indigo-500" />
                     Expenses
                   </h3>
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-600 flex items-center gap-1.5">
-                      Cash Expense
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs p-3">
-                          <p className="text-sm">Cash paid out for expenses during this period (e.g. supplies, petty cash).</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </span>
-                    <span className={`font-semibold ${summaryData.cashExpense > 0 ? "text-red-600" : "text-slate-900"}`}>
-                      ₹{summaryData.cashExpense.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                    </span>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 flex items-center gap-1.5">
+                        Cash Expense
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs p-3">
+                            <p className="text-sm">Cash paid out for expenses during this period (e.g. supplies, misc).</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className={`font-semibold ${summaryData.cashExpense > 0 ? "text-red-600" : "text-slate-900"}`}>
+                        ₹{summaryData.cashExpense.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 flex items-center gap-1.5">
+                        Petty Cash Expense
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs p-3">
+                            <p className="text-sm">Expenses paid from the petty cash wallet during this period.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className={`font-semibold ${(summaryData.pettyCashExpense ?? 0) > 0 ? "text-red-600" : "text-slate-900"}`}>
+                        ₹{(summaryData.pettyCashExpense ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
                   </div>
                 </div>
 

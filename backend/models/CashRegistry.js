@@ -57,6 +57,10 @@ const cashRegistrySchema = new mongoose.Schema({
     default: 0 
   },
   
+  // Petty Cash (separate from main cash - not treated as cash)
+  pettyCashOpeningBalance: { type: Number, default: 0 },
+  pettyCashClosingBalance: { type: Number, default: 0 },
+  
   // Balance Differences
   balanceDifference: { 
     type: Number, 

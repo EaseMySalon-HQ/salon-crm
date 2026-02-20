@@ -24,6 +24,7 @@ import {
   FileText,
   Minus,
   Pencil,
+  Trash2,
   ChevronDown,
   ChevronUp,
   Edit,
@@ -210,23 +211,24 @@ function blockAppliesOnDate(block: { startDate: string; endDate?: string | null;
   return false
 }
 
-/** Get staff IDs that are available for a slot [startM, startM + duration] on dateStr */
+/** Get staff IDs that are available for a slot [startM, startM + duration] on dateStr.
+ * When considerAllAppointments is true (from linked appointment), check all non-cancelled appointments for conflicts. */
 function getAvailableStaffIds(
   dateStr: string,
   timeStr: string,
   durationMinutes: number,
   appointments: any[],
   blockTimes: any[],
-  allStaffIds: string[]
+  allStaffIds: string[],
+  considerAllAppointments = false
 ): string[] {
   const startM = parseTimeToMinutes(timeStr)
   const endM = startM + durationMinutes
   const busyStaffIds = new Set<string>()
 
-  // Appointments: only mark staff unavailable when client has arrived (Quick Sale uses current time)
   for (const apt of appointments) {
     if (apt.status === "cancelled") continue
-    if (apt.status !== "arrived" && apt.status !== "service_started") continue
+    if (!considerAllAppointments && apt.status !== "arrived" && apt.status !== "service_started") continue
     const aptStartM = parseTimeToMinutes(apt.time || "0:00")
     const aptDuration = apt.duration ?? 60
     const aptEndM = aptStartM + aptDuration
@@ -256,13 +258,15 @@ function getAvailableStaffIds(
 interface QuickSaleProps {
   mode?: BillingMode
   initialSale?: any
+  billLoading?: boolean
 }
 
-export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {}) {
+export function QuickSale({ mode = "create", initialSale, billLoading = false }: QuickSaleProps = {}) {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
   const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
+  const [linkedAppointmentTime, setLinkedAppointmentTime] = useState<string | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
@@ -428,21 +432,52 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const currentTimeStr = format(new Date(), "HH:mm")
   const allStaffIds = staff.map((s) => String(s._id || s.id)).filter(Boolean)
 
-  /** Available staff for a given duration (uses current time for billing) */
-  const getAvailableStaffForSlot = (durationMinutes: number) => {
+  /** Available staff for a given duration. When from linked appointment, uses appointment time + offset and considers all appointments. */
+  const getAvailableStaffForSlot = (
+    durationMinutes: number,
+    slotTimeStr?: string,
+    slotDateStr?: string,
+    considerAll = false
+  ) => {
     return getAvailableStaffIds(
-      dateStr,
-      currentTimeStr,
+      slotDateStr ?? dateStr,
+      slotTimeStr ?? currentTimeStr,
       durationMinutes,
       appointmentsForDate,
       blockTimesForDate,
-      allStaffIds
+      allStaffIds,
+      considerAll
     )
   }
 
-  /** Staff list filtered by availability for a given duration. Excludes staff marked absent (Full Day Off). Pass includeIds to keep selected staff in list. */
-  const getAvailableStaffList = (durationMinutes: number, includeIds?: string[]) => {
-    const availableIds = getAvailableStaffForSlot(durationMinutes)
+  /** Staff list filtered by availability. Services are sequential: Service 0 at base, Service 1 at base+dur0, Service 2 at base+dur0+dur1, etc. */
+  const getAvailableStaffList = (
+    durationMinutes: number,
+    includeIds?: string[],
+    serviceIndex?: number
+  ) => {
+    let slotTimeStr = currentTimeStr
+    let considerAll = false
+    const baseTime = linkedAppointmentTime ?? currentTimeStr
+    if (serviceIndex != null) {
+      if (serviceIndex === 0) {
+        slotTimeStr = baseTime
+      } else {
+        let cumulativeM = 0
+        for (let i = 0; i < serviceIndex; i++) {
+          const item = serviceItems[i]
+          const raw = item?.serviceId
+        const sid = typeof raw === "object" && raw && "_id" in raw ? (raw as { _id: string })._id : raw
+          const svc = sid ? services.find((s) => (s._id || s.id) === sid) : null
+          cumulativeM += svc?.duration ?? 60
+        }
+        const baseM = parseTimeToMinutes(baseTime)
+        const slotM = baseM + cumulativeM
+        slotTimeStr = `${Math.floor(slotM / 60)}:${String(slotM % 60).padStart(2, "0")}`
+      }
+    }
+    if (linkedAppointmentId && linkedAppointmentTime) considerAll = true
+    const availableIds = getAvailableStaffForSlot(durationMinutes, slotTimeStr, dateStr, considerAll)
     const includeSet = new Set(includeIds?.map(String) || [])
     const dayOfWeek = selectedDate.getDay() // 0 = Sunday, 6 = Saturday
     return staff.filter((s) => {
@@ -792,6 +827,16 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         setOnlineAmount(online)
       }
 
+      // Set tip amount and tip staff (if any)
+      if (initialSale.tip && initialSale.tip > 0) {
+        setTip(Number(initialSale.tip))
+        const tipStaff = initialSale.tipStaffId
+        const tipStaffIdStr = typeof tipStaff === "object" && tipStaff?._id ? tipStaff._id : String(tipStaff || "")
+        if (tipStaffIdStr) {
+          setTipStaffId(tipStaffIdStr)
+        }
+      }
+
       // Set linked appointment
       if (initialSale.appointmentId) {
         setLinkedAppointmentId(initialSale.appointmentId)
@@ -815,6 +860,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
         if (appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id) {
           setLinkedAppointmentId(appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id)
+        }
+        if (appointmentData.time) {
+          setLinkedAppointmentTime(appointmentData.time)
         }
 
         // Find and set the client
@@ -2155,8 +2203,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     throw lastError instanceof Error ? lastError : new Error('Failed to generate receipt number. Please check your connection and try again.')
   }
 
-  // Handle checkout
-  const handleCheckout = async () => {
+  // Handle checkout (reasonOverride: when called from modal, pass reason directly since setState is async)
+  const handleCheckout = async (reasonOverride?: string) => {
     console.log('🚀 handleCheckout function called!')
     console.log('🚀 Mode:', mode)
     console.log('🚀 selectedCustomer:', selectedCustomer)
@@ -2169,8 +2217,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       return
     }
     
+    const effectiveReason = (reasonOverride ?? editReason).trim()
     // Validate edit reason for edit mode
-    if (mode === "edit" && !editReason.trim()) {
+    if (mode === "edit" && !effectiveReason) {
       toast({
         title: "Edit Reason Required",
         description: "Please provide a reason for editing this bill",
@@ -2652,7 +2701,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
             result = await SalesAPI.update(saleId!, {
               ...saleData,
-              editReason: editReason.trim(),
+              editReason: effectiveReason,
             })
             console.log('📊 SalesAPI.update response:', result)
             console.log('💳 Payment details in response:', {
@@ -2727,13 +2776,14 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               console.warn('⚠️ No WhatsApp status in response')
             }
             
-            // Mark linked appointment as completed if fully paid
+            // Mark linked appointment (and all in same booking group) as completed if fully paid
             if (linkedAppointmentId && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
               try {
                 await AppointmentsAPI.update(linkedAppointmentId, { status: "completed" })
+                window.dispatchEvent(new CustomEvent("appointments-refresh"))
                 toast({
                   title: "Appointment Completed",
-                  description: "Linked appointment has been marked as completed.",
+                  description: "Linked appointment(s) have been marked as completed.",
                 })
               } catch (error) {
                 console.error("Failed to update appointment status:", error)
@@ -2796,7 +2846,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             // Open receipt in new tab - Use business receipt page (with Print/Thermal Print buttons)
             try {
               // Always use business receipt URL for internal use (has Print/Thermal Print buttons)
-              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&t=${Date.now()}`
+              const returnTo = linkedAppointmentId ? 'appointments' : 'quick-sale'
+              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&returnTo=${returnTo}&t=${Date.now()}`
               console.log('🎯 Opening business receipt URL (with print options):', receiptUrl)
               
               const newWindow = window.open(receiptUrl, '_blank')
@@ -3448,6 +3499,15 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto bg-white/80 backdrop-blur-sm pr-96">
         <div className="p-8 space-y-8 max-h-screen overflow-y-auto">
+          {billLoading ? (
+            <div className="flex items-center justify-center min-h-[60vh]">
+              <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+                <p className="text-sm font-medium">Loading bill details...</p>
+              </div>
+            </div>
+          ) : (
+          <>
           {/* Header */}
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-2">
@@ -3470,6 +3530,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                   </p>
                   <p className="text-sm text-amber-700">
                     Original Date: {initialSale.date ? format(new Date(initialSale.date), "dd MMM yyyy") : "N/A"}
+                    {initialSale.tip && initialSale.tip > 0 && (
+                      <span className="ml-2">• Tip: {formatCurrency(initialSale.tip)}</span>
+                    )}
                   </p>
                 </div>
               </div>
@@ -3712,7 +3775,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 </div>
 
                 <div style={{ overflow: 'visible' }}>
-                  {serviceItems.map((item) => (
+                  {serviceItems.map((item, serviceIndex) => (
                   <div
                     key={item.id}
                     className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200"
@@ -3800,7 +3863,14 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
                     <MultiStaffSelector
                       key={`service-${item.id}-staff`}
-                      staffList={getAvailableStaffList(services.find((s) => (s._id || s.id) === item.serviceId)?.duration ?? 60, (item.staffContributions || []).map((c) => c.staffId).filter(Boolean))}
+                      staffList={getAvailableStaffList(
+                        services.find((s) => (s._id || s.id) === item.serviceId)?.duration ?? 60,
+                        [...new Set([
+                          ...(item.staffContributions || []).map((c) => c.staffId).filter(Boolean),
+                          ...serviceItems.filter((s) => s.id !== item.id).flatMap((s) => (s.staffContributions || []).map((c) => c.staffId).filter(Boolean)),
+                        ])],
+                        serviceIndex
+                      )}
                       serviceTotal={item.total}
                       compact
                       selectStaffFlex={1.5}
@@ -4207,6 +4277,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               </div>
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
 
@@ -4325,6 +4397,13 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                       title="Edit tip amount"
                     >
                       <Pencil className="h-3 w-3 text-gray-500 hover:text-gray-700" />
+                    </button>
+                    <button
+                      onClick={() => { setTip(0); setTipStaffId(null) }}
+                      className="p-1 hover:bg-red-50 rounded-md transition-colors"
+                      title="Remove tip"
+                    >
+                      <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-600" />
                     </button>
                   </div>
                 ) : (
@@ -4674,7 +4753,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             </Button>
             <Button
               onClick={() => {
-                if (!tempEditReason.trim()) {
+                const reason = tempEditReason.trim()
+                if (!reason) {
                   toast({
                     title: "Edit Reason Required",
                     description: "Please provide a reason for editing this bill",
@@ -4682,13 +4762,13 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                   })
                   return
                 }
-                setEditReason(tempEditReason.trim())
+                setEditReason(reason)
                 setShowEditReasonModal(false)
                 setTempEditReason("")
                 if (totalPaid < roundedTotal) {
                   setShowPaymentModal(true)
                 } else {
-                  handleCheckout()
+                  handleCheckout(reason)
                 }
               }}
               className="flex-1 bg-indigo-600 hover:bg-indigo-700"
@@ -5324,7 +5404,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => router.push(`/receipt/${bill.receiptNumber || bill.id}`)}
+                            onClick={() => router.push(`/receipt/${bill.receiptNumber || bill.id}?returnTo=/quick-sale`)}
                             title="View Receipt"
                             className="h-8"
                           >

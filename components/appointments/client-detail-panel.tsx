@@ -198,9 +198,7 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
                       <li className="bg-slate-50 rounded-lg overflow-hidden shrink-0">
                         <div className="flex items-center justify-between text-left text-xs sm:text-sm px-2.5 py-1.5 sm:px-3 sm:py-2">
                           <Link
-                            href={`/receipt/${encodeURIComponent(s.billNo || "")}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            href={`/receipt/${encodeURIComponent(s.billNo || "")}?returnTo=${encodeURIComponent(`/clients/${client?._id || client?.id || ""}`)}`}
                             onClick={(e) => e.stopPropagation()}
                             className="truncate font-medium text-indigo-600 hover:text-indigo-800 hover:underline focus:outline-none focus:underline"
                           >
