@@ -6089,6 +6089,83 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
   }
 };
 
+/** Create walk-in appointment cards for a completed sale with multiple staff when NOT linked to an appointment. */
+const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId) => {
+  if (!sale || !businessModels?.Appointment || !businessModels?.Service || !businessModels?.Client) return;
+  if (sale.appointmentId) return; // Already handled by markAppointmentCompleted
+  if (String(sale.status).toLowerCase() !== 'completed') return;
+
+  try {
+    const { Appointment, Service, Client } = businessModels;
+    const serviceItems = (sale.items || [])
+      .filter((i) => i.type === 'service' && i.serviceId)
+      .map((i, idx) => {
+        const contrib = (i.staffContributions || [])[0];
+        const raw = contrib?.staffId ?? i.staffId;
+        const staffId = raw ? String(typeof raw === 'object' && raw._id ? raw._id : raw) : null;
+        return { ...i, _primaryStaffId: staffId, _order: idx };
+      })
+      .filter((i) => i._primaryStaffId);
+
+    if (serviceItems.length === 0) return;
+    const uniqueStaffIds = [...new Set(serviceItems.map((i) => i._primaryStaffId))];
+    if (uniqueStaffIds.length < 2) return; // Only create when multiple staff
+
+    const orConditions = [];
+    if (sale.customerName) orConditions.push({ name: new RegExp(`^${String(sale.customerName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+    if (sale.customerPhone) orConditions.push({ phone: sale.customerPhone });
+    if (orConditions.length === 0) {
+      console.warn('[createWalkInCardsForStandaloneSale] No customer name/phone to find client');
+      return;
+    }
+    const client = await Client.findOne({ $or: orConditions }).lean();
+    if (!client) {
+      console.warn('[createWalkInCardsForStandaloneSale] Client not found for:', sale.customerName, sale.customerPhone);
+      return;
+    }
+
+    const saleDate = sale.date ? (typeof sale.date === 'string' ? sale.date.slice(0, 10) : new Date(sale.date).toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10);
+    const baseTimeM = parseTimeToMinutes(sale.time || '09:00');
+    const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+    const bookingGroupId = uuidv4();
+
+    for (const item of serviceItems) {
+      const staffIdStr = item._primaryStaffId;
+      if (!staffIdStr) continue;
+      const svcId = item.serviceId?._id || item.serviceId;
+      const idx = allOrdered.findIndex((o) => String(o.serviceId?._id || o.serviceId) === String(svcId));
+      let cumulativeM = 0;
+      for (let i = 0; i < idx; i++) {
+        const s = await Service.findById(allOrdered[i].serviceId?._id || allOrdered[i].serviceId).select('duration').lean();
+        cumulativeM += s?.duration ?? 60;
+      }
+      const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
+      const service = await Service.findById(svcId).lean();
+      if (!service) continue;
+
+      const staffIdObj = mongoose.Types.ObjectId.isValid(staffIdStr) ? new mongoose.Types.ObjectId(staffIdStr) : staffIdStr;
+      const newApt = new Appointment({
+        clientId: client._id,
+        serviceId: svcId,
+        date: saleDate,
+        time: serviceTime,
+        duration: service.duration ?? 60,
+        status: 'completed',
+        price: item.price ?? item.total ?? service.price ?? 0,
+        branchId: branchId || sale.branchId,
+        bookingGroupId,
+        staffId: staffIdObj,
+        staffAssignments: [{ staffId: staffIdObj, percentage: 100, role: 'primary' }],
+        leadSource: 'Walk-in',
+      });
+      await newApt.save();
+      console.log(`✅ Created walk-in card (standalone sale) for staff ${staffIdStr}: ${service.name}`);
+    }
+  } catch (err) {
+    console.error('❌ createWalkInCardsForStandaloneSale failed:', err);
+  }
+};
+
 // Appointments routes
 app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
@@ -6206,7 +6283,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled' } = req.body;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId } = req.body;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -6279,7 +6356,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
     } else {
       // Different staff per service (or single service): create one appointment per service
       // Each service starts after the previous ends (sequential: Service A 9:00–9:30, Service B 9:30–10:00)
-      const bookingGroupId = uuidv4();
+      // Use existingBookingGroupId when adding new staff cards from edit (link to existing group)
+      const bookingGroupId = existingBookingGroupId || uuidv4();
       const baseTimeMinutes = parseTimeToMinutes(time);
       let cumulativeMinutes = 0;
       for (let i = 0; i < services.length; i++) {
@@ -7914,6 +7992,9 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
 
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
+    } else if (String(savedSale.status).toLowerCase() === 'completed') {
+      // Standalone sale with multiple staff: create walk-in cards for calendar
+      await createWalkInCardsForStandaloneSale(savedSale, req.businessModels, req.user.branchId);
     }
 
     // Auto consumption: deduct inventory for completed service lines (only when bill status is completed)

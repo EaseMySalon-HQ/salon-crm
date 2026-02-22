@@ -238,11 +238,13 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
     e.preventDefault()
 
     try {
+      const costVal = formData.cost !== undefined && formData.cost !== null && formData.cost !== '' ? parseFloat(formData.cost) : undefined
+      const isServiceProduct = formData.productType === "service"
       const productData: any = {
         name: formData.name,
         category: formData.category,
-        price: parseFloat(formData.price) || 0,
-        cost: formData.cost !== undefined && formData.cost !== null && formData.cost !== '' ? parseFloat(formData.cost) : undefined,
+        price: isServiceProduct ? (costVal ?? (parseFloat(formData.price) || 0)) : (parseFloat(formData.price) || 0),
+        cost: costVal,
         offerPrice: formData.offerPrice !== undefined && formData.offerPrice !== null && formData.offerPrice !== '' ? parseFloat(formData.offerPrice) : undefined,
         stock: parseInt(formData.stock),
         sku: formData.sku || `SKU-${Date.now()}`,

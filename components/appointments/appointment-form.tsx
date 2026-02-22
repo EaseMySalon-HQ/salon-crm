@@ -159,6 +159,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [loadingAppointment, setLoadingAppointment] = useState(false)
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
+  const [existingBookingGroupId, setExistingBookingGroupId] = useState<string | null>(null)
+  const [existingGroupAppointmentIds, setExistingGroupAppointmentIds] = useState<string[]>([])
 
   // Prefer URL params (from calendar slot) over props so time is correct on first paint
   const urlDate = searchParams?.get("date") ?? initialDate
@@ -315,10 +317,16 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       })
       if (isBlocked) return false
 
-      // Only check conflicts for THIS service's time block; exclude current appointment when editing
+      // Only check conflicts for THIS service's time block; exclude all appointments we're editing (main + related)
+      const idsBeingEdited = new Set<string>()
+      if (appointmentId) idsBeingEdited.add(String(appointmentId))
+      selectedServices.forEach((s) => {
+        if (s.id.startsWith("related-")) idsBeingEdited.add(s.id.replace("related-", ""))
+      })
       const hasOverlappingAppointment = appointmentsForDate.some((apt: any) => {
         if (apt.status === "cancelled") return false
-        if (appointmentId && (apt._id || apt.id) === appointmentId) return false
+        const aptId = apt._id || apt.id
+        if (aptId && idsBeingEdited.has(String(aptId))) return false
         const aptStaffId = apt.staffId?._id || apt.staffId?.id || apt.staffId
         const aptStaffIds = new Set<string>()
         if (aptStaffId) aptStaffIds.add(String(aptStaffId))
@@ -430,6 +438,12 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         }
 
         setSelectedServices(servicesToShow)
+        setExistingBookingGroupId(a.bookingGroupId || null)
+        setExistingGroupAppointmentIds(
+          nonCancelledRelated.length > 0
+            ? [String(a._id), ...nonCancelledRelated.map((r: any) => String(r._id))]
+            : []
+        )
         if (a.date) {
           const parts = a.date.split("-").map(Number)
           if (parts.length >= 3) {
@@ -838,6 +852,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         : undefined
 
       if (isEditMode && appointmentId) {
+        let appointmentIdDeleted = false
         const dateStr = format(values.date, "yyyy-MM-dd")
         const timeStr = formatTimeForApi(values.time)
         const hasAdditional = selectedServices.some((s) => s.id.startsWith("additional-"))
@@ -850,22 +865,25 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const newServicesDifferentStaff = primary ? newServices.filter((s) => !s.staffId || s.staffId !== primary.staffId) : newServices
 
         if (hasAdditional || newServicesSameStaff.length > 0) {
-          // Same staff, multiple services: update single appointment with primary + additionalServiceIds (including newly added same-staff services)
-          if (!primary) {
+          // Same staff, multiple services: update single appointment with primary + additionalServiceIds
+          // If primary (edit-service) was removed: promote first additional to primary
+          const effectivePrimary = primary ?? (existingAdditional.length > 0 ? { ...existingAdditional[0], id: "edit-service" } : null)
+          if (!effectivePrimary) {
             toast({ title: "Error", description: "Invalid edit state.", variant: "destructive" })
             return
           }
-          const allAdditional = [...existingAdditional, ...newServicesSameStaff]
+          const restAdditional = primary ? existingAdditional : existingAdditional.slice(1)
+          const allAdditional = [...restAdditional, ...newServicesSameStaff]
           const additionalIds = allAdditional.map((s) => s.serviceId)
           const totalDur = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
           const totalPrice = selectedServices.reduce((sum, s) => sum + (s.price || 0), 0)
           const updateRes = await AppointmentsAPI.update(appointmentId, {
             date: dateStr,
             time: timeStr,
-            serviceId: primary.serviceId,
+            serviceId: effectivePrimary.serviceId,
             additionalServiceIds: additionalIds,
-            staffId: primary.staffId,
-            staffAssignments: primary.staffId ? [{ staffId: primary.staffId, percentage: 100, role: "primary" }] : undefined,
+            staffId: effectivePrimary.staffId,
+            staffAssignments: effectivePrimary.staffId ? [{ staffId: effectivePrimary.staffId, percentage: 100, role: "primary" }] : undefined,
             duration: totalDur,
             price: totalPrice,
             leadSource: leadSourceValue || "",
@@ -876,7 +894,24 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             return
           }
         } else if (hasRelated) {
-          // Multi staff: update each appointment with its service and sequential time
+          // Multi staff: delete removed appointments, update remaining with sequential times
+          const idsToUpdate = selectedServices
+            .map((s) => (s.id === "edit-service" ? appointmentId : s.id.startsWith("related-") ? s.id.replace("related-", "") : null))
+            .filter(Boolean)
+            .map((id) => String(id)) as string[]
+          let idsToDelete = existingGroupAppointmentIds.map((id) => String(id)).filter((id) => !idsToUpdate.includes(id))
+          // When edit-service was removed, ensure appointmentId is deleted even if existingGroupAppointmentIds was stale
+          if (!idsToUpdate.includes(String(appointmentId))) {
+            if (!idsToDelete.includes(String(appointmentId))) idsToDelete = [...idsToDelete, String(appointmentId)]
+            appointmentIdDeleted = true
+          }
+          for (const id of idsToDelete) {
+            const delRes = await AppointmentsAPI.delete(id)
+            if (!delRes?.success) {
+              toast({ title: "Error", description: "Failed to delete removed service.", variant: "destructive" })
+              return
+            }
+          }
           for (let i = 0; i < selectedServices.length; i++) {
             const s = selectedServices[i]
             const serviceTime = getSequentialServiceStartTime(selectedServices, values.time, i)
@@ -925,6 +960,11 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         }
 
         if (newServicesDifferentStaff.length > 0) {
+          // Link new cards to existing group (or create group for originally single card)
+          const groupId = existingBookingGroupId || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+          if (!existingBookingGroupId && !appointmentIdDeleted) {
+            await AppointmentsAPI.update(appointmentId, { bookingGroupId: groupId })
+          }
           // New services must start after all existing services (sequential, no overlap)
           const firstNewIdx = selectedServices.findIndex((s) =>
             newServicesDifferentStaff.some((n) => n.serviceId === s.serviceId && n.staffId === s.staffId)
@@ -940,6 +980,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             date: dateStr,
             time: timeStrForNew,
             leadSource: leadSourceValue,
+            bookingGroupId: groupId,
             services: newServicesDifferentStaff.map((s) => ({
               serviceId: s.serviceId,
               staffId: s.staffId,
@@ -959,6 +1000,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         }
 
         toast({ title: "Appointment Updated", description: newServicesSameStaff.length > 0 || newServicesDifferentStaff.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("appointments-refresh"))
         onSuccess ? onSuccess() : router.push("/appointments")
       } else {
         const appointmentData = {

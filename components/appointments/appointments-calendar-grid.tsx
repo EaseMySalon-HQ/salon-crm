@@ -57,11 +57,9 @@ interface Appointment {
 }
 
 function getServiceDisplayNames(apt: { serviceId?: { name?: string; _id?: unknown }; additionalServices?: Array<{ name?: string }>; bookingGroupId?: string | null }): string[] {
-  // Use this appointment's serviceId only (multi-staff: each card has its own service)
   const svc = apt?.serviceId
   const primary = (typeof svc === "object" && svc?.name) || "Service"
-  // Multi-staff: each card has one service, no bullet list
-  if (apt?.bookingGroupId) return [primary]
+  // Include additionalServices (e.g. services added via edit for same staff) on all cards
   const additional = (apt?.additionalServices || []).map((s) => s?.name).filter(Boolean) as string[]
   return [primary, ...additional]
 }
@@ -327,7 +325,24 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [showTimeChangeConfirm, setShowTimeChangeConfirm] = useState(false)
   const [currentTime, setCurrentTime] = useState(() => new Date())
   const [scrollToNowRequested, setScrollToNowRequested] = useState(false)
-  const [density, setDensity] = useState<"compact" | "comfortable">("comfortable")
+  const [density, setDensityState] = useState<"compact" | "comfortable">(() => {
+    if (typeof window === "undefined") return "comfortable"
+    try {
+      const stored = localStorage.getItem("appointmentViewMode") as "compact" | "comfortable" | null
+      if (stored === "compact" || stored === "comfortable") return stored
+    } catch {
+      /* ignore */
+    }
+    return "comfortable"
+  })
+  const setDensity = useCallback((value: "compact" | "comfortable") => {
+    setDensityState(value)
+    try {
+      localStorage.setItem("appointmentViewMode", value)
+    } catch {
+      /* ignore */
+    }
+  }, [])
   const [pendingTimeChange, setPendingTimeChange] = useState<{
     id: string
     mode: "move" | "resize-top" | "resize-bottom" | "staff"
@@ -388,17 +403,33 @@ export const AppointmentsCalendarGrid = forwardRef<
       return
     }
     let cancelled = false
-    SalesAPI.getByAppointmentId(selectedAppointment._id)
-      .then((res) => {
-        if (!cancelled && res?.success) setLinkedSale(res.data ?? null)
-      })
-      .catch(() => {
-        if (!cancelled) setLinkedSale(null)
-      })
+    const a = selectedAppointment as any
+    const idsToTry: string[] = a.bookingGroupId
+      ? appointments
+          .filter((apt) => (apt as Appointment).bookingGroupId === a.bookingGroupId)
+          .map((apt) => apt._id)
+      : [selectedAppointment._id]
+
+    const fetchLinkedSale = async () => {
+      for (const id of idsToTry) {
+        if (cancelled) return
+        try {
+          const res = await SalesAPI.getByAppointmentId(id)
+          if (res?.success && res?.data) {
+            if (!cancelled) setLinkedSale(res.data)
+            return
+          }
+        } catch {
+          /* try next */
+        }
+      }
+      if (!cancelled) setLinkedSale(null)
+    }
+    fetchLinkedSale()
     return () => {
       cancelled = true
     }
-  }, [selectedAppointment?._id])
+  }, [selectedAppointment?._id, (selectedAppointment as any)?.bookingGroupId, appointments])
 
   useImperativeHandle(ref, () => ({
     showCancelledModal: () => setShowCancelledModal(true),
