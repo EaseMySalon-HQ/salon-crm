@@ -541,7 +541,7 @@ export class SupplierPayablesAPI {
 }
 
 export class CategoriesAPI {
-  static async getAll(params?: { search?: string; activeOnly?: boolean }): Promise<ApiResponse<any[]>> {
+  static async getAll(params?: { search?: string; activeOnly?: boolean; type?: 'product' | 'service' }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/categories', { params })
     return response.data
   }
@@ -551,7 +551,7 @@ export class CategoriesAPI {
     return response.data
   }
 
-  static async create(data: { name: string; description?: string }): Promise<ApiResponse<any>> {
+  static async create(data: { name: string; description?: string; type?: 'product' | 'service' | 'both' }): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/categories', data)
     return response.data
   }

@@ -3463,11 +3463,12 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
       });
     }
 
+    const costVal = cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined;
     const newProduct = new Product({
       name,
       category,
-      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0 (selling price)
-      cost: cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined,
+      price: isServiceProduct ? (costVal ?? parseFloat(price) ?? 0) : parseFloat(price), // Service products: selling price = cost price
+      cost: costVal,
       offerPrice: offerPrice !== undefined && offerPrice !== null && offerPrice !== '' ? parseFloat(offerPrice) : undefined,
       stock: parseInt(stock),
       minimumStock: minimumStock !== undefined ? parseInt(minimumStock) : undefined,
@@ -3487,6 +3488,7 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
     const savedProduct = await newProduct.save();
 
     // Create inventory transaction for stock addition
+    const unitCostForTxn = isServiceProduct ? (costVal ?? 0) : (parseFloat(price) || 0);
     const inventoryTransaction = new InventoryTransaction({
       productId: savedProduct._id,
       productName: savedProduct.name,
@@ -3494,8 +3496,8 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
       quantity: parseInt(stock),
       previousStock: 0,
       newStock: parseInt(stock),
-      unitCost: parseFloat(price) || 0,
-      totalValue: (parseFloat(price) || 0) * parseInt(stock),
+      unitCost: unitCostForTxn,
+      totalValue: unitCostForTxn * parseInt(stock),
       referenceType: 'purchase',
       referenceId: savedProduct._id.toString(),
       referenceNumber: `PROD-${savedProduct._id.toString().slice(-6)}`,
@@ -3556,12 +3558,13 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
     const newStock = parseInt(stock);
     const stockDifference = newStock - previousStock;
 
+    const costVal = cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined;
     // Update the product
     const updateData = {
       name,
       category,
-      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0 (selling price)
-      cost: cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined,
+      price: isServiceProduct ? (costVal ?? parseFloat(price) ?? 0) : parseFloat(price), // Service products: selling price = cost price
+      cost: costVal,
       offerPrice: offerPrice !== undefined && offerPrice !== null && offerPrice !== '' ? parseFloat(offerPrice) : undefined,
       stock: newStock,
       sku: sku || `SKU-${Date.now()}`,
@@ -5062,9 +5065,16 @@ app.delete('/api/inventory/transactions', authenticateToken, setupBusinessDataba
 app.get('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { search, activeOnly } = req.query;
+    const { search, activeOnly, type } = req.query;
 
     let query = { branchId: req.user.branchId };
+
+    // Filter by type: product = product + both, service = service + both (keeps them separate)
+    if (type === 'product') {
+      query.$or = [{ type: 'product' }, { type: 'both' }];
+    } else if (type === 'service') {
+      query.$or = [{ type: 'service' }, { type: 'both' }];
+    }
 
     // Filter by active status if requested
     if (activeOnly === 'true') {
@@ -5121,7 +5131,7 @@ app.get('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
 app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { name, description } = req.body;
+    const { name, description, type: typeParam } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -5151,10 +5161,11 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
       return res.status(201).json({ success: true, data: existingCategory });
     }
 
-    // Create new category
+    // Create new category (type: product | service | both - keeps product/service categories separate)
+    const categoryType = ['product', 'service', 'both'].includes(typeParam) ? typeParam : 'both';
     const category = new Category({
       name: name.trim(),
-      type: 'both',
+      type: categoryType,
       description: description || '',
       branchId: req.user.branchId,
       isActive: true
