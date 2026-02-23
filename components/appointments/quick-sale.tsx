@@ -2789,6 +2789,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 console.error("Failed to update appointment status:", error)
               }
             }
+            // Refresh calendar so new walk-in cards (multi-staff services) appear - for both linked and standalone sales
+            if (typeof window !== "undefined" && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
+              window.dispatchEvent(new CustomEvent("appointments-refresh"))
+            }
             
             // Now that backend sale is successful, create and store the receipt locally
       const tipStaff = tipStaffId

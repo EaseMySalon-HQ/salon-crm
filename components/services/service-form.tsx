@@ -170,6 +170,7 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
         <div className="space-y-2">
           <Label htmlFor="category">Category</Label>
           <CategoryCombobox
+            type="service"
             value={formData.category}
             onChange={(value) => setFormData({ ...formData, category: value })}
           />

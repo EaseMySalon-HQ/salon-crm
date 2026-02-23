@@ -46,11 +46,14 @@ interface Category {
 interface CategoryManagementProps {
   title?: string
   description?: string
+  /** 'product' = product categories only, 'service' = service categories only. Keeps them separate. */
+  type?: "product" | "service"
 }
 
 export function CategoryManagement({ 
   title = "Category Management",
-  description = "Manage your product and service categories"
+  description = "Manage your product and service categories",
+  type
 }: CategoryManagementProps) {
   const [categories, setCategories] = React.useState<Category[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -66,13 +69,13 @@ export function CategoryManagement({
       setLoading(true)
       const categoryMap = new Map<string, Category>()
       
-      // Fetch from the Categories API
+      // Fetch from the Categories API (filter by type so product/service stay separate)
       try {
         const response = await CategoriesAPI.getAll({ 
           search: searchQuery || undefined,
-          activeOnly: false 
+          activeOnly: false,
+          ...(type && { type }),
         })
-        
         if (response.success && response.data) {
           response.data.forEach((category: any) => {
             categoryMap.set(category._id, {
@@ -86,49 +89,54 @@ export function CategoryManagement({
         console.log('Categories API returned no data, will extract from products/services')
       }
       
-      // Also extract categories from existing products and services
-      try {
-        const response = await ProductsAPI.getAll({ limit: 10000 })
-        if (response.success && response.data) {
-          const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-          products.forEach((product: any) => {
-            if (product.category && product.category.trim()) {
-              const categoryName = product.category.trim()
-              if (!Array.from(categoryMap.values()).some(cat => cat.name.toLowerCase() === categoryName.toLowerCase())) {
-                categoryMap.set(`extracted-product-${categoryName}`, {
-                  _id: `extracted-product-${categoryName}`,
-                  name: categoryName,
-                  isActive: true,
-                  isManaged: false
-                } as any)
+      // Extract categories from products only (when type is product or unspecified)
+      if (type !== "service") {
+        try {
+          const response = await ProductsAPI.getAll({ limit: 10000 })
+          if (response.success && response.data) {
+            const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+            products.forEach((product: any) => {
+              if (product.category && product.category.trim()) {
+                const categoryName = product.category.trim()
+                if (!Array.from(categoryMap.values()).some(cat => cat.name.toLowerCase() === categoryName.toLowerCase())) {
+                  categoryMap.set(`extracted-product-${categoryName}`, {
+                    _id: `extracted-product-${categoryName}`,
+                    name: categoryName,
+                    isActive: true,
+                    isManaged: false
+                  } as any)
+                }
               }
-            }
-          })
+            })
+          }
+        } catch (error) {
+          console.log('Error fetching products for categories:', error)
         }
-      } catch (error) {
-        console.log('Error fetching products for categories:', error)
       }
       
-      try {
-        const response = await ServicesAPI.getAll({ limit: 10000 })
-        if (response.success && response.data) {
-          const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-          services.forEach((service: any) => {
-            if (service.category && service.category.trim()) {
-              const categoryName = service.category.trim()
-              if (!Array.from(categoryMap.values()).some(cat => cat.name.toLowerCase() === categoryName.toLowerCase())) {
-                categoryMap.set(`extracted-service-${categoryName}`, {
-                  _id: `extracted-service-${categoryName}`,
-                  name: categoryName,
-                  isActive: true,
-                  isManaged: false
-                } as any)
+      // Extract categories from services only (when type is service or unspecified)
+      if (type !== "product") {
+        try {
+          const response = await ServicesAPI.getAll({ limit: 10000 })
+          if (response.success && response.data) {
+            const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+            services.forEach((service: any) => {
+              if (service.category && service.category.trim()) {
+                const categoryName = service.category.trim()
+                if (!Array.from(categoryMap.values()).some(cat => cat.name.toLowerCase() === categoryName.toLowerCase())) {
+                  categoryMap.set(`extracted-service-${categoryName}`, {
+                    _id: `extracted-service-${categoryName}`,
+                    name: categoryName,
+                    isActive: true,
+                    isManaged: false
+                  } as any)
+                }
               }
-            }
-          })
+            })
+          }
+        } catch (error) {
+          console.log('Error fetching services for categories:', error)
         }
-      } catch (error) {
-        console.log('Error fetching services for categories:', error)
       }
       
       // Convert map to array and sort
@@ -155,7 +163,7 @@ export function CategoryManagement({
     } finally {
       setLoading(false)
     }
-  }, [searchQuery, toast])
+  }, [searchQuery, type, toast])
 
   // Load categories on mount and when dependencies change
   React.useEffect(() => {
@@ -355,6 +363,7 @@ export function CategoryManagement({
         open={showAddDialog}
         onOpenChange={setShowAddDialog}
         onSuccess={handleSaveSuccess}
+        type={type}
       />
 
       {/* Edit Category Dialog */}
@@ -363,6 +372,7 @@ export function CategoryManagement({
         onOpenChange={(open) => !open && setEditingCategory(null)}
         category={editingCategory || undefined}
         onSuccess={handleSaveSuccess}
+        type={type}
       />
 
       {/* Delete Confirmation Dialog */}
