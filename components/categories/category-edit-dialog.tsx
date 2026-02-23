@@ -29,13 +29,16 @@ interface CategoryEditDialogProps {
   onOpenChange: (open: boolean) => void
   category?: Category
   onSuccess: () => void
+  /** When creating, use this type so product/service categories stay separate */
+  type?: "product" | "service"
 }
 
 export function CategoryEditDialog({
   open,
   onOpenChange,
   category,
-  onSuccess
+  onSuccess,
+  type
 }: CategoryEditDialogProps) {
   const [formData, setFormData] = React.useState({
     name: '',
@@ -78,7 +81,7 @@ export function CategoryEditDialog({
     try {
       setIsSubmitting(true)
       
-      const categoryData = {
+      const categoryData: { name: string; description?: string; isActive?: boolean; type?: "product" | "service" | "both" } = {
         name: formData.name.trim(),
         description: formData.description.trim(),
         isActive: formData.isActive
@@ -89,8 +92,11 @@ export function CategoryEditDialog({
         // Update existing category
         response = await CategoriesAPI.update(category._id, categoryData)
       } else {
-        // Create new category
-        response = await CategoriesAPI.create(categoryData)
+        // Create new category (with type so product/service stay separate)
+        response = await CategoriesAPI.create({
+          ...categoryData,
+          ...(type && { type }),
+        })
       }
 
       if (response.success) {

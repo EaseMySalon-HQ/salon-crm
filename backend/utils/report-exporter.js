@@ -1327,6 +1327,13 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
       status: { $in: ['approved', 'pending'] }
     }).lean();
 
+    const pettyCashExpenses = await Expense.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      paymentMode: 'Petty Cash Wallet',
+      status: { $in: ['approved', 'pending'] }
+    }).lean();
+
     const totalBillCount = sales.length;
     const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
     const totalCustomerCount = uniqueCustomers.size || totalBillCount;
@@ -1361,6 +1368,7 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
     });
     // Use Expense collection as source of truth (matches /api/reports/summary)
     const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const pettyCashExpense = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     // Tip collected: sum from Sales (Quick Sale) + Receipts (manual receipts), matches API
     const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
     const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
@@ -1377,6 +1385,7 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
       totalSalesCard,
       duesCollected,
       cashExpense,
+      pettyCashExpense,
       tipCollected,
       cashBalance
     };
@@ -1409,6 +1418,7 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
         ['Total Sales (Card)', summaryData.totalSalesCard],
         ['Dues Collected', summaryData.duesCollected],
         ['Cash Expense', summaryData.cashExpense],
+        ['Petty Cash Expense', summaryData.pettyCashExpense],
         ['Tip Collected', summaryData.tipCollected],
         ['Cash Balance', summaryData.cashBalance]
       ];
@@ -1435,6 +1445,7 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
         ['Total Sales (Card)', `₹${fmt(summaryData.totalSalesCard)}`],
         ['Dues Collected', `₹${fmt(summaryData.duesCollected)}`],
         ['Cash Expense', `₹${fmt(summaryData.cashExpense)}`],
+        ['Petty Cash Expense', `₹${fmt(summaryData.pettyCashExpense)}`],
         ['Tip Collected', `₹${fmt(summaryData.tipCollected)}`],
         ['Cash Balance', `₹${fmt(summaryData.cashBalance)}`]
       ];

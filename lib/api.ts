@@ -116,10 +116,15 @@ apiClient.interceptors.response.use(
         if (errorInfo.url && errorInfo.url !== 'Unknown URL') {
           console.warn(`⚠️ API 404: ${errorInfo.method} ${errorInfo.url} - ${errorInfo.message || 'Not Found'}`)
         }
+      } else if (errorInfo.status === 0 || errorInfo.type === 'Network Error') {
+        // Status 0 = network error (backend unreachable, CORS, connection refused)
+        const url = error?.config?.url || errorInfo.url
+        const baseUrl = error?.config?.baseURL || ''
+        console.warn(`⚠️ API Network Error: Cannot reach backend. Ensure the server is running on ${baseUrl || 'port 3001'}.`, url ? `Request: ${url}` : '')
       } else {
         // Build error object with only defined, meaningful values
         const errorDetails: Record<string, any> = {}
-        if (errorInfo.status !== undefined && errorInfo.status !== null) errorDetails.status = errorInfo.status
+        if (errorInfo.status !== undefined && errorInfo.status !== null && errorInfo.status !== 0) errorDetails.status = errorInfo.status
         if (errorInfo.statusText && errorInfo.statusText.trim()) errorDetails.statusText = errorInfo.statusText
         if (errorInfo.error && errorInfo.error.trim()) {
           errorDetails.error = errorInfo.error
@@ -130,7 +135,16 @@ apiClient.interceptors.response.use(
         if (errorInfo.url && errorInfo.url !== 'Unknown URL') errorDetails.url = errorInfo.url
         if (errorInfo.method && errorInfo.method !== 'Unknown method') errorDetails.method = errorInfo.method
         if (errorInfo.data !== undefined && errorInfo.data !== null) errorDetails.data = errorInfo.data
-        
+        // For 400/4xx, ensure we capture message from response body for debugging
+        if (errorInfo.status >= 400 && errorInfo.status < 500 && errorInfo.data && typeof errorInfo.data === 'object') {
+          const msg = errorInfo.data.message || errorInfo.data.error || errorInfo.data.details
+          if (msg && !errorDetails.error) errorDetails.error = typeof msg === 'string' ? msg : JSON.stringify(msg)
+          // Always set error from response for 4xx so we never log empty {}
+          if (!errorDetails.error && errorInfo.data) {
+            errorDetails.error = typeof errorInfo.data === 'string' ? errorInfo.data : JSON.stringify(errorInfo.data)
+          }
+        }
+
         // Only log if we have at least one meaningful property (avoid "Error response: {}")
         const hasValidProperties = Object.keys(errorDetails).some(key => {
           const value = errorDetails[key]
@@ -388,7 +402,12 @@ export class ProductsAPI {
 }
 
 export class SuppliersAPI {
-  static async getAll(params?: { search?: string; activeOnly?: boolean }): Promise<ApiResponse<any[]>> {
+  static async getSummary(): Promise<ApiResponse<{ totalSuppliers: number; totalOutstanding: number; purchasesThisMonth: number; overdueAmount: number }>> {
+    const response = await apiClient.get('/suppliers/summary')
+    return response.data
+  }
+
+  static async getAll(params?: { search?: string; activeOnly?: boolean; withSummary?: boolean | string }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/suppliers', { params })
     return response.data
   }
@@ -398,12 +417,47 @@ export class SuppliersAPI {
     return response.data
   }
 
-  static async create(data: { name: string; contactPerson?: string; phone?: string; email?: string; address?: string; notes?: string }): Promise<ApiResponse<any>> {
+  static async getOrders(id: string): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get(`/suppliers/${id}/orders`)
+    return response.data
+  }
+
+  static async getOutstanding(id: string): Promise<ApiResponse<{ outstanding: number; payables: any[] }>> {
+    const response = await apiClient.get(`/suppliers/${id}/outstanding`)
+    return response.data
+  }
+
+  static async create(data: {
+    name: string
+    contactPerson?: string
+    phone?: string
+    whatsapp?: string
+    email?: string
+    address?: string
+    gstNumber?: string
+    paymentTerms?: string
+    bankDetails?: string
+    categories?: string[]
+    notes?: string
+  }): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/suppliers', data)
     return response.data
   }
 
-  static async update(id: string, data: { name?: string; contactPerson?: string; phone?: string; email?: string; address?: string; notes?: string; isActive?: boolean }): Promise<ApiResponse<any>> {
+  static async update(id: string, data: {
+    name?: string
+    contactPerson?: string
+    phone?: string
+    whatsapp?: string
+    email?: string
+    address?: string
+    gstNumber?: string
+    paymentTerms?: string
+    bankDetails?: string
+    categories?: string[]
+    notes?: string
+    isActive?: boolean
+  }): Promise<ApiResponse<any>> {
     const response = await apiClient.put(`/suppliers/${id}`, data)
     return response.data
   }
@@ -414,8 +468,80 @@ export class SuppliersAPI {
   }
 }
 
+export class PurchaseOrdersAPI {
+  static async getAll(params?: { supplier?: string; status?: string; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/purchase-orders', { params })
+    return response.data
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/purchase-orders/${id}`)
+    return response.data
+  }
+
+  static async create(data: {
+    supplierId: string
+    orderDate?: string
+    expectedDeliveryDate?: string
+    items: { productId: string; productName: string; quantity: number; unitCost: number; gstPercent?: number }[]
+    notes?: string
+    status?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/purchase-orders', data)
+    return response.data
+  }
+
+  static async update(id: string, data: {
+    supplierId?: string
+    orderDate?: string
+    expectedDeliveryDate?: string
+    items?: { productId: string; productName: string; quantity: number; unitCost: number; gstPercent?: number }[]
+    notes?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/purchase-orders/${id}`, data)
+    return response.data
+  }
+
+  static async receive(id: string, data: {
+    receivedItems: { productId: string; receivedQty: number; unitCost?: number }[]
+    invoiceUrl?: string
+    grnNotes?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/purchase-orders/${id}/receive`, data)
+    return response.data
+  }
+
+  static async cancel(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/purchase-orders/${id}/cancel`)
+    return response.data
+  }
+}
+
+export class SupplierPayablesAPI {
+  static async getAll(params?: { supplier?: string; status?: string }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/supplier-payables', { params })
+    return response.data
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/supplier-payables/${id}`)
+    return response.data
+  }
+
+  static async recordPayment(id: string, data: {
+    amount: number
+    paymentMethod?: string
+    paymentDate?: string
+    reference?: string
+    notes?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/supplier-payables/${id}/payments`, data)
+    return response.data
+  }
+}
+
 export class CategoriesAPI {
-  static async getAll(params?: { search?: string; activeOnly?: boolean }): Promise<ApiResponse<any[]>> {
+  static async getAll(params?: { search?: string; activeOnly?: boolean; type?: 'product' | 'service' }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/categories', { params })
     return response.data
   }
@@ -425,7 +551,7 @@ export class CategoriesAPI {
     return response.data
   }
 
-  static async create(data: { name: string; description?: string }): Promise<ApiResponse<any>> {
+  static async create(data: { name: string; description?: string; type?: 'product' | 'service' | 'both' }): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/categories', data)
     return response.data
   }
@@ -902,6 +1028,16 @@ export class ReportsAPI {
     return response.data
   }
 
+  static async getSupplierReport(params?: { dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/reports/supplier', { params })
+    return response.data
+  }
+
+  static async getPurchaseReport(params?: { dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/reports/purchase', { params })
+    return response.data
+  }
+
   static async exportSummary(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/reports/export/summary', {
       format,
@@ -1050,6 +1186,24 @@ export class CashRegistryAPI {
 
   static async getDashboardSummary(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/cash-registry/summary/dashboard')
+    return response.data
+  }
+
+  static async getPettyCashSummary(date?: string): Promise<ApiResponse<{ totalAdditions: number; pettyCashExpenses: number; expectedBalance: number }>> {
+    const params = date ? { date } : {}
+    const response = await apiClient.get('/cash-registry/petty-cash-summary', { params })
+    return response.data
+  }
+}
+
+export class PettyCashAPI {
+  static async addBalance(amount: number, date?: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/petty-cash', { amount, date })
+    return response.data
+  }
+
+  static async getLogs(): Promise<ApiResponse<{ type: string; amount: number; date: string }[]>> {
+    const response = await apiClient.get('/petty-cash/logs')
     return response.data
   }
 }

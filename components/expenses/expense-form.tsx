@@ -39,7 +39,7 @@ const paymentModes = [
   "Bank Transfer",
   "UPI",
   "Cheque",
-  "Digital Wallet"
+  "Petty Cash Wallet"
 ]
 
 export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFormProps) {
@@ -54,26 +54,37 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
     notes: expense?.notes || "",
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [showDescription, setShowDescription] = useState(!!(expense?.description))
+
+  const showTransactionId = ["Card", "UPI", "Bank Transfer", "Cheque"].includes(formData.paymentMode)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!formData.category || !formData.paymentMode || !formData.amount) {
+      toast({
+        title: "Validation Error",
+        description: "Please fill in Category, Payment Mode, and Amount.",
+        variant: "destructive",
+      })
+      return
+    }
     setIsSubmitting(true)
 
     try {
-      const expenseData = {
+      const expenseData: Record<string, unknown> = {
         category: formData.category,
         paymentMode: formData.paymentMode,
-        description: formData.description,
+        description: (formData.description || "").trim() || "No description",
         amount: parseFloat(formData.amount),
         date: format(formData.date, "yyyy-MM-dd"),
         status: expense?.status || "pending",
-        vendor: formData.vendor,
-        notes: formData.notes,
+        vendor: (formData.vendor || "").trim(),
+        notes: (formData.notes || "").trim(),
         approvedBy: expense?.approvedBy || "",
-        createdAt: expense?.createdAt || new Date().toISOString(),
       }
-
-      console.log('Submitting expense data:', expenseData)
+      if (isEditMode && expense?.createdAt) {
+        expenseData.createdAt = expense.createdAt
+      }
 
       let response
       if (isEditMode && expense?.id) {
@@ -102,11 +113,13 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
       
       // Dispatch custom event to refresh stats
       window.dispatchEvent(new CustomEvent('expense-added'))
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error submitting expense:', error)
+      const err = error as { response?: { data?: { error?: string } }; message?: string }
+      const errMsg = err?.response?.data?.error || err?.message || (isEditMode ? "Failed to update expense. Please try again." : "Failed to create expense. Please try again.")
       toast({
         title: "Error",
-        description: isEditMode ? "Failed to update expense. Please try again." : "Failed to create expense. Please try again.",
+        description: typeof errMsg === "string" ? errMsg : "Something went wrong. Please try again.",
         variant: "destructive",
       })
     } finally {
@@ -122,100 +135,14 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {/* Row 1: Date and Expense Category */}
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="category">Expense Category *</Label>
-          <Select value={formData.category} onValueChange={(value) => handleChange("category", value)}>
-            <SelectTrigger>
-              <SelectValue placeholder="Choose expense name" />
-            </SelectTrigger>
-            <SelectContent>
-              {expenseCategories.map((category) => (
-                <SelectItem key={category} value={category}>
-                  {category}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="paymentMode">Payment Mode *</Label>
-          <Select value={formData.paymentMode} onValueChange={(value) => handleChange("paymentMode", value)}>
-            <SelectTrigger>
-              <SelectValue placeholder="Choose payment mode" />
-            </SelectTrigger>
-            <SelectContent>
-              {paymentModes.map((mode) => (
-                <SelectItem key={mode} value={mode}>
-                  {mode}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="description">Description</Label>
-        <Textarea
-          id="description"
-          value={formData.description}
-          onChange={(e) => handleChange("description", e.target.value)}
-          placeholder="Enter expense description..."
-          rows={3}
-          maxLength={200}
-        />
-        <div className="text-right text-sm text-muted-foreground">
-          Approx. chars. left: {remainingChars}
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="vendor">Vendor</Label>
-          <Input
-            id="vendor"
-            value={formData.vendor}
-            onChange={(e) => handleChange("vendor", e.target.value)}
-            placeholder="Enter vendor name..."
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="notes">Notes</Label>
-          <Input
-            id="notes"
-            value={formData.notes}
-            onChange={(e) => handleChange("notes", e.target.value)}
-            placeholder="Additional notes..."
-          />
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="amount">Amount *</Label>
-          <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
-            <Input
-              id="amount"
-              type="number"
-              step="0.01"
-              value={formData.amount}
-              onChange={(e) => handleChange("amount", e.target.value)}
-              placeholder="0.00"
-              className="pl-8"
-              required
-            />
-          </div>
-        </div>
-
         <div className="space-y-2">
           <Label htmlFor="date">Date *</Label>
           <Popover>
             <PopoverTrigger asChild>
               <Button
+                type="button"
                 variant="outline"
                 className={cn(
                   "w-full justify-start text-left font-normal",
@@ -236,6 +163,109 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
             </PopoverContent>
           </Popover>
         </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="category">Expense Category *</Label>
+          <Select value={formData.category} onValueChange={(value) => handleChange("category", value)}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose expense name" />
+            </SelectTrigger>
+            <SelectContent>
+              {expenseCategories.map((category) => (
+                <SelectItem key={category} value={category}>
+                  {category}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Row 2: Vendor, Amount and Payment Mode */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="space-y-2">
+          <Label htmlFor="vendor">Vendor</Label>
+          <Input
+            id="vendor"
+            value={formData.vendor}
+            onChange={(e) => handleChange("vendor", e.target.value)}
+            placeholder="Enter vendor name..."
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="amount">Amount *</Label>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
+            <Input
+              id="amount"
+              type="number"
+              step="0.01"
+              value={formData.amount}
+              onChange={(e) => handleChange("amount", e.target.value)}
+              placeholder="0.00"
+              className="pl-8"
+              required
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="paymentMode">Payment Mode *</Label>
+          <Select value={formData.paymentMode} onValueChange={(value) => handleChange("paymentMode", value)}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose payment mode" />
+            </SelectTrigger>
+            <SelectContent>
+              {paymentModes.map((mode) => (
+                <SelectItem key={mode} value={mode}>
+                  {mode}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Row 3: Transaction ID (only for Card, UPI, Bank Transfer, Cheque) */}
+      {showTransactionId && (
+        <div className="space-y-2">
+          <Label htmlFor="notes">Transaction Id</Label>
+          <Input
+            id="notes"
+            value={formData.notes}
+            onChange={(e) => handleChange("notes", e.target.value)}
+            placeholder="Enter transaction ID..."
+          />
+        </div>
+      )}
+
+      {/* Row 4: Add Description (expandable) */}
+      <div className="space-y-2">
+        {showDescription ? (
+          <>
+            <Label htmlFor="description">Description</Label>
+            <Textarea
+              id="description"
+              value={formData.description}
+              onChange={(e) => handleChange("description", e.target.value)}
+              placeholder="Enter expense description..."
+              rows={3}
+              maxLength={200}
+            />
+            <div className="text-right text-sm text-muted-foreground">
+              Approx. chars. left: {remainingChars}
+            </div>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowDescription(true)}
+            className="text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
+          >
+            Add Description
+          </button>
+        )}
       </div>
 
       <div className="flex justify-end space-x-2">

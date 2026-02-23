@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Bell, Plus, User, Users, Briefcase, Package, Receipt, Settings, LogOut, Banknote } from "lucide-react"
+import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -167,42 +167,13 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                 {(isManager() || isAdmin()) && (
                   <>
                 <DropdownMenuItem 
-                  onClick={() => handleQuickAdd("/clients/new")}
+                  onClick={() => router.push("/staff/working-hours")}
                   className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
                 >
                   <div className="p-2 bg-blue-100 rounded-lg">
-                    <User className="h-4 w-4 text-blue-600" />
+                    <Clock className="h-4 w-4 text-blue-600" />
                   </div>
-                  <span className="font-medium text-gray-700">Customer</span>
-                </DropdownMenuItem>
-                {isAdmin() && (
-                  <DropdownMenuItem 
-                    onClick={() => handleQuickAdd("/staff/new")}
-                    className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-purple-50 hover:to-pink-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
-                  >
-                    <div className="p-2 bg-purple-100 rounded-lg">
-                      <Users className="h-4 w-4 text-purple-600" />
-                    </div>
-                    <span className="font-medium text-gray-700">Staff</span>
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem 
-                  onClick={() => handleQuickAdd("/services/new")}
-                  className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-emerald-50 hover:to-green-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
-                >
-                  <div className="p-2 bg-emerald-100 rounded-lg">
-                    <Briefcase className="h-4 w-4 text-emerald-600" />
-                  </div>
-                  <span className="font-medium text-gray-700">Service</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem 
-                  onClick={() => handleQuickAdd("/products/new")}
-                  className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-orange-50 hover:to-amber-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
-                >
-                  <div className="p-2 bg-orange-100 rounded-lg">
-                    <Package className="h-4 w-4 text-orange-600" />
-                  </div>
-                  <span className="font-medium text-gray-700">Product</span>
+                  <span className="font-medium text-gray-700">Attendance</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem 
                   onClick={() => handleQuickAdd("/expenses/new")}

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI } from "@/lib/api"
+import { BlockTimeModal, getBlockReasonIcon } from "@/components/appointments/block-time-modal"
 
 interface Appointment {
   _id: string
@@ -36,6 +37,7 @@ interface Appointment {
     price: number
     duration: number
   }
+  additionalServices?: Array<{ _id: string; name: string; price?: number; duration?: number }>
   staffId: {
     _id: string
     name: string
@@ -51,6 +53,24 @@ interface Appointment {
   createdAt: string
   createdBy?: string
   leadSource?: string
+  bookingGroupId?: string | null
+}
+
+function getServiceDisplayNames(apt: { serviceId?: { name?: string; _id?: unknown }; additionalServices?: Array<{ name?: string }>; bookingGroupId?: string | null }): string[] {
+  const svc = apt?.serviceId
+  const primary = (typeof svc === "object" && svc?.name) || "Service"
+  // Include additionalServices (e.g. services added via edit for same staff) on all cards
+  const additional = (apt?.additionalServices || []).map((s) => s?.name).filter(Boolean) as string[]
+  return [primary, ...additional]
+}
+
+/** Total duration for multi-service appointments: primary + sum of additional services.
+ * Uses apt.duration when set (e.g. from resize) so user overrides take precedence over service defaults. */
+function getTotalDuration(apt: { duration?: number; serviceId?: { duration?: number }; additionalServices?: Array<{ duration?: number }> }): number {
+  if (apt?.duration != null && apt.duration > 0) return apt.duration
+  const primary = apt?.serviceId?.duration ?? 60
+  const additional = (apt?.additionalServices || []).reduce((sum, s) => sum + (s.duration ?? 0), 0)
+  return primary + additional
 }
 
 interface StaffWorkDay {
@@ -112,13 +132,22 @@ function parseHHMMToMinutes(time?: string | null): number | null {
 }
 
 function parseTimeToMinutes(time: string): number {
-  if (!time) return 0
-  const cleaned = time.replace(/\s*(am|pm)/i, "").trim()
+  if (!time || typeof time !== "string") return 0
+  const str = String(time).trim()
+  // Handle ISO date strings (e.g. "2025-02-19T20:30:00.000Z") - extract time part
+  const isoMatch = str.match(/T(\d{1,2}):(\d{2})/)
+  if (isoMatch) {
+    const h = parseInt(isoMatch[1], 10)
+    const m = parseInt(isoMatch[2], 10)
+    return (h >= 0 && h < 24 && m >= 0 && m < 60) ? h * 60 + m : 0
+  }
+  const cleaned = str.replace(/\s*(am|pm)/i, "").trim()
   const parts = cleaned.split(":")
   const h = parseInt(parts[0] || "0", 10)
   const m = parseInt(parts[1] || "0", 10)
-  const isPm = /pm/i.test(time) && h < 12
-  const hour = isPm ? h + 12 : /am/i.test(time) && h === 12 ? 0 : h
+  if (h < 0 || h > 23 || m < 0 || m > 59) return 0
+  const isPm = /pm/i.test(str) && h < 12
+  const hour = isPm ? h + 12 : /am/i.test(str) && h === 12 ? 0 : h
   return hour * 60 + m
 }
 
@@ -296,7 +325,24 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [showTimeChangeConfirm, setShowTimeChangeConfirm] = useState(false)
   const [currentTime, setCurrentTime] = useState(() => new Date())
   const [scrollToNowRequested, setScrollToNowRequested] = useState(false)
-  const [density, setDensity] = useState<"compact" | "comfortable">("comfortable")
+  const [density, setDensityState] = useState<"compact" | "comfortable">(() => {
+    if (typeof window === "undefined") return "comfortable"
+    try {
+      const stored = localStorage.getItem("appointmentViewMode") as "compact" | "comfortable" | null
+      if (stored === "compact" || stored === "comfortable") return stored
+    } catch {
+      /* ignore */
+    }
+    return "comfortable"
+  })
+  const setDensity = useCallback((value: "compact" | "comfortable") => {
+    setDensityState(value)
+    try {
+      localStorage.setItem("appointmentViewMode", value)
+    } catch {
+      /* ignore */
+    }
+  }, [])
   const [pendingTimeChange, setPendingTimeChange] = useState<{
     id: string
     mode: "move" | "resize-top" | "resize-bottom" | "staff"
@@ -326,6 +372,19 @@ export const AppointmentsCalendarGrid = forwardRef<
     clientX: number
     clientY: number
   } | null>(null)
+  const [blockTimeModalOpen, setBlockTimeModalOpen] = useState(false)
+  const [blockTimeModalData, setBlockTimeModalData] = useState<{
+    date: string
+    time: string
+    staffId: string | null
+    staffName?: string
+  } | null>(null)
+  const [blockTimesRefreshKey, setBlockTimesRefreshKey] = useState(0)
+  const [blockContextMenu, setBlockContextMenu] = useState<{
+    block: BlockTime
+    clientX: number
+    clientY: number
+  } | null>(null)
 
   // Update current time every minute for the red "now" line
   useEffect(() => {
@@ -344,17 +403,33 @@ export const AppointmentsCalendarGrid = forwardRef<
       return
     }
     let cancelled = false
-    SalesAPI.getByAppointmentId(selectedAppointment._id)
-      .then((res) => {
-        if (!cancelled && res?.success) setLinkedSale(res.data ?? null)
-      })
-      .catch(() => {
-        if (!cancelled) setLinkedSale(null)
-      })
+    const a = selectedAppointment as any
+    const idsToTry: string[] = a.bookingGroupId
+      ? appointments
+          .filter((apt) => (apt as Appointment).bookingGroupId === a.bookingGroupId)
+          .map((apt) => apt._id)
+      : [selectedAppointment._id]
+
+    const fetchLinkedSale = async () => {
+      for (const id of idsToTry) {
+        if (cancelled) return
+        try {
+          const res = await SalesAPI.getByAppointmentId(id)
+          if (res?.success && res?.data) {
+            if (!cancelled) setLinkedSale(res.data)
+            return
+          }
+        } catch {
+          /* try next */
+        }
+      }
+      if (!cancelled) setLinkedSale(null)
+    }
+    fetchLinkedSale()
     return () => {
       cancelled = true
     }
-  }, [selectedAppointment?._id])
+  }, [selectedAppointment?._id, (selectedAppointment as any)?.bookingGroupId, appointments])
 
   useImperativeHandle(ref, () => ({
     showCancelledModal: () => setShowCancelledModal(true),
@@ -425,7 +500,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     return () => {
       cancelled = true
     }
-  }, [selectedDate, staffFilter])
+  }, [selectedDate, staffFilter, blockTimesRefreshKey])
 
   useEffect(() => {
     let cancelled = false
@@ -576,7 +651,15 @@ export const AppointmentsCalendarGrid = forwardRef<
     let extStart = startMinutes
     let extEnd = endMinutes
     walkInSales.forEach((sale) => {
-      const checkoutEndM = parseTimeToMinutes(sale.time || "9:00")
+      // Prefer sale.time; fallback to extracting time from sale.date (ISO string) when time is missing/invalid
+      let timeStr = sale.time
+      if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
+        const d = sale.date ? new Date(sale.date) : new Date()
+        if (!Number.isNaN(d.getTime())) {
+          timeStr = format(d, "HH:mm")
+        }
+      }
+      const checkoutEndM = parseTimeToMinutes(timeStr || "9:00")
       const startM = checkoutEndM - 30
       if (startM < extStart) extStart = startM
       if (checkoutEndM > extEnd) extEnd = checkoutEndM
@@ -594,9 +677,10 @@ export const AppointmentsCalendarGrid = forwardRef<
     const slots: { label: string; minutes: number; isHourStart: boolean; showTimeLabel: boolean }[] = []
     for (let minutes = extendedStartMinutes; minutes < extendedEndMinutes; minutes += SLOT_MINUTES) {
       const h = Math.floor(minutes / 60)
-      const m = minutes % 60
+      const m = ((minutes % 60) + 60) % 60 // Handle negative minutes correctly
       const isHourStart = m === 0
-      const showTimeLabel = m % 30 === 0
+      // Show label at :00, :30, and first slot so time column is never empty when walk-in extends range outside staff hours
+      const showTimeLabel = m % 30 === 0 || minutes === extendedStartMinutes || minutes === extendedEndMinutes - SLOT_MINUTES
       const label = format(new Date(2000, 0, 1, h, m), "h:mma").toLowerCase()
       slots.push({ label, minutes, isHourStart, showTimeLabel })
     }
@@ -678,7 +762,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       const staffId = getPrimaryStaffId(apt)
       if (!staffId || !map[staffId]) return
       const startM = parseTimeToMinutes(apt.time)
-      const duration = apt.duration ?? 60
+      const duration = getTotalDuration(apt as any)
       const top = ((startM - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
       const height = Math.max(slotHeight * 0.6, (duration / SLOT_MINUTES) * slotHeight)
       map[staffId].push({ apt, top, height })
@@ -725,7 +809,12 @@ export const AppointmentsCalendarGrid = forwardRef<
     walkInSales.forEach((sale) => {
       const serviceItems = (sale.items || []).filter((i: any) => i.type === "service")
       if (serviceItems.length === 0) return
-      const checkoutEndM = parseTimeToMinutes(sale.time || "9:00")
+      let timeStr = sale.time
+      if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
+        const d = sale.date ? new Date(sale.date) : new Date()
+        if (!Number.isNaN(d.getTime())) timeStr = format(d, "HH:mm")
+      }
+      const checkoutEndM = parseTimeToMinutes(timeStr || "9:00")
       const duration = WALK_IN_SALE_DURATION
       const endM = checkoutEndM
       const startM = endM - duration
@@ -832,6 +921,16 @@ export const AppointmentsCalendarGrid = forwardRef<
     setShowCancelConfirm(true)
   }
 
+  const aptToCancel = appointmentToCancel ? appointments.find((a) => a._id === appointmentToCancel) : null
+  const hasMultipleInGroup = aptToCancel?.bookingGroupId
+    ? appointments.filter((a) => (a as Appointment).bookingGroupId === aptToCancel.bookingGroupId).length > 1
+    : false
+  const groupIdsToCancel = hasMultipleInGroup && aptToCancel?.bookingGroupId
+    ? appointments
+        .filter((a) => (a as Appointment).bookingGroupId === aptToCancel.bookingGroupId)
+        .map((a) => a._id)
+    : []
+
   const confirmCancelAppointment = async () => {
     if (!appointmentToCancel) return
     setCancelling(true)
@@ -857,6 +956,36 @@ export const AppointmentsCalendarGrid = forwardRef<
     }
   }
 
+  const confirmCancelAllAppointments = async () => {
+    if (!appointmentToCancel || groupIdsToCancel.length === 0) return
+    setCancelling(true)
+    try {
+      let allSuccess = true
+      for (const id of groupIdsToCancel) {
+        const res = await AppointmentsAPI.update(id, { status: "cancelled" })
+        if (!res?.success) allSuccess = false
+      }
+      if (allSuccess) {
+        const idsSet = new Set(groupIdsToCancel)
+        const list = appointments.map((a) =>
+          idsSet.has(a._id) ? { ...a, status: "cancelled" as const } : a
+        )
+        setAppointments(list)
+        setShowDetails(false)
+        setShowCancelConfirm(false)
+        setAppointmentToCancel(null)
+        alert("All appointments cancelled successfully")
+      } else {
+        alert("Failed to cancel some appointments. Please try again.")
+      }
+    } catch (e) {
+      console.error(e)
+      alert("Failed to cancel appointments. Please try again.")
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   const handleDeleteInvoiceClick = () => {
     setShowDeleteInvoiceConfirm(true)
   }
@@ -870,15 +999,24 @@ export const AppointmentsCalendarGrid = forwardRef<
         alert("Failed to delete invoice. Please try again.")
         return
       }
-      const aptRes = await AppointmentsAPI.delete(selectedAppointment._id)
-      if (aptRes?.success) {
-        setAppointments((prev) => prev.filter((a) => a._id !== selectedAppointment._id))
+      const a = selectedAppointment as any
+      const idsToDelete = a.bookingGroupId
+        ? appointments.filter((apt) => (apt as Appointment).bookingGroupId === a.bookingGroupId).map((apt) => apt._id)
+        : [selectedAppointment._id]
+      let allAptDeleted = true
+      for (const id of idsToDelete) {
+        const aptRes = await AppointmentsAPI.delete(id)
+        if (!aptRes?.success) allAptDeleted = false
+      }
+      if (allAptDeleted) {
+        const idsSet = new Set(idsToDelete)
+        setAppointments((prev) => prev.filter((apt) => !idsSet.has(apt._id)))
       }
       setLinkedSale(null)
       setShowDetails(false)
       setShowDeleteInvoiceConfirm(false)
       window.dispatchEvent(new CustomEvent("appointments-refresh"))
-      alert("Invoice and appointment deleted successfully")
+      alert(allAptDeleted ? "Invoice and appointment(s) deleted successfully" : "Invoice deleted. Failed to delete some appointment(s).")
     } catch (e) {
       console.error(e)
       alert("Failed to delete invoice. Please try again.")
@@ -896,7 +1034,19 @@ export const AppointmentsCalendarGrid = forwardRef<
         const list = appointments.map((a) =>
           a._id === selectedAppointment._id ? { ...a, status: newStatus } : a
         )
-        setAppointments(list)
+        if (newStatus === 'arrived') {
+          const groupId = selectedAppointment.bookingGroupId
+          if (groupId) {
+            const updatedList = list.map((a) =>
+              a.bookingGroupId === groupId ? { ...a, status: newStatus } : a
+            )
+            setAppointments(updatedList)
+          } else {
+            setAppointments(list)
+          }
+        } else {
+          setAppointments(list)
+        }
         setSelectedAppointment({ ...selectedAppointment, status: newStatus })
         if (newStatus === "arrived") {
           // no alert; user may click "Service Started" next
@@ -928,7 +1078,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       startX: e.clientX,
       startY: e.clientY,
       startTimeMinutes: parseTimeToMinutes(apt.time),
-      duration: apt.duration ?? 60,
+      duration: getTotalDuration(apt as any),
       mode: "move",
       sourceStaffId,
     })
@@ -948,7 +1098,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       startX: e.clientX,
       startY: e.clientY,
       startTimeMinutes: parseTimeToMinutes(apt.time),
-      duration: apt.duration ?? 60,
+      duration: getTotalDuration(apt as any),
       mode,
       sourceStaffId,
     })
@@ -975,20 +1125,15 @@ export const AppointmentsCalendarGrid = forwardRef<
     const isValidDropTarget = (colIndex: number, slotMinutes: number, duration: number): boolean => {
       const col = columns[colIndex]
       if (!col) return false
-      const todayStr = format(new Date(), "yyyy-MM-dd")
-      const isToday = selectedDate === todayStr
-      const isPastDate = selectedDate < todayStr
-      const currentMinutes = new Date().getHours() * 60 + new Date().getMinutes()
       const windowForStaff = staffWindowsById[col._id]
       for (let m = slotMinutes; m < slotMinutes + duration; m += SLOT_MINUTES) {
-        const past = isPastDate || (isToday && m < currentMinutes)
         const inWindow = !windowForStaff || (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
         const blocked = (blockTimesByColumn[col._id] || []).some(({ block }) => {
           const startM = parseTimeToMinutes(block.startTime)
           const endM = parseTimeToMinutes(block.endTime)
           return m < endM && m + SLOT_MINUTES > startM
         })
-        if (past || !inWindow || blocked) return false
+        if (!inWindow || blocked) return false
       }
       return true
     }
@@ -1256,6 +1401,24 @@ export const AppointmentsCalendarGrid = forwardRef<
     }
   }, [draggingBlock, startMinutes, endMinutes, slotHeight])
 
+  const handleDeleteBlockTime = useCallback(async (block: BlockTime) => {
+    if (!confirm("Delete this blocked time?")) return
+    setUpdatingBlockForId(block._id)
+    try {
+      const res = await BlockTimeAPI.delete(block._id)
+      if (res?.success) {
+        setBlockTimes((prev) => prev.filter((b) => b._id !== block._id))
+      } else {
+        alert("Failed to delete. Please try again.")
+      }
+    } catch (e) {
+      console.error(e)
+      alert("Failed to delete. Please try again.")
+    } finally {
+      setUpdatingBlockForId(null)
+    }
+  }, [])
+
   const confirmTimeChange = async () => {
     const pending = pendingTimeChange
     if (!pending) return
@@ -1429,6 +1592,7 @@ export const AppointmentsCalendarGrid = forwardRef<
           </div>
         </div>
         <div className="flex-1" />
+        {/* Color Code - right side, above table */}
         <div className="relative">
           <Button
             variant="outline"
@@ -1443,11 +1607,11 @@ export const AppointmentsCalendarGrid = forwardRef<
           {showColorLegend && (
             <>
               <div
-                className="fixed inset-0 z-10"
+                className="fixed inset-0 z-[100]"
                 aria-hidden
                 onClick={() => setShowColorLegend(false)}
               />
-              <div className="absolute right-0 top-full mt-1 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-lg min-w-[180px]">
+              <div className="absolute right-0 top-full mt-1 z-[101] rounded-xl border border-slate-200 bg-white p-3 shadow-lg min-w-[180px]">
                 <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
                   Status
                 </div>
@@ -1549,9 +1713,7 @@ export const AppointmentsCalendarGrid = forwardRef<
               const now = new Date()
               const todayStr = format(now, "yyyy-MM-dd")
               const isToday = selectedDate === todayStr
-              const isPastDate = selectedDate < todayStr
               const currentMinutes = now.getHours() * 60 + now.getMinutes()
-              const isPastSlot = isPastDate || (isToday && slot.minutes < currentMinutes)
               const isCurrentHourRow = isToday && isHourBoundary && Math.floor(currentMinutes / 60) === slot.minutes / 60
               return (
                 <Fragment key={`row-${slot.minutes}`}>
@@ -1566,7 +1728,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                       key={`empty-${slot.minutes}`}
                       type="button"
                       onClick={(e) => {
-                        if (isPastSlot) return
                         setSlotActionDialog({
                           date: selectedDate,
                           time: slotMinutesToTimeString(slot.minutes),
@@ -1575,13 +1736,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                           clientY: e.clientY,
                         })
                       }}
-                      className={`w-full border-r border-slate-200/80 last:border-r-0 text-left ${rowBorderClass} transition-colors duration-150 ${
-                        isPastSlot
-                          ? "calendar-outside-hours cursor-not-allowed"
-                          : "hover:bg-violet-100/90 hover:ring-1 hover:ring-violet-200/60 hover:ring-inset cursor-pointer"
-                      } ${!isPastSlot ? rowBgClass : ""} ${!isPastSlot && isCurrentHourRow ? "!bg-amber-50/20" : ""}`}
+                      className={`w-full border-r border-slate-200/80 last:border-r-0 text-left ${rowBorderClass} transition-colors duration-150 hover:bg-violet-100/90 hover:ring-1 hover:ring-violet-200/60 hover:ring-inset cursor-pointer ${rowBgClass} ${isCurrentHourRow ? "!bg-amber-50/20" : ""}`}
                       style={{ height: slotHeight, minHeight: slotHeight }}
-                      title={isPastSlot ? "Past slot – unavailable" : "New appointment"}
+                      title="New appointment"
                     />
                   ) : (
                     columns.map((col, colIndex) => {
@@ -1598,7 +1755,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           return slot.minutes < endM && slot.minutes + SLOT_MINUTES > startM
                         }
                       )
-                      const inWindow = inWorkWindow && !isBlockedByTime && !isPastSlot
+                      const inWindow = inWorkWindow && !isBlockedByTime
                       const duration = draggingApt?.duration ?? 60
                       const isInDragHighlight =
                         draggingApt &&
@@ -1611,14 +1768,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                         isInDragHighlight &&
                         (() => {
                           for (let m = dragHoverSlot!.slotMinutes; m < dragHoverSlot!.slotMinutes + duration; m += SLOT_MINUTES) {
-                            const past = isPastDate || (isToday && m < currentMinutes)
                             const w = !windowForStaff || (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
                             const blocked = (blockTimesByColumn[col._id] || []).some(({ block }) => {
                               const startM = parseTimeToMinutes(block.startTime)
                               const endM = parseTimeToMinutes(block.endTime)
                               return m < endM && m + SLOT_MINUTES > startM
                             })
-                            if (past || !w || blocked) return false
+                            if (!w || blocked) return false
                           }
                           return true
                         })()
@@ -1647,7 +1803,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                             : "calendar-outside-hours cursor-not-allowed"
                         } ${!isInDragHighlight && inWindow ? rowBgClass : ""} ${!isInDragHighlight && inWindow && isCurrentHourRow ? "!bg-amber-50/20" : ""}`}
                         style={{ height: slotHeight, minHeight: slotHeight }}
-                        title={inWindow ? `New appointment with ${col.name}` : isPastSlot ? "Past slot – unavailable" : "Unavailable (blocked or outside working hours)"}
+                        title={inWindow ? `New appointment with ${col.name}` : "Unavailable (blocked or outside working hours)"}
                       />
                       );
                     })
@@ -1661,20 +1817,15 @@ export const AppointmentsCalendarGrid = forwardRef<
               const col = columns[dragHoverSlot.colIndex]
               if (!col) return null
               const windowForStaff = staffWindowsById[col._id]
-              const todayStr = format(new Date(), "yyyy-MM-dd")
-              const isToday = selectedDate === todayStr
-              const isPastDate = selectedDate < todayStr
-              const currentMinutes = new Date().getHours() * 60 + new Date().getMinutes()
               let isValid = true
               for (let m = dragHoverSlot.slotMinutes; m < dragHoverSlot.slotMinutes + duration; m += SLOT_MINUTES) {
-                const past = isPastDate || (isToday && m < currentMinutes)
                 const w = !windowForStaff || (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
                 const blocked = (blockTimesByColumn[col._id] || []).some(({ block }) => {
                   const startM = parseTimeToMinutes(block.startTime)
                   const endM = parseTimeToMinutes(block.endTime)
                   return m < endM && m + SLOT_MINUTES > startM
                 })
-                if (past || !w || blocked) { isValid = false; break }
+                if (!w || blocked) { isValid = false; break }
               }
               const slotCount = Math.ceil(duration / SLOT_MINUTES)
               const topPx = ((dragHoverSlot.slotMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
@@ -1705,7 +1856,7 @@ export const AppointmentsCalendarGrid = forwardRef<
             {columns.length > 0 && (
               <div
                 ref={blocksContainerRef}
-                className="absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] pointer-events-none"
+                className="absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] z-[5] pointer-events-none"
                 style={{ height: totalSlotsWithSales * slotHeight }}
                 onClick={(e) => {
                   if (justDraggedRef.current) return
@@ -1716,9 +1867,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                   const slotIndex = Math.floor(relY / slotHeight)
                   const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
                   if (slotMinutes < extendedStartMinutes || slotMinutes >= extendedEndMinutes) return
-                  const todayStr = format(new Date(), "yyyy-MM-dd")
-                  const isPast = selectedDate < todayStr || (selectedDate === todayStr && slotMinutes < new Date().getHours() * 60 + new Date().getMinutes())
-                  if (isPast) return
                   const colIndex = Math.floor((e.clientX - rect.left) / (rect.width / columns.length))
                   const col = columns[colIndex]
                   if (!col) return
@@ -1750,7 +1898,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                 >
                   {(blocksByColumnWithLayout[col._id] || []).map(({ apt, top, height, left, width }) => {
                     const a = apt as any
-                    const serviceName = a?.serviceId?.name || "Service"
+                    const serviceNames = getServiceDisplayNames(a)
                     const clientName = a?.clientId?.name || "Client"
                     const isDragging = draggingApt?.id === apt._id
                     const isUpdating = updatingTimeForId === apt._id
@@ -1789,7 +1937,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                     }
                     const accentColor = accentColorMap[apt.status] || "bg-slate-500"
                     const statusDotColor = statusDotColorMap[apt.status] || "bg-slate-400"
-                    const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + (apt.duration ?? 60))
+                    const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(apt as any))
                     const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
                     return (
                       <div
@@ -1822,7 +1970,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                         />
                         {/* Drag handle - top */}
                         <div
-                          className={`absolute top-0 left-0 right-0 z-20 h-2.5 flex flex-col items-center justify-center ${canDrag ? "!cursor-grab active:!cursor-grabbing hover:bg-black/[0.03]" : ""}`}
+                          className={`absolute top-0 left-0 right-0 z-20 h-3 flex flex-col items-center justify-center ${canDrag ? "!cursor-grab active:!cursor-grabbing hover:bg-black/[0.06]" : ""}`}
                           aria-hidden
                           onMouseDown={(e) => {
                             if (canDrag) handleResizeStart(e, apt, "resize-top")
@@ -1830,12 +1978,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                           title={canDrag ? "Drag to change start time or reassign staff" : undefined}
                         >
                           {canDrag && (
-                            <div className="pointer-events-none w-5 h-0.5 rounded-full bg-slate-400/40" aria-hidden />
+                            <div className="pointer-events-none w-6 h-0.5 rounded-full bg-slate-400/50" aria-hidden />
                           )}
                         </div>
                         {/* Main card body */}
                         <div
-                          className={`flex-1 pl-[14px] pr-3 pt-6 pb-3 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+                          className={`flex-1 pl-[14px] pr-3 pt-6 pb-4 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
                           onMouseDown={(e) => {
                             if (canDrag) handleTimeDragStart(e, apt)
                           }}
@@ -1858,10 +2006,16 @@ export const AppointmentsCalendarGrid = forwardRef<
                           <div className="font-semibold text-slate-800 text-[14px] truncate leading-tight pr-16">
                             {clientName}
                           </div>
-                          {/* Line 2: Service name - 13-14px, medium */}
-                          <div className="text-slate-600 text-[13px] font-medium truncate mt-1">
-                            {serviceName}
-                          </div>
+                          {/* Line 2: Service name(s) - multi-staff: single service; same-staff multi: bullet list */}
+                          {serviceNames.length === 1 ? (
+                            <div className="text-slate-600 text-[13px] font-medium mt-1 truncate">{serviceNames[0]}</div>
+                          ) : (
+                            <ul className="text-slate-600 text-[13px] font-medium mt-1 list-disc list-inside space-y-0.5">
+                              {serviceNames.map((name, i) => (
+                                <li key={i} className="truncate">{name}</li>
+                              ))}
+                            </ul>
+                          )}
                           {/* Line 3: Time range - 12-13px, muted, with clock icon */}
                           <div className="flex items-center gap-1.5 mt-2 text-slate-500 text-[12px] tabular-nums">
                             <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" />
@@ -1870,7 +2024,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           {/* Line 4: Metadata - duration pill, secondary */}
                           <div className="flex items-center justify-between gap-2 mt-2">
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80">
-                              {apt.duration ?? 60} min
+                              {getTotalDuration(apt as any)} min
                             </span>
                           </div>
                           {apt.notes && (
@@ -1925,15 +2079,16 @@ export const AppointmentsCalendarGrid = forwardRef<
                         </div>
                         {/* Resize handle - bottom */}
                         <div
-                          className={`h-2.5 min-h-2.5 shrink-0 flex items-center justify-center bg-slate-50/90 ${canDrag ? "hover:bg-slate-100 cursor-n-resize" : ""}`}
+                          className={`absolute bottom-0 left-0 right-0 z-20 h-4 flex items-center justify-center bg-slate-100/80 ${canDrag ? "hover:bg-slate-200/80 cursor-n-resize active:bg-slate-300/80" : ""}`}
                           aria-hidden
                           onMouseDown={(e) => {
+                            e.stopPropagation()
                             if (canDrag) handleResizeStart(e, apt, "resize-bottom")
                           }}
-                          title={canDrag ? "Drag to change duration" : undefined}
+                          title={canDrag ? "Drag to extend or shorten duration" : undefined}
                         >
                           {canDrag && (
-                            <div className="w-5 h-0.5 rounded-full bg-slate-400/50" aria-hidden />
+                            <div className="pointer-events-none w-8 h-1 rounded-full bg-slate-400/60" aria-hidden />
                           )}
                         </div>
                       </div>
@@ -1978,6 +2133,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                     )
                   })}
                   {(blockTimesByColumn[col._id] || []).map(({ block, top, height }) => {
+                    const BlockReasonIcon = getBlockReasonIcon(block.title)
                     const isResizing = draggingBlock?.id === block._id
                     const isResizeTop = isResizing && draggingBlock?.mode === "resize-top"
                     const isResizeBottom = isResizing && draggingBlock?.mode === "resize-bottom"
@@ -1998,7 +2154,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           top: displayTop,
                           height: displayHeight,
                         }}
-                        title={block.title}
+                        title={`${block.title} – Click for options`}
                       >
                         {/* Top resize handle */}
                         <div
@@ -2010,15 +2166,25 @@ export const AppointmentsCalendarGrid = forwardRef<
                           <div className="pointer-events-none w-5 h-0.5 rounded-full bg-red-400/60" aria-hidden />
                         </div>
                         <div className="absolute left-0 top-0 bottom-0 w-1 bg-red-500 shrink-0" aria-hidden />
-                        <div className="pl-4 pr-3 pt-6 pb-2 text-xs overflow-hidden text-left flex-1 min-w-0">
-                          <div className="font-medium text-red-800 truncate">
-                            {block.title}
+                        <button
+                          type="button"
+                          className="flex items-stretch flex-1 min-w-0 pt-6 pb-2 cursor-pointer hover:bg-red-100/50 transition-colors text-left border-0 bg-transparent w-full"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setBlockContextMenu({ block, clientX: e.clientX, clientY: e.clientY })
+                          }}
+                        >
+                          <div className="pl-4 pr-2 pt-0 text-xs overflow-hidden text-left flex-1 min-w-0">
+                            <div className="font-medium text-red-800 truncate">{block.title}</div>
+                            <div className="text-red-600 text-[10px] tabular-nums mt-0.5">
+                              {format(new Date(2000, 0, 1, Math.floor(parseTimeToMinutes(block.startTime) / 60), parseTimeToMinutes(block.startTime) % 60), "h:mma").toLowerCase()}
+                              – {format(new Date(2000, 0, 1, Math.floor(parseTimeToMinutes(block.endTime) / 60), parseTimeToMinutes(block.endTime) % 60), "h:mma").toLowerCase()}
+                            </div>
                           </div>
-                          <div className="text-red-600 text-[10px] tabular-nums mt-0.5">
-                            {format(new Date(2000, 0, 1, Math.floor(parseTimeToMinutes(block.startTime) / 60), parseTimeToMinutes(block.startTime) % 60), "h:mma").toLowerCase()}
-                            – {format(new Date(2000, 0, 1, Math.floor(parseTimeToMinutes(block.endTime) / 60), parseTimeToMinutes(block.endTime) % 60), "h:mma").toLowerCase()}
+                          <div className="flex items-center justify-center pr-3 shrink-0">
+                            <BlockReasonIcon className="h-8 w-8 text-red-400/80" />
                           </div>
-                        </div>
+                        </button>
                         {/* Bottom resize handle */}
                         <div
                           className="absolute bottom-0 left-0 right-0 z-20 h-2.5 flex flex-col items-center justify-center cursor-s-resize hover:bg-red-200/40 active:bg-red-200/60"
@@ -2058,12 +2224,8 @@ export const AppointmentsCalendarGrid = forwardRef<
                   style={{ top: topPx }}
                   aria-hidden
                 >
-                  <div className="flex-shrink-0 w-[88px] flex items-center justify-end gap-2 pr-2">
-                    <span
-                      className="animate-time-dot-pulse h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]"
-                      aria-hidden
-                    />
-                    <span className="text-[10px] font-semibold text-red-600 tabular-nums">
+                  <div className="flex-shrink-0 w-[88px] flex items-center justify-end pr-2">
+                    <span className="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-semibold tabular-nums">
                       {format(currentTime, "h:mm a")}
                     </span>
                   </div>
@@ -2080,14 +2242,14 @@ export const AppointmentsCalendarGrid = forwardRef<
         const apt = appointments.find((a) => a._id === draggingApt.id)
         if (!apt) return null
         const a = apt as any
-        const serviceName = a?.serviceId?.name || "Service"
+        const serviceNames = getServiceDisplayNames(a)
         const clientName = a?.clientId?.name || "Client"
         const accentColorMap: Record<string, string> = {
           scheduled: "bg-amber-500", arrived: "bg-blue-500", confirmed: "bg-emerald-500",
           service_started: "bg-violet-500", completed: "bg-slate-400", cancelled: "bg-red-500",
         }
         const accentColor = accentColorMap[apt.status] || "bg-slate-500"
-        const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + (apt.duration ?? 60))
+        const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(a))
         const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
         return createPortal(
           <div
@@ -2102,19 +2264,68 @@ export const AppointmentsCalendarGrid = forwardRef<
             <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor}`} />
             <div className="pl-[14px] pr-3 pt-6 pb-3 h-full flex flex-col justify-center">
               <div className="font-semibold text-slate-800 text-[14px] truncate">{clientName}</div>
-              <div className="text-slate-600 text-[13px] font-medium truncate mt-1">{serviceName}</div>
+              {serviceNames.length === 1 ? (
+                <div className="text-slate-600 text-[13px] font-medium mt-1 truncate">{serviceNames[0]}</div>
+              ) : (
+                <ul className="text-slate-600 text-[13px] font-medium mt-1 list-disc list-inside space-y-0.5">
+                  {serviceNames.map((name, i) => <li key={i} className="truncate">{name}</li>)}
+                </ul>
+              )}
               <div className="flex items-center gap-1.5 mt-2 text-slate-500 text-[12px]">
                 <Clock className="h-3.5 w-3.5 shrink-0 opacity-70" />
                 <span>{timeRangeStr}</span>
               </div>
               <span className="inline-flex mt-2 px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80 w-fit">
-                {apt.duration ?? 60} min
+                {getTotalDuration(a)} min
               </span>
             </div>
           </div>,
           document.body
         )
       })()}
+
+      <BlockTimeModal
+        open={blockTimeModalOpen}
+        onOpenChange={setBlockTimeModalOpen}
+        initialDate={blockTimeModalData?.date ?? ""}
+        initialTime={blockTimeModalData?.time ?? ""}
+        initialStaffId={blockTimeModalData?.staffId ?? null}
+        initialStaffName={blockTimeModalData?.staffName}
+        staffOptions={staffWithScheduling}
+        onSuccess={() => setBlockTimesRefreshKey((k) => k + 1)}
+      />
+
+      {blockContextMenu &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50"
+            onClick={() => setBlockContextMenu(null)}
+            aria-hidden
+          >
+            <div className="absolute inset-0 bg-transparent" />
+            <div
+              className="absolute z-10 min-w-[180px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+              style={{
+                left: blockContextMenu.clientX,
+                top: blockContextMenu.clientY + 8,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors text-left"
+                onClick={() => {
+                  handleDeleteBlockTime(blockContextMenu.block)
+                  setBlockContextMenu(null)
+                }}
+              >
+                <Trash2 className="h-4 w-4 shrink-0" />
+                Delete Blocked Time
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {slotActionDialog &&
         createPortal(
@@ -2165,10 +2376,14 @@ export const AppointmentsCalendarGrid = forwardRef<
                   variant="outline"
                   className="justify-start gap-3 h-12 text-left"
                   onClick={() => {
-                    const params = new URLSearchParams({ addBlock: "1", returnTo: "/appointments", date: slotActionDialog.date, time: slotActionDialog.time })
-                    if (slotActionDialog.staffId) params.set("staffId", slotActionDialog.staffId)
-                    router.push(`/staff/working-hours?${params.toString()}`)
+                    setBlockTimeModalData({
+                      date: slotActionDialog.date,
+                      time: slotActionDialog.time,
+                      staffId: slotActionDialog.staffId,
+                      staffName: slotActionDialog.staffName,
+                    })
                     setSlotActionDialog(null)
+                    setBlockTimeModalOpen(true)
                   }}
                 >
                   <CalendarClock className="h-5 w-5 shrink-0 text-amber-600" />
@@ -2194,10 +2409,10 @@ export const AppointmentsCalendarGrid = forwardRef<
             <div className="space-y-4 text-sm">
               {(() => {
                 const a = selectedAppointment as any
-                const serviceName = a?.serviceId?.name || "Service"
+                const serviceNames = getServiceDisplayNames(a)
                 const clientName = a?.clientId?.name || "Client"
                 const staffName = getPrimaryStaffName(selectedAppointment)
-                const duration = a?.duration ?? 0
+                const duration = getTotalDuration(a)
                 const price = a?.price ?? 0
                 const timeFrom = a?.time || ""
                 const timeTo = timeFrom ? slotMinutesToTimeString(parseTimeToMinutes(timeFrom) + duration) : ""
@@ -2243,7 +2458,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                       <div>
                         <div className="text-muted-foreground text-xs">Service Name</div>
-                        <div className="font-medium">{serviceName}</div>
+                        {serviceNames.length === 1 ? (
+                          <div className="font-medium">{serviceNames[0]}</div>
+                        ) : (
+                          <ul className="font-medium list-disc list-inside space-y-0.5">
+                            {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                          </ul>
+                        )}
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Service Price</div>
@@ -2254,7 +2475,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                         <div>{timeFrom && timeTo ? `${timeFrom} – ${timeTo}` : timeFrom || "—"}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground text-xs">Service Duration</div>
+                        <div className="text-muted-foreground text-xs">Total Duration</div>
                         <div>{duration} min</div>
                       </div>
                       <div>
@@ -2307,9 +2528,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           className="shrink-0"
                         >
                           <Link
-                            href={`/receipt/${linkedSale.billNo || linkedSale.receiptNumber}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            href={`/receipt/${linkedSale.billNo || linkedSale.receiptNumber}?returnTo=appointments`}
                           >
                             <Eye className="h-4 w-4 mr-2" />
                             View Invoice
@@ -2347,16 +2566,63 @@ export const AppointmentsCalendarGrid = forwardRef<
                         onClick={() => {
                           if (!selectedAppointment) return
                           const a = selectedAppointment as any
+                          const staffId = a.staffId?._id || a.staffId
+                          const staffName = a.staffId?.name || ""
+                          let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
+                          if (a.bookingGroupId) {
+                            const groupApts = appointments.filter(
+                              (apt) =>
+                                (apt as Appointment).bookingGroupId === a.bookingGroupId &&
+                                (apt as any).status !== "cancelled"
+                            )
+                            for (const apt of groupApts) {
+                              const svc = (apt as any).serviceId
+                              const sid = (apt as any).staffId?._id || (apt as any).staffId
+                              const sname = (apt as any).staffId?.name || ""
+                              services.push({
+                                serviceId: svc?._id || svc,
+                                staffId: sid || "",
+                                staffName: sname,
+                                price: (apt as any).price ?? (typeof svc === "object" && svc?.price) ?? 0,
+                              })
+                            }
+                          } else if (a.additionalServices && a.additionalServices.length > 0) {
+                            const primary = a.serviceId
+                            services.push({
+                              serviceId: primary?._id || primary,
+                              staffId: staffId || "",
+                              staffName,
+                              price: (typeof primary === "object" && primary?.price) ?? a.price ?? 0,
+                            })
+                            for (const s of a.additionalServices) {
+                              services.push({
+                                serviceId: s._id || s,
+                                staffId: staffId || "",
+                                staffName,
+                                price: s.price ?? 0,
+                              })
+                            }
+                          } else {
+                            services = [{
+                              serviceId: a.serviceId?._id || a.serviceId,
+                              staffId: staffId || "",
+                              staffName,
+                              price: a.price ?? (typeof a.serviceId === "object" && a.serviceId?.price) ?? 0,
+                            }]
+                          }
                           const appointmentData = {
                             appointmentId: a._id,
                             clientId: a.clientId?._id || a.clientId,
                             clientName: a.clientId?.name || "",
-                            serviceId: a.serviceId?._id || a.serviceId,
+                            date: a.date,
+                            time: a.time,
+                            services: services.length > 0 ? services : undefined,
+                            serviceId: services.length === 1 ? services[0].serviceId : undefined,
                             serviceName: a.serviceId?.name || "",
                             servicePrice: a.price || 0,
                             serviceDuration: a.duration || 0,
-                            staffId: a.staffId?._id || a.staffId,
-                            staffName: a.staffId?.name || "",
+                            staffId: staffId || "",
+                            staffName,
                           }
                           setShowDetails(false)
                           router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
@@ -2386,12 +2652,12 @@ export const AppointmentsCalendarGrid = forwardRef<
               {getUpcomingAppointments().length > 0 ? (
                 getUpcomingAppointments().map((appointment) => {
                   const a = appointment as any
-                  const serviceName = a?.serviceId?.name || "Service"
+                  const serviceNames = getServiceDisplayNames(a)
                   const clientName = a?.clientId?.name || "Client"
                   const clientInitial = clientName?.charAt?.(0) || "?"
                   const staffName = a?.staffId?.name || "Unassigned Staff"
                   const price = a?.price ?? 0
-                  const duration = a?.duration ?? 0
+                  const duration = getTotalDuration(a)
                   return (
                     <Card
                       key={appointment._id}
@@ -2412,7 +2678,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                           </Badge>
                         </div>
                         <div className="space-y-3">
-                          <div className="font-semibold text-slate-800 text-lg">{serviceName}</div>
+                          {serviceNames.length === 1 ? (
+                            <div className="font-semibold text-slate-800 text-lg">{serviceNames[0]}</div>
+                          ) : (
+                            <ul className="font-semibold text-slate-800 text-lg list-disc list-inside space-y-0.5">
+                              {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                            </ul>
+                          )}
                           <div className="flex items-center">
                             <Avatar className="h-8 w-8 mr-3 border border-indigo-200">
                               <AvatarFallback className="text-sm font-medium bg-indigo-100 text-indigo-700">
@@ -2462,12 +2734,12 @@ export const AppointmentsCalendarGrid = forwardRef<
               {getCancelledAppointments().length > 0 ? (
                 getCancelledAppointments().map((appointment) => {
                   const a = appointment as any
-                  const serviceName = a?.serviceId?.name || "Service"
+                  const serviceNames = getServiceDisplayNames(a)
                   const clientName = a?.clientId?.name || "Client"
                   const clientInitial = clientName?.charAt?.(0) || "?"
                   const staffName = a?.staffId?.name || "Unassigned Staff"
                   const price = a?.price ?? 0
-                  const duration = a?.duration ?? 0
+                  const duration = getTotalDuration(a)
                   return (
                     <Card
                       key={appointment._id}
@@ -2489,9 +2761,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                           </div>
                         </div>
                         <div className="space-y-3">
-                          <div className="font-semibold text-slate-800 text-lg line-through opacity-75">
-                            {serviceName}
-                          </div>
+                          {serviceNames.length === 1 ? (
+                            <div className="font-semibold text-slate-800 text-lg line-through opacity-75">{serviceNames[0]}</div>
+                          ) : (
+                            <ul className="font-semibold text-slate-800 text-lg line-through opacity-75 list-disc list-inside space-y-0.5">
+                              {serviceNames.map((name, i) => <li key={i}>{name}</li>)}
+                            </ul>
+                          )}
                           <div className="flex items-center">
                             <Avatar className="h-8 w-8 mr-3 border border-red-200">
                               <AvatarFallback className="text-sm font-medium bg-red-100 text-red-700">
@@ -2631,7 +2907,7 @@ export const AppointmentsCalendarGrid = forwardRef<
               Are you sure you want to cancel this appointment? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex gap-3 justify-end">
+          <div className="flex gap-3 justify-end flex-nowrap">
             <Button
               variant="outline"
               onClick={() => {
@@ -2673,9 +2949,19 @@ export const AppointmentsCalendarGrid = forwardRef<
                   Cancelling...
                 </>
               ) : (
-                "Yes, Cancel Appointment"
+                "Cancel"
               )}
             </Button>
+            {hasMultipleInGroup && (
+              <Button
+                variant="destructive"
+                onClick={confirmCancelAllAppointments}
+                disabled={cancelling}
+                className="bg-red-700 hover:bg-red-800 text-white"
+              >
+                Cancel All
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>

@@ -44,9 +44,11 @@ interface CategoryComboboxProps {
   onChange: (value: string) => void
   disabled?: boolean
   onManageCategories?: () => void // Optional callback to open category management
+  /** 'product' = product categories only, 'service' = service categories only. Keeps them separate. */
+  type?: "product" | "service"
 }
 
-export function CategoryCombobox({ value, onChange, disabled, onManageCategories }: CategoryComboboxProps) {
+export function CategoryCombobox({ value, onChange, disabled, onManageCategories, type }: CategoryComboboxProps) {
   const [open, setOpen] = React.useState(false)
   const [categories, setCategories] = React.useState<Category[]>([])
   const [loading, setLoading] = React.useState(false)
@@ -56,11 +58,11 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
   const [addingCategory, setAddingCategory] = React.useState(false)
   const { toast } = useToast()
 
-  // Load categories on mount
+  // Load categories on mount and when type changes
   React.useEffect(() => {
     loadCategories()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [type])
 
   const loadCategories = async () => {
     try {
@@ -68,10 +70,12 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
       const uniqueCategories = new Set<string>()
       const categoryMap = new Map<string, Category>()
       
-      // Fetch from Categories API
+      // Fetch from Categories API (filter by type so product/service categories stay separate)
       try {
-        const response = await CategoriesAPI.getAll({ activeOnly: true })
-        
+        const response = await CategoriesAPI.getAll({
+          activeOnly: true,
+          ...(type && { type }),
+        })
         if (response.success && response.data) {
           response.data.forEach((category: any) => {
             if (category.name && category.name.trim()) {
@@ -89,49 +93,54 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
         console.log('Categories API not available or empty, will extract from products/services')
       }
       
-      // Also extract categories from existing products and services
-      try {
-        const response = await ProductsAPI.getAll({ limit: 10000 })
-        if (response.success && response.data) {
-          const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-          products.forEach((product: any) => {
-            if (product.category && product.category.trim()) {
-              const categoryName = product.category.trim()
-              if (!uniqueCategories.has(categoryName)) {
-                uniqueCategories.add(categoryName)
-                categoryMap.set(categoryName, {
-                  name: categoryName,
-                  _id: categoryName,
-                  isActive: true
-                })
+      // Extract categories from products only (when type is product or unspecified)
+      if (type !== "service") {
+        try {
+          const response = await ProductsAPI.getAll({ limit: 10000 })
+          if (response.success && response.data) {
+            const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+            products.forEach((product: any) => {
+              if (product.category && product.category.trim()) {
+                const categoryName = product.category.trim()
+                if (!uniqueCategories.has(categoryName)) {
+                  uniqueCategories.add(categoryName)
+                  categoryMap.set(categoryName, {
+                    name: categoryName,
+                    _id: categoryName,
+                    isActive: true
+                  })
+                }
               }
-            }
-          })
+            })
+          }
+        } catch (error) {
+          console.log('Error fetching products for categories:', error)
         }
-      } catch (error) {
-        console.log('Error fetching products for categories:', error)
       }
       
-      try {
-        const response = await ServicesAPI.getAll({ limit: 10000 })
-        if (response.success && response.data) {
-          const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-          services.forEach((service: any) => {
-            if (service.category && service.category.trim()) {
-              const categoryName = service.category.trim()
-              if (!uniqueCategories.has(categoryName)) {
-                uniqueCategories.add(categoryName)
-                categoryMap.set(categoryName, {
-                  name: categoryName,
-                  _id: categoryName,
-                  isActive: true
-                })
+      // Extract categories from services only (when type is service or unspecified)
+      if (type !== "product") {
+        try {
+          const response = await ServicesAPI.getAll({ limit: 10000 })
+          if (response.success && response.data) {
+            const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+            services.forEach((service: any) => {
+              if (service.category && service.category.trim()) {
+                const categoryName = service.category.trim()
+                if (!uniqueCategories.has(categoryName)) {
+                  uniqueCategories.add(categoryName)
+                  categoryMap.set(categoryName, {
+                    name: categoryName,
+                    _id: categoryName,
+                    isActive: true
+                  })
+                }
               }
-            }
-          })
+            })
+          }
+        } catch (error) {
+          console.log('Error fetching services for categories:', error)
         }
-      } catch (error) {
-        console.log('Error fetching services for categories:', error)
       }
       
       // Convert map to array and sort alphabetically
@@ -165,10 +174,11 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
     try {
       setAddingCategory(true)
       
-      // Create the category using the API
+      // Create the category using the API (with type so product/service stay separate)
       const response = await CategoriesAPI.create({
         name: newCategoryName.trim(),
-        description: ''
+        description: '',
+        ...(type && { type }),
       })
       
       if (response.success && response.data) {

@@ -123,11 +123,16 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
   // Update form data when product prop changes (for edit mode)
   useEffect(() => {
     if (product) {
+      const isService = product.productType === "service"
+      const costVal = product.cost != null && product.cost !== "" ? String(product.cost) : ""
+      const priceVal = product.price != null && product.price !== "" ? String(product.price) : ""
+      // For service products: selling price = cost price (use cost when price is 0/empty)
+      const displayPrice = isService && (!priceVal || Number(priceVal) === 0) && costVal ? costVal : priceVal
       setFormData({
         name: product.name || "",
         category: product.category || "",
-        price: product.price || "",
-        cost: product.cost || "",
+        price: displayPrice,
+        cost: costVal,
         offerPrice: product.offerPrice ?? "",
         stock: product.stock || "",
         minStock: product.minimumStock || product.minStock || "5",
@@ -233,11 +238,13 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
     e.preventDefault()
 
     try {
+      const costVal = formData.cost !== undefined && formData.cost !== null && formData.cost !== '' ? parseFloat(formData.cost) : undefined
+      const isServiceProduct = formData.productType === "service"
       const productData: any = {
         name: formData.name,
         category: formData.category,
-        price: parseFloat(formData.price) || 0,
-        cost: formData.cost !== undefined && formData.cost !== null && formData.cost !== '' ? parseFloat(formData.cost) : undefined,
+        price: isServiceProduct ? (costVal ?? (parseFloat(formData.price) || 0)) : (parseFloat(formData.price) || 0),
+        cost: costVal,
         offerPrice: formData.offerPrice !== undefined && formData.offerPrice !== null && formData.offerPrice !== '' ? parseFloat(formData.offerPrice) : undefined,
         stock: parseInt(formData.stock),
         sku: formData.sku || `SKU-${Date.now()}`,
@@ -335,7 +342,18 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
   }
 
   const handleChange = (field: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }))
+    setFormData((prev) => {
+      const next = { ...prev, [field]: value }
+      // For service products: selling price = cost price
+      if (prev.productType === "service" && field === "cost") {
+        next.price = value
+      }
+      // When switching to service type, sync price = cost
+      if (field === "productType" && value === "service" && prev.cost) {
+        next.price = prev.cost
+      }
+      return next
+    })
   }
 
   return (
@@ -411,6 +429,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
         <div className="space-y-2">
           <Label htmlFor="category">Category *</Label>
           <CategoryCombobox
+            type="product"
             value={formData.category}
             onChange={(value) => handleChange("category", value)}
           />
@@ -436,6 +455,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
             <div className="space-y-2">
               <div className="flex items-center gap-1.5 min-h-[22px]">
                 <Label htmlFor="price">Selling Price</Label>
+                <span className="text-xs text-muted-foreground font-normal">(same as cost)</span>
               </div>
               <Input
                 id="price"
@@ -443,9 +463,9 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
                 step="0.01"
                 min="0"
                 value={formData.price}
-                onChange={(e) => handleChange("price", e.target.value)}
+                readOnly
                 placeholder="0.00"
-                className="h-9"
+                className="h-9 bg-muted"
               />
             </div>
           </div>

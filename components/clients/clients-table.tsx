@@ -809,7 +809,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => router.push(`/receipt/${bill.billNo || bill._id}`)}
+                          onClick={() => router.push(`/receipt/${bill.billNo || bill._id}?returnTo=/clients`)}
                           title="View Receipt"
                           className="h-8"
                         >

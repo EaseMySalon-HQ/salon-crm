@@ -10,7 +10,7 @@ const cron = require('node-cron');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
-const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST } = require('./utils/date-utils');
+const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -3463,11 +3463,12 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
       });
     }
 
+    const costVal = cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined;
     const newProduct = new Product({
       name,
       category,
-      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0 (selling price)
-      cost: cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined,
+      price: isServiceProduct ? (costVal ?? parseFloat(price) ?? 0) : parseFloat(price), // Service products: selling price = cost price
+      cost: costVal,
       offerPrice: offerPrice !== undefined && offerPrice !== null && offerPrice !== '' ? parseFloat(offerPrice) : undefined,
       stock: parseInt(stock),
       minimumStock: minimumStock !== undefined ? parseInt(minimumStock) : undefined,
@@ -3487,6 +3488,7 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
     const savedProduct = await newProduct.save();
 
     // Create inventory transaction for stock addition
+    const unitCostForTxn = isServiceProduct ? (costVal ?? 0) : (parseFloat(price) || 0);
     const inventoryTransaction = new InventoryTransaction({
       productId: savedProduct._id,
       productName: savedProduct.name,
@@ -3494,8 +3496,8 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
       quantity: parseInt(stock),
       previousStock: 0,
       newStock: parseInt(stock),
-      unitCost: parseFloat(price) || 0,
-      totalValue: (parseFloat(price) || 0) * parseInt(stock),
+      unitCost: unitCostForTxn,
+      totalValue: unitCostForTxn * parseInt(stock),
       referenceType: 'purchase',
       referenceId: savedProduct._id.toString(),
       referenceNumber: `PROD-${savedProduct._id.toString().slice(-6)}`,
@@ -3556,12 +3558,13 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
     const newStock = parseInt(stock);
     const stockDifference = newStock - previousStock;
 
+    const costVal = cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined;
     // Update the product
     const updateData = {
       name,
       category,
-      price: isServiceProduct ? 0 : parseFloat(price), // Service products have price 0 (selling price)
-      cost: cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined,
+      price: isServiceProduct ? (costVal ?? parseFloat(price) ?? 0) : parseFloat(price), // Service products: selling price = cost price
+      cost: costVal,
       offerPrice: offerPrice !== undefined && offerPrice !== null && offerPrice !== '' ? parseFloat(offerPrice) : undefined,
       stock: newStock,
       sku: sku || `SKU-${Date.now()}`,
@@ -3928,7 +3931,30 @@ app.get('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaff
       query.name = { $regex: search, $options: 'i' };
     }
 
-    const suppliers = await Supplier.find(query).sort({ name: 1 });
+    const suppliers = await Supplier.find(query).sort({ name: 1 }).lean();
+
+    if (req.query.withSummary === 'true') {
+      const { PurchaseOrder, SupplierPayable } = req.businessModels;
+      const supplierIds = suppliers.map((s) => s._id);
+      const lastOrders = await PurchaseOrder.aggregate([
+        { $match: { supplierId: { $in: supplierIds }, branchId: req.user.branchId, status: { $ne: 'cancelled' } } },
+        { $sort: { orderDate: -1 } },
+        { $group: { _id: '$supplierId', lastOrderDate: { $first: '$orderDate' }, lastPoNumber: { $first: '$poNumber' } } }
+      ]);
+      const outstandingAgg = await SupplierPayable.aggregate([
+        { $match: { supplierId: { $in: supplierIds }, branchId: req.user.branchId, status: { $in: ['pending', 'partial'] } } },
+        { $group: { _id: '$supplierId', outstanding: { $sum: { $subtract: ['$totalAmount', { $ifNull: ['$amountPaid', 0] }] } } } }
+      ]);
+      const lastOrderMap = Object.fromEntries(lastOrders.map((o) => [o._id.toString(), { lastOrderDate: o.lastOrderDate, lastPoNumber: o.lastPoNumber }]));
+      const outstandingMap = Object.fromEntries(outstandingAgg.map((o) => [o._id.toString(), o.outstanding]));
+      const withSummary = suppliers.map((s) => ({
+        ...s,
+        outstandingAmount: outstandingMap[s._id.toString()] || 0,
+        lastOrderDate: lastOrderMap[s._id.toString()]?.lastOrderDate || null,
+        lastPoNumber: lastOrderMap[s._id.toString()]?.lastPoNumber || null
+      }));
+      return res.json({ success: true, data: withSummary });
+    }
 
     res.json({
       success: true,
@@ -3939,6 +3965,57 @@ app.get('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaff
     res.status(500).json({
       success: false,
       error: 'Internal server error'
+    });
+  }
+});
+
+// Suppliers & Orders summary (Total Suppliers, Total Outstanding, Purchases This Month, Overdue Amount)
+app.get('/api/suppliers/summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    if (!req.businessModels) {
+      return res.status(500).json({ success: false, error: 'Business database not initialized' });
+    }
+    const { Supplier, SupplierPayable, PurchaseOrder } = req.businessModels;
+    const branchId = req.user?.branchId;
+    if (!branchId) {
+      return res.status(400).json({ success: false, error: 'Business context required' });
+    }
+
+    const totalSuppliers = await Supplier.countDocuments({ branchId, isActive: true }).catch(() => 0);
+
+    const payables = await SupplierPayable.find({ branchId, status: { $in: ['pending', 'partial'] } }).lean().catch(() => []);
+    const totalOutstanding = payables.reduce((sum, p) => sum + Math.max(0, (p.totalAmount || 0) - (p.amountPaid || 0)), 0);
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    const posThisMonth = await PurchaseOrder.find({
+      branchId,
+      status: { $in: ['ordered', 'partially_received', 'received'] },
+      orderDate: { $gte: monthStart, $lte: monthEnd }
+    }).lean().catch(() => []);
+    const purchasesThisMonth = posThisMonth.reduce((sum, po) => sum + (po.grandTotal || 0), 0);
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const overduePayables = payables.filter((p) => p.dueDate && new Date(p.dueDate) < today);
+    const overdueAmount = overduePayables.reduce((sum, p) => sum + Math.max(0, (p.totalAmount || 0) - (p.amountPaid || 0)), 0);
+
+    res.json({
+      success: true,
+      data: {
+        totalSuppliers,
+        totalOutstanding,
+        purchasesThisMonth,
+        overdueAmount
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching suppliers summary:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
@@ -3969,11 +4046,49 @@ app.get('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireS
   }
 });
 
+// Get supplier's purchase orders
+app.get('/api/suppliers/:id/orders', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder } = req.businessModels;
+    const supplierId = req.params.id;
+    const branchId = req.user.branchId;
+
+    const orders = await PurchaseOrder.find({ supplierId, branchId })
+      .sort({ orderDate: -1 })
+      .lean();
+
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.error('Error fetching supplier orders:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get supplier's outstanding balance
+app.get('/api/suppliers/:id/outstanding', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { SupplierPayable } = req.businessModels;
+    const supplierId = req.params.id;
+    const branchId = req.user.branchId;
+
+    const payables = await SupplierPayable.find({ supplierId, branchId, status: { $in: ['pending', 'partial'] } })
+      .populate('purchaseOrderId', 'poNumber orderDate')
+      .lean();
+
+    const outstanding = payables.reduce((sum, p) => sum + (p.totalAmount - (p.amountPaid || 0)), 0);
+
+    res.json({ success: true, data: { outstanding, payables } });
+  } catch (error) {
+    console.error('Error fetching supplier outstanding:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // Create a new supplier
 app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
-    const { name, contactPerson, phone, email, address, notes } = req.body;
+    const { name, contactPerson, phone, whatsapp, email, address, gstNumber, paymentTerms, bankDetails, categories, notes } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -4001,8 +4116,13 @@ app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaf
       name: name.trim(),
       contactPerson: contactPerson || '',
       phone: phone || '',
+      whatsapp: whatsapp || '',
       email: email || '',
       address: address || '',
+      gstNumber: gstNumber || '',
+      paymentTerms: paymentTerms || '30',
+      bankDetails: bankDetails || '',
+      categories: Array.isArray(categories) ? categories.filter(Boolean) : [],
       notes: notes || '',
       branchId: req.user.branchId,
       isActive: true
@@ -4027,7 +4147,7 @@ app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaf
 app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
-    const { name, contactPerson, phone, email, address, notes, isActive } = req.body;
+    const { name, contactPerson, phone, whatsapp, email, address, gstNumber, paymentTerms, bankDetails, categories, notes, isActive } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -4051,17 +4171,25 @@ app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireS
       });
     }
 
+    const updateFields = {
+      name: name.trim(),
+      contactPerson: contactPerson || '',
+      phone: phone || '',
+      whatsapp: whatsapp !== undefined ? whatsapp : undefined,
+      email: email || '',
+      address: address || '',
+      gstNumber: gstNumber !== undefined ? gstNumber : undefined,
+      paymentTerms: paymentTerms !== undefined ? paymentTerms : undefined,
+      bankDetails: bankDetails !== undefined ? bankDetails : undefined,
+      categories: categories !== undefined ? (Array.isArray(categories) ? categories.filter(Boolean) : []) : undefined,
+      notes: notes || '',
+      isActive: isActive !== undefined ? isActive : true
+    };
+    Object.keys(updateFields).forEach(k => updateFields[k] === undefined && delete updateFields[k]);
+
     const updatedSupplier = await Supplier.findByIdAndUpdate(
       req.params.id,
-      {
-        name: name.trim(),
-        contactPerson: contactPerson || '',
-        phone: phone || '',
-        email: email || '',
-        address: address || '',
-        notes: notes || '',
-        isActive: isActive !== undefined ? isActive : true
-      },
+      updateFields,
       { new: true, runValidators: true }
     );
 
@@ -4108,6 +4236,646 @@ app.delete('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requi
       success: false,
       error: 'Internal server error'
     });
+  }
+});
+
+// ==================== PURCHASE ORDER ROUTES ====================
+
+// Increment PO number (atomic)
+app.post('/api/settings/business/increment-purchase-order', authenticateToken, async (req, res) => {
+  try {
+    const businessId = req.user?.branchId;
+    if (!businessId) {
+      return res.status(400).json({ success: false, error: 'Business ID not found' });
+    }
+    const mainConnection = await databaseManager.getMainConnection();
+    const businessConnection = await databaseManager.getConnection(businessId, mainConnection);
+    const businessModels = modelFactory.createBusinessModels(businessConnection);
+    const { BusinessSettings, PurchaseOrder } = businessModels;
+
+    let settings = await BusinessSettings.findOne({ branchId: businessId });
+    if (!settings) {
+      settings = new BusinessSettings({ branchId: businessId, purchaseOrderNumber: 0 });
+      await settings.save();
+    }
+
+    const updated = await BusinessSettings.findOneAndUpdate(
+      { _id: settings._id },
+      { $inc: { purchaseOrderNumber: 1 } },
+      { new: true }
+    );
+    const newNumber = updated.purchaseOrderNumber;
+    const poNumber = `PO-${newNumber.toString().padStart(6, '0')}`;
+
+    const existing = await PurchaseOrder.findOne({ branchId: businessId, poNumber });
+    if (existing) {
+      let nextNum = newNumber + 1;
+      let attempts = 0;
+      while (attempts < 500) {
+        const nextPo = `PO-${nextNum.toString().padStart(6, '0')}`;
+        if (!(await PurchaseOrder.findOne({ branchId: businessId, poNumber: nextPo }))) {
+          await BusinessSettings.findByIdAndUpdate(settings._id, { purchaseOrderNumber: nextNum });
+          return res.json({ success: true, data: { poNumber: nextPo, purchaseOrderNumber: nextNum } });
+        }
+        nextNum++;
+        attempts++;
+      }
+    }
+
+    res.json({ success: true, data: { poNumber, purchaseOrderNumber: newNumber } });
+  } catch (error) {
+    console.error('Error incrementing PO number:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get all purchase orders
+app.get('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder } = req.businessModels;
+    const { supplier, status, dateFrom, dateTo } = req.query;
+    const branchId = req.user.branchId;
+
+    let query = { branchId };
+    if (supplier) query.supplierId = supplier;
+    if (status) query.status = status;
+    if (dateFrom || dateTo) {
+      query.orderDate = {};
+      if (dateFrom) query.orderDate.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const d = new Date(dateTo);
+        d.setHours(23, 59, 59, 999);
+        query.orderDate.$lte = d;
+      }
+    }
+
+    const orders = await PurchaseOrder.find(query)
+      .populate('supplierId', 'name contactPerson phone')
+      .sort({ orderDate: -1 })
+      .lean();
+
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.error('Error fetching purchase orders:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Get single purchase order
+app.get('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder, SupplierPayable } = req.businessModels;
+    const order = await PurchaseOrder.findById(req.params.id)
+      .populate('supplierId')
+      .lean();
+    if (!order || order.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Purchase order not found' });
+    }
+    const payable = await SupplierPayable.findOne({ purchaseOrderId: order._id }).lean();
+    res.json({ success: true, data: { ...order, payable } });
+  } catch (error) {
+    console.error('Error fetching purchase order:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Create purchase order
+app.post('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder, Supplier } = req.businessModels;
+    const { supplierId, orderDate, expectedDeliveryDate, items, notes, status } = req.body;
+
+    if (!supplierId || !items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, error: 'Supplier and items are required' });
+    }
+
+    const supplier = await Supplier.findById(supplierId);
+    if (!supplier || supplier.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Supplier not found' });
+    }
+
+    let poNumber = req.body.poNumber;
+    if (!poNumber) {
+      const { BusinessSettings } = req.businessModels;
+      let settings = await BusinessSettings.findOne({ branchId: req.user.branchId });
+      if (!settings) {
+        settings = new BusinessSettings({ branchId: req.user.branchId, purchaseOrderNumber: 0 });
+        await settings.save();
+      }
+      const updated = await BusinessSettings.findOneAndUpdate(
+        { _id: settings._id },
+        { $inc: { purchaseOrderNumber: 1 } },
+        { new: true }
+      );
+      const num = updated.purchaseOrderNumber;
+      poNumber = `PO-${num.toString().padStart(6, '0')}`;
+      const existing = await PurchaseOrder.findOne({ branchId: req.user.branchId, poNumber });
+      if (existing) {
+        let nextNum = num + 1;
+        for (let i = 0; i < 500; i++) {
+          poNumber = `PO-${nextNum.toString().padStart(6, '0')}`;
+          if (!(await PurchaseOrder.findOne({ branchId: req.user.branchId, poNumber }))) {
+            await BusinessSettings.findByIdAndUpdate(settings._id, { purchaseOrderNumber: nextNum });
+            break;
+          }
+          nextNum++;
+        }
+      }
+    }
+
+    let subtotal = 0, gstAmount = 0;
+    const validItems = items.map((it) => {
+      const qty = parseFloat(it.quantity) || 0;
+      const cost = parseFloat(it.unitCost) || 0;
+      const gst = parseFloat(it.gstPercent) || 0;
+      const lineTotal = qty * cost * (1 + gst / 100);
+      subtotal += qty * cost;
+      gstAmount += lineTotal - qty * cost;
+      return {
+        productId: it.productId,
+        productName: it.productName || 'Product',
+        quantity: qty,
+        unitCost: cost,
+        gstPercent: gst,
+        total: Math.round(lineTotal * 100) / 100
+      };
+    });
+    const grandTotal = Math.round((subtotal + gstAmount) * 100) / 100;
+
+    const po = new PurchaseOrder({
+      poNumber,
+      supplierId,
+      orderDate: orderDate ? new Date(orderDate) : new Date(),
+      expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
+      status: status || 'draft',
+      items: validItems,
+      subtotal,
+      gstAmount,
+      grandTotal,
+      notes: notes || '',
+      branchId: req.user.branchId,
+      createdBy: req.user._id
+    });
+    await po.save();
+
+    res.status(201).json({ success: true, data: po });
+  } catch (error) {
+    console.error('Error creating purchase order:', error);
+    res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+});
+
+// Update purchase order (draft only)
+app.put('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder, Supplier } = req.businessModels;
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po || po.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Purchase order not found' });
+    }
+    if (po.status !== 'draft') {
+      return res.status(400).json({ success: false, error: 'Only draft orders can be updated' });
+    }
+
+    const { supplierId, orderDate, expectedDeliveryDate, items, notes } = req.body;
+    if (supplierId) {
+      const supplier = await Supplier.findById(supplierId);
+      if (!supplier) return res.status(404).json({ success: false, error: 'Supplier not found' });
+      po.supplierId = supplierId;
+    }
+    if (orderDate) po.orderDate = new Date(orderDate);
+    if (expectedDeliveryDate !== undefined) po.expectedDeliveryDate = expectedDeliveryDate ? new Date(expectedDeliveryDate) : null;
+    if (notes !== undefined) po.notes = notes;
+
+    if (items && Array.isArray(items) && items.length > 0) {
+      let subtotal = 0, gstAmount = 0;
+      po.items = items.map((it) => {
+        const qty = parseFloat(it.quantity) || 0;
+        const cost = parseFloat(it.unitCost) || 0;
+        const gst = parseFloat(it.gstPercent) || 0;
+        const lineTotal = qty * cost * (1 + gst / 100);
+        subtotal += qty * cost;
+        gstAmount += lineTotal - qty * cost;
+        return {
+          productId: it.productId,
+          productName: it.productName || 'Product',
+          quantity: qty,
+          unitCost: cost,
+          gstPercent: gst,
+          total: Math.round(lineTotal * 100) / 100
+        };
+      });
+      po.subtotal = subtotal;
+      po.gstAmount = gstAmount;
+      po.grandTotal = Math.round((subtotal + gstAmount) * 100) / 100;
+    }
+    await po.save();
+    res.json({ success: true, data: po });
+  } catch (error) {
+    console.error('Error updating purchase order:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Mark PO as received (GRN)
+app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder, Product, InventoryTransaction, SupplierPayable, Supplier } = req.businessModels;
+    const po = await PurchaseOrder.findById(req.params.id).populate('supplierId');
+    if (!po || po.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Purchase order not found' });
+    }
+    if (po.status === 'cancelled') {
+      return res.status(400).json({ success: false, error: 'Cannot receive a cancelled order' });
+    }
+
+    const { receivedItems, invoiceUrl, grnNotes } = req.body;
+    if (!receivedItems || !Array.isArray(receivedItems) || receivedItems.length === 0) {
+      return res.status(400).json({ success: false, error: 'receivedItems array is required' });
+    }
+
+    const receivedMap = {};
+    for (const ri of receivedItems) {
+      const pid = (ri.productId || ri._id || ri).toString();
+      receivedMap[pid] = { receivedQty: parseFloat(ri.receivedQty) || 0, unitCost: parseFloat(ri.unitCost) || 0 };
+    }
+
+    // For partially_received POs, accumulate with previous deliveries
+    const existingReceivedMap = {};
+    if (po.status === 'partially_received' && Array.isArray(po.receivedItems)) {
+      for (const ri of po.receivedItems) {
+        const pid = (ri.productId || ri._id || ri).toString();
+        existingReceivedMap[pid] = parseFloat(ri.receivedQty) || 0;
+      }
+    }
+
+    let allReceived = true;
+    let anyReceived = false;
+    const processedItems = [];
+
+    for (const item of po.items) {
+      const pid = item.productId.toString();
+      const rec = receivedMap[pid];
+      const thisDeliveryQty = rec ? rec.receivedQty : 0;
+      const unitCost = rec ? rec.unitCost : item.unitCost;
+      const previouslyReceived = existingReceivedMap[pid] || 0;
+      const cumulativeReceived = previouslyReceived + thisDeliveryQty;
+
+      if (thisDeliveryQty > 0) {
+        anyReceived = true;
+        const product = await Product.findById(pid);
+        if (product) {
+          const prevStock = product.stock || 0;
+          const newStock = prevStock + thisDeliveryQty;
+          await Product.findByIdAndUpdate(pid, { stock: newStock, cost: unitCost });
+
+          await new InventoryTransaction({
+            productId: product._id,
+            productName: product.name,
+            transactionType: 'purchase',
+            quantity: thisDeliveryQty,
+            previousStock: prevStock,
+            newStock,
+            unitCost,
+            totalValue: thisDeliveryQty * unitCost,
+            referenceType: 'purchase',
+            referenceId: po._id.toString(),
+            referenceNumber: po.poNumber,
+            processedBy: req.user.email || 'System',
+            location: 'main',
+            reason: po.status === 'partially_received' ? 'Partial delivery - remaining goods received' : 'Goods received from PO',
+            notes: grnNotes || '',
+            transactionDate: new Date()
+          }).save();
+        }
+        processedItems.push({ productId: item.productId, orderedQty: item.quantity, receivedQty: cumulativeReceived, unitCost });
+      } else {
+        processedItems.push({ productId: item.productId, orderedQty: item.quantity, receivedQty: previouslyReceived, unitCost });
+      }
+      if (cumulativeReceived < item.quantity) allReceived = false;
+    }
+
+    if (!anyReceived) {
+      return res.status(400).json({ success: false, error: 'At least one item must have received quantity > 0' });
+    }
+
+    const receivedAt = new Date();
+    po.receivedAt = receivedAt;
+    po.receivedItems = processedItems;
+    po.invoiceUrl = invoiceUrl || '';
+    po.grnNotes = grnNotes || '';
+
+    // Build delivery event for this receive (what was received in THIS delivery)
+    const thisDeliveryItems = [];
+    for (const item of po.items) {
+      const pid = item.productId.toString();
+      const rec = receivedMap[pid];
+      const thisDeliveryQty = rec ? rec.receivedQty : 0;
+      const unitCost = rec ? rec.unitCost : item.unitCost;
+      if (thisDeliveryQty > 0) {
+        thisDeliveryItems.push({
+          productId: item.productId,
+          productName: item.productName,
+          receivedQty: thisDeliveryQty,
+          unitCost
+        });
+      }
+    }
+    const deliveryEvent = { receivedAt, receivedItems: thisDeliveryItems, grnNotes: grnNotes || '' };
+    if (!po.deliveryHistory) po.deliveryHistory = [];
+    po.deliveryHistory.push(deliveryEvent);
+
+    po.status = allReceived ? 'received' : 'partially_received';
+    await po.save();
+
+    const grandTotal = po.grandTotal;
+    const paymentTerms = parseInt(po.supplierId?.paymentTerms || '30', 10) || 30;
+    const dueDate = new Date(po.orderDate);
+    dueDate.setDate(dueDate.getDate() + paymentTerms);
+
+    let payable = await SupplierPayable.findOne({ purchaseOrderId: po._id });
+    if (!payable) {
+      payable = new SupplierPayable({
+        purchaseOrderId: po._id,
+        supplierId: po.supplierId._id || po.supplierId,
+        totalAmount: grandTotal,
+        amountPaid: 0,
+        dueDate,
+        status: 'pending',
+        branchId: req.user.branchId
+      });
+      await payable.save();
+    }
+
+    res.json({ success: true, data: { purchaseOrder: po, payable } });
+  } catch (error) {
+    console.error('Error receiving purchase order:', error);
+    res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+});
+
+// Cancel purchase order
+app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder } = req.businessModels;
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po || po.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Purchase order not found' });
+    }
+    if (po.status === 'received' || po.status === 'partially_received') {
+      return res.status(400).json({ success: false, error: 'Cannot cancel received order' });
+    }
+    po.status = 'cancelled';
+    await po.save();
+    res.json({ success: true, data: po });
+  } catch (error) {
+    console.error('Error cancelling purchase order:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// ==================== SUPPLIER PAYABLE ROUTES ====================
+
+app.get('/api/supplier-payables', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { SupplierPayable, SupplierPayment } = req.businessModels;
+    const { supplier, status } = req.query;
+    const branchId = req.user.branchId;
+
+    let query = { branchId };
+    if (supplier) query.supplierId = supplier;
+    if (status) query.status = status;
+
+    const payables = await SupplierPayable.find(query)
+      .populate('supplierId', 'name contactPerson phone')
+      .populate('purchaseOrderId', 'poNumber orderDate')
+      .sort({ dueDate: 1 })
+      .lean();
+
+    const paidIdsWithoutPaidOn = payables.filter((p) => p.status === 'paid' && !p.paidOn).map((p) => p._id);
+    let lastPaymentMap = {};
+    if (paidIdsWithoutPaidOn.length > 0) {
+      const lastPayments = await SupplierPayment.aggregate([
+        { $match: { supplierPayableId: { $in: paidIdsWithoutPaidOn } } },
+        { $sort: { paymentDate: -1 } },
+        { $group: { _id: '$supplierPayableId', paymentDate: { $first: '$paymentDate' } } }
+      ]);
+      lastPaymentMap = lastPayments.reduce((acc, lp) => {
+        acc[lp._id.toString()] = lp.paymentDate;
+        return acc;
+      }, {});
+    }
+
+    const withBalance = payables.map((p) => {
+      const paidOn = p.paidOn || (p.status === 'paid' ? lastPaymentMap[p._id.toString()] : null);
+      return {
+        ...p,
+        balanceDue: Math.max(0, p.totalAmount - (p.amountPaid || 0)),
+        paidOn: paidOn || p.paidOn
+      };
+    });
+
+    res.json({ success: true, data: withBalance });
+  } catch (error) {
+    console.error('Error fetching supplier payables:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.get('/api/supplier-payables/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { SupplierPayable, SupplierPayment } = req.businessModels;
+    const payable = await SupplierPayable.findById(req.params.id)
+      .populate('supplierId')
+      .populate('purchaseOrderId')
+      .lean();
+    if (!payable || payable.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Payable not found' });
+    }
+    const payments = await SupplierPayment.find({ supplierPayableId: payable._id }).sort({ paymentDate: -1 }).lean();
+    res.json({
+      success: true,
+      data: {
+        ...payable,
+        balanceDue: Math.max(0, payable.totalAmount - (payable.amountPaid || 0)),
+        payments
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching payable:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/supplier-payables/:id/payments', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { SupplierPayable, SupplierPayment } = req.businessModels;
+    const payable = await SupplierPayable.findById(req.params.id);
+    if (!payable || payable.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Payable not found' });
+    }
+
+    const { amount, paymentMethod, paymentDate, reference, notes } = req.body;
+    const payAmount = parseFloat(amount);
+    if (!payAmount || payAmount <= 0) {
+      return res.status(400).json({ success: false, error: 'Valid amount is required' });
+    }
+    const balance = payable.totalAmount - (payable.amountPaid || 0);
+    if (payAmount > balance) {
+      return res.status(400).json({ success: false, error: `Amount cannot exceed balance due (₹${balance.toFixed(2)})` });
+    }
+
+    const payment = new SupplierPayment({
+      supplierPayableId: payable._id,
+      amount: payAmount,
+      paymentMethod: paymentMethod || 'Cash',
+      paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
+      reference: reference || '',
+      notes: notes || '',
+      branchId: req.user.branchId,
+      createdBy: req.user._id
+    });
+    await payment.save();
+
+    payable.amountPaid = (payable.amountPaid || 0) + payAmount;
+    payable.status = payable.amountPaid >= payable.totalAmount ? 'paid' : 'partial';
+    if (payable.status === 'paid') {
+      payable.paidOn = payment.paymentDate || new Date();
+    }
+    await payable.save();
+
+    const updated = await SupplierPayable.findById(req.params.id)
+      .populate('supplierId')
+      .populate('purchaseOrderId')
+      .lean();
+
+    res.json({
+      success: true,
+      data: {
+        payable: { ...updated, balanceDue: Math.max(0, updated.totalAmount - (updated.amountPaid || 0)) },
+        payment
+      }
+    });
+  } catch (error) {
+    console.error('Error recording payment:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// ==================== SUPPLIER & PURCHASE REPORTS ====================
+
+app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder, SupplierPayable, Supplier } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { dateFrom, dateTo } = req.query;
+
+    let dateFilter = {};
+    if (dateFrom || dateTo) {
+      dateFilter.orderDate = {};
+      if (dateFrom) dateFilter.orderDate.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const d = new Date(dateTo);
+        d.setHours(23, 59, 59, 999);
+        dateFilter.orderDate.$lte = d;
+      }
+    }
+
+    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received'] }, ...dateFilter })
+      .populate('supplierId', 'name')
+      .lean();
+
+    const supplierTotals = {};
+    const productCounts = {};
+    for (const po of pos) {
+      const sid = (po.supplierId?._id || po.supplierId)?.toString();
+      if (sid) {
+        supplierTotals[sid] = (supplierTotals[sid] || 0) + (po.grandTotal || 0);
+        for (const item of po.items || []) {
+          const pid = (item.productId?._id || item.productId)?.toString();
+          const key = `${sid}::${pid}`;
+          const prev = productCounts[key] || { quantity: 0, productName: item.productName || 'Product' };
+          productCounts[key] = { quantity: prev.quantity + (item.quantity || 0), productName: prev.productName };
+        }
+      }
+    }
+
+    const payables = await SupplierPayable.find({ branchId, status: { $in: ['pending', 'partial'] } }).lean();
+    const outstandingBySupplier = {};
+    for (const p of payables) {
+      const sid = p.supplierId?.toString();
+      if (sid) {
+        outstandingBySupplier[sid] = (outstandingBySupplier[sid] || 0) + Math.max(0, (p.totalAmount || 0) - (p.amountPaid || 0));
+      }
+    }
+
+    const suppliers = await Supplier.find({ branchId }).lean();
+    const report = suppliers.map((s) => {
+      const sid = s._id.toString();
+      const totalPurchased = supplierTotals[sid] || 0;
+      const outstanding = outstandingBySupplier[sid] || 0;
+      const topProducts = Object.entries(productCounts)
+        .filter(([k]) => k.startsWith(sid + '::'))
+        .sort((a, b) => (b[1]?.quantity || 0) - (a[1]?.quantity || 0))
+        .slice(0, 5)
+        .map(([k, v]) => ({ productId: k.split('::')[1], productName: v?.productName || 'Product', quantity: v?.quantity || 0 }));
+      return { supplier: s, totalPurchased, outstanding, topProducts };
+    });
+
+    res.json({ success: true, data: report });
+  } catch (error) {
+    console.error('Error fetching supplier report:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.get('/api/reports/purchase', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder, Supplier } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { dateFrom, dateTo } = req.query;
+
+    let dateFilter = {};
+    if (dateFrom || dateTo) {
+      dateFilter.orderDate = {};
+      if (dateFrom) dateFilter.orderDate.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const d = new Date(dateTo);
+        d.setHours(23, 59, 59, 999);
+        dateFilter.orderDate.$lte = d;
+      }
+    }
+
+    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received'] }, ...dateFilter })
+      .populate('supplierId', 'name categories')
+      .lean();
+
+    let monthlyTotal = 0;
+    let gstTotal = 0;
+    const categorySpend = {};
+    for (const po of pos) {
+      monthlyTotal += po.grandTotal || 0;
+      gstTotal += po.gstAmount || 0;
+      const cats = Array.isArray(po.supplierId?.categories) && po.supplierId.categories.length > 0
+        ? po.supplierId.categories
+        : (po.supplierId?.category ? [po.supplierId.category] : ['other']);
+      for (const cat of cats) {
+        if (cat) categorySpend[cat] = (categorySpend[cat] || 0) + (po.grandTotal || 0);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        monthlyTotal,
+        gstTotal,
+        categorySpend: Object.entries(categorySpend).map(([cat, amt]) => ({ category: cat, amount: amt })),
+        orderCount: pos.length,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching purchase report:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -4297,9 +5065,16 @@ app.delete('/api/inventory/transactions', authenticateToken, setupBusinessDataba
 app.get('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { search, activeOnly } = req.query;
+    const { search, activeOnly, type } = req.query;
 
     let query = { branchId: req.user.branchId };
+
+    // Filter by type: product = product + both, service = service + both (keeps them separate)
+    if (type === 'product') {
+      query.$or = [{ type: 'product' }, { type: 'both' }];
+    } else if (type === 'service') {
+      query.$or = [{ type: 'service' }, { type: 'both' }];
+    }
 
     // Filter by active status if requested
     if (activeOnly === 'true') {
@@ -4356,7 +5131,7 @@ app.get('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
 app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Category } = req.businessModels;
-    const { name, description } = req.body;
+    const { name, description, type: typeParam } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -4386,10 +5161,11 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
       return res.status(201).json({ success: true, data: existingCategory });
     }
 
-    // Create new category
+    // Create new category (type: product | service | both - keeps product/service categories separate)
+    const categoryType = ['product', 'service', 'both'].includes(typeParam) ? typeParam : 'both';
     const category = new Category({
       name: name.trim(),
-      type: 'both',
+      type: categoryType,
       description: description || '',
       branchId: req.user.branchId,
       isActive: true
@@ -5179,7 +5955,7 @@ app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
+const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = null, businessModels = null) => {
   if (!AppointmentModel || !appointmentId) return;
   try {
     const appointment = await AppointmentModel.findById(appointmentId);
@@ -5193,10 +5969,200 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId) => {
     }
 
     appointment.status = 'completed';
+
+    const aptStaffId = appointment.staffId ? String(appointment.staffId) : null;
+    const aptStaffFromAssignments = (appointment.staffAssignments || [])[0]?.staffId;
+    const linkedStaffId = aptStaffId || (aptStaffFromAssignments ? String(aptStaffFromAssignments) : null);
+
+    // Sync appointment services with actual services performed (added during checkout)
+    // Same staff: update this card with primary + additional. Different staff: create new card(s).
+    if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
+      const serviceItems = sale.items
+        .filter((i) => i.type === 'service' && i.serviceId)
+        .map((i) => {
+          const contrib = (i.staffContributions || [])[0];
+          const staffId = contrib ? String(contrib.staffId) : (i.staffId ? String(i.staffId) : null);
+          return { ...i, _primaryStaffId: staffId };
+        });
+
+      if (serviceItems.length > 0) {
+        const { Service } = businessModels;
+        const servicesByStaff = new Map();
+        serviceItems.forEach((item, idx) => {
+          const sid = item._primaryStaffId || 'unknown';
+          if (!servicesByStaff.has(sid)) servicesByStaff.set(sid, []);
+          servicesByStaff.get(sid).push({ ...item, _order: idx });
+        });
+
+        const linkedServices = linkedStaffId ? (servicesByStaff.get(linkedStaffId) || []) : [];
+        const otherStaffServices = [];
+        servicesByStaff.forEach((items, sid) => {
+          if (sid !== 'unknown' && (!linkedStaffId || sid !== linkedStaffId)) {
+            otherStaffServices.push(...items);
+          }
+        });
+
+        if (linkedServices.length > 0) {
+          const serviceIds = linkedServices.map((i) => i.serviceId._id || i.serviceId);
+          const firstServiceId = serviceIds[0];
+          const firstItem = linkedServices[0];
+          const firstService = await Service.findById(firstServiceId).lean();
+          if (firstService) {
+            appointment.serviceId = firstServiceId;
+            appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
+            appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
+            let totalDuration = firstService.duration ?? appointment.duration ?? 60;
+            if (serviceIds.length > 1) {
+              const additionalServices = await Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
+              totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
+            }
+            appointment.duration = totalDuration;
+            console.log(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
+          }
+        }
+
+        // Create new appointment cards for services with different staff (skip if staff already has a card in group)
+        if (otherStaffServices.length > 0) {
+          const existingGroupStaffIds = new Set();
+          if (appointment.bookingGroupId) {
+            const groupApts = await AppointmentModel.find({ bookingGroupId: appointment.bookingGroupId }).lean();
+            groupApts.forEach((a) => {
+              if (a.staffId) existingGroupStaffIds.add(String(a.staffId));
+              (a.staffAssignments || []).forEach((as) => { if (as.staffId) existingGroupStaffIds.add(String(as.staffId)); });
+            });
+          }
+          const baseTimeM = parseTimeToMinutes(appointment.time || '09:00');
+          const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+          const bookingGroupId = appointment.bookingGroupId || uuidv4();
+          if (!appointment.bookingGroupId) appointment.bookingGroupId = bookingGroupId;
+
+          for (const item of otherStaffServices) {
+            const contrib = (item.staffContributions || [])[0];
+            const staffId = contrib?.staffId || item.staffId;
+            if (!staffId || existingGroupStaffIds.has(String(staffId))) continue;
+            const idx = allOrdered.findIndex((o) => (o.serviceId._id || o.serviceId) === (item.serviceId._id || item.serviceId));
+            let cumulativeM = 0;
+            for (let i = 0; i < idx; i++) {
+              const s = await Service.findById(allOrdered[i].serviceId._id || allOrdered[i].serviceId).select('duration').lean();
+              cumulativeM += s?.duration ?? 60;
+            }
+            const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
+            const service = await Service.findById(item.serviceId._id || item.serviceId).lean();
+            if (!service) continue;
+
+            existingGroupStaffIds.add(String(staffId));
+            const newApt = new AppointmentModel({
+              clientId: appointment.clientId,
+              serviceId: item.serviceId._id || item.serviceId,
+              date: appointment.date,
+              time: serviceTime,
+              duration: service.duration ?? 60,
+              status: 'completed',
+              price: item.price ?? item.total ?? service.price ?? 0,
+              branchId: appointment.branchId,
+              bookingGroupId,
+              staffId,
+              staffAssignments: [{ staffId, percentage: 100, role: 'primary' }],
+            });
+            await newApt.save();
+            console.log(`✅ Created new appointment card for different-staff service: ${service.name}`);
+          }
+        }
+      }
+    }
+
     await appointment.save();
     console.log(`✅ Appointment ${appointmentId} marked as completed after sale.`);
+
+    // Mark all appointments in the same booking group as completed (multi-staff cards)
+    if (appointment.bookingGroupId) {
+      const groupUpdated = await AppointmentModel.updateMany(
+        { bookingGroupId: appointment.bookingGroupId, _id: { $ne: appointmentId } },
+        { $set: { status: 'completed' } }
+      );
+      if (groupUpdated.modifiedCount > 0) {
+        console.log(`✅ ${groupUpdated.modifiedCount} related appointment(s) in group marked as completed.`);
+      }
+    }
   } catch (error) {
     console.error('❌ Failed to mark appointment as completed:', error);
+  }
+};
+
+/** Create walk-in appointment cards for a completed sale with multiple staff when NOT linked to an appointment. */
+const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId) => {
+  if (!sale || !businessModels?.Appointment || !businessModels?.Service || !businessModels?.Client) return;
+  if (sale.appointmentId) return; // Already handled by markAppointmentCompleted
+  if (String(sale.status).toLowerCase() !== 'completed') return;
+
+  try {
+    const { Appointment, Service, Client } = businessModels;
+    const serviceItems = (sale.items || [])
+      .filter((i) => i.type === 'service' && i.serviceId)
+      .map((i, idx) => {
+        const contrib = (i.staffContributions || [])[0];
+        const raw = contrib?.staffId ?? i.staffId;
+        const staffId = raw ? String(typeof raw === 'object' && raw._id ? raw._id : raw) : null;
+        return { ...i, _primaryStaffId: staffId, _order: idx };
+      })
+      .filter((i) => i._primaryStaffId);
+
+    if (serviceItems.length === 0) return;
+    const uniqueStaffIds = [...new Set(serviceItems.map((i) => i._primaryStaffId))];
+    if (uniqueStaffIds.length < 2) return; // Only create when multiple staff
+
+    const orConditions = [];
+    if (sale.customerName) orConditions.push({ name: new RegExp(`^${String(sale.customerName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+    if (sale.customerPhone) orConditions.push({ phone: sale.customerPhone });
+    if (orConditions.length === 0) {
+      console.warn('[createWalkInCardsForStandaloneSale] No customer name/phone to find client');
+      return;
+    }
+    const client = await Client.findOne({ $or: orConditions }).lean();
+    if (!client) {
+      console.warn('[createWalkInCardsForStandaloneSale] Client not found for:', sale.customerName, sale.customerPhone);
+      return;
+    }
+
+    const saleDate = sale.date ? (typeof sale.date === 'string' ? sale.date.slice(0, 10) : new Date(sale.date).toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10);
+    const baseTimeM = parseTimeToMinutes(sale.time || '09:00');
+    const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+    const bookingGroupId = uuidv4();
+
+    for (const item of serviceItems) {
+      const staffIdStr = item._primaryStaffId;
+      if (!staffIdStr) continue;
+      const svcId = item.serviceId?._id || item.serviceId;
+      const idx = allOrdered.findIndex((o) => String(o.serviceId?._id || o.serviceId) === String(svcId));
+      let cumulativeM = 0;
+      for (let i = 0; i < idx; i++) {
+        const s = await Service.findById(allOrdered[i].serviceId?._id || allOrdered[i].serviceId).select('duration').lean();
+        cumulativeM += s?.duration ?? 60;
+      }
+      const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
+      const service = await Service.findById(svcId).lean();
+      if (!service) continue;
+
+      const staffIdObj = mongoose.Types.ObjectId.isValid(staffIdStr) ? new mongoose.Types.ObjectId(staffIdStr) : staffIdStr;
+      const newApt = new Appointment({
+        clientId: client._id,
+        serviceId: svcId,
+        date: saleDate,
+        time: serviceTime,
+        duration: service.duration ?? 60,
+        status: 'completed',
+        price: item.price ?? item.total ?? service.price ?? 0,
+        branchId: branchId || sale.branchId,
+        bookingGroupId,
+        staffId: staffIdObj,
+        staffAssignments: [{ staffId: staffIdObj, percentage: 100, role: 'primary' }],
+        leadSource: 'Walk-in',
+      });
+      await newApt.save();
+      console.log(`✅ Created walk-in card (standalone sale) for staff ${staffIdStr}: ${service.name}`);
+    }
+  } catch (err) {
+    console.error('❌ createWalkInCardsForStandaloneSale failed:', err);
   }
 };
 
@@ -5271,19 +6237,28 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
       return a;
     });
 
-    // Populate clientId and serviceId (they're in business DB)
+    // Populate clientId, serviceId, and additionalServiceIds (they're in business DB)
     const clientIds = [...new Set(appointments.map((a) => a.clientId).filter(Boolean))];
-    const serviceIds = [...new Set(appointments.map((a) => a.serviceId).filter(Boolean))];
+    const primaryServiceIds = [...new Set(appointments.map((a) => a.serviceId).filter(Boolean))];
+    const additionalIds = appointments.flatMap((a) => a.additionalServiceIds || []).filter(Boolean);
+    const allServiceIds = [...new Set([...primaryServiceIds.map((id) => id.toString()), ...additionalIds.map((id) => id.toString())])];
     const { Client, Service } = req.businessModels;
     const [clients, services] = await Promise.all([
       clientIds.length ? Client.find({ _id: { $in: clientIds } }).select('name phone email').lean() : [],
-      serviceIds.length ? Service.find({ _id: { $in: serviceIds } }).select('name price duration').lean() : [],
+      allServiceIds.length ? Service.find({ _id: { $in: allServiceIds } }).select('name price duration').lean() : [],
     ]);
     const clientMap = new Map(clients.map((c) => [c._id.toString(), c]));
     const serviceMap = new Map(services.map((s) => [s._id.toString(), s]));
     appointments.forEach((a) => {
       if (a.clientId) a.clientId = clientMap.get(a.clientId.toString()) || a.clientId;
       if (a.serviceId) a.serviceId = serviceMap.get(a.serviceId.toString()) || a.serviceId;
+      if (a.additionalServiceIds && a.additionalServiceIds.length) {
+        a.additionalServices = a.additionalServiceIds
+          .map((id) => serviceMap.get(id.toString()))
+          .filter(Boolean);
+      } else {
+        a.additionalServices = [];
+      }
     });
 
     res.json({
@@ -5308,7 +6283,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled' } = req.body;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId } = req.body;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -5317,55 +6292,60 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       });
     }
 
-    // Create appointments for each service
+    const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
+
+    // Helper: get primary staff ID from a service for comparison
+    const getPrimaryStaffId = (s) => {
+      const id = s.staffId || (s.staffAssignments && s.staffAssignments[0] && s.staffAssignments[0].staffId);
+      return id ? String(id) : null;
+    };
+
+    // When all services have the same staff: create single appointment card listing all services
+    const allSameStaff = services.length > 1 && services.every((s, i) => {
+      const a = getPrimaryStaffId(services[0]);
+      const b = getPrimaryStaffId(s);
+      return a && b && a === b;
+    });
+
     const createdAppointments = [];
-    
-    for (const service of services) {
-      const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
+
+    if (allSameStaff && services.length > 1) {
+      // Single appointment with multiple services (same staff)
+      const first = services[0];
+      const additionalIds = services.slice(1).map((s) => s.serviceId);
+      const totalDur = services.reduce((sum, s) => sum + (s.duration || 0), 0);
+      const totalPrice = services.reduce((sum, s) => sum + (s.price || 0), 0);
+
       const appointmentData = {
         clientId,
-        serviceId: service.serviceId,
+        serviceId: first.serviceId,
+        additionalServiceIds: additionalIds,
         date,
         time,
-        duration: service.duration,
+        duration: totalDur,
         status,
         notes,
         leadSource: leadSource || '',
         createdBy,
-        price: service.price,
+        price: totalPrice,
         branchId: req.user.branchId
       };
 
-      // Handle multiple staff assignments
-      if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
-        appointmentData.staffAssignments = service.staffAssignments;
-        // Validate that percentages add up to 100%
-        const totalPercentage = service.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+      if (first.staffAssignments && Array.isArray(first.staffAssignments)) {
+        appointmentData.staffAssignments = first.staffAssignments;
+        const totalPercentage = first.staffAssignments.reduce((sum, a) => sum + a.percentage, 0);
         if (Math.abs(totalPercentage - 100) > 0.01) {
-          return res.status(400).json({
-            success: false,
-            error: 'Staff assignment percentages must add up to 100%'
-          });
+          return res.status(400).json({ success: false, error: 'Staff assignment percentages must add up to 100%' });
         }
-      } else if (service.staffId) {
-        // Legacy support - single staff member
-        appointmentData.staffId = service.staffId;
-        appointmentData.staffAssignments = [{
-          staffId: service.staffId,
-          percentage: 100,
-          role: 'primary'
-        }];
+      } else if (first.staffId) {
+        appointmentData.staffId = first.staffId;
+        appointmentData.staffAssignments = [{ staffId: first.staffId, percentage: 100, role: 'primary' }];
       } else {
-        return res.status(400).json({
-          success: false,
-          error: 'Either staffId or staffAssignments is required'
-        });
+        return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
       }
 
       const newAppointment = new Appointment(appointmentData);
       const savedAppointment = await newAppointment.save();
-      
-      // Populate the saved appointment with related data
       const populatedAppointment = await Appointment.findById(savedAppointment._id)
         .populate('clientId', 'name phone email')
         .populate('serviceId', 'name price duration')
@@ -5373,6 +6353,67 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         .populate('staffAssignments.staffId', 'name role');
 
       createdAppointments.push(populatedAppointment);
+    } else {
+      // Different staff per service (or single service): create one appointment per service
+      // Each service starts after the previous ends (sequential: Service A 9:00–9:30, Service B 9:30–10:00)
+      // Use existingBookingGroupId when adding new staff cards from edit (link to existing group)
+      const bookingGroupId = existingBookingGroupId || uuidv4();
+      const baseTimeMinutes = parseTimeToMinutes(time);
+      let cumulativeMinutes = 0;
+      for (let i = 0; i < services.length; i++) {
+        const service = services[i];
+        const serviceStartMinutes = baseTimeMinutes + cumulativeMinutes;
+        const serviceTime = minutesToTimeString(serviceStartMinutes);
+        cumulativeMinutes += service.duration || 0;
+        const appointmentData = {
+          clientId,
+          serviceId: service.serviceId,
+          date,
+          time: serviceTime,
+          duration: service.duration,
+          status,
+          notes,
+          leadSource: leadSource || '',
+          createdBy,
+          price: service.price,
+          branchId: req.user.branchId,
+          bookingGroupId
+        };
+
+        if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
+          appointmentData.staffAssignments = service.staffAssignments;
+          const totalPercentage = service.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+          if (Math.abs(totalPercentage - 100) > 0.01) {
+            return res.status(400).json({
+              success: false,
+              error: 'Staff assignment percentages must add up to 100%'
+            });
+          }
+        } else if (service.staffId) {
+          appointmentData.staffId = service.staffId;
+          appointmentData.staffAssignments = [{
+            staffId: service.staffId,
+            percentage: 100,
+            role: 'primary'
+          }];
+        } else {
+          return res.status(400).json({
+            success: false,
+            error: 'Either staffId or staffAssignments is required'
+          });
+        }
+
+        const newAppointment = new Appointment(appointmentData);
+        const savedAppointment = await newAppointment.save();
+
+        const populatedAppointment = await Appointment.findById(savedAppointment._id)
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role')
+          .populate('staffAssignments.staffId', 'name role');
+
+        createdAppointments.push(populatedAppointment);
+      }
     }
 
     // Send email notifications if enabled
@@ -6238,9 +7279,22 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     const ownerId = businessOwner?._id?.toString();
     const ownerName = businessOwner ? `${businessOwner.firstName || ''} ${businessOwner.lastName || ''}`.trim() || 'Owner' : null;
 
+    // Fetch related appointments first (for multi-staff booking) so we can resolve all staff
+    // Exclude cancelled appointments - they should not appear when editing
+    let relatedRaw = [];
+    if (raw.bookingGroupId) {
+      relatedRaw = await Appointment.find({
+        bookingGroupId: raw.bookingGroupId,
+        _id: { $ne: id },
+        status: { $ne: 'cancelled' }
+      }).lean();
+    }
+    const allAppointmentsForStaff = [raw, ...relatedRaw];
     const staffIds = [];
-    if (raw.staffId) staffIds.push(raw.staffId);
-    (raw.staffAssignments || []).forEach((as) => { if (as.staffId) staffIds.push(as.staffId); });
+    allAppointmentsForStaff.forEach((apt) => {
+      if (apt.staffId) staffIds.push(apt.staffId);
+      (apt.staffAssignments || []).forEach((as) => { if (as.staffId) staffIds.push(as.staffId); });
+    });
     const staffFromDb = staffIds.length ? await Staff.find({ _id: { $in: staffIds } }).select('_id name role').lean() : [];
     const staffMap = new Map(staffFromDb.map((s) => [s._id.toString(), { _id: s._id, name: s.name, role: s.role }]));
     const resolveStaff = (sid) => {
@@ -6267,8 +7321,45 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       const service = await Service.findById(raw.serviceId).select('name price duration').lean();
       appointment.serviceId = service || raw.serviceId;
     }
+    if (raw.additionalServiceIds && raw.additionalServiceIds.length) {
+      const additionalServices = await Service.find({ _id: { $in: raw.additionalServiceIds } }).select('name price duration').lean();
+      appointment.additionalServices = additionalServices;
+    } else {
+      appointment.additionalServices = [];
+    }
 
-    res.json({ success: true, data: appointment });
+    // When editing multi-staff booking: return all appointments in the same group
+    let relatedAppointments = [];
+    if (raw.bookingGroupId && relatedRaw.length) {
+      const relatedServiceIds = relatedRaw.map((r) => r.serviceId).filter(Boolean);
+      const relatedServices = relatedServiceIds.length
+        ? await Service.find({ _id: { $in: relatedServiceIds } }).select('name price duration').lean()
+        : [];
+      const serviceMap = new Map(relatedServices.map((s) => [s._id.toString(), s]));
+      relatedAppointments = relatedRaw
+        .sort((a, b) => {
+          const am = parseTimeToMinutes(a.time || '');
+          const bm = parseTimeToMinutes(b.time || '');
+          return am - bm;
+        })
+        .map((r) => {
+          const rApp = { ...r };
+          rApp.staffId = r.staffId ? resolveStaff(r.staffId) : null;
+          rApp.staffAssignments = (r.staffAssignments || []).map((as) => ({
+            ...as,
+            staffId: as.staffId ? resolveStaff(as.staffId) : null,
+          }));
+          const svc = r.serviceId ? serviceMap.get(r.serviceId.toString()) : null;
+          rApp.serviceId = svc || r.serviceId;
+          return rApp;
+        });
+    }
+
+    res.json({
+      success: true,
+      data: appointment,
+      relatedAppointments: relatedAppointments.length ? relatedAppointments : undefined,
+    });
   } catch (error) {
     console.error('Error fetching appointment:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch appointment' });
@@ -6298,7 +7389,19 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     // Check if status is being changed to cancelled
     const previousStatus = appointment.status;
     const isBeingCancelled = updateData.status === 'cancelled' && previousStatus !== 'cancelled';
-    
+
+    // Arrival, scheduled, and completed are appointment-level: sync across all cards in the same booking group
+    const appointmentLevelStatuses = ['arrived', 'scheduled', 'completed'];
+    const isAppointmentLevelStatus = updateData.status && appointmentLevelStatuses.includes(updateData.status);
+    const bookingGroupId = appointment.bookingGroupId;
+
+    if (isAppointmentLevelStatus && bookingGroupId) {
+      await Appointment.updateMany(
+        { bookingGroupId },
+        { $set: { status: updateData.status } }
+      );
+    }
+
     console.log('📧 Appointment Update Check:', {
       appointmentId: id,
       previousStatus: previousStatus,
@@ -6704,6 +7807,13 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
       status: { $in: ['approved', 'pending'] }
     }).lean();
 
+    const pettyCashExpenses = await Expense.find({
+      branchId,
+      date: { $gte: dateFrom, $lte: dateTo },
+      paymentMode: 'Petty Cash Wallet',
+      status: { $in: ['approved', 'pending'] }
+    }).lean();
+
     const totalBillCount = sales.length;
     const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
     const totalCustomerCount = uniqueCustomers.size || totalBillCount;
@@ -6742,6 +7852,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     });
     // Use Expense collection as source of truth for cash expenses; closingRegistry.expenseValue is 0 when not yet closed
     const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+    const pettyCashExpense = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     // Tip collected: sum from Sales (Quick Sale flow) + Receipts (manual receipt flow), for selected date range, all staff
     const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
     const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
@@ -6762,6 +7873,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         duesCollected,
         cashDuesCollected,
         cashExpense,
+        pettyCashExpense,
         tipCollected,
         cashBalance,
         openingBalance,
@@ -6879,7 +7991,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     }
 
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
-      await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
+    } else if (String(savedSale.status).toLowerCase() === 'completed') {
+      // Standalone sale with multiple staff: create walk-in cards for calendar
+      await createWalkInCardsForStandaloneSale(savedSale, req.businessModels, req.user.branchId);
     }
 
     // Auto consumption: deduct inventory for completed service lines (only when bill status is completed)
@@ -7553,6 +8668,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'payments',
       'paymentMode',
       'status', // Allow updating status when payments change
+      'tip',
+      'tipStaffId',
+      'tipStaffName',
     ];
 
     editableRootFields.forEach((field) => {
@@ -7561,9 +8679,14 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           // Only allow adjusting dueDate and totalAmount; keep paidAmount as is
           const currentPaymentStatus = existingSale.paymentStatus || {};
           const incoming = updateData.paymentStatus || {};
+          // totalAmount = netTotal (grossTotal + tip) - use incoming when provided so tip removal is reflected
+          const totalAmount = incoming.totalAmount != null
+            ? Number(incoming.totalAmount)
+            : Number(updateData.netTotal ?? updateData.grossTotal ?? currentPaymentStatus.totalAmount);
           existingSale.paymentStatus = {
             ...currentPaymentStatus,
-            totalAmount: Number(updateData.grossTotal ?? currentPaymentStatus.totalAmount),
+            totalAmount,
+            remainingAmount: totalAmount - Number(incoming.paidAmount ?? currentPaymentStatus.paidAmount ?? 0),
             dueDate: incoming.dueDate || currentPaymentStatus.dueDate,
           };
         } else if (field === 'items') {
@@ -7582,6 +8705,14 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           console.log('💳 Updating paymentMode:', updateData.paymentMode);
           existingSale.paymentMode = updateData.paymentMode || '';
           console.log('💳 Updated paymentMode on sale:', existingSale.paymentMode);
+        } else if (field === 'tip') {
+          existingSale.tip = Number(updateData.tip) || 0;
+          existingSale.tipStaffId = existingSale.tip > 0 ? (updateData.tipStaffId || null) : null;
+          existingSale.tipStaffName = existingSale.tip > 0 ? (updateData.tipStaffName || '') : '';
+        } else if (field === 'tipStaffId') {
+          existingSale.tipStaffId = updateData.tipStaffId ?? null;
+        } else if (field === 'tipStaffName') {
+          existingSale.tipStaffName = updateData.tipStaffName ?? '';
         } else {
           existingSale[field] = updateData[field];
         }
@@ -7598,7 +8729,8 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       }, 0);
       
       console.log('💰 Calculated newPaidAmount:', newPaidAmount);
-      const totalAmount = Number(updateData.grossTotal || existingSale.grossTotal || existingSale.paymentStatus?.totalAmount || 0);
+      // totalAmount = netTotal (grossTotal + tip) so tip removal is reflected
+      const totalAmount = Number(updateData.netTotal ?? updateData.paymentStatus?.totalAmount ?? updateData.grossTotal ?? existingSale.paymentStatus?.totalAmount ?? existingSale.grossTotal ?? 0);
       console.log('💰 Total amount:', totalAmount);
       
       if (!existingSale.paymentStatus) {
@@ -7689,7 +8821,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     // Mark linked appointment as completed if now fully paid
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       const { Appointment } = req.businessModels;
-      await markAppointmentCompleted(Appointment, savedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
     }
 
     const newStatus = String(savedSale.status || '').toLowerCase();
@@ -8099,7 +9231,7 @@ app.post('/api/sales/:id/payment', authenticateToken, setupBusinessDatabase, req
     const updatedSale = await sale.addPayment(paymentData);
 
     if (updatedSale.appointmentId && String(updatedSale.status).toLowerCase() === 'completed') {
-      await markAppointmentCompleted(Appointment, updatedSale.appointmentId);
+      await markAppointmentCompleted(Appointment, updatedSale.appointmentId, updatedSale, req.businessModels);
     }
     
     res.json({ 
@@ -8463,9 +9595,18 @@ app.get('/api/expenses', authenticateToken, setupBusinessDatabase, requireManage
 app.post('/api/expenses', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Expense } = req.businessModels;
+    const { category, paymentMode, description, amount, date, status, vendor, notes, approvedBy } = req.body;
     const expenseData = {
-      ...req.body,
-      createdBy: req.user.id,
+      category,
+      paymentMode,
+      description: (description || '').trim() || 'No description',
+      amount: Number(amount),
+      date: date ? new Date(date) : new Date(),
+      status: status || 'pending',
+      vendor: (vendor || '').trim(),
+      notes: (notes || '').trim(),
+      approvedBy: (approvedBy || '').trim(),
+      createdBy: req.user._id || req.user.id,
       branchId: req.user.branchId
     };
     
@@ -9402,6 +10543,93 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
 
 // Cash Registry Routes
 // Note: Specific routes must come before parameterized routes
+app.get('/api/cash-registry/petty-cash-summary', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Expense, PettyCashTransaction } = req.businessModels;
+    const { date } = req.query;
+    const dateStr = date || new Date().toISOString().split('T')[0];
+    const endOfDay = getEndOfDayIST(dateStr);
+
+    // Total additions (all time up to end of date)
+    const additions = await PettyCashTransaction.aggregate([
+      { $match: { branchId: req.user.branchId, date: { $lte: endOfDay } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    const totalAdditions = additions[0]?.total ?? 0;
+
+    // Total deductions from expenses (all time up to end of date)
+    const pettyCashExpenses = await Expense.find({
+      branchId: req.user.branchId,
+      paymentMode: 'Petty Cash Wallet',
+      date: { $lte: endOfDay }
+    });
+    const totalDeductions = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+    const expectedBalance = Math.max(0, totalAdditions - totalDeductions);
+    res.json({
+      success: true,
+      data: {
+        totalAdditions,
+        pettyCashExpenses: totalDeductions,
+        expectedBalance
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching petty cash summary:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Petty Cash - Add balance
+app.post('/api/petty-cash', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PettyCashTransaction } = req.businessModels;
+    const { amount, date } = req.body;
+    const amt = Number(amount) || 0;
+    if (amt <= 0) {
+      return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    }
+    const txDate = date ? new Date(date) : new Date();
+    const tx = new PettyCashTransaction({
+      type: 'add',
+      amount: amt,
+      date: txDate,
+      createdBy: req.user._id || req.user.id,
+      branchId: req.user.branchId
+    });
+    await tx.save();
+    res.status(201).json({ success: true, data: tx });
+  } catch (error) {
+    console.error('Error adding petty cash:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Petty Cash - View logs (additions + deductions)
+app.get('/api/petty-cash/logs', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Expense, PettyCashTransaction } = req.businessModels;
+    const branchId = req.user.branchId;
+
+    const additions = await PettyCashTransaction.find({ branchId })
+      .sort({ date: -1 })
+      .lean();
+    const deductions = await Expense.find({ branchId, paymentMode: 'Petty Cash Wallet' })
+      .sort({ date: -1 })
+      .lean();
+
+    const logs = [
+      ...additions.map(a => ({ type: 'add', amount: a.amount, date: a.date })),
+      ...deductions.map(d => ({ type: 'deduct', amount: -d.amount, date: d.date }))
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error('Error fetching petty cash logs:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 app.get('/api/cash-registry/summary/dashboard', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     console.log('🔍 Cash Registry Summary request for user:', req.user?.email, 'branchId:', req.user?.branchId);
@@ -9534,6 +10762,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       closingBalance,
       onlineCash,
       posCash,
+      pettyCashOpeningBalance,
+      pettyCashClosingBalance,
       createdBy
     } = req.body;
     
@@ -9572,7 +10802,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
           $gte: startOfDay,
           $lt: endOfDay
         },
-        paymentMethod: 'Cash'
+        paymentMode: 'Cash'
       });
       
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -9601,6 +10831,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       posCash: shiftType === 'closing' ? posCash : 0,
       onlinePosDifference,
       onlineCashDifferenceReason: onlinePosDifference !== 0 ? 'Difference detected' : 'Balanced',
+      pettyCashOpeningBalance: shiftType === 'opening' ? (pettyCashOpeningBalance ?? 0) : 0,
+      pettyCashClosingBalance: shiftType === 'closing' ? (pettyCashClosingBalance ?? 0) : 0,
       notes,
       branchId: req.user.branchId
     });
@@ -9742,14 +10974,24 @@ app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, a
     if (!cashRegistry) {
       return res.status(404).json({ message: 'Cash registry entry not found' });
     }
-    
-    // Only allow deletion of unverified entries, unless user is admin
-    if (cashRegistry.isVerified && req.user.role !== 'admin') {
-      return res.status(400).json({ 
-        message: 'Cannot delete verified cash registry entries. Only administrators can delete verified entries.' 
+
+    // Ensure entry belongs to user's branch
+    const userBranchId = req.user.branchId?.toString?.();
+    const entryBranchId = cashRegistry.branchId?.toString?.();
+    if (userBranchId && entryBranchId && userBranchId !== entryBranchId) {
+      return res.status(403).json({
+        message: 'You do not have permission to delete this cash registry entry.',
       });
     }
-    
+
+    // Only allow deletion of unverified entries, unless user is admin or manager
+    const canDeleteVerified = ['admin', 'manager'].includes(req.user.role);
+    if (cashRegistry.isVerified && !canDeleteVerified) {
+      return res.status(400).json({
+        message: 'Cannot delete verified cash registry entries. Only administrators or managers can delete verified entries.',
+      });
+    }
+
     await CashRegistry.findByIdAndDelete(req.params.id);
     res.json({ message: 'Cash registry entry deleted successfully' });
   } catch (error) {

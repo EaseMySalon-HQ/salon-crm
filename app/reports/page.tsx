@@ -89,7 +89,7 @@ export default function ReportsPage() {
                         className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
                       >
                         <Receipt className="h-4 w-4 mr-2" />
-                        Expense Report
+                        Expense
                       </TabsTrigger>
                     </>
                   )}

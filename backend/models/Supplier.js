@@ -14,6 +14,10 @@ const supplierSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  whatsapp: {
+    type: String,
+    default: ''
+  },
   email: {
     type: String,
     default: ''
@@ -21,6 +25,23 @@ const supplierSchema = new mongoose.Schema({
   address: {
     type: String,
     default: ''
+  },
+  gstNumber: {
+    type: String,
+    default: ''
+  },
+  paymentTerms: {
+    type: String,
+    enum: ['7', '15', '30', '45', '60', 'custom'],
+    default: '30'
+  },
+  bankDetails: {
+    type: String,
+    default: ''
+  },
+  categories: {
+    type: [String],
+    default: []
   },
   notes: {
     type: String,

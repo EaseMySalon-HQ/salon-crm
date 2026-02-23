@@ -24,7 +24,9 @@ import {
   FileText,
   Minus,
   Pencil,
+  Trash2,
   ChevronDown,
+  ChevronUp,
   Edit,
   RefreshCw,
   Package,
@@ -209,23 +211,24 @@ function blockAppliesOnDate(block: { startDate: string; endDate?: string | null;
   return false
 }
 
-/** Get staff IDs that are available for a slot [startM, startM + duration] on dateStr */
+/** Get staff IDs that are available for a slot [startM, startM + duration] on dateStr.
+ * When considerAllAppointments is true (from linked appointment), check all non-cancelled appointments for conflicts. */
 function getAvailableStaffIds(
   dateStr: string,
   timeStr: string,
   durationMinutes: number,
   appointments: any[],
   blockTimes: any[],
-  allStaffIds: string[]
+  allStaffIds: string[],
+  considerAllAppointments = false
 ): string[] {
   const startM = parseTimeToMinutes(timeStr)
   const endM = startM + durationMinutes
   const busyStaffIds = new Set<string>()
 
-  // Appointments: only mark staff unavailable when client has arrived (Quick Sale uses current time)
   for (const apt of appointments) {
     if (apt.status === "cancelled") continue
-    if (apt.status !== "arrived" && apt.status !== "service_started") continue
+    if (!considerAllAppointments && apt.status !== "arrived" && apt.status !== "service_started") continue
     const aptStartM = parseTimeToMinutes(apt.time || "0:00")
     const aptDuration = apt.duration ?? 60
     const aptEndM = aptStartM + aptDuration
@@ -255,13 +258,15 @@ function getAvailableStaffIds(
 interface QuickSaleProps {
   mode?: BillingMode
   initialSale?: any
+  billLoading?: boolean
 }
 
-export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {}) {
+export function QuickSale({ mode = "create", initialSale, billLoading = false }: QuickSaleProps = {}) {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
   const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
+  const [linkedAppointmentTime, setLinkedAppointmentTime] = useState<string | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
@@ -282,7 +287,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const [isOldQuickSale, setIsOldQuickSale] = useState(false)
   const [currentReceipt, setCurrentReceipt] = useState<any | null>(null)
   const [showReceiptDialog, setShowReceiptDialog] = useState(false)
-  
+  const [summaryExpanded, setSummaryExpanded] = useState(false)
+
   // Search states for service items dropdown
   const [serviceDropdownSearch, setServiceDropdownSearch] = useState("")
   const [productDropdownSearch, setProductDropdownSearch] = useState("")
@@ -310,6 +316,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const [showTipModal, setShowTipModal] = useState(false)
   const [tempTipAmount, setTempTipAmount] = useState(0)
   const [editReason, setEditReason] = useState("")
+  const [showEditReasonModal, setShowEditReasonModal] = useState(false)
+  const [tempEditReason, setTempEditReason] = useState("")
   const [isInitialized, setIsInitialized] = useState(false)
 
   // State for services and products from API
@@ -424,21 +432,52 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const currentTimeStr = format(new Date(), "HH:mm")
   const allStaffIds = staff.map((s) => String(s._id || s.id)).filter(Boolean)
 
-  /** Available staff for a given duration (uses current time for billing) */
-  const getAvailableStaffForSlot = (durationMinutes: number) => {
+  /** Available staff for a given duration. When from linked appointment, uses appointment time + offset and considers all appointments. */
+  const getAvailableStaffForSlot = (
+    durationMinutes: number,
+    slotTimeStr?: string,
+    slotDateStr?: string,
+    considerAll = false
+  ) => {
     return getAvailableStaffIds(
-      dateStr,
-      currentTimeStr,
+      slotDateStr ?? dateStr,
+      slotTimeStr ?? currentTimeStr,
       durationMinutes,
       appointmentsForDate,
       blockTimesForDate,
-      allStaffIds
+      allStaffIds,
+      considerAll
     )
   }
 
-  /** Staff list filtered by availability for a given duration. Excludes staff marked absent (Full Day Off). Pass includeIds to keep selected staff in list. */
-  const getAvailableStaffList = (durationMinutes: number, includeIds?: string[]) => {
-    const availableIds = getAvailableStaffForSlot(durationMinutes)
+  /** Staff list filtered by availability. Services are sequential: Service 0 at base, Service 1 at base+dur0, Service 2 at base+dur0+dur1, etc. */
+  const getAvailableStaffList = (
+    durationMinutes: number,
+    includeIds?: string[],
+    serviceIndex?: number
+  ) => {
+    let slotTimeStr = currentTimeStr
+    let considerAll = false
+    const baseTime = linkedAppointmentTime ?? currentTimeStr
+    if (serviceIndex != null) {
+      if (serviceIndex === 0) {
+        slotTimeStr = baseTime
+      } else {
+        let cumulativeM = 0
+        for (let i = 0; i < serviceIndex; i++) {
+          const item = serviceItems[i]
+          const raw = item?.serviceId
+        const sid = typeof raw === "object" && raw && "_id" in raw ? (raw as { _id: string })._id : raw
+          const svc = sid ? services.find((s) => (s._id || s.id) === sid) : null
+          cumulativeM += svc?.duration ?? 60
+        }
+        const baseM = parseTimeToMinutes(baseTime)
+        const slotM = baseM + cumulativeM
+        slotTimeStr = `${Math.floor(slotM / 60)}:${String(slotM % 60).padStart(2, "0")}`
+      }
+    }
+    if (linkedAppointmentId && linkedAppointmentTime) considerAll = true
+    const availableIds = getAvailableStaffForSlot(durationMinutes, slotTimeStr, dateStr, considerAll)
     const includeSet = new Set(includeIds?.map(String) || [])
     const dayOfWeek = selectedDate.getDay() // 0 = Sunday, 6 = Saturday
     return staff.filter((s) => {
@@ -745,13 +784,21 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       setServiceItems(serviceItemsData)
       setProductItems(productItemsData)
 
-      // Set discount
-      if (initialSale.discount) {
-        if (initialSale.discountType === "percentage") {
-          setDiscountPercentage(initialSale.discount)
-          setIsGlobalDiscountActive(true)
+      // Set discount (percentage = global %, fixed = amount in currency)
+      if (initialSale.discount && initialSale.discount > 0) {
+        const dType = (initialSale.discountType || "percentage").toLowerCase()
+        if (dType === "percentage") {
+          // Sanity: percentage should be 0-100; if >100 likely legacy bug (amount stored as %)
+          const val = Number(initialSale.discount)
+          if (val <= 100) {
+            setDiscountPercentage(val)
+            setIsGlobalDiscountActive(true)
+          } else {
+            setDiscountValue(val)
+            setIsValueDiscountActive(true)
+          }
         } else {
-          setDiscountValue(initialSale.discount)
+          setDiscountValue(Number(initialSale.discount))
           setIsValueDiscountActive(true)
         }
       }
@@ -780,6 +827,16 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         setOnlineAmount(online)
       }
 
+      // Set tip amount and tip staff (if any)
+      if (initialSale.tip && initialSale.tip > 0) {
+        setTip(Number(initialSale.tip))
+        const tipStaff = initialSale.tipStaffId
+        const tipStaffIdStr = typeof tipStaff === "object" && tipStaff?._id ? tipStaff._id : String(tipStaff || "")
+        if (tipStaffIdStr) {
+          setTipStaffId(tipStaffIdStr)
+        }
+      }
+
       // Set linked appointment
       if (initialSale.appointmentId) {
         setLinkedAppointmentId(initialSale.appointmentId)
@@ -803,6 +860,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
         if (appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id) {
           setLinkedAppointmentId(appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id)
+        }
+        if (appointmentData.time) {
+          setLinkedAppointmentTime(appointmentData.time)
         }
 
         // Find and set the client
@@ -1610,16 +1670,20 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         return { ...item, discount: proportionalDiscountPercentage, total: finalTotal }
       }))
     } else {
-      // No discount - reset to GST-inclusive amounts (service tax only when Tax Applicable ON)
+      // No global discount - keep line-level discounts (item.discount) and compute totals
       setServiceItems(prev => prev.map(item => {
         const baseAmount = item.price * item.quantity
+        const itemDiscPct = item.discount || 0
+        const discountedBase = baseAmount - (baseAmount * itemDiscPct) / 100
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
-        return { ...item, discount: 0, total: baseAmount + gstAmount }
+        const gstAmount = isServiceTaxable(item) ? (discountedBase * serviceTaxRate) / 100 : 0
+        return { ...item, discount: itemDiscPct, total: discountedBase + gstAmount }
       }))
       
       setProductItems(prev => prev.map(item => {
         const baseAmount = item.price * item.quantity
+        const itemDiscPct = item.discount || 0
+        const discountedBase = baseAmount - (baseAmount * itemDiscPct) / 100
         const product = products.find((p) => p._id === item.productId || p.id === item.productId)
         let productTaxRate = 18
         if (product?.taxCategory && taxSettings) {
@@ -1631,8 +1695,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
           }
         }
-        const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * productTaxRate) / 100 : 0
-        return { ...item, discount: 0, total: baseAmount + gstAmount }
+        const gstAmount = (taxSettings?.enableTax !== false) ? (discountedBase * productTaxRate) / 100 : 0
+        return { ...item, discount: itemDiscPct, total: discountedBase + gstAmount }
       }))
     }
   }
@@ -1845,7 +1909,14 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const serviceTotal = serviceItems.reduce((sum, item) => sum + item.total, 0)
   const productTotal = productItems.reduce((sum, item) => sum + item.total, 0)
   const subtotal = serviceTotal + productTotal
-  const totalDiscount = discountValue + (subtotal * discountPercentage) / 100
+  const globalDiscount = discountValue + (subtotal * discountPercentage) / 100
+  // Line-level discount (per service/product) - only when global discount is off
+  const lineLevelDiscount =
+    discountValue === 0 && discountPercentage === 0
+      ? serviceItems.reduce((sum, item) => sum + (item.price * item.quantity * (item.discount || 0)) / 100, 0) +
+        productItems.reduce((sum, item) => sum + (item.price * item.quantity * (item.discount || 0)) / 100, 0)
+      : 0
+  const totalDiscount = globalDiscount + lineLevelDiscount
   
   // Calculate tax breakdown for billing summary
   // Tax should be calculated on the discounted amount, not original price
@@ -1934,6 +2005,17 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   }, 0) : 0
 
   const totalTax = serviceTax + productTax
+  
+  // Service Total (for billing display) = sum of (price × qty) for services only
+  const billingServiceTotal = serviceItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  // Product Total (for billing display) = sum of (price × qty) for products only
+  const billingProductTotal = productItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  // Item Total = Service Total + Product Total (before discounts)
+  const billingItemTotal = billingServiceTotal + billingProductTotal
+  // Discounts = Manual + Global (both line-level and global discount)
+  const discounts = totalDiscount
+  // Sub Total = Item Total - Discounts
+  const subTotal = billingItemTotal - discounts
   
   // Calculate subtotal excluding tax (discounted amounts)
   const subtotalExcludingTax = serviceItems.reduce((sum, item) => {
@@ -2064,8 +2146,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     })
   }
 
-  // Base bill (services/products) total = subtotal - discount (GST already included in subtotal)
-  const baseTotal = subtotal - totalDiscount
+  // Base bill (services/products) total = subtotal - global discount only (line-level already in item totals)
+  const baseTotal = subtotal - globalDiscount
   const baseRounded = Math.round(baseTotal)
   const roundOff = baseRounded - baseTotal
   // Amount payable by customer = baseRounded + tip (tip is separate, non-taxable)
@@ -2074,64 +2156,55 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
   const totalPaid = cashAmount + cardAmount + onlineAmount
   const change = totalPaid - roundedTotal
 
-  // Generate receipt number with proper increment
+  // Generate receipt number with proper increment.
+  // No fallback to cached number - if the API fails after retries, we surface the error
+  // to avoid duplicate invoice IDs (INV-000122, etc.) when multiple bills use the same cached value.
   const generateReceiptNumber = async () => {
-    try {
-      console.log('=== RECEIPT NUMBER GENERATION DEBUG ===')
-      
-      // First, increment the receipt number atomically
-      const incrementResponse = await SettingsAPI.incrementReceiptNumber()
-      if (incrementResponse.success) {
-        const newReceiptNumber = incrementResponse.data.receiptNumber
-        console.log('✅ Receipt number incremented successfully:', newReceiptNumber)
-        
-        // Get fresh business settings to get the prefix
-        const settingsResponse = await SettingsAPI.getBusinessSettings()
-        if (settingsResponse.success) {
-          const currentSettings = settingsResponse.data
-        const prefix = currentSettings?.invoicePrefix || currentSettings?.receiptPrefix || "INV"
-        
-        console.log('Fresh business settings:', currentSettings)
-          console.log('New receipt number from increment:', newReceiptNumber)
-        console.log('Final prefix used:', prefix)
-          
+    const maxRetries = 3
+    let lastError: unknown = null
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`=== RECEIPT NUMBER GENERATION (attempt ${attempt}/${maxRetries}) ===`)
+
+        const incrementResponse = await SettingsAPI.incrementReceiptNumber()
+        if (incrementResponse.success) {
+          const newReceiptNumber = incrementResponse.data.receiptNumber
+          console.log('✅ Receipt number incremented successfully:', newReceiptNumber)
+
+          let prefix = 'INV'
+          const settingsResponse = await SettingsAPI.getBusinessSettings()
+          if (settingsResponse.success && settingsResponse.data) {
+            prefix = settingsResponse.data.invoicePrefix || settingsResponse.data.receiptPrefix || 'INV'
+          } else {
+            prefix = posSettings?.invoicePrefix || businessSettings?.invoicePrefix || businessSettings?.receiptPrefix || 'INV'
+          }
+
           const formattedReceiptNumber = `${prefix}-${newReceiptNumber.toString().padStart(6, '0')}`
-          console.log('Final receipt number generated:', formattedReceiptNumber)
-          
-          // Update local state with new receipt number
+
           setBusinessSettings((prev: any) => ({
             ...prev,
             receiptNumber: newReceiptNumber
           }))
-          
+
           return formattedReceiptNumber
         }
-      } else {
-        console.error('Failed to increment receipt number:', incrementResponse.error)
-        throw new Error(incrementResponse.error || 'Failed to increment receipt number')
+        lastError = new Error(incrementResponse.error || 'Failed to increment receipt number')
+      } catch (error) {
+        lastError = error
+        console.error(`Receipt number generation attempt ${attempt} failed:`, error)
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 500 * attempt))
+        }
       }
-    } catch (error) {
-      console.error('Failed to generate receipt number:', error)
-    
-    // Fallback to cached settings if API call fails
-    const prefix = posSettings?.invoicePrefix || businessSettings?.invoicePrefix || businessSettings?.receiptPrefix || "INV"
-      const receiptNumber = (posSettings?.receiptNumber || businessSettings?.receiptNumber || 1)
-    
-    console.log('=== FALLBACK RECEIPT NUMBER GENERATION ===')
-    console.log('Using cached settings - posSettings:', posSettings)
-    console.log('Using cached settings - businessSettings:', businessSettings)
-    console.log('Final prefix used:', prefix)
-    console.log('Final receipt number used:', receiptNumber)
-      
-      const formattedReceiptNumber = `${prefix}-${receiptNumber.toString().padStart(6, '0')}`
-      console.log('Final receipt number generated (fallback):', formattedReceiptNumber)
-      
-      return formattedReceiptNumber
     }
+
+    console.error('Failed to generate receipt number after retries:', lastError)
+    throw lastError instanceof Error ? lastError : new Error('Failed to generate receipt number. Please check your connection and try again.')
   }
 
-  // Handle checkout
-  const handleCheckout = async () => {
+  // Handle checkout (reasonOverride: when called from modal, pass reason directly since setState is async)
+  const handleCheckout = async (reasonOverride?: string) => {
     console.log('🚀 handleCheckout function called!')
     console.log('🚀 Mode:', mode)
     console.log('🚀 selectedCustomer:', selectedCustomer)
@@ -2144,8 +2217,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       return
     }
     
+    const effectiveReason = (reasonOverride ?? editReason).trim()
     // Validate edit reason for edit mode
-    if (mode === "edit" && !editReason.trim()) {
+    if (mode === "edit" && !effectiveReason) {
       toast({
         title: "Edit Reason Required",
         description: "Please provide a reason for editing this bill",
@@ -2244,8 +2318,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
     try {
       // Calculate rounded total for customer stats (before receipt generation)
-      // Grand total = subtotal - discount + tip (tax already included in subtotal)
-      const grandTotalForStats = subtotal - totalDiscount + tip
+      // Grand total = baseTotal + tip (line-level discount already in subtotal; only subtract global discount)
+      const grandTotalForStats = baseTotal + tip
       const roundedTotalForStats = Math.round(grandTotalForStats)
       
       // Create or use existing customer
@@ -2371,8 +2445,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       // Calculate tax breakdown from individual items (GST already included in item totals)
       // Note: subtotal already includes tax (item.total includes tax)
       let calculatedTax = 0
-      // Base bill amount (for sales/revenue) = subtotal - discount (tip is separate and non-taxable)
-      const baseTotalForSale = subtotal - totalDiscount
+      // Base bill amount (for sales/revenue) = subtotal - global discount (line-level already in item totals)
+      const baseTotalForSale = subtotal - globalDiscount
       const roundedBaseTotalForSale = Math.round(baseTotalForSale)
       const roundOff = roundedBaseTotalForSale - baseTotalForSale
       // calculatedTotal = bill amount used for sales/grossTotal (EXCLUDES tip)
@@ -2532,6 +2606,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 quantity: item.quantity,
                 price: item.price,
                 total: item.total,
+                discount: item.discount ?? 0,
                 staffId: item.staffId || '',
                 staffName: staffMember?.name || '',
                 staffContributions: item.staffContributions || []
@@ -2548,6 +2623,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 quantity: item.quantity,
                 price: item.price,
                 total: item.total,
+                discount: item.discount ?? 0,
                 staffId: item.staffId || '',
                 staffName: staffMember?.name || '',
                 staffContributions: item.staffContributions || []
@@ -2562,8 +2638,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
           tip: tip,
           tipStaffId: tipStaffId || undefined,
           tipStaffName: tipStaff?.name || undefined,
-          discount: totalDiscount || 0,
-          discountType: 'percentage',
+          discount: isValueDiscountActive ? discountValue : (isGlobalDiscountActive ? discountPercentage : 0),
+          discountType: isValueDiscountActive ? 'fixed' : 'percentage',
           // Payment status tracking
           paymentStatus: {
             // Total amount customer needs to pay = sales amount (calculatedTotal) + tip
@@ -2625,7 +2701,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
             result = await SalesAPI.update(saleId!, {
               ...saleData,
-              editReason: editReason.trim(),
+              editReason: effectiveReason,
             })
             console.log('📊 SalesAPI.update response:', result)
             console.log('💳 Payment details in response:', {
@@ -2700,17 +2776,22 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               console.warn('⚠️ No WhatsApp status in response')
             }
             
-            // Mark linked appointment as completed if fully paid
+            // Mark linked appointment (and all in same booking group) as completed if fully paid
             if (linkedAppointmentId && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
               try {
                 await AppointmentsAPI.update(linkedAppointmentId, { status: "completed" })
+                window.dispatchEvent(new CustomEvent("appointments-refresh"))
                 toast({
                   title: "Appointment Completed",
-                  description: "Linked appointment has been marked as completed.",
+                  description: "Linked appointment(s) have been marked as completed.",
                 })
               } catch (error) {
                 console.error("Failed to update appointment status:", error)
               }
+            }
+            // Refresh calendar so new walk-in cards (multi-staff services) appear - for both linked and standalone sales
+            if (typeof window !== "undefined" && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
+              window.dispatchEvent(new CustomEvent("appointments-refresh"))
             }
             
             // Now that backend sale is successful, create and store the receipt locally
@@ -2769,7 +2850,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
             // Open receipt in new tab - Use business receipt page (with Print/Thermal Print buttons)
             try {
               // Always use business receipt URL for internal use (has Print/Thermal Print buttons)
-              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&t=${Date.now()}`
+              const returnTo = linkedAppointmentId ? 'appointments' : 'quick-sale'
+              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&returnTo=${returnTo}&t=${Date.now()}`
               console.log('🎯 Opening business receipt URL (with print options):', receiptUrl)
               
               const newWindow = window.open(receiptUrl, '_blank')
@@ -2882,6 +2964,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
     setConfirmUnpaid(false)
     setShowTipModal(false)
     setTempTipAmount(0)
+    setEditReason("")
+    setShowEditReasonModal(false)
+    setTempEditReason("")
   }
 
   // Tip modal handlers
@@ -3418,8 +3503,17 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto bg-white/80 backdrop-blur-sm pr-96">
         <div className="p-8 space-y-8 max-h-screen overflow-y-auto">
+          {billLoading ? (
+            <div className="flex items-center justify-center min-h-[60vh]">
+              <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+                <p className="text-sm font-medium">Loading bill details...</p>
+              </div>
+            </div>
+          ) : (
+          <>
           {/* Header */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="space-y-2">
               <h2 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
                 {mode === "edit" ? "Edit Bill" : mode === "exchange" ? "Exchange Products" : "Quick Sale"}
@@ -3428,45 +3522,26 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 {mode === "edit" ? "Edit existing bill details" : mode === "exchange" ? "Exchange products in this bill" : "Create and process sales quickly and efficiently"}
               </p>
             </div>
+            {(mode === "edit" || mode === "exchange") && initialSale && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center gap-3 shrink-0">
+                <div className="p-2 bg-amber-100 rounded-lg">
+                  <Edit className="h-5 w-5 text-amber-700" />
+                </div>
+                <div>
+                  <p className="font-semibold text-amber-900">
+                    {mode === "edit" ? "Editing Bill" : "Exchanging Products"}: {initialSale.billNo || initialSale.receiptNumber}
+                    {initialSale.isEdited && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
+                  </p>
+                  <p className="text-sm text-amber-700">
+                    Original Date: {initialSale.date ? format(new Date(initialSale.date), "dd MMM yyyy") : "N/A"}
+                    {initialSale.tip && initialSale.tip > 0 && (
+                      <span className="ml-2">• Tip: {formatCurrency(initialSale.tip)}</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
-
-          {/* Edit Mode Banner */}
-          {(mode === "edit" || mode === "exchange") && initialSale && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center gap-3">
-              <div className="p-2 bg-amber-100 rounded-lg">
-                <Edit className="h-5 w-5 text-amber-700" />
-              </div>
-              <div className="flex-1">
-                <p className="font-semibold text-amber-900">
-                  {mode === "edit" ? "Editing Bill" : "Exchanging Products"}: {initialSale.billNo || initialSale.receiptNumber}
-                  {initialSale.isEdited && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
-                </p>
-                <p className="text-sm text-amber-700">
-                  Original Date: {initialSale.date ? format(new Date(initialSale.date), "dd MMM yyyy") : "N/A"}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Edit Reason Field (Required for Edit Mode) */}
-          {mode === "edit" && (
-            <div className="space-y-2">
-              <Label htmlFor="editReason" className="text-sm font-semibold text-gray-700">
-                Edit Reason <span className="text-red-500">*</span>
-              </Label>
-              <Textarea
-                id="editReason"
-                placeholder="Please provide a reason for editing this bill (required for audit purposes)..."
-                value={editReason}
-                onChange={(e) => setEditReason(e.target.value)}
-                className="min-h-[80px] border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20"
-                required
-              />
-              {!editReason.trim() && (
-                <p className="text-xs text-red-600">Edit reason is required to save changes</p>
-              )}
-            </div>
-          )}
 
           {/* Customer and Date */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -3704,7 +3779,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                 </div>
 
                 <div style={{ overflow: 'visible' }}>
-                  {serviceItems.map((item) => (
+                  {serviceItems.map((item, serviceIndex) => (
                   <div
                     key={item.id}
                     className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200"
@@ -3792,7 +3867,14 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
 
                     <MultiStaffSelector
                       key={`service-${item.id}-staff`}
-                      staffList={getAvailableStaffList(services.find((s) => (s._id || s.id) === item.serviceId)?.duration ?? 60, (item.staffContributions || []).map((c) => c.staffId).filter(Boolean))}
+                      staffList={getAvailableStaffList(
+                        services.find((s) => (s._id || s.id) === item.serviceId)?.duration ?? 60,
+                        [...new Set([
+                          ...(item.staffContributions || []).map((c) => c.staffId).filter(Boolean),
+                          ...serviceItems.filter((s) => s.id !== item.id).flatMap((s) => (s.staffContributions || []).map((c) => c.staffId).filter(Boolean)),
+                        ])],
+                        serviceIndex
+                      )}
                       serviceTotal={item.total}
                       compact
                       selectStaffFlex={1.5}
@@ -3852,7 +3934,9 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                       placeholder={(isGlobalDiscountActive || isValueDiscountActive) ? "Global discount" : "0"}
                     />
 
-                    <div className="text-sm font-medium">₹{item.total.toFixed(2)}</div>
+                    <div className="text-sm font-medium">
+                      ₹{getDiscountedBase(item.price * item.quantity, item.discount, taxSettings?.serviceTaxRate || 5).toFixed(2)}
+                    </div>
 
                     <Button
                       variant="ghost"
@@ -4066,7 +4150,25 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                         placeholder={(isGlobalDiscountActive || isValueDiscountActive) ? "Global discount" : "0"}
                       />
 
-                      <div className="text-sm font-medium">₹{item.total.toFixed(2)}</div>
+                      <div className="text-sm font-medium">
+                        ₹{getDiscountedBase(
+                          item.price * item.quantity,
+                          item.discount,
+                          (() => {
+                            const product = products.find((p) => p._id === item.productId || p.id === item.productId)
+                            if (product?.taxCategory && taxSettings) {
+                              switch (product.taxCategory) {
+                                case "essential": return taxSettings.essentialProductRate || 5
+                                case "intermediate": return taxSettings.intermediateProductRate || 12
+                                case "standard": return taxSettings.standardProductRate || 18
+                                case "luxury": return taxSettings.luxuryProductRate || 28
+                                case "exempt": return taxSettings.exemptProductRate || 0
+                              }
+                            }
+                            return 18
+                          })()
+                        ).toFixed(2)}
+                      </div>
 
                       <Button
                         variant="ghost"
@@ -4179,6 +4281,8 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               </div>
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
 
@@ -4193,83 +4297,136 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
         {/* Content - Scrollable */}
         <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
           <div className="px-6 py-4 space-y-2 flex-1">
-            {/* Order Summary - Modern */}
+            {/* Order Summary: Service Total → Discounts → Sub Total → GST → Total → Tip → Grand Total */}
             <div className="bg-gray-50/50 rounded-xl p-2 space-y-1 border border-gray-200">
+              {/* 1. Service Total (price × qty for services only) */}
+              <div className="flex justify-between items-center py-1">
+                <span className="text-sm text-gray-600">Service Total</span>
+                <span className="text-sm font-medium text-gray-900">{formatCurrency(billingServiceTotal)}</span>
+              </div>
+
+              {/* Product Total (when products present) */}
+              {productItems.length > 0 && (
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-sm text-gray-600">Product Total</span>
+                  <span className="text-sm font-medium text-gray-900">{formatCurrency(billingProductTotal)}</span>
+                </div>
+              )}
+
+              {/* 2. Discounts (Manual + Global) */}
+              <div className="flex justify-between items-center py-1">
+                <span className="text-sm text-gray-600">Discounts</span>
+                <span className={`text-sm font-medium ${discounts > 0 ? "text-red-500" : "text-gray-500"}`}>
+                  {discounts > 0 ? `-${formatCurrency(discounts)}` : formatCurrency(0)}
+                </span>
+              </div>
+
+              {/* 3. Sub Total */}
               <div className="flex justify-between items-center py-1">
                 <span className="text-sm text-gray-600">Sub Total</span>
-                <span className="text-sm font-medium text-gray-900">{formatCurrency(subtotalExcludingTax)}</span>
+                <span className="text-sm font-medium text-gray-900">{formatCurrency(subTotal)}</span>
               </div>
-              
-              {/* Service Tax Breakdown */}
-              {serviceTax > 0 && (
-                <>
-                <div className="flex justify-between items-center py-1">
-                    <span className="text-sm text-gray-600">CGST @ {serviceCGSTRate.toFixed(1)}%</span>
-                    <span className="text-sm font-medium text-gray-900">{formatCurrency(serviceCGST)}</span>
-                </div>
-                  <div className="flex justify-between items-center py-1">
-                    <span className="text-sm text-gray-600">SGST @ {serviceSGSTRate.toFixed(1)}%</span>
-                    <span className="text-sm font-medium text-gray-900">{formatCurrency(serviceSGST)}</span>
+
+              {/* 4. GST - expandable dropdown for SGST/CGST */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setSummaryExpanded((v) => !v)}
+                  className="flex w-full justify-between items-center py-1 hover:bg-gray-100/50 rounded-md transition-colors -mx-1 px-1"
+                >
+                  <span className="text-sm text-gray-600">GST</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm font-medium text-gray-900">{formatCurrency(totalTax)}</span>
+                    {summaryExpanded ? (
+                      <ChevronUp className="h-4 w-4 text-gray-500 shrink-0" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-gray-500 shrink-0" />
+                    )}
                   </div>
-                </>
-              )}
-              
-              {/* Product Tax Breakdown - Per Category */}
-              {productTaxByCategory.map((categoryTax) => (
-                <div key={categoryTax.category}>
-                  <div className="flex justify-between items-center py-1">
-                    <span className="text-sm text-gray-600">CGST @ {categoryTax.cgstRate.toFixed(1)}% ({categoryTax.categoryLabel})</span>
-                    <span className="text-sm font-medium text-gray-900">{formatCurrency(categoryTax.cgst)}</span>
+                </button>
+                {summaryExpanded && (
+                  <div className="pl-2 space-y-0.5 border-l-2 border-gray-200 ml-1">
+                    {serviceTax > 0 && (
+                      <>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">CGST @ {serviceCGSTRate.toFixed(1)}%</span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(serviceCGST)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">SGST @ {serviceSGSTRate.toFixed(1)}%</span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(serviceSGST)}</span>
+                        </div>
+                      </>
+                    )}
+                    {productTaxByCategory.map((categoryTax) => (
+                      <div key={categoryTax.category}>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">CGST @ {categoryTax.cgstRate.toFixed(1)}% ({categoryTax.categoryLabel})</span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(categoryTax.cgst)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">SGST @ {categoryTax.sgstRate.toFixed(1)}% ({categoryTax.categoryLabel})</span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(categoryTax.sgst)}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {totalTax === 0 && (
+                      <div className="text-sm text-gray-500 py-0.5">No tax applied</div>
+                    )}
                   </div>
-                  <div className="flex justify-between items-center py-1">
-                    <span className="text-sm text-gray-600">SGST @ {categoryTax.sgstRate.toFixed(1)}% ({categoryTax.categoryLabel})</span>
-                    <span className="text-sm font-medium text-gray-900">{formatCurrency(categoryTax.sgst)}</span>
-                  </div>
-                </div>
-              ))}
-              
-              {(discountValue > 0 || discountPercentage > 0) && (
-                <div className="flex justify-between items-center py-1">
-                  <span className="text-sm text-gray-600">Discount</span>
-                  <span className="text-sm font-medium text-red-500">-{formatCurrency(discountValue + (subtotal * discountPercentage / 100))}</span>
-                </div>
-              )}
-              
+                )}
+              </div>
+
+              {/* 5. Total (Sub Total + GST with round off) */}
+              <div className="flex justify-between items-center py-1">
+                <span className="text-sm text-gray-600">Total</span>
+                <span className="text-sm font-medium text-gray-900">{formatCurrency(baseRounded)}</span>
+              </div>
               {Math.abs(roundOff) > 0.01 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Round Off</span>
+                <div className="flex justify-between text-sm pl-2">
+                  <span className="text-gray-500">Round Off</span>
                   <span className="font-medium text-gray-700">{formatCurrency(roundOff)}</span>
                 </div>
               )}
-              
+
+              {/* 6. Tip (Optional) */}
+              <div className="flex justify-between items-center py-1">
+                <span className="text-sm text-gray-600">Tip (Optional)</span>
+                {tip > 0 ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm font-medium text-gray-900">{formatCurrency(tip)}</span>
+                    <button
+                      onClick={handleTipClick}
+                      className="p-1 hover:bg-gray-100 rounded-md transition-colors"
+                      title="Edit tip amount"
+                    >
+                      <Pencil className="h-3 w-3 text-gray-500 hover:text-gray-700" />
+                    </button>
+                    <button
+                      onClick={() => { setTip(0); setTipStaffId(null) }}
+                      className="p-1 hover:bg-red-50 rounded-md transition-colors"
+                      title="Remove tip"
+                    >
+                      <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-600" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleTipClick}
+                    className="text-sm font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+                  >
+                    Add
+                  </button>
+                )}
+              </div>
+
+              {/* 7. Grand Total */}
               <div className="border-t border-gray-200 pt-3 mt-3">
                 <div className="flex justify-between items-center">
                   <span className="text-base font-bold text-gray-900">Grand Total</span>
                   <span className="text-lg font-bold text-gray-900">{formatCurrency(roundedTotal)}</span>
                 </div>
               </div>
-            </div>
-
-            {/* Tip - Modern Style */}
-            <div className="flex items-center justify-between py-2">
-              <button
-                onClick={handleTipClick}
-                className="text-sm font-medium text-indigo-600 hover:text-indigo-700 hover:underline cursor-pointer transition-colors"
-              >
-                Add Tip
-              </button>
-              {tip > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-gray-700">{formatCurrency(tip)}</span>
-                  <button
-                    onClick={handleTipClick}
-                    className="p-1 hover:bg-gray-100 rounded-md transition-colors"
-                    title="Edit tip amount"
-                  >
-                    <Pencil className="h-3 w-3 text-gray-500 hover:text-gray-700" />
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Change Display - Modern */}
@@ -4438,6 +4595,13 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                   return
                 }
                 
+                // Edit mode: ask for reason first if not yet provided
+                if (mode === "edit" && !editReason.trim()) {
+                  setTempEditReason("")
+                  setShowEditReasonModal(true)
+                  return
+                }
+                
                 if (totalPaid < roundedTotal) {
                   console.log('💰 Opening payment modal for partial/unpaid bill')
                   setShowPaymentModal(true)
@@ -4446,7 +4610,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                   handleCheckout()
                 }
               }} 
-              disabled={isProcessing || roundedTotal <= 0 || (mode === "edit" && !editReason.trim())} 
+              disabled={isProcessing || roundedTotal <= 0} 
               className="flex-1 h-10 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isProcessing ? (
@@ -4542,6 +4706,78 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
               className="flex-1 bg-indigo-600 hover:bg-indigo-700"
             >
               OK
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Edit Reason Modal - shown when user clicks Save Changes in edit mode */}
+      <Dialog open={showEditReasonModal} onOpenChange={(open) => {
+        setShowEditReasonModal(open)
+        if (!open) setTempEditReason("")
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Edit className="h-5 w-5 text-amber-600" />
+              Edit Reason Required
+            </DialogTitle>
+            <DialogDescription>
+              Please provide a reason for editing this bill (required for audit purposes).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-reason-modal" className="text-sm font-medium">
+                Edit Reason <span className="text-red-500">*</span>
+              </Label>
+              <Textarea
+                id="edit-reason-modal"
+                placeholder="Please provide a reason for editing this bill..."
+                value={tempEditReason}
+                onChange={(e) => setTempEditReason(e.target.value)}
+                className="min-h-[100px] border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20"
+                autoFocus
+              />
+              {!tempEditReason.trim() && (
+                <p className="text-xs text-red-600">Edit reason is required to save changes</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowEditReasonModal(false)
+                setTempEditReason("")
+              }}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const reason = tempEditReason.trim()
+                if (!reason) {
+                  toast({
+                    title: "Edit Reason Required",
+                    description: "Please provide a reason for editing this bill",
+                    variant: "destructive",
+                  })
+                  return
+                }
+                setEditReason(reason)
+                setShowEditReasonModal(false)
+                setTempEditReason("")
+                if (totalPaid < roundedTotal) {
+                  setShowPaymentModal(true)
+                } else {
+                  handleCheckout(reason)
+                }
+              }}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700"
+            >
+              Save Changes
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -5172,7 +5408,7 @@ export function QuickSale({ mode = "create", initialSale }: QuickSaleProps = {})
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => router.push(`/receipt/${bill.receiptNumber || bill.id}`)}
+                            onClick={() => router.push(`/receipt/${bill.receiptNumber || bill.id}?returnTo=/quick-sale`)}
                             title="View Receipt"
                             className="h-8"
                           >

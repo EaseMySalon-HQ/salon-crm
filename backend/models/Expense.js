@@ -36,7 +36,7 @@ const expenseSchema = new mongoose.Schema({
       "Bank Transfer",
       "UPI",
       "Cheque",
-      "Digital Wallet"
+      "Petty Cash Wallet"
     ]
   },
   date: {

@@ -1,10 +1,11 @@
 "use client"
 
 import { useState } from "react"
-import { Package, Sparkles, TrendingUp, BarChart3, FolderTree } from "lucide-react"
+import { Package, FolderTree, Truck } from "lucide-react"
 import { ProductsTable } from "@/components/products/products-table"
 import { ProductStatsCards } from "@/components/dashboard/stats-cards"
 import { CategoryManagement } from "@/components/categories/category-management"
+import { SuppliersAndOrdersTab } from "@/components/suppliers/suppliers-and-orders-tab"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
@@ -59,9 +60,9 @@ export default function ProductsPage() {
             </div>
           </div>
 
-          {/* Tabs for Products and Categories */}
+          {/* Tabs for Products, Categories, and Suppliers & Orders */}
           <Tabs defaultValue="products" className="w-full">
-            <TabsList className="mb-6 bg-white shadow-sm">
+            <TabsList className="mb-6 bg-white shadow-sm grid grid-cols-3">
               <TabsTrigger value="products" className="gap-2">
                 <Package className="h-4 w-4" />
                 Products
@@ -69,6 +70,10 @@ export default function ProductsPage() {
               <TabsTrigger value="categories" className="gap-2">
                 <FolderTree className="h-4 w-4" />
                 Categories
+              </TabsTrigger>
+              <TabsTrigger value="suppliers" className="gap-2">
+                <Truck className="h-4 w-4" />
+                Suppliers & Orders
               </TabsTrigger>
             </TabsList>
 
@@ -109,6 +114,12 @@ export default function ProductsPage() {
                   title="Product Categories"
                   description="Manage categories for your salon products"
                 />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="suppliers">
+              <div className="bg-white rounded-xl border border-gray-200 shadow-lg p-6">
+                <SuppliersAndOrdersTab />
               </div>
             </TabsContent>
           </Tabs>

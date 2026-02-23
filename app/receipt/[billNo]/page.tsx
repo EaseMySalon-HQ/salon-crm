@@ -292,7 +292,11 @@ export default function ReceiptPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Link href="/quick-sale">
+            <Link href={(() => {
+              const returnTo = searchParams.get('returnTo')
+              if (!returnTo) return '/quick-sale'
+              return returnTo.startsWith('/') ? returnTo : `/${returnTo}`
+            })()}>
               <Button variant="outline">
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back
