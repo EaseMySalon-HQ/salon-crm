@@ -1,6 +1,6 @@
 "use client"
 
-import { PlusCircle, List, Calendar } from "lucide-react"
+import { PlusCircle } from "lucide-react"
 import { useRef, Suspense, useState, useEffect, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 
@@ -106,34 +106,6 @@ function AppointmentsContent() {
               <p className="text-slate-500 text-sm">Manage and view all your appointments</p>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex rounded-xl border border-slate-200 bg-white p-0.5 shadow-sm">
-                <Button
-                  variant={view === "list" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => setView("list")}
-                  className={`rounded-lg transition-all duration-200 ${
-                    view === "list"
-                      ? "bg-violet-600 text-white hover:bg-violet-700 shadow-sm"
-                      : "text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  <List className="mr-2 h-4 w-4" />
-                  List
-                </Button>
-                <Button
-                  variant={view === "calendar" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => setView("calendar")}
-                  className={`rounded-lg transition-all duration-200 ${
-                    view === "calendar"
-                      ? "bg-violet-600 text-white hover:bg-violet-700 shadow-sm"
-                      : "text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  <Calendar className="mr-2 h-4 w-4" />
-                  Calendar
-                </Button>
-              </div>
               <Button
                 onClick={() => openAppointmentForm()}
                 className="bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-5 py-2.5 font-semibold shadow-md shadow-violet-500/20 transition-all hover:shadow-lg"
@@ -149,6 +121,8 @@ function AppointmentsContent() {
                 ref={calendarRef}
                 initialAppointmentId={selectedAppointmentId}
                 onOpenAppointmentForm={openAppointmentForm}
+                view={view}
+                onSwitchView={setView}
               />
             ) : (
               <AppointmentsCalendarGrid
@@ -156,6 +130,8 @@ function AppointmentsContent() {
                 initialAppointmentId={selectedAppointmentId}
                 onSwitchToList={() => setView("list")}
                 onOpenAppointmentForm={openAppointmentForm}
+                view={view}
+                onSwitchView={setView}
               />
             )}
           </div>

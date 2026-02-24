@@ -122,47 +122,21 @@ apiClient.interceptors.response.use(
         const baseUrl = error?.config?.baseURL || ''
         console.warn(`⚠️ API Network Error: Cannot reach backend. Ensure the server is running on ${baseUrl || 'port 3001'}.`, url ? `Request: ${url}` : '')
       } else {
-        // Build error object with only defined, meaningful values
-        const errorDetails: Record<string, any> = {}
-        if (errorInfo.status !== undefined && errorInfo.status !== null && errorInfo.status !== 0) errorDetails.status = errorInfo.status
-        if (errorInfo.statusText && errorInfo.statusText.trim()) errorDetails.statusText = errorInfo.statusText
-        if (errorInfo.error && errorInfo.error.trim()) {
-          errorDetails.error = errorInfo.error
-        } else if (errorInfo.message && errorInfo.message !== 'Unknown error' && errorInfo.message.trim()) {
-          errorDetails.error = errorInfo.message
-        }
-        if (errorInfo.type && errorInfo.type !== 'Request Setup Error') errorDetails.type = errorInfo.type
-        if (errorInfo.url && errorInfo.url !== 'Unknown URL') errorDetails.url = errorInfo.url
-        if (errorInfo.method && errorInfo.method !== 'Unknown method') errorDetails.method = errorInfo.method
-        if (errorInfo.data !== undefined && errorInfo.data !== null) errorDetails.data = errorInfo.data
-        // For 400/4xx, ensure we capture message from response body for debugging
-        if (errorInfo.status >= 400 && errorInfo.status < 500 && errorInfo.data && typeof errorInfo.data === 'object') {
-          const msg = errorInfo.data.message || errorInfo.data.error || errorInfo.data.details
-          if (msg && !errorDetails.error) errorDetails.error = typeof msg === 'string' ? msg : JSON.stringify(msg)
-          // Always set error from response for 4xx so we never log empty {}
-          if (!errorDetails.error && errorInfo.data) {
-            errorDetails.error = typeof errorInfo.data === 'string' ? errorInfo.data : JSON.stringify(errorInfo.data)
-          }
-        }
+        // For 4xx, extract error message from response - ensure we never log empty {}
+        const status = errorInfo.status ?? error?.response?.status
+        const data = errorInfo.data ?? error?.response?.data
+        const errMsg = (typeof data === 'object' && data !== null)
+          ? (data.error || data.errorDetail || data.message || data.details)
+          : (typeof data === 'string' ? data : null)
+        const message = (typeof errMsg === 'string' && errMsg.trim())
+          ? errMsg
+          : (errorInfo.error || errorInfo.message || errorInfo.statusText || `Request failed with status ${status}`)
 
-        // Only log if we have at least one meaningful property (avoid "Error response: {}")
-        const hasValidProperties = Object.keys(errorDetails).some(key => {
-          const value = errorDetails[key]
-          if (value === undefined || value === null) return false
-          if (typeof value === 'string') return value.trim() !== ''
-          if (typeof value === 'object') return Object.keys(value).length > 0
-          return true
-        })
-        
-        if (hasValidProperties) {
-          console.error('❌ API Response Interceptor: Error response:', errorDetails)
-        } else {
-          const status = error?.response?.status
-          const statusText = error?.response?.statusText || 'Unknown error'
-          const url = error?.config?.url
-          const method = error?.config?.method?.toUpperCase()
-          console.error('❌ API Response Interceptor:', status ? `${status} ${statusText}` : error?.message || 'Unknown error', url ? `${method} ${url}` : '')
-        }
+        const url = error?.config?.url
+        const method = error?.config?.method?.toUpperCase()
+        // Use warn for 4xx (validation/business logic) - expected user feedback, not a bug
+        const logFn = status >= 400 && status < 500 ? console.warn : console.error
+        logFn(`API ${status || ''} ${method || ''} ${url || ''}:`, message)
       }
     } catch (logError) {
       // If error logging itself fails, log the raw error

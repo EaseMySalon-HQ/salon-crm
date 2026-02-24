@@ -212,7 +212,8 @@ function blockAppliesOnDate(block: { startDate: string; endDate?: string | null;
 }
 
 /** Get staff IDs that are available for a slot [startM, startM + duration] on dateStr.
- * When considerAllAppointments is true (from linked appointment), check all non-cancelled appointments for conflicts. */
+ * When considerAllAppointments is true (from linked appointment), check all non-cancelled appointments for conflicts.
+ * For walk-in QuickSale: "arrived" and "service_started" do NOT block - staff may have rest periods or gaps where they can take other work. */
 function getAvailableStaffIds(
   dateStr: string,
   timeStr: string,
@@ -228,7 +229,8 @@ function getAvailableStaffIds(
 
   for (const apt of appointments) {
     if (apt.status === "cancelled") continue
-    if (!considerAllAppointments && apt.status !== "arrived" && apt.status !== "service_started") continue
+    // For walk-in QuickSale, don't block by appointments - staff can take other work during rest periods or gaps.
+    if (!considerAllAppointments) continue
     const aptStartM = parseTimeToMinutes(apt.time || "0:00")
     const aptDuration = apt.duration ?? 60
     const aptEndM = aptStartM + aptDuration

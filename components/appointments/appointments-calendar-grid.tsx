@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2 } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2, List, Calendar } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -22,6 +23,7 @@ import {
 } from "@/components/ui/select"
 import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI } from "@/lib/api"
 import { BlockTimeModal, getBlockReasonIcon } from "@/components/appointments/block-time-modal"
+import { useToast } from "@/hooks/use-toast"
 
 interface Appointment {
   _id: string
@@ -270,13 +272,16 @@ interface AppointmentsCalendarGridProps {
   initialAppointmentId?: string
   onSwitchToList?: () => void
   onOpenAppointmentForm?: (params?: { date?: string; time?: string; staffId?: string; appointmentId?: string }) => void
+  view?: "list" | "calendar"
+  onSwitchView?: (v: "list" | "calendar") => void
 }
 
 export const AppointmentsCalendarGrid = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarGridProps
->(({ initialAppointmentId, onSwitchToList, onOpenAppointmentForm }, ref) => {
+>(({ initialAppointmentId, onSwitchToList, onOpenAppointmentForm, view = "calendar", onSwitchView }, ref) => {
   const router = useRouter()
+  const { toast } = useToast()
   const [staffList, setStaffList] = useState<StaffMember[]>([])
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [loading, setLoading] = useState(true)
@@ -339,6 +344,25 @@ export const AppointmentsCalendarGrid = forwardRef<
     setDensityState(value)
     try {
       localStorage.setItem("appointmentViewMode", value)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+  const [showWalkInCards, setShowWalkInCardsState] = useState(() => {
+    if (typeof window === "undefined") return true
+    try {
+      const stored = localStorage.getItem("appointmentShowWalkInCards")
+      if (stored === "false") return false
+      if (stored === "true") return true
+    } catch {
+      /* ignore */
+    }
+    return true
+  })
+  const setShowWalkInCards = useCallback((value: boolean) => {
+    setShowWalkInCardsState(value)
+    try {
+      localStorage.setItem("appointmentShowWalkInCards", String(value))
     } catch {
       /* ignore */
     }
@@ -647,10 +671,12 @@ export const AppointmentsCalendarGrid = forwardRef<
 
   const slotHeight = density === "comfortable" ? slotHeight_COMFORTABLE : slotHeight_COMPACT
 
+  const effectiveWalkInSales = showWalkInCards ? walkInSales : []
+
   const { extendedStartMinutes, extendedEndMinutes, totalSlots: totalSlotsWithSales } = useMemo(() => {
     let extStart = startMinutes
     let extEnd = endMinutes
-    walkInSales.forEach((sale) => {
+    effectiveWalkInSales.forEach((sale) => {
       // Prefer sale.time; fallback to extracting time from sale.date (ISO string) when time is missing/invalid
       let timeStr = sale.time
       if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
@@ -671,7 +697,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       extendedEndMinutes: extEnd,
       totalSlots: slots,
     }
-  }, [startMinutes, endMinutes, walkInSales])
+  }, [startMinutes, endMinutes, effectiveWalkInSales])
 
   const timeSlots = useMemo(() => {
     const slots: { label: string; minutes: number; isHourStart: boolean; showTimeLabel: boolean }[] = []
@@ -806,7 +832,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     columns.forEach((col) => {
       map[col._id] = []
     })
-    walkInSales.forEach((sale) => {
+    effectiveWalkInSales.forEach((sale) => {
       const serviceItems = (sale.items || []).filter((i: any) => i.type === "service")
       if (serviceItems.length === 0) return
       let timeStr = sale.time
@@ -835,7 +861,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       (map[col._id] || []).sort((a, b) => a.top - b.top)
     })
     return map
-  }, [columns, walkInSales, extendedStartMinutes, slotHeight])
+  }, [columns, effectiveWalkInSales, extendedStartMinutes, slotHeight])
 
   const salesByColumnWithLayout = useMemo(() => {
     const result: Record<string, Array<{ sale: any; serviceItem: any; top: number; height: number; startM: number; endM: number; left: number; width: number }>> = {}
@@ -1382,11 +1408,21 @@ export const AppointmentsCalendarGrid = forwardRef<
             })
           )
         } else {
-          alert("Failed to update block time.")
+          const r = res as { error?: string; errorDetail?: string }
+          toast({
+            title: "Cannot Update Block Time",
+            description: r?.error || r?.errorDetail || "Failed to update block time.",
+            variant: "destructive",
+          })
         }
-      } catch (err) {
-        console.error(err)
-        alert("Failed to update block time.")
+      } catch (err: any) {
+        const data = err?.response?.data || err?.responseData
+        const errMsg = data?.error || data?.errorDetail || data?.message || err?.message || "Failed to update block time."
+        toast({
+          title: "Cannot Update Block Time",
+          description: typeof errMsg === "string" ? errMsg : "Failed to update block time.",
+          variant: "destructive",
+        })
       } finally {
         setUpdatingBlockForId(null)
         setDraggingBlock(null)
@@ -1566,14 +1602,14 @@ export const AppointmentsCalendarGrid = forwardRef<
             })}
           </div>
           {/* Density toggle */}
-          <div className="flex rounded-lg border border-slate-200 bg-white/80 p-0.5">
+          <div className="flex gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
             <button
               type="button"
               onClick={() => setDensity("compact")}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
                 density === "compact"
-                  ? "bg-slate-800 text-white shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
+                  ? "bg-violet-600 text-white shadow-sm"
+                  : "text-slate-600 hover:bg-slate-50"
               }`}
             >
               Compact
@@ -1581,17 +1617,54 @@ export const AppointmentsCalendarGrid = forwardRef<
             <button
               type="button"
               onClick={() => setDensity("comfortable")}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
                 density === "comfortable"
-                  ? "bg-slate-800 text-white shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
+                  ? "bg-violet-600 text-white shadow-sm"
+                  : "text-slate-600 hover:bg-slate-50"
               }`}
             >
               Comfortable
             </button>
           </div>
+          <label className="flex items-center gap-2 cursor-pointer select-none text-slate-600 text-sm">
+            <Checkbox
+              checked={showWalkInCards}
+              onCheckedChange={(checked) => setShowWalkInCards(checked === true)}
+              className="border-slate-300 data-[state=checked]:bg-violet-600 data-[state=checked]:border-violet-600"
+            />
+            <span>Show Walk-in</span>
+          </label>
         </div>
         <div className="flex-1" />
+        {/* List/Calendar toggle - just before Color Code */}
+        {onSwitchView && (
+          <div className="flex gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
+            <button
+              type="button"
+              onClick={() => onSwitchView("list")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
+                view === "list"
+                  ? "bg-violet-600 text-white shadow-sm"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <List className="h-3.5 w-3.5 shrink-0" />
+              List
+            </button>
+            <button
+              type="button"
+              onClick={() => onSwitchView("calendar")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
+                view === "calendar"
+                  ? "bg-violet-600 text-white shadow-sm"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <Calendar className="h-3.5 w-3.5 shrink-0" />
+              Calendar
+            </button>
+          </div>
+        )}
         {/* Color Code - right side, above table */}
         <div className="relative">
           <Button

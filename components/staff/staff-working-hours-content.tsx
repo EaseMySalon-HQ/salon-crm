@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { StaffDirectoryAPI, StaffAPI, BlockTimeAPI, AppointmentsAPI } from "@/lib/api"
+import { useToast } from "@/hooks/use-toast"
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
@@ -170,6 +171,7 @@ function isAppointmentOutsideHours(apt: { time: string; duration?: number }, sta
 export function StaffWorkingHoursContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
+  const { toast } = useToast()
   const [staff, setStaff] = useState<StaffRow[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedDate, setSelectedDate] = useState(() => format(new Date(), "yyyy-MM-dd"))
@@ -614,11 +616,20 @@ export function StaffWorkingHoursContent() {
         setSelectedBlock(null)
         refetchBlockTimes()
       } else {
-        alert("Failed to update block time. Please try again.")
+        toast({
+          title: "Cannot Update Block Time",
+          description: res?.error || res?.errorDetail || "Failed to update block time. Please try again.",
+          variant: "destructive",
+        })
       }
-    } catch (e) {
-      console.error(e)
-      alert("Failed to update block time. Please try again.")
+    } catch (e: any) {
+      const data = e?.response?.data || e?.responseData
+      const errMsg = data?.error || data?.errorDetail || data?.message || e?.message || "Failed to update block time. Please try again."
+      toast({
+        title: "Cannot Update Block Time",
+        description: typeof errMsg === "string" ? errMsg : "Failed to update block time. Please try again.",
+        variant: "destructive",
+      })
     } finally {
       setUpdatingBlock(false)
     }
@@ -690,11 +701,20 @@ export function StaffWorkingHoursContent() {
         closeBlockTimeModal()
         refetchBlockTimes()
       } else {
-        alert("Failed to create block time. Please try again.")
+        toast({
+          title: "Cannot Block Time",
+          description: res?.error || res?.errorDetail || "Failed to create block time. Please try again.",
+          variant: "destructive",
+        })
       }
-    } catch (e) {
-      console.error(e)
-      alert("Failed to create block time. Please try again.")
+    } catch (e: any) {
+      const data = e?.response?.data || e?.responseData
+      const errMsg = data?.error || data?.errorDetail || data?.message || e?.message || "Failed to create block time. Please try again."
+      toast({
+        title: "Cannot Block Time",
+        description: typeof errMsg === "string" ? errMsg : "Failed to create block time. Please try again.",
+        variant: "destructive",
+      })
     } finally {
       setCreatingBlock(false)
     }
