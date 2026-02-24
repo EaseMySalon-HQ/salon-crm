@@ -5842,6 +5842,90 @@ app.post('/api/staff/:id/change-password', authenticateToken, setupBusinessDatab
 });
 
 // Block Time (staff unavailability / blocked slots)
+/** Get dates a block applies to (for conflict check). Returns YYYY-MM-DD strings. */
+function getBlockDates(startDate, endDate, recurringFrequency) {
+  const dates = [];
+  const rec = recurringFrequency || 'none';
+  const start = String(startDate).slice(0, 10);
+  const end = endDate ? String(endDate).slice(0, 10) : start;
+  if (rec === 'none') {
+    dates.push(start);
+    return dates;
+  }
+  if (start > end) return dates;
+
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = end.split('-').map(Number);
+  const startD = new Date(sy, sm - 1, sd);
+  const endD = new Date(ey, em - 1, ed);
+
+  if (rec === 'daily') {
+    for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      dates.push(`${y}-${m}-${day}`);
+    }
+  } else if (rec === 'weekly') {
+    for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 7)) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      dates.push(`${y}-${m}-${day}`);
+    }
+  } else if (rec === 'monthly') {
+    for (let y = sy, m = sm; y < ey || (y === ey && m <= em); m++) {
+      if (m > 12) { m = 1; y++; }
+      const lastDay = new Date(y, m, 0).getDate();
+      const day = Math.min(sd, lastDay);
+      const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      if (dateStr > end) break;
+      if (dateStr >= start) dates.push(dateStr);
+    }
+  }
+  return dates;
+}
+
+/** Check if staff has overlapping scheduled appointments for the block. Returns array of conflict info. */
+async function getBlockTimeAppointmentConflicts(AppointmentModel, staffId, startDate, endDate, startTime, endTime, recurringFrequency) {
+  if (!AppointmentModel || !staffId) return [];
+  const blockStartM = parseTimeToMinutes(startTime || '0:00');
+  const blockEndM = parseTimeToMinutes(endTime || '23:59');
+  if (blockEndM <= blockStartM) return [];
+
+  const dates = getBlockDates(startDate, endDate, recurringFrequency);
+  const conflicts = [];
+
+  for (const dateStr of dates) {
+    const apts = await AppointmentModel.find({
+      date: dateStr,
+      status: { $nin: ['cancelled'] },
+      $or: [
+        { staffId: staffId },
+        { 'staffAssignments.staffId': staffId }
+      ]
+    }).populate('clientId', 'name').populate('serviceId', 'name').lean();
+
+    for (const apt of apts) {
+      const aptStartM = parseTimeToMinutes(apt.time || '0:00');
+      const aptDuration = apt.duration ?? 60;
+      const aptEndM = aptStartM + aptDuration;
+      if (aptEndM <= blockStartM || aptStartM >= blockEndM) continue;
+      const clientName = (apt.clientId && apt.clientId.name) || 'Client';
+      const serviceName = (apt.serviceId && apt.serviceId.name) || 'Service';
+      conflicts.push({
+        date: dateStr,
+        time: apt.time,
+        duration: apt.duration,
+        clientName,
+        serviceName,
+        status: apt.status
+      });
+    }
+  }
+  return conflicts;
+}
+
 app.get('/api/block-time', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { BlockTime } = req.businessModels;
@@ -5882,12 +5966,32 @@ app.get('/api/block-time', authenticateToken, setupBusinessDatabase, requireMana
 
 app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
-    const { BlockTime } = req.businessModels;
+    const { BlockTime, Appointment } = req.businessModels;
     const { staffId, title, startDate, startTime, endTime, recurringFrequency, endDate, description } = req.body;
     if (!staffId || !title || !startDate || !startTime || !endTime) {
       return res.status(400).json({
         success: false,
         error: 'Staff, title, start date, start time, and end time are required'
+      });
+    }
+    const rec = ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none';
+    const blockEndDate = endDate && ['daily', 'weekly', 'monthly'].includes(rec) ? String(endDate) : null;
+    const conflicts = await getBlockTimeAppointmentConflicts(
+      Appointment,
+      staffId,
+      String(startDate),
+      blockEndDate || String(startDate),
+      String(startTime),
+      String(endTime),
+      rec
+    );
+    if (conflicts.length > 0) {
+      const msg = conflicts.map((c) => `${c.date} ${c.time} - ${c.clientName} (${c.serviceName})`).join('; ');
+      return res.status(400).json({
+        success: false,
+        error: 'Staff has appointment(s) scheduled for the time being blocked',
+        conflicts,
+        errorDetail: msg
       });
     }
     const doc = {
@@ -5896,8 +6000,8 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
       startDate: String(startDate),
       startTime: String(startTime),
       endTime: String(endTime),
-      recurringFrequency: ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none',
-      endDate: endDate && ['daily', 'weekly', 'monthly'].includes(recurringFrequency) ? String(endDate) : null,
+      recurringFrequency: rec,
+      endDate: blockEndDate,
       description: description ? String(description).slice(0, 200) : '',
       branchId: req.user.branchId
     };
@@ -5914,7 +6018,7 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
 
 app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
-    const { BlockTime } = req.businessModels;
+    const { BlockTime, Appointment } = req.businessModels;
     const existing = await BlockTime.findOne({ _id: req.params.id, branchId: req.user.branchId });
     if (!existing) {
       return res.status(404).json({ success: false, error: 'Block time not found' });
@@ -5931,6 +6035,29 @@ app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, require
       updateData.endDate = (rec === 'daily' || rec === 'weekly' || rec === 'monthly') ? String(endDate) : null;
     }
     if (description !== undefined) updateData.description = String(description).slice(0, 200) || '';
+    const finalStartDate = updateData.startDate ?? existing.startDate;
+    const finalStartTime = updateData.startTime ?? existing.startTime;
+    const finalEndTime = updateData.endTime ?? existing.endTime;
+    const finalRec = updateData.recurringFrequency ?? existing.recurringFrequency;
+    const finalEndDate = updateData.endDate !== undefined ? updateData.endDate : existing.endDate;
+    const conflicts = await getBlockTimeAppointmentConflicts(
+      Appointment,
+      existing.staffId,
+      finalStartDate,
+      finalEndDate || finalStartDate,
+      finalStartTime,
+      finalEndTime,
+      finalRec
+    );
+    if (conflicts.length > 0) {
+      const msg = conflicts.map((c) => `${c.date} ${c.time} - ${c.clientName} (${c.serviceName})`).join('; ');
+      return res.status(400).json({
+        success: false,
+        error: 'Staff has appointment(s) scheduled for the time being blocked',
+        conflicts,
+        errorDetail: msg
+      });
+    }
     const updated = await BlockTime.findByIdAndUpdate(req.params.id, { $set: updateData }, { new: true }).lean();
     const staff = await req.businessModels.Staff.findById(updated.staffId).select('name').lean();
     const data = { ...updated, staffId: { _id: updated.staffId, name: staff?.name || 'Staff' } };
