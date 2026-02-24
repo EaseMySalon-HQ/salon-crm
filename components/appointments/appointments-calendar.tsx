@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from "react"
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useMemo } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { addDays, format, startOfWeek, addWeeks, subWeeks } from "date-fns"
-import { ChevronLeft, ChevronRight, Pencil, Eye } from "lucide-react"
+import { addDays, format } from "date-fns"
+import { Pencil, Eye, ChevronDown, Square, List, Calendar } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,7 +12,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { AppointmentsAPI, SalesAPI } from "@/lib/api"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { AppointmentsAPI, SalesAPI, StaffDirectoryAPI } from "@/lib/api"
 
 interface Appointment {
   _id: string
@@ -91,19 +98,44 @@ function getPrimaryStaffName(apt: Appointment): string {
   return "Unassigned Staff"
 }
 
+function getPrimaryStaffId(apt: Appointment): string | null {
+  const a = apt as any
+  if (a.staffId?._id) return a.staffId._id
+  if (typeof a.staffId === "string") return a.staffId
+  if (a.staffAssignments?.length) {
+    const primary = a.staffAssignments.find((s: any) => s.role === "primary")
+    const first = a.staffAssignments[0]
+    const assignment = primary || first
+    return assignment?.staffId?._id ?? assignment?.staffId ?? null
+  }
+  return null
+}
+
+interface StaffMember {
+  _id: string
+  name: string
+  role?: string
+  allowAppointmentScheduling?: boolean
+}
+
 interface AppointmentsCalendarProps {
   onShowCancelled?: () => void
   initialAppointmentId?: string
   onOpenAppointmentForm?: (params?: { date?: string; time?: string; staffId?: string; appointmentId?: string }) => void
+  view?: "list" | "calendar"
+  onSwitchView?: (v: "list" | "calendar") => void
 }
 
 export const AppointmentsCalendar = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarProps
->(({ onShowCancelled, initialAppointmentId, onOpenAppointmentForm }, ref) => {
+>(({ onShowCancelled, initialAppointmentId, onOpenAppointmentForm, view = "list", onSwitchView }, ref) => {
   const router = useRouter()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [appointments, setAppointments] = useState<Appointment[]>([])
+  const [staffList, setStaffList] = useState<StaffMember[]>([])
+  const [staffFilter, setStaffFilter] = useState<string | null>(null)
+  const [showColorLegend, setShowColorLegend] = useState(false)
   const [loading, setLoading] = useState(true)
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null)
   const [showDetails, setShowDetails] = useState(false)
@@ -133,7 +165,6 @@ export const AppointmentsCalendar = forwardRef<
     return `${year}-${month}-${date}`
   })
   const [linkedSale, setLinkedSale] = useState<any | null>(null)
-  const startDate = startOfWeek(currentDate, { weekStartsOn: 1 })
 
   useEffect(() => {
     if (!selectedAppointment?._id) {
@@ -174,32 +205,20 @@ export const AppointmentsCalendar = forwardRef<
     showUpcomingModal: () => setShowUpcomingModal(true),
   }))
 
-  const weekDays = Array.from({ length: 7 }).map((_, i) => addDays(startDate, i))
+  const staffWithScheduling = useMemo(
+    () => staffList.filter((s) => s.allowAppointmentScheduling !== false),
+    [staffList]
+  )
 
-  const goToPreviousWeek = () => setCurrentDate(subWeeks(currentDate, 1))
-  const goToNextWeek = () => setCurrentDate(addWeeks(currentDate, 1))
-  const goToToday = () => setCurrentDate(new Date())
-  
-  // Handle date selection
-  const handleDateClick = (day: Date) => {
-    // Use local date to avoid timezone issues
-    const year = day.getFullYear()
-    const month = String(day.getMonth() + 1).padStart(2, '0')
-    const date = String(day.getDate()).padStart(2, '0')
-    const dateString = `${year}-${month}-${date}`
-    console.log('Selected date:', dateString, 'Day:', day.getDate())
-    setSelectedDate(dateString)
-  }
-  
-  // Check if a date is selected
-  const isSelectedDate = (day: Date) => {
-    // Use local date to avoid timezone issues
-    const year = day.getFullYear()
-    const month = String(day.getMonth() + 1).padStart(2, '0')
-    const date = String(day.getDate()).padStart(2, '0')
-    const dayString = `${year}-${month}-${date}`
-    return dayString === selectedDate
-  }
+  const dayChips = useMemo(() => {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const arr: Date[] = []
+    for (let i = -1; i <= 3; i++) {
+      arr.push(addDays(today, i))
+    }
+    return arr
+  }, [])
 
   // Fetch appointments from API
   const fetchAppointments = async () => {
@@ -226,6 +245,15 @@ export const AppointmentsCalendar = forwardRef<
   useEffect(() => {
     fetchAppointments()
   }, [currentDate])
+
+  // Fetch staff list for filter
+  useEffect(() => {
+    let cancelled = false
+    StaffDirectoryAPI.getAll().then((res) => {
+      if (!cancelled && res?.data?.length) setStaffList(res.data)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   // Refresh when appointment is created/updated from drawer
   const fetchRef = useRef(fetchAppointments)
@@ -330,20 +358,22 @@ export const AppointmentsCalendar = forwardRef<
     })
   }
 
+  const matchesStaffFilter = (apt: Appointment) => {
+    if (!staffFilter) return true
+    return getPrimaryStaffId(apt) === staffFilter
+  }
+
   const getSelectedDateAppointments = () => {
     return appointments
       .filter(apt => {
-        // Convert appointment date to YYYY-MM-DD format for comparison
         const aptDate = new Date(apt.date)
         const year = aptDate.getFullYear()
         const month = String(aptDate.getMonth() + 1).padStart(2, '0')
         const date = String(aptDate.getDate()).padStart(2, '0')
         const aptDateString = `${year}-${month}-${date}`
-        
-        return aptDateString === selectedDate && apt.status !== 'cancelled'
+        return aptDateString === selectedDate && apt.status !== 'cancelled' && matchesStaffFilter(apt)
       })
       .sort((a, b) => {
-        // Sort by time for selected date appointments
         const timeA = a.time || '00:00'
         const timeB = b.time || '00:00'
         return timeA.localeCompare(timeB)
@@ -378,31 +408,31 @@ export const AppointmentsCalendar = forwardRef<
   // First column: only scheduled (no arrived, service_started, completed, cancelled)
   const getSelectedDateAppointmentsForColumns = () => {
     return appointments
-      .filter(apt => isAppointmentOnSelectedDate(apt) && apt.status === 'scheduled')
+      .filter(apt => isAppointmentOnSelectedDate(apt) && apt.status === 'scheduled' && matchesStaffFilter(apt))
       .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
   }
 
   const getArrivedAppointments = () => {
     return appointments
-      .filter(apt => isAppointmentOnSelectedDate(apt) && (apt.status === 'arrived' || apt.status === 'confirmed'))
+      .filter(apt => isAppointmentOnSelectedDate(apt) && (apt.status === 'arrived' || apt.status === 'confirmed') && matchesStaffFilter(apt))
       .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
   }
 
   const getServiceStartedAppointments = () => {
     return appointments
-      .filter(apt => isAppointmentOnSelectedDate(apt) && apt.status === 'service_started')
+      .filter(apt => isAppointmentOnSelectedDate(apt) && apt.status === 'service_started' && matchesStaffFilter(apt))
       .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
   }
 
   const getCompletedAppointments = () => {
     return appointments
-      .filter(apt => isAppointmentOnSelectedDate(apt) && apt.status === 'completed')
+      .filter(apt => isAppointmentOnSelectedDate(apt) && apt.status === 'completed' && matchesStaffFilter(apt))
       .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
   }
 
   const getCancelledAppointmentsForDate = () => {
     return appointments
-      .filter(apt => isAppointmentOnSelectedDate(apt) && apt.status === 'cancelled')
+      .filter(apt => isAppointmentOnSelectedDate(apt) && apt.status === 'cancelled' && matchesStaffFilter(apt))
       .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
   }
 
@@ -413,7 +443,7 @@ export const AppointmentsCalendar = forwardRef<
       .filter(apt => {
         const aptDate = new Date(apt.date)
         aptDate.setHours(0, 0, 0, 0)
-        return aptDate >= today && apt.status !== 'cancelled'
+        return aptDate >= today && apt.status !== 'cancelled' && matchesStaffFilter(apt)
       })
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
   }
@@ -425,11 +455,6 @@ export const AppointmentsCalendar = forwardRef<
   }
 
   const selectedDateLabel = selectedDate ? format(new Date(selectedDate + 'T12:00:00'), 'EEE, MMM d, yyyy') : ''
-
-  const isToday = (day: Date) => {
-    const today = new Date()
-    return day.toDateString() === today.toDateString()
-  }
 
   const handleCancelClick = (appointmentId: string) => {
     setAppointmentToCancel(appointmentId)
@@ -630,74 +655,147 @@ export const AppointmentsCalendar = forwardRef<
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      {/* Filter bar - same as Calendar View (Staff, Date, Day chips, Color Code) - no Compact/Comfortable or Show Walk-in */}
+      <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={goToPreviousWeek} className="rounded-xl border-slate-200 hover:border-indigo-500 hover:bg-indigo-50">
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="sm" onClick={goToToday} className="rounded-xl border-slate-200 hover:border-indigo-500 hover:bg-indigo-50 font-medium">
-            Today
-          </Button>
-          <Button variant="outline" size="sm" onClick={goToNextWeek} className="rounded-xl border-slate-200 hover:border-indigo-500 hover:bg-indigo-50">
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+          <Select
+            value={staffFilter ?? "all"}
+            onValueChange={(v) => setStaffFilter(v === "all" ? null : v)}
+          >
+            <SelectTrigger className="w-[160px] rounded-xl border-slate-200 bg-white/80 h-9">
+              <SelectValue placeholder="All Staff" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Staff</SelectItem>
+              {staffWithScheduling.map((s) => (
+                <SelectItem key={s._id} value={s._id}>
+                  {s.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/80 px-3 py-2 h-9">
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => {
+                const v = e.target.value
+                setSelectedDate(v)
+                if (v) setCurrentDate(new Date(v + "T12:00:00"))
+              }}
+              className="text-sm font-medium text-slate-700 bg-transparent border-0 focus:outline-none focus:ring-0 min-w-[120px]"
+            />
+          </div>
+          <div className="flex items-center gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
+            {dayChips.map((day) => {
+              const dStr = format(day, "yyyy-MM-dd")
+              const isToday = dStr === format(new Date(), "yyyy-MM-dd")
+              const isSelected = dStr === selectedDate
+              return (
+                <button
+                  key={dStr}
+                  type="button"
+                  onClick={() => {
+                    setSelectedDate(dStr)
+                    setCurrentDate(day)
+                  }}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
+                    isSelected
+                      ? "bg-violet-600 text-white shadow-sm"
+                      : isToday
+                      ? "bg-violet-50 text-violet-700 font-semibold"
+                      : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {format(day, "d")} {isToday ? "Today" : format(day, "EEE")}
+                </button>
+              )
+            })}
+          </div>
         </div>
-        <div className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-          {format(startDate, "MMMM yyyy")}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-7 gap-6">
-        {weekDays.map((day) => {
-          const isSelected = isSelectedDate(day)
-          const isTodayDate = isToday(day)
-          
-          return (
-            <Card 
-              key={day.toISOString()} 
-              className={`min-h-[120px] bg-gradient-to-br from-white to-slate-50/50 border-slate-200 shadow-lg hover:shadow-xl transition-all duration-300 rounded-2xl cursor-pointer hover:border-indigo-300 ${
-                isSelected ? 'ring-2 ring-emerald-500 border-emerald-300 shadow-emerald-200' : 
-                isTodayDate ? 'ring-2 ring-indigo-500 border-indigo-300 shadow-indigo-200' : ''
+        <div className="flex-1" />
+        {/* List/Calendar toggle - just before Color Code */}
+        {onSwitchView && (
+          <div className="flex gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
+            <button
+              type="button"
+              onClick={() => onSwitchView("list")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
+                view === "list"
+                  ? "bg-violet-600 text-white shadow-sm"
+                  : "text-slate-600 hover:bg-slate-50"
               }`}
-              onClick={() => handleDateClick(day)}
             >
-              <CardHeader className={`p-6 rounded-t-2xl transition-all duration-200 ${
-                isSelected 
-                  ? 'bg-gradient-to-r from-emerald-100 to-teal-100 hover:from-emerald-200 hover:to-teal-200' 
-                  : isTodayDate 
-                  ? 'bg-gradient-to-r from-indigo-100 to-purple-100 hover:from-indigo-200 hover:to-purple-200' 
-                  : 'bg-gradient-to-r from-slate-50 to-blue-50 hover:from-indigo-50 hover:to-purple-50'
-              }`}>
-                <CardTitle className="text-sm">
-                  <div className="text-center">
-                    <div className={`font-semibold uppercase tracking-wide ${
-                      isSelected ? 'text-emerald-700' : 
-                      isTodayDate ? 'text-indigo-700' : 'text-slate-600'
-                    }`}>{format(day, "EEE")}</div>
-                    <div className={`text-4xl font-bold mt-2 ${
-                      isSelected ? 'text-emerald-800' : 
-                      isTodayDate ? 'text-indigo-800' : 'text-slate-800'
-                    }`}>{format(day, "d")}</div>
-                    {isSelected && (
-                      <div className="mt-2">
-                        <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs">
-                          Selected
-                        </Badge>
-                      </div>
-                    )}
-                    {isTodayDate && !isSelected && (
-                      <div className="mt-2">
-                        <Badge className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs">
-                          Today
-                        </Badge>
-                      </div>
-                    )}
+              <List className="h-3.5 w-3.5 shrink-0" />
+              List
+            </button>
+            <button
+              type="button"
+              onClick={() => onSwitchView("calendar")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
+                view === "calendar"
+                  ? "bg-violet-600 text-white shadow-sm"
+                  : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <Calendar className="h-3.5 w-3.5 shrink-0" />
+              Calendar
+            </button>
+          </div>
+        )}
+        {/* Color Code - right side */}
+        <div className="relative">
+          <Button
+            variant="outline"
+            size="sm"
+            className="rounded-xl border-slate-200 gap-1.5"
+            onClick={() => setShowColorLegend((v) => !v)}
+          >
+            <Square className="h-3.5 w-3.5 rounded bg-red-500" />
+            Color Code
+            <ChevronDown className="h-4 w-4" />
+          </Button>
+          {showColorLegend && (
+            <>
+              <div
+                className="fixed inset-0 z-[100]"
+                aria-hidden
+                onClick={() => setShowColorLegend(false)}
+              />
+              <div className="absolute right-0 top-full mt-1 z-[101] rounded-xl border border-slate-200 bg-white p-3 shadow-lg min-w-[180px]">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                  Status
+                </div>
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded bg-amber-500" />
+                    Scheduled
                   </div>
-                </CardTitle>
-              </CardHeader>
-            </Card>
-          )
-        })}
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded bg-blue-500" />
+                    Arrived
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded bg-purple-500" />
+                    Service Started
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded bg-emerald-500" />
+                    Completed
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded bg-red-500" />
+                    Cancelled
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded bg-red-500" />
+                    Blocked time
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Appointments for selected date - 5 columns by status */}

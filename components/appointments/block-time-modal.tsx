@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { BlockTimeAPI } from "@/lib/api"
+import { useToast } from "@/hooks/use-toast"
 
 type ReasonChip = "Lunch" | "Break" | "Personal" | "Meeting" | "Custom"
 const REASON_CHIPS: { value: ReasonChip; icon: LucideIcon }[] = [
@@ -82,6 +83,7 @@ export function BlockTimeModal({
   staffOptions,
   onSuccess,
 }: BlockTimeModalProps) {
+  const { toast } = useToast()
   const [staffId, setStaffId] = useState<string>(initialStaffId ?? "")
   const [date, setDate] = useState(initialDate)
   const [startTime, setStartTime] = useState(initialTime)
@@ -146,11 +148,20 @@ export function BlockTimeModal({
         onOpenChange(false)
         onSuccess?.()
       } else {
-        alert("Failed to block time. Please try again.")
+        toast({
+          title: "Cannot Block Time",
+          description: res?.error || res?.errorDetail || "Failed to block time. Please try again.",
+          variant: "destructive",
+        })
       }
-    } catch (e) {
-      console.error(e)
-      alert("Failed to block time. Please try again.")
+    } catch (e: any) {
+      const data = e?.response?.data || e?.responseData
+      const errMsg = data?.error || data?.errorDetail || data?.message || e?.message || "Failed to block time. Please try again."
+      toast({
+        title: "Cannot Block Time",
+        description: typeof errMsg === "string" ? errMsg : "Failed to block time. Please try again.",
+        variant: "destructive",
+      })
     } finally {
       setCreating(false)
     }
