@@ -811,8 +811,8 @@ export class SalesAPI {
     return response.data
   }
 
-  static async delete(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.delete(`/sales/${id}`)
+  static async delete(id: string, reason?: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.delete(`/sales/${id}`, reason ? { data: { reason } } : undefined)
     return response.data
   }
 
@@ -1014,6 +1014,45 @@ export class ReportsAPI {
 
   static async exportSummary(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/reports/export/summary', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async getAppointmentList(params?: { dateFrom?: string; dateTo?: string; dateFilterType?: string; status?: string; showWalkIn?: boolean }): Promise<ApiResponse<any> & { data: any[]; summary: { count: number; totalValue: number } }> {
+    const response = await apiClient.get('/reports/appointment-list', { params });
+    return response.data;
+  }
+
+  static async exportAppointmentList(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/appointment-list', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async getUnpaidPartPaid(params?: { dateFrom?: string; dateTo?: string; status?: string }): Promise<ApiResponse<any> & { data: any[]; summary: { count: number; totalOutstanding: number } }> {
+    const response = await apiClient.get('/reports/unpaid-part-paid', { params });
+    return response.data;
+  }
+
+  static async exportUnpaidPartPaid(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/unpaid-part-paid', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async getDeletedInvoices(params?: { date?: string; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any> & { data: any[]; summary: { count: number; totalValue: number } }> {
+    const response = await apiClient.get('/reports/deleted-invoices', { params });
+    return response.data;
+  }
+
+  static async exportDeletedInvoices(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/deleted-invoices', {
       format,
       filters
     });

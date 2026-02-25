@@ -10469,6 +10469,7 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
     console.log(`✅ Sale found: ${sale.billNo}, items count: ${sale.items?.length || 0}`);
 
     // Archive bill before deletion
+    const deleteReason = (req.body?.reason || '').trim() || 'Bill deleted';
     try {
       if (BillArchive) {
         await BillArchive.create(
@@ -10480,7 +10481,7 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
               archivedAt: new Date(),
               archivedBy: req.user?._id || req.user?.id || null,
               archivedByName: req.user?.name || req.user?.firstName || '',
-              reason: 'Bill deleted',
+              reason: deleteReason,
             },
           ],
           session ? { session } : {},
@@ -11394,6 +11395,322 @@ app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDat
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export service list report'
+    });
+  }
+});
+
+// Get appointment list for report (with filters)
+app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Appointment, Client, Sale } = req.businessModels;
+    const { dateFrom, dateTo, dateFilterType = 'appointment_date', status, showWalkIn } = req.query;
+
+    const query = {};
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom);
+      const toStr = String(dateTo);
+      if (dateFilterType === 'created_date') {
+        query.createdAt = {
+          $gte: new Date(fromStr + 'T00:00:00.000Z'),
+          $lte: new Date(toStr + 'T23:59:59.999Z')
+        };
+      } else {
+        query.date = { $gte: fromStr, $lte: toStr };
+      }
+    }
+    if (status && status !== 'all') {
+      if (status === 'new') {
+        query.status = { $in: ['scheduled', 'confirmed'] };
+      } else {
+        const statusMap = { arrived: 'arrived', started: 'service_started', completed: 'completed', cancelled: 'cancelled' };
+        const dbStatus = statusMap[status] || status;
+        query.status = dbStatus;
+      }
+    }
+    if (showWalkIn === 'false' || showWalkIn === false) {
+      query.$nor = [{ leadSource: new RegExp('^walk-in$', 'i') }];
+    }
+
+    const rawAppointments = await Appointment.find(query).sort({ date: -1, time: -1 }).limit(5000).lean();
+    const clientIds = [...new Set(rawAppointments.map((a) => a.clientId).filter(Boolean))];
+    const clients = clientIds.length ? await Client.find({ _id: { $in: clientIds } }).select('name').lean() : [];
+    const clientMap = new Map(clients.map((c) => [c._id.toString(), c.name || '—']));
+
+    const appointmentIds = rawAppointments.map((a) => a._id);
+    const sales = appointmentIds.length ? await Sale.find({ appointmentId: { $in: appointmentIds } }).lean() : [];
+    const saleByAppointmentId = new Map(sales.map((s) => [s.appointmentId?.toString(), s]));
+
+    const rows = rawAppointments.map((apt) => {
+      const sale = saleByAppointmentId.get(apt._id.toString());
+      const totalAmount = sale?.paymentStatus?.totalAmount ?? sale?.grossTotal ?? 0;
+      const paidAmount = sale?.paymentStatus?.paidAmount ?? 0;
+      const paymentStatus = totalAmount <= 0 ? '—' : paidAmount >= totalAmount ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
+      const statusLabel = { scheduled: 'New', confirmed: 'New', arrived: 'Arrived', service_started: 'Started', completed: 'Completed', cancelled: 'Cancelled' }[apt.status] || apt.status;
+      return {
+        id: apt._id,
+        customerName: clientMap.get(apt.clientId?.toString()) || '—',
+        createdAt: apt.createdAt,
+        startDate: apt.date,
+        startTime: apt.time,
+        price: apt.price ?? 0,
+        status: statusLabel,
+        paymentStatus,
+        isWalkIn: false
+      };
+    });
+
+    // When showWalkIn is true, add standalone sales (no appointmentId) as walk-in rows
+    if (showWalkIn !== 'false' && showWalkIn !== false) {
+      const saleQuery = {
+        $or: [{ appointmentId: null }, { appointmentId: { $exists: false } }],
+        'items.type': 'service'
+      };
+      if (dateFrom && dateTo) {
+        const fromStr = String(dateFrom).split('T')[0];
+        const toStr = String(dateTo).split('T')[0];
+        if (dateFilterType === 'created_date') {
+          saleQuery.createdAt = {
+            $gte: new Date(fromStr + 'T00:00:00.000Z'),
+            $lte: new Date(toStr + 'T23:59:59.999Z')
+          };
+        } else {
+          saleQuery.date = { $gte: new Date(fromStr + 'T00:00:00.000Z'), $lte: new Date(toStr + 'T23:59:59.999Z') };
+        }
+      }
+      if (status && status !== 'all') {
+        if (status === 'cancelled') {
+          saleQuery.status = new RegExp('^cancelled$', 'i');
+        } else if (status === 'completed') {
+          saleQuery.status = new RegExp('^completed$', 'i');
+        }
+        // new, arrived, started don't apply to sales - walk-ins are typically completed
+      }
+      const walkInSales = await Sale.find(saleQuery).sort({ date: -1, time: -1 }).limit(5000).lean();
+      walkInSales.forEach((sale) => {
+        const saleDate = sale.date ? new Date(sale.date) : null;
+        const dateStr = saleDate ? saleDate.toISOString().slice(0, 10) : '';
+        const totalAmount = sale.paymentStatus?.totalAmount ?? sale.grossTotal ?? 0;
+        const paidAmount = sale.paymentStatus?.paidAmount ?? 0;
+        const paymentStatus = totalAmount <= 0 ? '—' : paidAmount >= totalAmount ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
+        const statusStr = String(sale.status || '').toLowerCase();
+        const statusLabel = statusStr === 'cancelled' ? 'Cancelled' : statusStr === 'completed' ? 'Completed' : 'Completed';
+        rows.push({
+          id: 'sale-' + sale._id,
+          customerName: sale.customerName || '—',
+          createdAt: sale.createdAt,
+          startDate: dateStr,
+          startTime: sale.time || '',
+          price: sale.grossTotal ?? 0,
+          status: statusLabel,
+          paymentStatus,
+          isWalkIn: true,
+          billNo: sale.billNo
+        });
+      });
+      rows.sort((a, b) => {
+        const dA = a.startDate + (a.startTime || '');
+        const dB = b.startDate + (b.startTime || '');
+        return dB.localeCompare(dA);
+      });
+    }
+
+    const totalValue = rows.reduce((sum, r) => sum + (r.price || 0), 0);
+    res.json({
+      success: true,
+      data: rows,
+      summary: { count: rows.length, totalValue }
+    });
+  } catch (error) {
+    console.error('Error fetching appointment list:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch appointment list'
+    });
+  }
+});
+
+// Get unpaid/part-paid bills for report
+app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Sale } = req.businessModels;
+    const { dateFrom, dateTo, status } = req.query;
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const query = {
+      status: { $nin: ['cancelled', 'Cancelled'] },
+      $expr: { $lt: [{ $ifNull: ['$paymentStatus.paidAmount', 0] }, { $ifNull: ['$paymentStatus.totalAmount', 999999999] }] }
+    };
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom).split('T')[0];
+      const toStr = String(dateTo).split('T')[0];
+      query.date = {
+        $gte: new Date(fromStr + 'T00:00:00.000Z'),
+        $lte: new Date(toStr + 'T23:59:59.999Z')
+      };
+    }
+    if (status && status !== 'all') {
+      if (status === 'unpaid') {
+        query['paymentStatus.paidAmount'] = 0;
+      } else if (status === 'part_paid') {
+        query['paymentStatus.paidAmount'] = { $gt: 0 };
+      } else if (status === 'overdue') {
+        query['$and'] = [
+          { 'paymentStatus.dueDate': { $lt: thirtyDaysAgo } },
+          { $or: [
+            { 'paymentStatus.remainingAmount': { $gt: 0 } },
+            { $expr: { $lt: ['$paymentStatus.paidAmount', '$paymentStatus.totalAmount'] } }
+          ]}
+        ];
+      }
+    }
+    const sales = await Sale.find(query).sort({ date: -1 }).limit(5000).lean();
+    const rows = sales.map((s) => {
+      const totalAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? 0;
+      const paidAmount = s.paymentStatus?.paidAmount ?? 0;
+      const remainingAmount = s.paymentStatus?.remainingAmount ?? Math.max(0, totalAmount - paidAmount);
+      const dueDate = s.paymentStatus?.dueDate ? new Date(s.paymentStatus.dueDate) : null;
+      const isOverdue = dueDate && dueDate < thirtyDaysAgo && remainingAmount > 0;
+      let statusLabel = 'Unpaid';
+      if (paidAmount >= totalAmount) statusLabel = 'Full Paid';
+      else if (paidAmount > 0) statusLabel = 'Part Paid';
+      else if (isOverdue) statusLabel = 'Overdue';
+      else statusLabel = 'Unpaid';
+      if (!isOverdue && paidAmount < totalAmount && dueDate && dueDate < thirtyDaysAgo) statusLabel = 'Overdue';
+      return {
+        id: s._id,
+        billNo: s.billNo,
+        customerName: s.customerName || '—',
+        customerPhone: s.customerPhone || '',
+        date: s.date,
+        invoiceAmount: totalAmount,
+        outstandingAmount: remainingAmount,
+        status: statusLabel
+      };
+    });
+    const totalOutstanding = rows.reduce((sum, r) => sum + (r.outstandingAmount || 0), 0);
+    res.json({
+      success: true,
+      data: rows,
+      summary: { count: rows.length, totalOutstanding }
+    });
+  } catch (error) {
+    console.error('Error fetching unpaid/part-paid:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch unpaid/part-paid bills'
+    });
+  }
+});
+
+// Get deleted invoices (archived bills) for report
+app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { BillArchive } = req.businessModels;
+    const { date, dateFrom, dateTo } = req.query;
+    const query = {};
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom).split('T')[0];
+      const toStr = String(dateTo).split('T')[0];
+      query.archivedAt = {
+        $gte: new Date(fromStr + 'T00:00:00.000Z'),
+        $lte: new Date(toStr + 'T23:59:59.999Z')
+      };
+    } else if (date) {
+      const dateStr = String(date).split('T')[0];
+      query.archivedAt = {
+        $gte: new Date(dateStr + 'T00:00:00.000Z'),
+        $lte: new Date(dateStr + 'T23:59:59.999Z')
+      };
+    }
+    const archives = await BillArchive.find(query).sort({ archivedAt: -1 }).limit(5000).lean();
+    const rows = archives.map((a) => ({
+      id: a._id,
+      customerName: a.originalBill?.customerName || '—',
+      date: a.archivedAt,
+      reason: a.reason || '—',
+      cancelledBy: a.archivedByName || '—',
+      grossTotal: a.originalBill?.grossTotal ?? 0
+    }));
+    const totalValue = rows.reduce((sum, r) => sum + (r.grossTotal || 0), 0);
+    res.json({
+      success: true,
+      data: rows,
+      summary: { count: rows.length, totalValue }
+    });
+  } catch (error) {
+    console.error('Error fetching deleted invoices:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch deleted invoices'
+    });
+  }
+});
+
+// Export unpaid/part-paid report (emailed to admin only)
+app.post('/api/reports/export/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportUnpaidPartPaidReport } = require('./utils/report-exporter');
+    const result = await exportUnpaidPartPaidReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Unpaid/Part-Paid report has been sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting unpaid/part-paid report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export unpaid/part-paid report'
+    });
+  }
+});
+
+// Export deleted invoices report (emailed to admin only)
+app.post('/api/reports/export/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportDeletedInvoicesReport } = require('./utils/report-exporter');
+    const result = await exportDeletedInvoicesReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Deleted invoice report has been sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting deleted invoice report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export deleted invoice report'
+    });
+  }
+});
+
+// Export appointment list report (emailed to admin only)
+app.post('/api/reports/export/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportAppointmentListReport } = require('./utils/report-exporter');
+    const result = await exportAppointmentListReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Appointment list report has been sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting appointment list report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export appointment list report'
     });
   }
 });

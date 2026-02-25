@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight } from "lucide-react"
+import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -15,6 +15,7 @@ import { Calendar } from "@/components/ui/calendar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Switch } from "@/components/ui/switch"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
 import { useToast } from "@/hooks/use-toast"
@@ -64,6 +65,7 @@ export function SalesReport() {
   const [isBillDialogOpen, setIsBillDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [deleteSaleReason, setDeleteSaleReason] = useState("")
   const [selectedSale, setSelectedSale] = useState<SalesRecord | null>(null)
 
   // Service List filters (when report type is service-list; shown in same bar)
@@ -75,6 +77,31 @@ export function SalesReport() {
   const [serviceListModeFilter, setServiceListModeFilter] = useState<string>("all")
   const [serviceListServices, setServiceListServices] = useState<{ _id: string; name: string; duration?: number }[]>([])
   const [serviceListStaff, setServiceListStaff] = useState<{ _id: string; name: string }[]>([])
+
+  // Appointment List filters
+  const [appointmentListDateFilterType, setAppointmentListDateFilterType] = useState<"appointment_date" | "created_date">("appointment_date")
+  const [appointmentListDatePeriod, setAppointmentListDatePeriod] = useState<DatePeriod>("today")
+  const [appointmentListDateRange, setAppointmentListDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [appointmentListStatusFilter, setAppointmentListStatusFilter] = useState<string>("all")
+  const [appointmentListShowWalkIn, setAppointmentListShowWalkIn] = useState(true)
+  const [appointmentListData, setAppointmentListData] = useState<any[]>([])
+  const [appointmentListSummary, setAppointmentListSummary] = useState<{ count: number; totalValue: number }>({ count: 0, totalValue: 0 })
+  const [appointmentListLoading, setAppointmentListLoading] = useState(false)
+
+  // Deleted Invoice filters
+  const [deletedInvoiceDatePeriod, setDeletedInvoiceDatePeriod] = useState<DatePeriod>("today")
+  const [deletedInvoiceDateRange, setDeletedInvoiceDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [deletedInvoiceData, setDeletedInvoiceData] = useState<any[]>([])
+  const [deletedInvoiceSummary, setDeletedInvoiceSummary] = useState<{ count: number; totalValue: number }>({ count: 0, totalValue: 0 })
+  const [deletedInvoiceLoading, setDeletedInvoiceLoading] = useState(false)
+
+  // Unpaid/Part-Paid filters
+  const [unpaidPartPaidDatePeriod, setUnpaidPartPaidDatePeriod] = useState<DatePeriod>("today")
+  const [unpaidPartPaidDateRange, setUnpaidPartPaidDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [unpaidPartPaidStatusFilter, setUnpaidPartPaidStatusFilter] = useState<string>("all")
+  const [unpaidPartPaidData, setUnpaidPartPaidData] = useState<any[]>([])
+  const [unpaidPartPaidSummary, setUnpaidPartPaidSummary] = useState<{ count: number; totalOutstanding: number }>({ count: 0, totalOutstanding: 0 })
+  const [unpaidPartPaidLoading, setUnpaidPartPaidLoading] = useState(false)
 
   // Staff Tip report: payouts (for Mark as Paid)
   const [tipPayouts, setTipPayouts] = useState<{ staffId: string; staffName: string; amount: number; paidAt: string }[]>([])
@@ -288,6 +315,42 @@ export function SalesReport() {
     }
   }
 
+  const handleAppointmentListDatePeriodChange = (period: DatePeriod) => {
+    setAppointmentListDatePeriod(period)
+    if (period === "custom") {
+      const range = getDateRangeFromPeriod("last7days")
+      setAppointmentListDateRange(range)
+    } else if (period !== "all") {
+      setAppointmentListDateRange(getDateRangeFromPeriod(period))
+    } else {
+      setAppointmentListDateRange({})
+    }
+  }
+
+  const handleDeletedInvoiceDatePeriodChange = (period: DatePeriod) => {
+    setDeletedInvoiceDatePeriod(period)
+    if (period === "custom") {
+      const range = getDateRangeFromPeriod("last7days")
+      setDeletedInvoiceDateRange(range)
+    } else if (period !== "all") {
+      setDeletedInvoiceDateRange(getDateRangeFromPeriod(period))
+    } else {
+      setDeletedInvoiceDateRange({})
+    }
+  }
+
+  const handleUnpaidPartPaidDatePeriodChange = (period: DatePeriod) => {
+    setUnpaidPartPaidDatePeriod(period)
+    if (period === "custom") {
+      const range = getDateRangeFromPeriod("last7days")
+      setUnpaidPartPaidDateRange(range)
+    } else if (period !== "all") {
+      setUnpaidPartPaidDateRange(getDateRangeFromPeriod(period))
+    } else {
+      setUnpaidPartPaidDateRange({})
+    }
+  }
+
   useEffect(() => {
     if (reportType !== "service-list") return
     let cancelled = false
@@ -339,6 +402,130 @@ export function SalesReport() {
       })
     return () => { cancelled = true }
   }, [reportType, datePeriod, dateRange.from, dateRange.to])
+
+  // Fetch appointment list when Appointment List report is selected
+  useEffect(() => {
+    if (reportType !== "appointment-list") return
+    const range = appointmentListDatePeriod === "custom"
+      ? (appointmentListDateRange.from && appointmentListDateRange.to ? appointmentListDateRange : getDateRangeFromPeriod("last7days"))
+      : appointmentListDatePeriod === "all"
+        ? { from: undefined, to: undefined }
+        : getDateRangeFromPeriod(appointmentListDatePeriod)
+    const params: Record<string, string | boolean> = {
+      dateFilterType: appointmentListDateFilterType,
+      status: appointmentListStatusFilter,
+      showWalkIn: appointmentListShowWalkIn
+    }
+    if (range.from && range.to) {
+      const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
+      if (dateFrom && dateTo) {
+        params.dateFrom = dateFrom
+        params.dateTo = dateTo
+      }
+    }
+    let cancelled = false
+    setAppointmentListLoading(true)
+    ReportsAPI.getAppointmentList(params)
+      .then((res: { success?: boolean; data?: any[]; summary?: { count: number; totalValue: number } }) => {
+        if (!cancelled && res?.success) {
+          setAppointmentListData(Array.isArray(res.data) ? res.data : [])
+          setAppointmentListSummary(res.summary || { count: 0, totalValue: 0 })
+        } else if (!cancelled) {
+          setAppointmentListData([])
+          setAppointmentListSummary({ count: 0, totalValue: 0 })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAppointmentListData([])
+          setAppointmentListSummary({ count: 0, totalValue: 0 })
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setAppointmentListLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [reportType, appointmentListDatePeriod, appointmentListDateRange.from, appointmentListDateRange.to, appointmentListDateFilterType, appointmentListStatusFilter, appointmentListShowWalkIn])
+
+  // Fetch deleted invoices when Deleted Invoice report is selected
+  useEffect(() => {
+    if (reportType !== "deleted-invoice") return
+    const range = deletedInvoiceDatePeriod === "custom"
+      ? (deletedInvoiceDateRange.from && deletedInvoiceDateRange.to ? deletedInvoiceDateRange : getDateRangeFromPeriod("last7days"))
+      : deletedInvoiceDatePeriod === "all"
+        ? { from: undefined, to: undefined }
+        : getDateRangeFromPeriod(deletedInvoiceDatePeriod)
+    const params: Record<string, string> = {}
+    if (range.from && range.to) {
+      const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
+      if (dateFrom && dateTo) {
+        params.dateFrom = dateFrom
+        params.dateTo = dateTo
+      }
+    }
+    let cancelled = false
+    setDeletedInvoiceLoading(true)
+    ReportsAPI.getDeletedInvoices(params)
+      .then((res: { success?: boolean; data?: any[]; summary?: { count: number; totalValue: number } }) => {
+        if (!cancelled && res?.success) {
+          setDeletedInvoiceData(Array.isArray(res.data) ? res.data : [])
+          setDeletedInvoiceSummary(res.summary || { count: 0, totalValue: 0 })
+        } else if (!cancelled) {
+          setDeletedInvoiceData([])
+          setDeletedInvoiceSummary({ count: 0, totalValue: 0 })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDeletedInvoiceData([])
+          setDeletedInvoiceSummary({ count: 0, totalValue: 0 })
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDeletedInvoiceLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [reportType, deletedInvoiceDatePeriod, deletedInvoiceDateRange.from, deletedInvoiceDateRange.to])
+
+  // Fetch unpaid/part-paid when Unpaid/Part-Paid report is selected
+  useEffect(() => {
+    if (reportType !== "unpaid-part-paid") return
+    const range = unpaidPartPaidDatePeriod === "custom"
+      ? (unpaidPartPaidDateRange.from && unpaidPartPaidDateRange.to ? unpaidPartPaidDateRange : getDateRangeFromPeriod("last7days"))
+      : unpaidPartPaidDatePeriod === "all"
+        ? { from: undefined, to: undefined }
+        : getDateRangeFromPeriod(unpaidPartPaidDatePeriod)
+    const params: Record<string, string> = { status: unpaidPartPaidStatusFilter }
+    if (range.from && range.to) {
+      const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
+      if (dateFrom && dateTo) {
+        params.dateFrom = dateFrom
+        params.dateTo = dateTo
+      }
+    }
+    let cancelled = false
+    setUnpaidPartPaidLoading(true)
+    ReportsAPI.getUnpaidPartPaid(params)
+      .then((res: { success?: boolean; data?: any[]; summary?: { count: number; totalOutstanding: number } }) => {
+        if (!cancelled && res?.success) {
+          setUnpaidPartPaidData(Array.isArray(res.data) ? res.data : [])
+          setUnpaidPartPaidSummary(res.summary || { count: 0, totalOutstanding: 0 })
+        } else if (!cancelled) {
+          setUnpaidPartPaidData([])
+          setUnpaidPartPaidSummary({ count: 0, totalOutstanding: 0 })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUnpaidPartPaidData([])
+          setUnpaidPartPaidSummary({ count: 0, totalOutstanding: 0 })
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setUnpaidPartPaidLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [reportType, unpaidPartPaidDatePeriod, unpaidPartPaidDateRange.from, unpaidPartPaidDateRange.to, unpaidPartPaidStatusFilter])
 
   // Fetch tip payouts when Staff Tip report is selected (for Paid state)
   useEffect(() => {
@@ -798,6 +985,135 @@ export function SalesReport() {
     }
   }
 
+  function getAppointmentListExportFilters(): Record<string, string | boolean> {
+    const range = appointmentListDatePeriod === "custom"
+      ? (appointmentListDateRange.from && appointmentListDateRange.to ? appointmentListDateRange : getDateRangeFromPeriod("last7days"))
+      : appointmentListDatePeriod === "all"
+        ? { from: undefined, to: undefined }
+        : getDateRangeFromPeriod(appointmentListDatePeriod)
+    const result: Record<string, string | boolean> = {
+      dateFilterType: appointmentListDateFilterType,
+      status: appointmentListStatusFilter,
+      showWalkIn: appointmentListShowWalkIn
+    }
+    if (range.from && range.to) {
+      const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
+      if (dateFrom && dateTo) {
+        result.dateFrom = dateFrom
+        result.dateTo = dateTo
+      }
+    }
+    return result
+  }
+
+  const handleExportAppointmentListXLS = async () => {
+    toast({ title: "Export requested", description: "Sending appointment list via email...", duration: 3000 })
+    try {
+      const filters = getAppointmentListExportFilters()
+      const result = await ReportsAPI.exportAppointmentList("xlsx", filters)
+      if (result?.success) {
+        toast({ title: "Export successful", description: result.message || "Appointment list report sent to admin email(s)." })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error?.message || "Failed to export.", variant: "destructive" })
+    }
+  }
+
+  const handleExportAppointmentListPDF = async () => {
+    toast({ title: "Export requested", description: "Sending appointment list via email...", duration: 3000 })
+    try {
+      const filters = getAppointmentListExportFilters()
+      const result = await ReportsAPI.exportAppointmentList("pdf", filters)
+      if (result?.success) {
+        toast({ title: "Export successful", description: result.message || "Appointment list report sent to admin email(s)." })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error?.message || "Failed to export.", variant: "destructive" })
+    }
+  }
+
+  function getDeletedInvoiceExportFilters(): Record<string, string> {
+    const range = deletedInvoiceDatePeriod === "custom"
+      ? (deletedInvoiceDateRange.from && deletedInvoiceDateRange.to ? deletedInvoiceDateRange : getDateRangeFromPeriod("last7days"))
+      : deletedInvoiceDatePeriod === "all"
+        ? { from: undefined, to: undefined }
+        : getDateRangeFromPeriod(deletedInvoiceDatePeriod)
+    if (range.from && range.to) {
+      const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
+      if (dateFrom && dateTo) return { dateFrom, dateTo }
+    }
+    return {}
+  }
+
+  const handleExportDeletedInvoiceXLS = async () => {
+    toast({ title: "Export requested", description: "Sending deleted invoice report via email...", duration: 3000 })
+    try {
+      const filters = getDeletedInvoiceExportFilters()
+      const result = await ReportsAPI.exportDeletedInvoices("xlsx", filters)
+      if (result?.success) {
+        toast({ title: "Export successful", description: result.message || "Deleted invoice report sent to admin email(s)." })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error?.message || "Failed to export.", variant: "destructive" })
+    }
+  }
+
+  const handleExportDeletedInvoicePDF = async () => {
+    toast({ title: "Export requested", description: "Sending deleted invoice report via email...", duration: 3000 })
+    try {
+      const filters = getDeletedInvoiceExportFilters()
+      const result = await ReportsAPI.exportDeletedInvoices("pdf", filters)
+      if (result?.success) {
+        toast({ title: "Export successful", description: result.message || "Deleted invoice report sent to admin email(s)." })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error?.message || "Failed to export.", variant: "destructive" })
+    }
+  }
+
+  function getUnpaidPartPaidExportFilters(): Record<string, string> {
+    const range = unpaidPartPaidDatePeriod === "custom"
+      ? (unpaidPartPaidDateRange.from && unpaidPartPaidDateRange.to ? unpaidPartPaidDateRange : getDateRangeFromPeriod("last7days"))
+      : unpaidPartPaidDatePeriod === "all"
+        ? { from: undefined, to: undefined }
+        : getDateRangeFromPeriod(unpaidPartPaidDatePeriod)
+    const result: Record<string, string> = { status: unpaidPartPaidStatusFilter }
+    if (range.from && range.to) {
+      const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
+      if (dateFrom && dateTo) {
+        result.dateFrom = dateFrom
+        result.dateTo = dateTo
+      }
+    }
+    return result
+  }
+
+  const handleExportUnpaidPartPaidXLS = async () => {
+    toast({ title: "Export requested", description: "Sending Unpaid/Part-Paid report via email...", duration: 3000 })
+    try {
+      const filters = getUnpaidPartPaidExportFilters()
+      const result = await ReportsAPI.exportUnpaidPartPaid("xlsx", filters)
+      if (result?.success) {
+        toast({ title: "Export successful", description: result.message || "Unpaid/Part-Paid report sent to admin email(s)." })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error?.message || "Failed to export.", variant: "destructive" })
+    }
+  }
+
+  const handleExportUnpaidPartPaidPDF = async () => {
+    toast({ title: "Export requested", description: "Sending Unpaid/Part-Paid report via email...", duration: 3000 })
+    try {
+      const filters = getUnpaidPartPaidExportFilters()
+      const result = await ReportsAPI.exportUnpaidPartPaid("pdf", filters)
+      if (result?.success) {
+        toast({ title: "Export successful", description: result.message || "Unpaid/Part-Paid report sent to admin email(s)." })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error?.message || "Failed to export.", variant: "destructive" })
+    }
+  }
+
   const handleViewBill = (sale: SalesRecord) => {
     setSelectedBill(sale)
     setIsBillDialogOpen(true)
@@ -813,19 +1129,20 @@ export function SalesReport() {
   }
 
   const handleConfirmDelete = async () => {
-    if (!selectedSale) return
+    if (!selectedSale || !deleteSaleReason.trim()) return
     
     try {
       console.log("Deleting sale:", selectedSale.billNo)
       
       // Call the API to delete the sale from the database
-      const response = await SalesAPI.delete(selectedSale.id)
+      const response = await SalesAPI.delete(selectedSale.id, deleteSaleReason.trim())
       
       if (response.success) {
         // Remove from local state only after successful API call
         setSalesData(prev => prev.filter(sale => sale.id !== selectedSale.id))
         setIsDeleteDialogOpen(false)
         setSelectedSale(null)
+        setDeleteSaleReason("")
         
         toast({
           title: "Sale Deleted",
@@ -994,6 +1311,9 @@ export function SalesReport() {
                   <SelectItem value="staff-tip">Staff Tip</SelectItem>
                   <SelectItem value="summary">Summary Reports</SelectItem>
                   <SelectItem value="service-list">Service List</SelectItem>
+                  <SelectItem value="appointment-list">Appointment List</SelectItem>
+                  <SelectItem value="deleted-invoice">Deleted Invoice</SelectItem>
+                  <SelectItem value="unpaid-part-paid">Unpaid/Part-Paid</SelectItem>
                 </SelectContent>
               </Select>
               {reportType === "summary" && (
@@ -1313,6 +1633,220 @@ export function SalesReport() {
                   </Select>
                 </>
               )}
+              {reportType === "appointment-list" && (
+                <>
+                  <Select value={appointmentListDateFilterType} onValueChange={(v: "appointment_date" | "created_date") => setAppointmentListDateFilterType(v)}>
+                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="appointment_date">Appointment Date</SelectItem>
+                      <SelectItem value="created_date">Created Date</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={appointmentListDatePeriod} onValueChange={(v: DatePeriod) => handleAppointmentListDatePeriodChange(v)}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="last7days">Last 7 days</SelectItem>
+                      <SelectItem value="last30days">Last 30 days</SelectItem>
+                      <SelectItem value="currentMonth">Current month</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {appointmentListDatePeriod === "custom" && (
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {appointmentListDateRange?.from ? format(appointmentListDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={appointmentListDateRange?.from}
+                            onSelect={(d) => setAppointmentListDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (appointmentListDateRange?.to ? d > appointmentListDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {appointmentListDateRange?.to ? format(appointmentListDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={appointmentListDateRange?.to}
+                            onSelect={(d) => setAppointmentListDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (appointmentListDateRange?.from ? d < appointmentListDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                  <Select value={appointmentListStatusFilter} onValueChange={setAppointmentListStatusFilter}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="new">New</SelectItem>
+                      <SelectItem value="arrived">Arrived</SelectItem>
+                      <SelectItem value="started">Started</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="cancelled">Cancelled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <label className="flex items-center gap-2 cursor-pointer select-none text-slate-600 text-sm whitespace-nowrap">
+                    <Switch
+                      checked={appointmentListShowWalkIn}
+                      onCheckedChange={setAppointmentListShowWalkIn}
+                    />
+                    <span>Show walk-in appointments</span>
+                  </label>
+                </>
+              )}
+              {reportType === "deleted-invoice" && (
+                <>
+                  <Select value={deletedInvoiceDatePeriod} onValueChange={(v: DatePeriod) => handleDeletedInvoiceDatePeriodChange(v)}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="last7days">Last 7 days</SelectItem>
+                      <SelectItem value="last30days">Last 30 days</SelectItem>
+                      <SelectItem value="currentMonth">Current month</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {deletedInvoiceDatePeriod === "custom" && (
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {deletedInvoiceDateRange?.from ? format(deletedInvoiceDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={deletedInvoiceDateRange?.from}
+                            onSelect={(d) => setDeletedInvoiceDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (deletedInvoiceDateRange?.to ? d > deletedInvoiceDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {deletedInvoiceDateRange?.to ? format(deletedInvoiceDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={deletedInvoiceDateRange?.to}
+                            onSelect={(d) => setDeletedInvoiceDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (deletedInvoiceDateRange?.from ? d < deletedInvoiceDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                </>
+              )}
+              {reportType === "unpaid-part-paid" && (
+                <>
+                  <Select value={unpaidPartPaidDatePeriod} onValueChange={(v: DatePeriod) => handleUnpaidPartPaidDatePeriodChange(v)}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="last7days">Last 7 days</SelectItem>
+                      <SelectItem value="last30days">Last 30 days</SelectItem>
+                      <SelectItem value="currentMonth">Current month</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {unpaidPartPaidDatePeriod === "custom" && (
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {unpaidPartPaidDateRange?.from ? format(unpaidPartPaidDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={unpaidPartPaidDateRange?.from}
+                            onSelect={(d) => setUnpaidPartPaidDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (unpaidPartPaidDateRange?.to ? d > unpaidPartPaidDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {unpaidPartPaidDateRange?.to ? format(unpaidPartPaidDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={unpaidPartPaidDateRange?.to}
+                            onSelect={(d) => setUnpaidPartPaidDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (unpaidPartPaidDateRange?.from ? d < unpaidPartPaidDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                  <Select value={unpaidPartPaidStatusFilter} onValueChange={setUnpaidPartPaidStatusFilter}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="unpaid">Unpaid</SelectItem>
+                      <SelectItem value="part_paid">Part Paid</SelectItem>
+                      <SelectItem value="overdue">Overdue (after 30 Days)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-3">
               {(reportType === "sales" || reportType === "staff-tip") && (
@@ -1325,7 +1859,7 @@ export function SalesReport() {
                   View Unpaid Bills
                 </Button>
               )}
-              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list") && (
+              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid") && (
                 canExport ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -1376,6 +1910,42 @@ export function SalesReport() {
                           </DropdownMenuItem>
                         </>
                       )}
+                      {reportType === "appointment-list" && (
+                        <>
+                          <DropdownMenuItem onClick={handleExportAppointmentListXLS} className="cursor-pointer">
+                            <Mail className="h-4 w-4 mr-2" />
+                            Export via Email (Excel)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={handleExportAppointmentListPDF} className="cursor-pointer">
+                            <Mail className="h-4 w-4 mr-2" />
+                            Export via Email (PDF)
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {reportType === "deleted-invoice" && (
+                        <>
+                          <DropdownMenuItem onClick={handleExportDeletedInvoiceXLS} className="cursor-pointer">
+                            <Mail className="h-4 w-4 mr-2" />
+                            Export via Email (Excel)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={handleExportDeletedInvoicePDF} className="cursor-pointer">
+                            <Mail className="h-4 w-4 mr-2" />
+                            Export via Email (PDF)
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {reportType === "unpaid-part-paid" && (
+                        <>
+                          <DropdownMenuItem onClick={handleExportUnpaidPartPaidXLS} className="cursor-pointer">
+                            <Mail className="h-4 w-4 mr-2" />
+                            Export via Email (Excel)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={handleExportUnpaidPartPaidPDF} className="cursor-pointer">
+                            <Mail className="h-4 w-4 mr-2" />
+                            Export via Email (PDF)
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 ) : (
@@ -1394,7 +1964,243 @@ export function SalesReport() {
         </div>
       </div>
 
-      {reportType === "service-list" ? (
+      {reportType === "appointment-list" ? (
+        <div className="min-h-[400px] bg-slate-50/80 rounded-2xl p-6 space-y-6">
+          {appointmentListLoading ? (
+            <div className="flex justify-center py-24">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-10 h-10 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+                <p className="text-slate-500 text-sm">Loading appointments...</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Card className="bg-white border-slate-100">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-500">No. Of Appointments</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold text-slate-900">{appointmentListSummary.count}</p>
+                  </CardContent>
+                </Card>
+                <Card className="bg-white border-slate-100">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-500">Total Value</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold text-slate-900">
+                      ₹{appointmentListSummary.totalValue.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+              <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-slate-100 hover:bg-transparent">
+                      <TableHead className="font-semibold">Customer Name</TableHead>
+                      <TableHead className="font-semibold">Created Date</TableHead>
+                      <TableHead className="font-semibold">Start Date</TableHead>
+                      <TableHead className="font-semibold">Price</TableHead>
+                      <TableHead className="font-semibold">Status</TableHead>
+                      <TableHead className="font-semibold">Payment Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {appointmentListData.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-12 text-slate-500">
+                          No appointments found for selected date
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      appointmentListData.map((row) => (
+                        <TableRow key={row.id} className="border-slate-50">
+                          <TableCell>{row.customerName}</TableCell>
+                          <TableCell>
+                            {row.createdAt ? format(new Date(row.createdAt), "dd MMM yyyy") : "—"}
+                          </TableCell>
+                          <TableCell>
+                            {row.startDate && row.startTime
+                              ? `${row.startDate} ${row.startTime}`
+                              : row.startDate || "—"}
+                          </TableCell>
+                          <TableCell>₹{(row.price ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</TableCell>
+                          <TableCell>
+                            <Badge variant={row.status === "Cancelled" ? "destructive" : "secondary"} className="capitalize">
+                              {row.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{row.paymentStatus}</TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
+          )}
+        </div>
+      ) : reportType === "deleted-invoice" ? (
+        <div className="min-h-[400px] bg-slate-50/80 rounded-2xl p-6 space-y-6">
+          {deletedInvoiceLoading ? (
+            <div className="flex justify-center py-24">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-10 h-10 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+                <p className="text-slate-500 text-sm">Loading deleted invoices...</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Card className="bg-white border-slate-100">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-500">No. Of Bills</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold text-slate-900">{deletedInvoiceSummary.count}</p>
+                  </CardContent>
+                </Card>
+                <Card className="bg-white border-slate-100">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-500">Total Value</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold text-slate-900">
+                      ₹{deletedInvoiceSummary.totalValue.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+              <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-slate-100 hover:bg-transparent">
+                      <TableHead className="font-semibold">Customer Name</TableHead>
+                      <TableHead className="font-semibold">Date</TableHead>
+                      <TableHead className="font-semibold">Reason</TableHead>
+                      <TableHead className="font-semibold">Cancelled By</TableHead>
+                      <TableHead className="font-semibold">Gross Total</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {deletedInvoiceData.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-12 text-slate-500">
+                          No deleted invoices found for selected date
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      deletedInvoiceData.map((row) => (
+                        <TableRow key={row.id} className="border-slate-50">
+                          <TableCell>{row.customerName}</TableCell>
+                          <TableCell>
+                            {row.date ? format(new Date(row.date), "dd MMM yyyy") : "—"}
+                          </TableCell>
+                          <TableCell>{row.reason || "—"}</TableCell>
+                          <TableCell>{row.cancelledBy || "—"}</TableCell>
+                          <TableCell>₹{(row.grossTotal ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
+          )}
+        </div>
+      ) : reportType === "unpaid-part-paid" ? (
+        <div className="min-h-[400px] bg-slate-50/80 rounded-2xl p-6 space-y-6">
+          {unpaidPartPaidLoading ? (
+            <div className="flex justify-center py-24">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-10 h-10 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+                <p className="text-slate-500 text-sm">Loading unpaid/part-paid bills...</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Card className="bg-white border-slate-100">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-500">No. Of Bills</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold text-slate-900">{unpaidPartPaidSummary.count}</p>
+                  </CardContent>
+                </Card>
+                <Card className="bg-white border-slate-100">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-500">Total Outstanding Value</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold text-slate-900">
+                      ₹{unpaidPartPaidSummary.totalOutstanding.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+              <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-slate-100 hover:bg-transparent">
+                      <TableHead className="font-semibold">Invoice Number</TableHead>
+                      <TableHead className="font-semibold">Customer Name</TableHead>
+                      <TableHead className="font-semibold">Date</TableHead>
+                      <TableHead className="font-semibold">Invoice Amount</TableHead>
+                      <TableHead className="font-semibold">Outstanding Amount</TableHead>
+                      <TableHead className="font-semibold">Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {unpaidPartPaidData.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-12 text-slate-500">
+                          No bills found for selected filters
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      unpaidPartPaidData.map((row) => (
+                        <TableRow key={row.id} className="border-slate-50">
+                          <TableCell className="font-medium">{row.billNo}</TableCell>
+                          <TableCell>
+                            <div>{row.customerName}</div>
+                            {row.customerPhone && (
+                              <div className="text-sm text-slate-500">{row.customerPhone}</div>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {row.date ? format(new Date(row.date), "dd MMM yyyy") : "—"}
+                          </TableCell>
+                          <TableCell>₹{(row.invoiceAmount ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</TableCell>
+                          <TableCell>
+                            <span className={row.outstandingAmount > 0 ? "font-semibold text-red-600" : ""}>
+                              ₹{(row.outstandingAmount ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                row.status === "Overdue" ? "destructive" :
+                                row.status === "Unpaid" ? "destructive" :
+                                row.status === "Part Paid" ? "secondary" : "default"
+                              }
+                              className="capitalize"
+                            >
+                              {row.status}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
+          )}
+        </div>
+      ) : reportType === "service-list" ? (
         <ServiceListReport
           controlledFilters={{
             datePeriod: serviceListDatePeriod,
@@ -2027,7 +2833,10 @@ export function SalesReport() {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+      <Dialog open={isDeleteDialogOpen} onOpenChange={(open) => {
+        setIsDeleteDialogOpen(open)
+        if (!open) setDeleteSaleReason("")
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Sale Record</DialogTitle>
@@ -2036,11 +2845,25 @@ export function SalesReport() {
               This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="delete-sale-reason" className="block text-sm font-medium text-slate-700 mb-1.5">
+                Reason for deletion <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                id="delete-sale-reason"
+                value={deleteSaleReason}
+                onChange={(e) => setDeleteSaleReason(e.target.value)}
+                placeholder="Enter reason for deleting this invoice..."
+                className="w-full min-h-[80px] px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500 resize-none"
+              />
+            </div>
+          </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
+            <Button variant="outline" onClick={() => { setIsDeleteDialogOpen(false); setDeleteSaleReason("") }}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={handleConfirmDelete}>
+            <Button variant="destructive" onClick={handleConfirmDelete} disabled={!deleteSaleReason.trim()}>
               Delete
             </Button>
           </DialogFooter>

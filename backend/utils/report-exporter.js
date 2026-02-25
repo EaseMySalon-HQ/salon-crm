@@ -1795,6 +1795,460 @@ async function exportServiceListReport({ branchId, format = 'xlsx', filters = {}
   }
 }
 
+/**
+ * Generate and email appointment list report
+ */
+async function exportAppointmentListReport({ branchId, format = 'xlsx', filters = {} }) {
+  try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const businessDb = await databaseManager.getConnection(branchId, mainConnection);
+    const businessModels = modelFactory.createBusinessModels(businessDb);
+    const { Appointment, Client, Sale } = businessModels;
+
+    const emailService = require('../services/email-service');
+    if (!emailService.initialized) {
+      await emailService.initialize();
+    }
+
+    const { dateFrom, dateTo, dateFilterType = 'appointment_date', status, showWalkIn } = filters;
+    const query = {};
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom).split('T')[0];
+      const toStr = String(dateTo).split('T')[0];
+      if (dateFilterType === 'created_date') {
+        query.createdAt = {
+          $gte: new Date(fromStr + 'T00:00:00.000Z'),
+          $lte: new Date(toStr + 'T23:59:59.999Z')
+        };
+      } else {
+        query.date = { $gte: fromStr, $lte: toStr };
+      }
+    }
+    if (status && status !== 'all') {
+      if (status === 'new') {
+        query.status = { $in: ['scheduled', 'confirmed'] };
+      } else {
+        const statusMap = { arrived: 'arrived', started: 'service_started', completed: 'completed', cancelled: 'cancelled' };
+        const dbStatus = statusMap[status] || status;
+        query.status = dbStatus;
+      }
+    }
+    if (showWalkIn === false || showWalkIn === 'false') {
+      query.$nor = [{ leadSource: new RegExp('^walk-in$', 'i') }];
+    }
+
+    const rawAppointments = await Appointment.find(query).sort({ date: -1, time: -1 }).limit(5000).lean();
+    const clientIds = [...new Set(rawAppointments.map((a) => a.clientId).filter(Boolean))];
+    const clients = clientIds.length ? await Client.find({ _id: { $in: clientIds } }).select('name').lean() : [];
+    const clientMap = new Map(clients.map((c) => [c._id.toString(), c.name || '—']));
+
+    const appointmentIds = rawAppointments.map((a) => a._id);
+    const sales = appointmentIds.length ? await Sale.find({ appointmentId: { $in: appointmentIds } }).lean() : [];
+    const saleByAppointmentId = new Map(sales.map((s) => [s.appointmentId?.toString(), s]));
+
+    const rows = rawAppointments.map((apt) => {
+      const sale = saleByAppointmentId.get(apt._id.toString());
+      const totalAmount = sale?.paymentStatus?.totalAmount ?? sale?.grossTotal ?? 0;
+      const paidAmount = sale?.paymentStatus?.paidAmount ?? 0;
+      const paymentStatus = totalAmount <= 0 ? '—' : paidAmount >= totalAmount ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
+      const statusLabel = { scheduled: 'New', confirmed: 'New', arrived: 'Arrived', service_started: 'Started', completed: 'Completed', cancelled: 'Cancelled' }[apt.status] || apt.status;
+      return {
+        customerName: clientMap.get(apt.clientId?.toString()) || '—',
+        createdAt: apt.createdAt ? new Date(apt.createdAt).toLocaleDateString() : '—',
+        startDate: apt.date ? `${apt.date} ${apt.time || ''}`.trim() : '—',
+        price: apt.price ?? 0,
+        status: statusLabel,
+        paymentStatus,
+        billNo: null
+      };
+    });
+
+    if (showWalkIn !== false && showWalkIn !== 'false') {
+      const saleQuery = {
+        $or: [{ appointmentId: null }, { appointmentId: { $exists: false } }],
+        'items.type': 'service'
+      };
+      if (dateFrom && dateTo) {
+        const fromStr = String(dateFrom).split('T')[0];
+        const toStr = String(dateTo).split('T')[0];
+        if (dateFilterType === 'created_date') {
+          saleQuery.createdAt = {
+            $gte: new Date(fromStr + 'T00:00:00.000Z'),
+            $lte: new Date(toStr + 'T23:59:59.999Z')
+          };
+        } else {
+          saleQuery.date = { $gte: new Date(fromStr + 'T00:00:00.000Z'), $lte: new Date(toStr + 'T23:59:59.999Z') };
+        }
+      }
+      if (status && status !== 'all') {
+        if (status === 'cancelled') saleQuery.status = new RegExp('^cancelled$', 'i');
+        else if (status === 'completed') saleQuery.status = new RegExp('^completed$', 'i');
+      }
+      const walkInSales = await Sale.find(saleQuery).sort({ date: -1, time: -1 }).limit(5000).lean();
+      walkInSales.forEach((sale) => {
+        const saleDate = sale.date ? new Date(sale.date) : null;
+        const dateStr = saleDate ? saleDate.toISOString().slice(0, 10) : '';
+        const totalAmount = sale.paymentStatus?.totalAmount ?? sale.grossTotal ?? 0;
+        const paidAmount = sale.paymentStatus?.paidAmount ?? 0;
+        const paymentStatus = totalAmount <= 0 ? '—' : paidAmount >= totalAmount ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
+        const statusStr = String(sale.status || '').toLowerCase();
+        const statusLabel = statusStr === 'cancelled' ? 'Cancelled' : 'Completed';
+        rows.push({
+          customerName: sale.customerName || '—',
+          createdAt: sale.createdAt ? new Date(sale.createdAt).toLocaleDateString() : '—',
+          startDate: dateStr ? `${dateStr} ${sale.time || ''}`.trim() : '—',
+          price: sale.grossTotal ?? 0,
+          status: statusLabel,
+          paymentStatus
+        });
+      });
+      rows.sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
+    }
+
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const business = await Business.findById(branchId);
+    const User = mainConnection.model('User', require('../models/User').schema);
+    const adminUsers = await User.find({
+      branchId: branchId,
+      role: 'admin',
+      email: { $exists: true, $ne: '' }
+    }).lean();
+    if (adminUsers.length === 0) {
+      throw new Error('No admin email found to send export to');
+    }
+
+    let attachment;
+    let fileName;
+    const exportType = 'Appointment List Report';
+    const periodText = dateFrom && dateTo ? `${String(dateFrom).split('T')[0]} - ${String(dateTo).split('T')[0]}` : 'All time';
+
+    if (format === 'xlsx') {
+      const data = rows.map((r) => ({
+        'Customer Name': r.customerName,
+        'Created Date': r.createdAt,
+        'Start Date': r.startDate,
+        'Price': r.price,
+        'Status': r.status,
+        'Payment Status': r.paymentStatus
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Appointment List');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      fileName = `appointment-list-report-${new Date().toISOString().split('T')[0]}.xlsx`;
+      attachment = { filename: fileName, content: buffer };
+    } else if (format === 'pdf') {
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => {});
+      let y = addPDFHeader(doc, 'Appointment List Report', `Period: ${periodText} | Generated: ${new Date().toLocaleString()}`);
+      y += 20;
+      const headers = ['Customer', 'Created', 'Start Date', 'Price', 'Status', 'Payment'];
+      const tableRows = rows.map((r) => [
+        r.customerName,
+        r.createdAt,
+        r.startDate,
+        `₹${Number(r.price).toFixed(2)}`,
+        r.status,
+        r.paymentStatus
+      ]);
+      const colWidths = [100, 80, 100, 60, 70, 60];
+      y = addTable(doc, y, headers, tableRows, { colWidths });
+      doc.end();
+      await new Promise((resolve) => { doc.on('end', resolve); });
+      const buffer = Buffer.concat(chunks);
+      fileName = `appointment-list-report-${new Date().toISOString().split('T')[0]}.pdf`;
+      attachment = { filename: fileName, content: buffer };
+    } else {
+      throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
+    }
+
+    for (const admin of adminUsers) {
+      try {
+        await emailService.sendExportReady({
+          to: admin.email,
+          exportType,
+          businessName: business?.name || 'Business',
+          attachments: [attachment]
+        });
+      } catch (emailError) {
+        console.error('Error sending appointment list export to', admin.email, emailError);
+      }
+    }
+    return { success: true, message: 'Appointment list report sent to admin email(s)' };
+  } catch (error) {
+    console.error('Error exporting appointment list report:', error);
+    throw error;
+  }
+}
+
+/**
+ * Generate and email unpaid/part-paid report
+ */
+async function exportUnpaidPartPaidReport({ branchId, format = 'xlsx', filters = {} }) {
+  try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const businessDb = await databaseManager.getConnection(branchId, mainConnection);
+    const businessModels = modelFactory.createBusinessModels(businessDb);
+    const { Sale } = businessModels;
+
+    const emailService = require('../services/email-service');
+    if (!emailService.initialized) {
+      await emailService.initialize();
+    }
+
+    const { dateFrom, dateTo, status } = filters;
+    const query = {
+      status: { $nin: ['cancelled', 'Cancelled'] },
+      $expr: { $lt: [{ $ifNull: ['$paymentStatus.paidAmount', 0] }, { $ifNull: ['$paymentStatus.totalAmount', 999999999] }] }
+    };
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom).split('T')[0];
+      const toStr = String(dateTo).split('T')[0];
+      query.date = {
+        $gte: new Date(fromStr + 'T00:00:00.000Z'),
+        $lte: new Date(toStr + 'T23:59:59.999Z')
+      };
+    }
+    if (status && status !== 'all') {
+      if (status === 'unpaid') {
+        query['paymentStatus.paidAmount'] = 0;
+      } else if (status === 'part_paid') {
+        query['paymentStatus.paidAmount'] = { $gt: 0 };
+      } else if (status === 'overdue') {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        query['$and'] = [
+          { 'paymentStatus.dueDate': { $lt: thirtyDaysAgo } },
+          { $or: [
+            { 'paymentStatus.remainingAmount': { $gt: 0 } },
+            { $expr: { $lt: ['$paymentStatus.paidAmount', '$paymentStatus.totalAmount'] } }
+          ]}
+        ];
+      }
+    }
+    const sales = await Sale.find(query).sort({ date: -1 }).limit(5000).lean();
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const rows = sales.map((s) => {
+      const totalAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? 0;
+      const paidAmount = s.paymentStatus?.paidAmount ?? 0;
+      const remainingAmount = s.paymentStatus?.remainingAmount ?? Math.max(0, totalAmount - paidAmount);
+      const dueDate = s.paymentStatus?.dueDate ? new Date(s.paymentStatus.dueDate) : null;
+      const isOverdue = dueDate && dueDate < thirtyDaysAgo && remainingAmount > 0;
+      let statusLabel = 'Unpaid';
+      if (paidAmount >= totalAmount) statusLabel = 'Full Paid';
+      else if (paidAmount > 0) statusLabel = 'Part Paid';
+      else if (isOverdue) statusLabel = 'Overdue';
+      else statusLabel = 'Unpaid';
+      if (!isOverdue && paidAmount < totalAmount && dueDate && dueDate < thirtyDaysAgo) statusLabel = 'Overdue';
+      return {
+        billNo: s.billNo,
+        customerName: s.customerName || '—',
+        customerPhone: s.customerPhone || '',
+        date: s.date ? new Date(s.date).toLocaleDateString() : '—',
+        invoiceAmount: totalAmount,
+        outstandingAmount: remainingAmount,
+        status: statusLabel
+      };
+    });
+
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const business = await Business.findById(branchId);
+    const User = mainConnection.model('User', require('../models/User').schema);
+    const adminUsers = await User.find({
+      branchId: branchId,
+      role: 'admin',
+      email: { $exists: true, $ne: '' }
+    }).lean();
+    if (adminUsers.length === 0) {
+      throw new Error('No admin email found to send export to');
+    }
+
+    let attachment;
+    let fileName;
+    const exportType = 'Unpaid/Part-Paid Report';
+    const periodText = dateFrom && dateTo ? `${String(dateFrom).split('T')[0]} - ${String(dateTo).split('T')[0]}` : 'All time';
+
+    if (format === 'xlsx') {
+      const data = rows.map((r) => ({
+        'Invoice Number': r.billNo,
+        'Customer Name': r.customerName,
+        'Phone': r.customerPhone,
+        'Date': r.date,
+        'Invoice Amount': r.invoiceAmount,
+        'Outstanding Amount': r.outstandingAmount,
+        'Status': r.status
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Unpaid Part-Paid');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      fileName = `unpaid-part-paid-report-${new Date().toISOString().split('T')[0]}.xlsx`;
+      attachment = { filename: fileName, content: buffer };
+    } else if (format === 'pdf') {
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => {});
+      let y = addPDFHeader(doc, 'Unpaid/Part-Paid Report', `Period: ${periodText} | Generated: ${new Date().toLocaleString()}`);
+      y += 20;
+      const headers = ['Invoice', 'Customer', 'Date', 'Invoice Amt', 'Outstanding', 'Status'];
+      const tableRows = rows.map((r) => [
+        r.billNo,
+        r.customerName,
+        r.date,
+        `₹${Number(r.invoiceAmount).toFixed(2)}`,
+        `₹${Number(r.outstandingAmount).toFixed(2)}`,
+        r.status
+      ]);
+      const colWidths = [80, 100, 80, 80, 90, 70];
+      y = addTable(doc, y, headers, tableRows, { colWidths });
+      doc.end();
+      await new Promise((resolve) => { doc.on('end', resolve); });
+      const buffer = Buffer.concat(chunks);
+      fileName = `unpaid-part-paid-report-${new Date().toISOString().split('T')[0]}.pdf`;
+      attachment = { filename: fileName, content: buffer };
+    } else {
+      throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
+    }
+
+    for (const admin of adminUsers) {
+      try {
+        await emailService.sendExportReady({
+          to: admin.email,
+          exportType,
+          businessName: business?.name || 'Business',
+          attachments: [attachment]
+        });
+      } catch (emailError) {
+        console.error('Error sending unpaid/part-paid export to', admin.email, emailError);
+      }
+    }
+    return { success: true, message: 'Unpaid/Part-Paid report sent to admin email(s)' };
+  } catch (error) {
+    console.error('Error exporting unpaid/part-paid report:', error);
+    throw error;
+  }
+}
+
+/**
+ * Generate and email deleted invoices report (archived bills)
+ */
+async function exportDeletedInvoicesReport({ branchId, format = 'xlsx', filters = {} }) {
+  try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const businessDb = await databaseManager.getConnection(branchId, mainConnection);
+    const businessModels = modelFactory.createBusinessModels(businessDb);
+    const { BillArchive } = businessModels;
+
+    const emailService = require('../services/email-service');
+    if (!emailService.initialized) {
+      await emailService.initialize();
+    }
+
+    const { date, dateFrom, dateTo } = filters;
+    const query = {};
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom).split('T')[0];
+      const toStr = String(dateTo).split('T')[0];
+      query.archivedAt = {
+        $gte: new Date(fromStr + 'T00:00:00.000Z'),
+        $lte: new Date(toStr + 'T23:59:59.999Z')
+      };
+    } else if (date) {
+      const dateStr = String(date).split('T')[0];
+      query.archivedAt = {
+        $gte: new Date(dateStr + 'T00:00:00.000Z'),
+        $lte: new Date(dateStr + 'T23:59:59.999Z')
+      };
+    }
+    const archives = await BillArchive.find(query).sort({ archivedAt: -1 }).limit(5000).lean();
+    const rows = archives.map((a) => ({
+      customerName: a.originalBill?.customerName || '—',
+      date: a.archivedAt ? new Date(a.archivedAt).toLocaleDateString() : '—',
+      reason: a.reason || '—',
+      cancelledBy: a.archivedByName || '—',
+      grossTotal: a.originalBill?.grossTotal ?? 0
+    }));
+
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const business = await Business.findById(branchId);
+    const User = mainConnection.model('User', require('../models/User').schema);
+    const adminUsers = await User.find({
+      branchId: branchId,
+      role: 'admin',
+      email: { $exists: true, $ne: '' }
+    }).lean();
+    if (adminUsers.length === 0) {
+      throw new Error('No admin email found to send export to');
+    }
+
+    let attachment;
+    let fileName;
+    const exportType = 'Deleted Invoice Report';
+    const periodText = dateFrom && dateTo ? `${String(dateFrom).split('T')[0]} - ${String(dateTo).split('T')[0]}` : date ? String(date).split('T')[0] : 'All time';
+
+    if (format === 'xlsx') {
+      const data = rows.map((r) => ({
+        'Customer Name': r.customerName,
+        'Date': r.date,
+        'Reason': r.reason,
+        'Cancelled By': r.cancelledBy,
+        'Gross Total': r.grossTotal
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Deleted Invoices');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      fileName = `deleted-invoices-report-${new Date().toISOString().split('T')[0]}.xlsx`;
+      attachment = { filename: fileName, content: buffer };
+    } else if (format === 'pdf') {
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => {});
+      let y = addPDFHeader(doc, 'Deleted Invoice Report', `Date: ${periodText} | Generated: ${new Date().toLocaleString()}`);
+      y += 20;
+      const headers = ['Customer', 'Date', 'Reason', 'Cancelled By', 'Gross Total'];
+      const tableRows = rows.map((r) => [
+        r.customerName,
+        r.date,
+        r.reason,
+        r.cancelledBy,
+        `₹${Number(r.grossTotal).toFixed(2)}`
+      ]);
+      const colWidths = [100, 80, 120, 80, 80];
+      y = addTable(doc, y, headers, tableRows, { colWidths });
+      doc.end();
+      await new Promise((resolve) => { doc.on('end', resolve); });
+      const buffer = Buffer.concat(chunks);
+      fileName = `deleted-invoices-report-${new Date().toISOString().split('T')[0]}.pdf`;
+      attachment = { filename: fileName, content: buffer };
+    } else {
+      throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
+    }
+
+    for (const admin of adminUsers) {
+      try {
+        await emailService.sendExportReady({
+          to: admin.email,
+          exportType,
+          businessName: business?.name || 'Business',
+          attachments: [attachment]
+        });
+      } catch (emailError) {
+        console.error('Error sending deleted invoice export to', admin.email, emailError);
+      }
+    }
+    return { success: true, message: 'Deleted invoice report sent to admin email(s)' };
+  } catch (error) {
+    console.error('Error exporting deleted invoice report:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   exportProductsReport,
   exportSalesReport,
@@ -1804,6 +2258,9 @@ module.exports = {
   exportCashRegistryReport,
   exportSummaryReport,
   exportStaffPerformanceReport,
-  exportServiceListReport
+  exportServiceListReport,
+  exportAppointmentListReport,
+  exportDeletedInvoicesReport,
+  exportUnpaidPartPaidReport
 };
 
