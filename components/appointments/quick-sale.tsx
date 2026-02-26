@@ -50,7 +50,6 @@ import { useToast } from "@/components/ui/use-toast"
 import { ReceiptDialog } from "@/components/receipts/receipt-dialog"
 import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -62,7 +61,7 @@ import {
   type PaymentMethod,
   getAllReceipts,
 } from "@/lib/data"
-import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI, BlockTimeAPI } from "@/lib/api"
+import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI, BlockTimeAPI, MembershipAPI } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
@@ -169,6 +168,8 @@ interface ServiceItem {
   price: number
   discount: number
   total: number
+  isMembershipFree?: boolean
+  membershipDiscountPercent?: number
 }
 
 interface ProductItem {
@@ -179,6 +180,17 @@ interface ProductItem {
   price: number
   discount: number
   total: number
+}
+
+interface MembershipItem {
+  id: string
+  planId: string
+  planName: string
+  price: number
+  durationInDays: number
+  quantity: number
+  total: number
+  staffId: string
 }
 
 type BillingMode = "create" | "edit" | "exchange"
@@ -322,6 +334,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [tempEditReason, setTempEditReason] = useState("")
   const [isInitialized, setIsInitialized] = useState(false)
 
+  // Membership state (for customer with active membership)
+  const [membershipData, setMembershipData] = useState<{
+    subscription: any
+    plan: any
+    usageSummary: Array<{ serviceId: string; serviceName: string; used: number; limit: number; remaining: number }>
+  } | null>(null)
+
+  // Plans for membership section (fetched when customer selected)
+  const [plans, setPlans] = useState<Array<{ _id: string; id?: string; planName: string; price: number; durationInDays: number }>>([])
+
+  // Add Items section: membership | gift-voucher | prepaid (none selected by default)
+  const [addItemSection, setAddItemSection] = useState<'membership' | 'gift-voucher' | 'prepaid' | null>(null)
+
+  // Membership items (rows added from Membership section)
+  const [membershipItems, setMembershipItems] = useState<MembershipItem[]>([])
+
   // State for services and products from API
   const [services, setServices] = useState<any[]>([])
   const [products, setProducts] = useState<any[]>([])
@@ -370,14 +398,36 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // Add item to cart function
   const addToCart = (item: any, type: "service" | "product") => {
     if (type === "service") {
+      let price = item.price || 0
+      let total = price
+      let isMembershipFree = false
+      let membershipDiscountPercent = 0
+
+      if (membershipData?.plan && membershipData?.usageSummary) {
+        const svcId = String(item._id || item.id)
+        const usage = membershipData.usageSummary.find((u: any) => String(u.serviceId || u.serviceId?._id) === svcId)
+        const plan = membershipData.plan
+        if (usage && usage.remaining > 0) {
+          price = 0
+          total = 0
+          isMembershipFree = true
+        } else if (plan?.discountPercentage > 0) {
+          membershipDiscountPercent = plan.discountPercentage
+          price = price * (1 - plan.discountPercentage / 100)
+          total = price
+        }
+      }
+
       const newItem: ServiceItem = {
         id: Date.now().toString(),
         serviceId: item._id || item.id,
         staffId: "",
         quantity: 1,
-        price: item.price || 0,
+        price,
         discount: 0,
-        total: item.price || 0,
+        total,
+        isMembershipFree,
+        membershipDiscountPercent,
       }
       setServiceItems([...serviceItems, newItem])
     } else if (type === "product") {
@@ -1396,6 +1446,75 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setShowDuesDialog(true)
   }
 
+  // Fetch membership when customer is selected
+  useEffect(() => {
+    const customerId = getCustomerId(selectedCustomer)
+    if (!customerId) {
+      setMembershipData(null)
+      return
+    }
+    MembershipAPI.getByCustomer(customerId)
+      .then((res) => {
+        if (res.success && res.data) setMembershipData(res.data as any)
+        else setMembershipData(null)
+      })
+      .catch(() => setMembershipData(null))
+  }, [selectedCustomer])
+
+  // Fetch plans when customer is selected (for Membership section)
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setPlans([])
+      return
+    }
+    MembershipAPI.getPlans({ isActive: true })
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) setPlans(res.data)
+        else setPlans([])
+      })
+      .catch(() => setPlans([]))
+  }, [selectedCustomer])
+
+  // Apply membership pricing to service items when membership loads or changes
+  useEffect(() => {
+    if (!membershipData?.plan || !membershipData?.usageSummary?.length) return
+    const usageMap = new Map(membershipData.usageSummary.map((u: any) => [u.serviceId, u]))
+    const plan = membershipData.plan
+    const discountPct = plan?.discountPercentage || 0
+
+    setServiceItems((items) => {
+      const remaining: Record<string, number> = {}
+      usageMap.forEach((u: any, sid: string) => { remaining[sid] = u.remaining })
+
+      return items.map((item) => {
+        if (!item.serviceId) return item
+        const sid = String(item.serviceId)
+        const u = usageMap.get(sid)
+        const service = services.find((s) => (s._id || s.id) === item.serviceId)
+        const basePrice = service?.price ?? item.price
+
+        if (u && remaining[sid] > 0 && item.quantity <= remaining[sid]) {
+          remaining[sid] -= item.quantity
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+          const applyTax = service?.taxApplicable && taxSettings?.enableTax !== false
+          const gstAmount = applyTax ? 0 : 0
+          return { ...item, price: 0, total: 0, discount: 0, isMembershipFree: true, membershipDiscountPercent: 0 }
+        }
+        if (discountPct > 0 && !item.isMembershipFree) {
+          const discounted = basePrice * (1 - discountPct / 100)
+          const baseAmount = discounted * item.quantity
+          const itemDiscountPct = item.discount || 0
+          const discountedAmount = baseAmount - (baseAmount * itemDiscountPct) / 100
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+          const applyTax = service?.taxApplicable && taxSettings?.enableTax !== false
+          const gstAmount = applyTax ? (discountedAmount * serviceTaxRate) / 100 : 0
+          return { ...item, price: discounted, total: discountedAmount + gstAmount, membershipDiscountPercent: discountPct }
+        }
+        return item
+      })
+    })
+  }, [membershipData])
+
   // Fetch customer statistics including visits, revenue, and last visit
   const fetchCustomerStats = async (customerId: string) => {
     console.log('🔍 Fetching customer stats for ID:', customerId)
@@ -1790,6 +1909,56 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }, 0)
   }
 
+  // Add membership item
+  const addMembershipItem = () => {
+    if (plans.length === 0) {
+      toast({
+        title: "No Plans Available",
+        description: "Select a customer first, or add membership plans in settings.",
+        variant: "destructive",
+      })
+      return
+    }
+    const newItem: MembershipItem = {
+      id: Date.now().toString(),
+      planId: "",
+      staffId: "",
+      planName: "",
+      price: 0,
+      durationInDays: 0,
+      quantity: 1,
+      total: 0,
+    }
+    setMembershipItems([...membershipItems, newItem])
+  }
+
+  // Remove membership item
+  const removeMembershipItem = (id: string) => {
+    setMembershipItems((items) => items.filter((item) => item.id !== id))
+  }
+
+  // Update membership item
+  const updateMembershipItem = (id: string, field: keyof MembershipItem, value: any) => {
+    setMembershipItems((items) =>
+      items.map((item) => {
+        if (item.id !== id) return item
+        const updated = { ...item, [field]: value }
+        if (field === "planId" && value) {
+          const plan = plans.find((p) => (p._id || p.id) === value)
+          if (plan) {
+            updated.planName = plan.planName
+            updated.price = plan.price ?? 0
+            updated.durationInDays = plan.durationInDays ?? 0
+            updated.total = updated.price * updated.quantity
+          }
+        } else if (field === "quantity") {
+          updated.total = updated.price * updated.quantity
+        }
+        return updated
+      })
+    )
+  }
+
   // Update service item
   const updateServiceItem = (id: string, field: keyof ServiceItem, value: any) => {
     console.log('=== UPDATE SERVICE ITEM ===')
@@ -1801,11 +1970,29 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         if (item.id === id) {
           const updatedItem = { ...item, [field]: value }
 
-          // Auto-fill price when service is selected
+          // Auto-fill price when service is selected (apply membership if applicable)
           if (field === "serviceId" && value) {
             const service = services.find((s) => s._id === value || s.id === value)
             if (service) {
-              updatedItem.price = service.price
+              let price = service.price
+              let isMembershipFree = false
+              let membershipDiscountPercent = 0
+
+              if (membershipData?.plan && membershipData?.usageSummary) {
+                const usage = membershipData.usageSummary.find((u: any) => String(u.serviceId || u.serviceId?._id) === String(value))
+                const plan = membershipData.plan
+                if (usage && usage.remaining > 0) {
+                  price = 0
+                  isMembershipFree = true
+                } else if (plan?.discountPercentage > 0) {
+                  membershipDiscountPercent = plan.discountPercentage
+                  price = price * (1 - plan.discountPercentage / 100)
+                }
+              }
+
+              updatedItem.price = price
+              updatedItem.isMembershipFree = isMembershipFree
+              updatedItem.membershipDiscountPercent = membershipDiscountPercent
             }
           }
 
@@ -2148,8 +2335,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     })
   }
 
-  // Base bill (services/products) total = subtotal - global discount only (line-level already in item totals)
-  const baseTotal = subtotal - globalDiscount
+  // Base bill (services/products) total = subtotal + membership items
+  // Note: When value/percentage discount is active, item.total already has the proportional discount baked in,
+  // so we must NOT subtract globalDiscount again (that would double-apply the discount).
+  const membershipTotal = membershipItems.reduce((sum, item) => sum + item.total, 0)
+  const baseTotal = subtotal + membershipTotal
   const baseRounded = Math.round(baseTotal)
   const roundOff = baseRounded - baseTotal
   // Amount payable by customer = baseRounded + tip (tip is separate, non-taxable)
@@ -2242,10 +2432,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     const validServiceItems = serviceItems.filter((item) => item.serviceId)
     const validProductItems = productItems.filter((item) => item.productId)
 
-    if (validServiceItems.length === 0 && validProductItems.length === 0) {
+    if (validServiceItems.length === 0 && validProductItems.length === 0 && membershipItems.filter((m) => m.planId).length === 0) {
       toast({
         title: "No Items",
-        description: "Please add at least one service or product",
+        description: "Please add at least one service, product, or membership plan",
         variant: "destructive",
       })
       return
@@ -2273,10 +2463,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
     // Validate that all services have staff assigned
     const servicesWithoutStaff = validServiceItems.filter((item) => !item.staffId)
-    if (servicesWithoutStaff.length > 0) {
+    if (validServiceItems.length > 0 && servicesWithoutStaff.length > 0) {
       toast({
         title: "Staff Required",
         description: "Please select staff for all services before checkout",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Validate that all membership items have staff assigned
+    const validMembershipItems = membershipItems.filter((m) => m.planId)
+    const membershipWithoutStaff = validMembershipItems.filter((m) => !m.staffId)
+    if (validMembershipItems.length > 0 && membershipWithoutStaff.length > 0) {
+      toast({
+        title: "Staff Required",
+        description: "Please select staff for all membership plans before checkout",
         variant: "destructive",
       })
       return
@@ -2320,7 +2522,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
     try {
       // Calculate rounded total for customer stats (before receipt generation)
-      // Grand total = baseTotal + tip (line-level discount already in subtotal; only subtract global discount)
+      // Grand total = baseTotal + tip (discount already in subtotal via item totals)
       const grandTotalForStats = baseTotal + tip
       const roundedTotalForStats = Math.round(grandTotalForStats)
       
@@ -2420,6 +2622,24 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             total: item.total,
           }
         }),
+        ...membershipItems
+          .filter((m) => m.planId)
+          .map((m) => ({
+            id: m.id,
+            name: `${m.planName} (${m.durationInDays} days)`,
+            type: "membership" as const,
+            quantity: m.quantity,
+            price: m.price,
+            discount: 0,
+            discountType: "percentage" as const,
+            staffId: m.staffId || staff[0]?._id || staff[0]?.id || "",
+            staffName: (m.staffId ? staff.find((s) => (s._id || s.id) === m.staffId)?.name : null) || staff[0]?.name || "Unassigned Staff",
+            total: m.total,
+            taxAmount: 0,
+            cgst: 0,
+            sgst: 0,
+            totalWithTax: m.total,
+          })),
       ]
 
       // Create payments array
@@ -2447,8 +2667,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       // Calculate tax breakdown from individual items (GST already included in item totals)
       // Note: subtotal already includes tax (item.total includes tax)
       let calculatedTax = 0
-      // Base bill amount (for sales/revenue) = subtotal - global discount (line-level already in item totals)
-      const baseTotalForSale = subtotal - globalDiscount
+      // Base bill amount (for sales/revenue) = subtotal + membership plan (discount already baked into item totals)
+      const baseTotalForSale = subtotal + membershipTotal
       const roundedBaseTotalForSale = Math.round(baseTotalForSale)
       const roundOff = roundedBaseTotalForSale - baseTotalForSale
       // calculatedTotal = bill amount used for sales/grossTotal (EXCLUDES tip)
@@ -2611,7 +2831,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 discount: item.discount ?? 0,
                 staffId: item.staffId || '',
                 staffName: staffMember?.name || '',
-                staffContributions: item.staffContributions || []
+                staffContributions: item.staffContributions || [],
+                isMembershipFree: item.isMembershipFree ?? false,
+                membershipDiscountPercent: item.membershipDiscountPercent ?? 0
               }
             }),
             ...validProductItems.map((item: any) => {
@@ -2664,7 +2886,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           notes: remarks || '',
           appointmentId: linkedAppointmentId || undefined,
           date: selectedDate.toISOString(),
-          time: format(new Date(), "HH:mm")
+          time: format(new Date(), "HH:mm"),
+          ...(membershipItems.filter((m) => m.planId).length > 0 && {
+            planToAssignId: membershipItems.find((m) => m.planId)?.planId,
+            membershipPlanPrice: membershipTotal,
+          }),
         }
 
         console.log('💾 Creating sale in backend:', saleData)
@@ -2969,6 +3195,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setEditReason("")
     setShowEditReasonModal(false)
     setTempEditReason("")
+    setMembershipItems([])
+    setAddItemSection(null)
   }
 
   // Tip modal handlers
@@ -3646,10 +3874,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
               {/* Selected Customer Details */}
               {selectedCustomer && (
-                <div className="mt-4 p-6 bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 rounded-xl border border-indigo-100/50 shadow-sm">
+                <div className={cn(
+                  "mt-4 p-6 rounded-xl shadow-sm",
+                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                    ? "bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100/80 border border-amber-200/60"
+                    : "bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 border border-indigo-100/50"
+                )}>
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <div className="p-3 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-md">
+                      <div className={cn(
+                        "p-3 rounded-xl shadow-md",
+                        membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                          ? "bg-gradient-to-br from-amber-500 via-yellow-500 to-amber-600"
+                          : "bg-gradient-to-br from-indigo-500 to-purple-600"
+                      )}>
                         <User className="h-5 w-5 text-white" />
                       </div>
                       <div>
@@ -3660,34 +3898,30 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         )}
                       </div>
                     </div>
-                    <Badge variant={selectedCustomer.status === "active" ? "default" : "secondary"} className="px-3 py-1">
-                      {selectedCustomer.status}
-                    </Badge>
-                  </div>
-
-                  <div className={`grid ${(selectedCustomer.totalDues || 0) > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-4 mb-4`}>
-                    <div className="text-center p-3 bg-white/60 rounded-lg border border-white/50">
-                      <div className="flex items-center justify-center gap-2 mb-2">
-                        <CalendarDays className="h-4 w-4 text-indigo-600" />
-                        <span className="text-xs font-medium text-gray-700">Visits</span>
+                    <div className="flex flex-col items-end gap-1">
+                      <div className="flex items-center gap-2">
+                        {membershipData?.subscription && (
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "text-xs",
+                              membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                                ? "bg-amber-50 text-amber-800 border-amber-300"
+                                : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            )}
+                          >
+                            {membershipData?.plan?.planName || "Membership Applied"}
+                          </Badge>
+                        )}
+                        <Badge variant={selectedCustomer.status === "active" ? "default" : "secondary"} className="px-3 py-1">
+                          {selectedCustomer.status}
+                        </Badge>
                       </div>
-                      <p className="text-lg font-bold text-indigo-700">{selectedCustomer.totalVisits || 0}</p>
-                    </div>
-                    <div className="text-center p-3 bg-white/60 rounded-lg border border-white/50">
-                      <div className="flex items-center justify-center gap-2 mb-2">
-                        <TrendingUp className="h-4 w-4 text-emerald-600" />
-                        <span className="text-xs font-medium text-gray-700">Revenue</span>
-                      </div>
-                      <p className="text-lg font-bold text-emerald-700">₹{Number(selectedCustomer.totalSpent || 0).toFixed(2)}</p>
-                    </div>
-                    <div className="text-center p-3 bg-white/60 rounded-lg border border-white/50">
-                      <div className="flex items-center justify-center gap-2 mb-2">
-                        <CalendarIcon className="h-4 w-4 text-purple-600" />
-                        <span className="text-xs font-medium text-gray-700">Last Visit</span>
-                      </div>
-                      <p className="text-sm font-semibold text-purple-700">
-                        {selectedCustomer.lastVisit ? format(new Date(selectedCustomer.lastVisit), "dd MMM") : "Never"}
-                      </p>
+                      {membershipData?.subscription?.expiryDate && (
+                        <p className="text-xs text-gray-500">
+                          Valid Till: {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
+                        </p>
+                      )}
                     </div>
                     {(selectedCustomer.totalDues || 0) > 0 && (
                       <div 
@@ -3708,11 +3942,75 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     )}
                   </div>
 
+                  <div className={`grid ${(selectedCustomer.totalDues || 0) > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-4 mb-4`}>
+                    <div className={cn(
+                      "text-center p-3 rounded-lg border",
+                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                        ? "bg-amber-50/60 border-amber-200/50"
+                        : "bg-white/60 border-white/50"
+                    )}>
+                      <div className="flex items-center justify-center gap-2 mb-2">
+                        <CalendarDays className={cn(
+                          "h-4 w-4",
+                          membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-indigo-600"
+                        )} />
+                        <span className="text-xs font-medium text-gray-700">Visits</span>
+                      </div>
+                      <p className={cn(
+                        "text-lg font-bold",
+                        membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-indigo-700"
+                      )}>{selectedCustomer.totalVisits || 0}</p>
+                    </div>
+                    <div className={cn(
+                      "text-center p-3 rounded-lg border",
+                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                        ? "bg-amber-50/60 border-amber-200/50"
+                        : "bg-white/60 border-white/50"
+                    )}>
+                      <div className="flex items-center justify-center gap-2 mb-2">
+                        <TrendingUp className={cn(
+                          "h-4 w-4",
+                          membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-emerald-600"
+                        )} />
+                        <span className="text-xs font-medium text-gray-700">Revenue</span>
+                      </div>
+                      <p className={cn(
+                        "text-lg font-bold",
+                        membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-emerald-700"
+                      )}>₹{Number(selectedCustomer.totalSpent || 0).toFixed(2)}</p>
+                    </div>
+                    <div className={cn(
+                      "text-center p-3 rounded-lg border",
+                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                        ? "bg-amber-50/60 border-amber-200/50"
+                        : "bg-white/60 border-white/50"
+                    )}>
+                      <div className="flex items-center justify-center gap-2 mb-2">
+                        <CalendarIcon className={cn(
+                          "h-4 w-4",
+                          membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-purple-600"
+                        )} />
+                        <span className="text-xs font-medium text-gray-700">Last Visit</span>
+                      </div>
+                      <p className={cn(
+                        "text-sm font-semibold",
+                        membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-purple-700"
+                      )}>
+                        {selectedCustomer.lastVisit ? format(new Date(selectedCustomer.lastVisit), "dd MMM") : "Never"}
+                      </p>
+                    </div>
+                  </div>
+
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={handleViewBillActivity}
-                    className="w-full h-10 text-sm bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300 transition-all duration-300"
+                    className={cn(
+                      "w-full h-10 text-sm transition-all duration-300",
+                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                        ? "bg-amber-50/80 hover:bg-amber-50 border-amber-200 text-amber-800 hover:text-amber-900 hover:border-amber-300"
+                        : "bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300"
+                    )}
                   >
                     <FileText className="h-4 w-4 mr-2" />
                     Bill Activity
@@ -3788,16 +4086,23 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   >
                     <div className="relative" data-quicksale-dropdown>
                       {item.serviceId ? (
-                        <div className="flex items-center justify-between h-8 px-3 py-1 bg-muted rounded-md text-sm">
-                          <span className="truncate">
-                            {services.find(s => (s._id || s.id) === item.serviceId)?.name || 'Unknown Service'}
-                          </span>
-                          <button
-                            onClick={() => updateServiceItem(item.id, "serviceId", "")}
-                            className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground"
-                          >
-                            ×
-                          </button>
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center justify-between h-8 px-3 py-1 bg-muted rounded-md text-sm">
+                            <span className="truncate">
+                              {services.find(s => (s._id || s.id) === item.serviceId)?.name || 'Unknown Service'}
+                            </span>
+                            <button
+                              onClick={() => updateServiceItem(item.id, "serviceId", "")}
+                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground"
+                            >
+                              ×
+                            </button>
+                          </div>
+                          {(item.isMembershipFree || (item.membershipDiscountPercent ?? 0) > 0) && (
+                            <span className="text-xs text-emerald-600">
+                              {item.isMembershipFree ? "Free via Membership" : `${item.membershipDiscountPercent}% Membership Discount`}
+                            </span>
+                          )}
                         </div>
                       ) : (
                         <div className="relative">
@@ -4203,29 +4508,141 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
           {/* Add Items Section */}
           <div className="space-y-4">
-            <h3 className="text-xl font-semibold">Add Items</h3>
-            <Tabs defaultValue="membership" className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="membership">Membership</TabsTrigger>
-                <TabsTrigger value="gift-voucher">Gift Voucher</TabsTrigger>
-                <TabsTrigger value="prepaid">Prepaid</TabsTrigger>
-              </TabsList>
-              <TabsContent value="membership" className="mt-4">
-                <div className="text-center py-8 text-muted-foreground border rounded-lg">
-                  Membership options coming soon
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant={addItemSection === 'membership' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  const next = addItemSection === 'membership' ? null : 'membership'
+                  setAddItemSection(next)
+                  if (next === 'membership' && membershipItems.length === 0 && selectedCustomer && !membershipData?.subscription && plans.length > 0) {
+                    addMembershipItem()
+                  }
+                }}
+              >
+                Add Membership
+              </Button>
+              <Button
+                type="button"
+                variant={addItemSection === 'gift-voucher' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setAddItemSection((prev) => (prev === 'gift-voucher' ? null : 'gift-voucher'))}
+              >
+                Add Gift Voucher
+              </Button>
+              <Button
+                type="button"
+                variant={addItemSection === 'prepaid' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setAddItemSection((prev) => (prev === 'prepaid' ? null : 'prepaid'))}
+              >
+                Add Prepaid Plans
+              </Button>
+            </div>
+            <div className="mt-4">
+              {addItemSection === 'membership' && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    {selectedCustomer
+                      ? membershipData?.subscription
+                        ? "Customer already has an active membership."
+                        : "Add a membership plan to assign on checkout."
+                      : "Select a customer above to add membership."}
+                  </p>
+                  {membershipItems.length > 0 && (
+                    <div className="border border-gray-200 rounded-xl shadow-sm bg-white">
+                      <div className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-indigo-50 to-purple-50 font-semibold text-sm text-gray-700 border-b">
+                        <div>Plan *</div>
+                        <div>Staff *</div>
+                        <div>Qty</div>
+                        <div>Price (₹)</div>
+                        <div>Total (₹)</div>
+                        <div></div>
+                      </div>
+                      {membershipItems.map((item) => (
+                        <div
+                          key={item.id}
+                          className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-indigo-50/30 transition-all duration-200"
+                        >
+                          <Select
+                            value={item.planId || "__none__"}
+                            onValueChange={(v) => updateMembershipItem(item.id, "planId", v === "__none__" ? "" : v)}
+                          >
+                            <SelectTrigger className="h-8">
+                              <SelectValue placeholder="Select plan" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">Select plan</SelectItem>
+                              {plans.map((p) => (
+                                <SelectItem key={p._id} value={p._id}>
+                                  {p.planName} — ₹{Number(p.price || 0).toFixed(2)} ({p.durationInDays} days)
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Select
+                            value={item.staffId || "__none__"}
+                            onValueChange={(v) => updateMembershipItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                          >
+                            <SelectTrigger className="h-8">
+                              <SelectValue placeholder="Select staff" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">Select staff</SelectItem>
+                              {getAvailableStaffList(15, item.staffId ? [item.staffId] : undefined).map((member) => {
+                                const staffId = member._id || member.id
+                                return (
+                                  <SelectItem key={staffId} value={staffId}>
+                                    {member.name}
+                                  </SelectItem>
+                                )
+                              })}
+                            </SelectContent>
+                          </Select>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8 p-0"
+                              onClick={() => updateMembershipItem(item.id, "quantity", Math.max(1, item.quantity - 1))}
+                            >
+                              <Minus className="h-3 w-3" />
+                            </Button>
+                            <div className="w-8 text-center text-sm font-medium">{item.quantity}</div>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8 p-0"
+                              onClick={() => updateMembershipItem(item.id, "quantity", item.quantity + 1)}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                          </div>
+                          <Input
+                            type="number"
+                            value={item.price}
+                            readOnly
+                            className="h-8 bg-muted"
+                          />
+                          <div className="text-sm font-medium">₹{item.total.toFixed(2)}</div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => removeMembershipItem(item.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </TabsContent>
-              <TabsContent value="gift-voucher" className="mt-4">
-                <div className="text-center py-8 text-muted-foreground border rounded-lg">
-                  Gift voucher options coming soon
-                </div>
-              </TabsContent>
-              <TabsContent value="prepaid" className="mt-4">
-                <div className="text-center py-8 text-muted-foreground border rounded-lg">
-                  Prepaid options coming soon
-                </div>
-              </TabsContent>
-            </Tabs>
+              )}
+              {addItemSection === 'gift-voucher' && null}
+              {addItemSection === 'prepaid' && null}
+            </div>
           </div>
 
           {/* Discounts & Offers */}

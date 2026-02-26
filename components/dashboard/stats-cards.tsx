@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Users, CalendarDays, PieChart, Settings, Package, Clock, DollarSign } from "lucide-react"
+import { Users, CalendarDays, PieChart, Settings, Package, Clock, DollarSign, CreditCard } from "lucide-react"
 import { ReportsAPI, ServicesAPI, ProductsAPI, SalesAPI, AppointmentsAPI, CashRegistryAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { cn } from "@/lib/utils"
@@ -196,6 +196,98 @@ export function DashboardStatsCards() {
   )
 }
 
+export function MembershipStatsCards() {
+  const [stats, setStats] = useState({
+    totalActiveMembers: 0,
+    membershipRevenue: 0,
+    membersExpiringIn30Days: 0
+  })
+  const [loading, setLoading] = useState(true)
+
+  const safeFormatAmount = (amount: number) => `₹${amount.toFixed(2)}`
+
+  useEffect(() => {
+    let isAuthError = false
+    const fetchStats = async () => {
+      try {
+        const res = await ReportsAPI.getDashboardStats()
+        if (res?.success && res.data) {
+          setStats({
+            totalActiveMembers: res.data.totalActiveMembers ?? 0,
+            membershipRevenue: res.data.membershipRevenue ?? 0,
+            membersExpiringIn30Days: res.data.membersExpiringIn30Days ?? 0
+          })
+        }
+      } catch (error: any) {
+        if (error?.response?.status === 401 || error?.response?.status === 403) isAuthError = true
+        console.error("Failed to fetch membership stats:", error)
+      } finally {
+        if (!isAuthError) setLoading(false)
+      }
+    }
+    fetchStats()
+  }, [])
+
+  if (loading) {
+    return (
+      <div className="grid gap-4 md:grid-cols-3">
+        {[1, 2, 3].map((i) => (
+          <Card key={i}>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <div className="h-4 w-20 bg-gray-200 rounded animate-pulse" />
+              <div className="h-4 w-4 bg-gray-200 rounded animate-pulse" />
+            </CardHeader>
+            <CardContent>
+              <div className="h-8 w-16 bg-gray-200 rounded animate-pulse mb-2" />
+              <div className="h-3 w-24 bg-gray-200 rounded animate-pulse" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid gap-4 md:grid-cols-3">
+      <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="text-sm font-medium text-gray-900">Active Members</CardTitle>
+          <div className="p-2 bg-gray-100 rounded-lg">
+            <CreditCard className="h-4 w-4 text-gray-600" />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="text-2xl font-bold text-gray-900">{stats.totalActiveMembers}</div>
+          <p className="text-sm text-gray-500">With active membership</p>
+        </CardContent>
+      </Card>
+      <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="text-sm font-medium text-gray-900">Membership Revenue</CardTitle>
+          <div className="p-2 bg-gray-100 rounded-lg">
+            <DollarSign className="h-4 w-4 text-gray-600" />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="text-2xl font-bold text-gray-900">{safeFormatAmount(stats.membershipRevenue)}</div>
+          <p className="text-sm text-gray-500">From active subscriptions</p>
+        </CardContent>
+      </Card>
+      <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="text-sm font-medium text-gray-900">Expiring in 30 Days</CardTitle>
+          <div className="p-2 bg-gray-100 rounded-lg">
+            <CalendarDays className="h-4 w-4 text-gray-600" />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="text-2xl font-bold text-gray-900">{stats.membersExpiringIn30Days}</div>
+          <p className="text-sm text-gray-500">Memberships expiring soon</p>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
 
 export function ServiceStatsCards() {
   const [stats, setStats] = useState<ServiceStats>({

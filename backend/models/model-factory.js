@@ -110,7 +110,12 @@ class ModelFactory {
       InventoryConsumptionLog: this.getModel('InventoryConsumptionLog', require('./InventoryConsumptionLog').schema, connection),
 
       // TipPayout model (staff tip payouts)
-      TipPayout: this.getModel('TipPayout', require('./TipPayout').schema, connection)
+      TipPayout: this.getModel('TipPayout', require('./TipPayout').schema, connection),
+
+      // Membership models
+      MembershipPlan: this.getModel('MembershipPlan', require('./MembershipPlan').schema, connection),
+      MembershipSubscription: this.getModel('MembershipSubscription', require('./MembershipSubscription').schema, connection),
+      MembershipUsage: this.getModel('MembershipUsage', require('./MembershipUsage').schema, connection)
     };
   }
 

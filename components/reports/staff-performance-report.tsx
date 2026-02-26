@@ -110,7 +110,7 @@ export function StaffPerformanceReport() {
   const { hasAccess: canExport } = useFeature("data_export")
   const [searchTerm, setSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
-  const [datePeriod, setDatePeriod] = useState<DatePeriod>("currentMonth")
+  const [datePeriod, setDatePeriod] = useState<DatePeriod>("today")
   const [selectedStaff, setSelectedStaff] = useState<string>("all")
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([])
   const [performanceData, setPerformanceData] = useState<StaffPerformanceData[]>([])

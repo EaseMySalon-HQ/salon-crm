@@ -188,8 +188,6 @@ const SIDEBAR_MODULES = [
   { id: "clients", label: "Clients", module: "clients", icon: Users },
   { id: "leads", label: "Leads", module: "lead_management", icon: Phone },
   { id: "campaigns", label: "Campaigns", module: "campaigns", icon: Megaphone },
-  { id: "services", label: "Services", module: "services", icon: Wrench },
-  { id: "products", label: "Products", module: "products", icon: Package },
   {
     id: "cash_register",
     label: "Cash Register",
@@ -251,6 +249,9 @@ const SETTINGS_CATEGORIES = [
   { id: "pos_settings", label: "POS Settings", icon: Receipt, adminOnly: true },
   { id: "notification_settings", label: "Notifications", icon: Bell, adminOnly: false },
   { id: "plan_billing", label: "Plan & Billing", icon: Wallet, adminOnly: true },
+  { id: "membership", label: "Membership", icon: CreditCard, adminOnly: false },
+  { id: "services", label: "Services", icon: Wrench, adminOnly: false },
+  { id: "products", label: "Products", icon: Package, adminOnly: false },
 ] as const
 
 const ADMIN_ONLY_SETTINGS = SETTINGS_CATEGORIES.filter((s) => s.adminOnly).map((s) => s.id)
@@ -286,6 +287,7 @@ function buildRoleTemplate(role: "admin" | "manager" | "staff"): Permission[] {
       "clients",
       "lead_management",
       "campaigns",
+      "membership",
       "services",
       "products",
       "cash_registry",
@@ -310,6 +312,7 @@ function buildRoleTemplate(role: "admin" | "manager" | "staff"): Permission[] {
     { m: "sales", f: ["view", "create"] },
     { m: "appointments", f: ["view", "create", "edit"] },
     { m: "clients", f: ["view", "create", "edit"] },
+    { m: "membership", f: ["view"] },
     { m: "services", f: ["view"] },
     { m: "products", f: ["view"] },
     { m: "general_settings", f: ["view"] },

@@ -47,6 +47,7 @@ export const ROUTE_PERMISSION_MAP: Record<string, string> = {
   "/clients": "clients",
   "/leads": "lead_management",
   "/campaigns": "campaigns",
+  "/membership": "membership",
   "/services": "services",
   "/products": "products",
   "/cash-registry": "cash_registry",
@@ -69,6 +70,9 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   pos: "pos_settings",
   notifications: "notification_settings",
   "plan-billing": "plan_billing",
+  membership: "membership",
+  services: "services",
+  products: "products",
 }
 
 // All settings modules (for "has any settings access" check)

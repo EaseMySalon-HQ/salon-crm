@@ -857,6 +857,66 @@ export class SalesAPI {
   }
 }
 
+export class MembershipAPI {
+  static async getPlans(params?: { isActive?: boolean }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/membership/plans', { params })
+    return response.data
+  }
+
+  static async createPlan(data: {
+    planName: string
+    price: number
+    durationInDays: number
+    discountPercentage?: number
+    includedServices?: Array<{ serviceId: string; usageLimit: number }>
+    isActive?: boolean
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/membership/plans', data)
+    return response.data
+  }
+
+  static async updatePlan(id: string, data: Partial<{
+    planName: string
+    price: number
+    durationInDays: number
+    discountPercentage: number
+    includedServices: Array<{ serviceId: string; usageLimit: number }>
+    isActive: boolean
+  }>): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/membership/plans/${id}`, data)
+    return response.data
+  }
+
+  static async togglePlan(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/membership/plans/${id}/toggle`)
+    return response.data
+  }
+
+  static async subscribe(data: { customerId: string; planId: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/membership/subscribe', data)
+    return response.data
+  }
+
+  static async getByCustomer(customerId: string): Promise<ApiResponse<{
+    subscription: any
+    plan: any
+    usageSummary: Array<{ serviceId: string; serviceName: string; used: number; limit: number; remaining: number }>
+  }>> {
+    const response = await apiClient.get(`/membership/customer/${customerId}`)
+    return response.data
+  }
+
+  static async redeem(data: {
+    customerId: string
+    serviceId: string
+    staffId: string
+    billingId: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/membership/redeem', data)
+    return response.data
+  }
+}
+
 export class ExpensesAPI {
   static async getAll(params?: { page?: number; limit?: number; search?: string; dateFrom?: string; dateTo?: string; category?: string; paymentMethod?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/expenses', { params })

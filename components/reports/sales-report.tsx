@@ -2077,6 +2077,7 @@ export function SalesReport() {
                 <Table>
                   <TableHeader>
                     <TableRow className="border-slate-100 hover:bg-transparent">
+                      <TableHead className="font-semibold">Bill No.</TableHead>
                       <TableHead className="font-semibold">Customer Name</TableHead>
                       <TableHead className="font-semibold">Date</TableHead>
                       <TableHead className="font-semibold">Reason</TableHead>
@@ -2087,22 +2088,65 @@ export function SalesReport() {
                   <TableBody>
                     {deletedInvoiceData.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center py-12 text-slate-500">
+                        <TableCell colSpan={6} className="text-center py-12 text-slate-500">
                           No deleted invoices found for selected date
                         </TableCell>
                       </TableRow>
                     ) : (
-                      deletedInvoiceData.map((row) => (
-                        <TableRow key={row.id} className="border-slate-50">
-                          <TableCell>{row.customerName}</TableCell>
-                          <TableCell>
-                            {row.date ? format(new Date(row.date), "dd MMM yyyy") : "—"}
-                          </TableCell>
-                          <TableCell>{row.reason || "—"}</TableCell>
-                          <TableCell>{row.cancelledBy || "—"}</TableCell>
-                          <TableCell>₹{(row.grossTotal ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</TableCell>
-                        </TableRow>
-                      ))
+                      deletedInvoiceData.map((row) => {
+                        const bill = row.originalBill
+                        const receiptData = bill ? {
+                          receiptNumber: bill.billNo,
+                          clientName: bill.customerName,
+                          clientPhone: bill.customerPhone || "",
+                          date: bill.date,
+                          time: typeof bill.date === "string" ? bill.date.split("T")[1]?.slice(0, 5) || "" : new Date(bill.date).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+                          items: (bill.items || []).map((item: any) => ({
+                            name: item.name,
+                            type: item.type,
+                            quantity: item.quantity,
+                            price: item.price,
+                            total: item.total,
+                            staffName: item.staffName || bill.staffName
+                          })),
+                          subtotal: bill.netTotal,
+                          tax: bill.taxAmount,
+                          total: (bill.grossTotal || 0) + (bill.tip || 0),
+                          tip: bill.tip || 0,
+                          tipStaffName: bill.tipStaffName,
+                          payments: (bill.payments || []).map((p: any) => ({ type: (p.mode || p.type || "cash").toLowerCase(), amount: p.amount })),
+                          staffName: bill.staffName,
+                          taxBreakdown: bill.taxBreakdown
+                        } : null
+                        return (
+                          <TableRow key={row.id} className="border-slate-50">
+                            <TableCell>
+                              {receiptData ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const dataStr = encodeURIComponent(JSON.stringify(receiptData))
+                                    router.push(`/receipt/${encodeURIComponent(row.billNo || bill.billNo)}?data=${dataStr}&returnTo=/reports`)
+                                  }}
+                                  className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium text-left"
+                                  title="View receipt"
+                                >
+                                  {row.billNo || "—"}
+                                </button>
+                              ) : (
+                                row.billNo || "—"
+                              )}
+                            </TableCell>
+                            <TableCell>{row.customerName}</TableCell>
+                            <TableCell>
+                              {row.date ? format(new Date(row.date), "dd MMM yyyy") : "—"}
+                            </TableCell>
+                            <TableCell>{row.reason || "—"}</TableCell>
+                            <TableCell>{row.cancelledBy || "—"}</TableCell>
+                            <TableCell>₹{(row.grossTotal ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</TableCell>
+                          </TableRow>
+                        )
+                      })
                     )}
                   </TableBody>
                 </Table>
