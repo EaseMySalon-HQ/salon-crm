@@ -8,6 +8,7 @@ import { SideNav } from "@/components/side-nav"
 import { TopNav } from "@/components/top-nav"
 import { clientStore, type Client } from "@/lib/client-store"
 import { ClientForm } from "@/components/clients/client-form"
+import { MembershipCard } from "@/components/membership/membership-card"
 import { toast } from "@/components/ui/use-toast"
 import {
   Dialog,
@@ -183,6 +184,8 @@ export function ClientDetailsPage({ clientId }: ClientDetailsPageProps) {
               isEditMode={isEditMode}
               onEditComplete={() => setIsEditMode(false)}
             />
+
+            <MembershipCard clientId={clientId} />
           </div>
         </main>
       </div>

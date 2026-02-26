@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
-import { CalendarDays, Home, PieChart, Settings, Users, Receipt, Scissors, Package, Wrench, DollarSign, Banknote, ChevronLeft, ChevronRight, Phone, Megaphone } from "lucide-react"
+import { CalendarDays, Home, PieChart, Settings, Users, Receipt, Banknote, ChevronLeft, ChevronRight, Phone, Megaphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context"
@@ -36,8 +36,6 @@ export function SideNav() {
     { title: "Clients", href: "/clients", icon: Users, permissionModule: "clients" },
     { title: "Leads", href: "/leads", icon: Phone, permissionModule: "lead_management" },
     { title: "Campaigns", href: "/campaigns", icon: Megaphone, permissionModule: "campaigns" },
-    { title: "Services", href: "/services", icon: Wrench, permissionModule: "services" },
-    { title: "Products", href: "/products", icon: Package, permissionModule: "products" },
     { title: "Cash Register", href: "/cash-registry", icon: Banknote, permissionModule: "cash_registry" },
     { title: "Analytics", href: "/analytics", icon: PieChart, permissionModule: "analytics" },
     { title: "Reports", href: "/reports", icon: PieChart, permissionModule: "reports" },
@@ -78,7 +76,7 @@ export function SideNav() {
   return (
     <div className={cn(
       "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 relative",
-      isCollapsed ? "w-20" : "w-72"
+      isCollapsed ? "w-24" : "w-56"
     )}>
       <div className="flex h-full flex-col gap-4 p-5">
         {/* Toggle Button */}
@@ -142,7 +140,7 @@ export function SideNav() {
                         "flex items-center justify-center w-full h-12 rounded-xl transition-all duration-300 group",
                         !canAccess && "opacity-50 cursor-not-allowed",
                         isActive 
-                          ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25" 
+                          ? "bg-indigo-600 text-white shadow-lg hover:bg-indigo-600 hover:text-white" 
                           : "hover:bg-indigo-50 hover:text-indigo-600 text-gray-600"
                       )}
                       onClick={(e) => {
@@ -157,7 +155,7 @@ export function SideNav() {
                         isActive ? "text-white" : ""
                       )} />
                       {isActive && (
-                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-gradient-to-b from-indigo-500 to-purple-600 rounded-r-full" />
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 rounded-r-full" />
                       )}
                     </Link>
                   ) : (
@@ -167,8 +165,8 @@ export function SideNav() {
                         "w-full h-12 rounded-xl transition-all duration-300 group justify-start text-left px-4",
                         !canAccess && "opacity-50 cursor-not-allowed",
                         isActive 
-                          ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25 !text-white" 
-                          : "hover:bg-gradient-to-r hover:from-indigo-50 hover:to-purple-50 hover:text-indigo-700 hover:shadow-md text-gray-700"
+                          ? "bg-indigo-600 text-white shadow-lg !text-white hover:!bg-indigo-600 hover:!text-white" 
+                          : "hover:bg-indigo-50 hover:text-indigo-700 hover:shadow-md text-gray-700"
                       )}
                       disabled={!canAccess}
                       asChild
@@ -203,7 +201,7 @@ export function SideNav() {
                   
                   {/* Hover indicator */}
                   {!isActive && canAccess && !isCollapsed && (
-                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-0 bg-gradient-to-b from-indigo-500 to-purple-600 rounded-r-full opacity-0 group-hover:opacity-100 group-hover:h-8 transition-all duration-300" />
+                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-0 bg-indigo-600 rounded-r-full opacity-0 group-hover:opacity-100 group-hover:h-8 transition-all duration-300" />
                   )}
                 </div>
               )

@@ -3387,6 +3387,397 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
   }
 });
 
+// ========== Membership routes ==========
+// Plan APIs
+app.get('/api/membership/plans', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { MembershipPlan } = req.businessModels;
+    const { isActive } = req.query;
+    const query = { branchId: req.user.branchId };
+    if (isActive !== undefined) query.isActive = isActive === 'true';
+    const plans = await MembershipPlan.find(query).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, data: plans });
+  } catch (error) {
+    console.error('Error fetching membership plans:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { MembershipPlan, Service } = req.businessModels;
+    const { planName, price, durationInDays, discountPercentage = 0, includedServices = [], isActive = true } = req.body;
+
+    if (!planName || price == null || !durationInDays) {
+      return res.status(400).json({
+        success: false,
+        error: 'planName, price, and durationInDays are required'
+      });
+    }
+
+    const priceNum = parseFloat(price);
+    const durationNum = parseInt(durationInDays);
+    const discountNum = parseFloat(discountPercentage) || 0;
+
+    if (isNaN(priceNum) || priceNum < 0) {
+      return res.status(400).json({ success: false, error: 'price must be a non-negative number' });
+    }
+    if (isNaN(durationNum) || durationNum < 1) {
+      return res.status(400).json({ success: false, error: 'durationInDays must be at least 1' });
+    }
+
+    const branchId = req.user.branchId;
+    const validIncludedServices = [];
+    if (Array.isArray(includedServices) && includedServices.length > 0) {
+      for (const inc of includedServices) {
+        const serviceId = inc.serviceId || inc.service;
+        const usageLimit = inc.usageLimit ?? 0;
+        if (!serviceId || !mongoose.Types.ObjectId.isValid(serviceId)) continue;
+        const service = await Service.findById(serviceId);
+        if (!service || service.branchId?.toString() !== branchId.toString()) {
+          return res.status(400).json({
+            success: false,
+            error: `Service ${serviceId} not found or does not belong to this business`
+          });
+        }
+        validIncludedServices.push({
+          serviceId: new mongoose.Types.ObjectId(serviceId),
+          usageLimit: Math.max(0, parseInt(usageLimit) || 0)
+        });
+      }
+    }
+
+    const plan = new MembershipPlan({
+      branchId,
+      planName: String(planName).trim(),
+      price: priceNum,
+      durationInDays: durationNum,
+      discountPercentage: Math.min(100, Math.max(0, discountNum)),
+      includedServices: validIncludedServices,
+      isActive: !!isActive
+    });
+
+    const savedPlan = await plan.save();
+    res.status(201).json({ success: true, data: savedPlan });
+  } catch (error) {
+    console.error('Error creating membership plan:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { MembershipPlan, Service } = req.businessModels;
+    const planId = req.params.id;
+    const branchId = req.user.branchId;
+
+    if (!mongoose.Types.ObjectId.isValid(planId)) {
+      return res.status(400).json({ success: false, error: 'Invalid plan ID' });
+    }
+
+    const plan = await MembershipPlan.findOne({ _id: planId, branchId });
+    if (!plan) {
+      return res.status(404).json({ success: false, error: 'Plan not found' });
+    }
+
+    const { planName, price, durationInDays, discountPercentage, includedServices, isActive } = req.body;
+
+    const updatePayload = {};
+    if (planName !== undefined) updatePayload.planName = String(planName).trim();
+    if (price !== undefined) {
+      const priceNum = parseFloat(price);
+      if (isNaN(priceNum) || priceNum < 0) {
+        return res.status(400).json({ success: false, error: 'price must be a non-negative number' });
+      }
+      updatePayload.price = priceNum;
+    }
+    if (durationInDays !== undefined) {
+      const durationNum = parseInt(durationInDays);
+      if (isNaN(durationNum) || durationNum < 1) {
+        return res.status(400).json({ success: false, error: 'durationInDays must be at least 1' });
+      }
+      updatePayload.durationInDays = durationNum;
+    }
+    if (discountPercentage !== undefined) updatePayload.discountPercentage = Math.min(100, Math.max(0, parseFloat(discountPercentage) || 0));
+    if (isActive !== undefined) updatePayload.isActive = !!isActive;
+
+    if (Array.isArray(includedServices)) {
+      const validIncludedServices = [];
+      for (const inc of includedServices) {
+        const serviceId = inc.serviceId || inc.service;
+        const usageLimit = inc.usageLimit ?? 0;
+        if (!serviceId || !mongoose.Types.ObjectId.isValid(serviceId)) continue;
+        const service = await Service.findById(serviceId);
+        if (!service || service.branchId?.toString() !== branchId.toString()) {
+          return res.status(400).json({
+            success: false,
+            error: `Service ${serviceId} not found or does not belong to this business`
+          });
+        }
+        validIncludedServices.push({
+          serviceId: new mongoose.Types.ObjectId(serviceId),
+          usageLimit: Math.max(0, parseInt(usageLimit) || 0)
+        });
+      }
+      updatePayload.includedServices = validIncludedServices;
+    }
+
+    const updatedPlan = await MembershipPlan.findByIdAndUpdate(planId, updatePayload, { new: true });
+    res.json({ success: true, data: updatedPlan });
+  } catch (error) {
+    console.error('Error updating membership plan:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { MembershipPlan } = req.businessModels;
+    const planId = req.params.id;
+    const branchId = req.user.branchId;
+
+    if (!mongoose.Types.ObjectId.isValid(planId)) {
+      return res.status(400).json({ success: false, error: 'Invalid plan ID' });
+    }
+
+    const plan = await MembershipPlan.findOne({ _id: planId, branchId });
+    if (!plan) {
+      return res.status(404).json({ success: false, error: 'Plan not found' });
+    }
+
+    plan.isActive = !plan.isActive;
+    await plan.save();
+    res.json({ success: true, data: plan });
+  } catch (error) {
+    console.error('Error toggling membership plan:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Subscription APIs
+app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { MembershipPlan, MembershipSubscription, Client } = req.businessModels;
+    const { customerId, planId } = req.body;
+    const branchId = req.user.branchId;
+
+    if (!customerId || !planId) {
+      return res.status(400).json({
+        success: false,
+        error: 'customerId and planId are required'
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(customerId) || !mongoose.Types.ObjectId.isValid(planId)) {
+      return res.status(400).json({ success: false, error: 'Invalid customerId or planId' });
+    }
+
+    const plan = await MembershipPlan.findOne({ _id: planId, branchId });
+    if (!plan) {
+      return res.status(404).json({ success: false, error: 'Plan not found' });
+    }
+    if (!plan.isActive) {
+      return res.status(400).json({ success: false, error: 'Plan is not active' });
+    }
+
+    const client = await Client.findById(customerId);
+    if (!client || client.branchId?.toString() !== branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Customer not found' });
+    }
+
+    const existingActive = await MembershipSubscription.findOne({
+      branchId,
+      customerId: new mongoose.Types.ObjectId(customerId),
+      status: 'ACTIVE'
+    });
+    if (existingActive) {
+      return res.status(400).json({
+        success: false,
+        error: 'Customer already has an active membership. Only one active membership per customer is allowed.'
+      });
+    }
+
+    const startDate = new Date();
+    const expiryDate = new Date(startDate);
+    expiryDate.setDate(expiryDate.getDate() + plan.durationInDays);
+
+    const subscription = new MembershipSubscription({
+      branchId,
+      customerId: new mongoose.Types.ObjectId(customerId),
+      planId: plan._id,
+      startDate,
+      expiryDate,
+      status: 'ACTIVE'
+    });
+
+    const saved = await subscription.save();
+    const populated = await MembershipSubscription.findById(saved._id)
+      .populate('planId', 'planName price durationInDays discountPercentage includedServices')
+      .lean();
+    res.status(201).json({ success: true, data: populated });
+  } catch (error) {
+    console.error('Error subscribing customer:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.get('/api/membership/customer/:customerId', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { MembershipPlan, MembershipSubscription, MembershipUsage, Service } = req.businessModels;
+    const { customerId } = req.params;
+    const branchId = req.user.branchId;
+
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({ success: false, error: 'Invalid customer ID' });
+    }
+
+    const subscription = await MembershipSubscription.findOne({
+      branchId,
+      customerId: new mongoose.Types.ObjectId(customerId),
+      status: 'ACTIVE'
+    })
+      .populate('planId')
+      .lean();
+
+    if (!subscription) {
+      return res.json({
+        success: true,
+        data: { subscription: null, usageSummary: [], plan: null }
+      });
+    }
+
+    const plan = subscription.planId;
+    if (!plan || !plan.includedServices || plan.includedServices.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          subscription,
+          plan,
+          usageSummary: []
+        }
+      });
+    }
+
+    const usageSummary = [];
+    for (const inc of plan.includedServices) {
+      const serviceId = inc.serviceId?._id || inc.serviceId;
+      const usageLimit = inc.usageLimit ?? 0;
+      const used = await MembershipUsage.countDocuments({
+        branchId,
+        subscriptionId: subscription._id,
+        serviceId
+      });
+      const service = await Service.findById(serviceId).select('name').lean();
+      usageSummary.push({
+        serviceId,
+        serviceName: service?.name || 'Unknown',
+        used,
+        limit: usageLimit,
+        remaining: Math.max(0, usageLimit - used)
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        subscription,
+        plan,
+        usageSummary
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching customer membership:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Redeem API (called during billing or by frontend)
+app.post('/api/membership/redeem', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { MembershipPlan, MembershipSubscription, MembershipUsage } = req.businessModels;
+    const { customerId, serviceId, staffId, billingId } = req.body;
+    const branchId = req.user.branchId;
+
+    if (!customerId || !serviceId || !staffId || !billingId) {
+      return res.status(400).json({
+        success: false,
+        error: 'customerId, serviceId, staffId, and billingId are required'
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(customerId) || !mongoose.Types.ObjectId.isValid(serviceId) ||
+        !mongoose.Types.ObjectId.isValid(staffId) || !mongoose.Types.ObjectId.isValid(billingId)) {
+      return res.status(400).json({ success: false, error: 'Invalid ObjectId in request' });
+    }
+
+    const subscription = await MembershipSubscription.findOne({
+      branchId,
+      customerId: new mongoose.Types.ObjectId(customerId),
+      status: 'ACTIVE'
+    }).populate('planId');
+
+    if (!subscription) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active membership found for this customer'
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (new Date(subscription.expiryDate) < today) {
+      return res.status(400).json({
+        success: false,
+        error: 'Membership has expired'
+      });
+    }
+
+    const plan = subscription.planId;
+    if (!plan) {
+      return res.status(400).json({ success: false, error: 'Plan not found' });
+    }
+
+    const included = (plan.includedServices || []).find(
+      s => (s.serviceId?._id || s.serviceId)?.toString() === serviceId.toString()
+    );
+    if (!included) {
+      return res.status(400).json({
+        success: false,
+        error: 'Service is not included in this membership plan'
+      });
+    }
+
+    const usageLimit = included.usageLimit ?? 0;
+    const used = await MembershipUsage.countDocuments({
+      branchId,
+      subscriptionId: subscription._id,
+      serviceId: new mongoose.Types.ObjectId(serviceId)
+    });
+
+    if (used >= usageLimit) {
+      return res.status(400).json({
+        success: false,
+        error: 'Usage limit reached for this service'
+      });
+    }
+
+    const usage = new MembershipUsage({
+      branchId,
+      subscriptionId: subscription._id,
+      serviceId: new mongoose.Types.ObjectId(serviceId),
+      usedOn: new Date(),
+      staffId: new mongoose.Types.ObjectId(staffId),
+      billingId: new mongoose.Types.ObjectId(billingId)
+    });
+
+    await usage.save();
+    res.json({ success: true, data: usage });
+  } catch (error) {
+    console.error('Error redeeming membership:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // Products routes
 app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
@@ -7836,7 +8227,7 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
   try {
     console.log('🔍 Dashboard stats request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
-    const { Service, Product, Staff, Client, Appointment, Receipt, Sale } = req.businessModels;
+    const { Service, Product, Staff, Client, Appointment, Receipt, Sale, MembershipSubscription, MembershipPlan } = req.businessModels;
     
     // Get counts from business-specific database
     const totalServices = await Service.countDocuments();
@@ -7862,6 +8253,19 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
     const totalRevenue = receipts.reduce((sum, receipt) => sum + receipt.total, 0);
     console.log('Total revenue:', totalRevenue);
 
+    // Membership metrics
+    const totalActiveMembers = await MembershipSubscription.countDocuments({ status: 'ACTIVE' });
+    const activeSubscriptions = await MembershipSubscription.find({ status: 'ACTIVE' }).populate('planId', 'price').lean();
+    const membershipRevenue = activeSubscriptions.reduce((sum, sub) => sum + (sub.planId?.price || 0), 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const in30Days = new Date(today);
+    in30Days.setDate(in30Days.getDate() + 30);
+    const membersExpiringIn30Days = await MembershipSubscription.countDocuments({
+      status: 'ACTIVE',
+      expiryDate: { $gte: today, $lte: in30Days }
+    });
+
     console.log('✅ Dashboard stats calculated for business:', req.user?.branchId);
     res.json({
       success: true,
@@ -7872,7 +8276,10 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
         totalClients,
         totalAppointments,
         totalReceipts,
-        totalRevenue
+        totalRevenue,
+        totalActiveMembers,
+        membershipRevenue,
+        membersExpiringIn30Days
       }
     });
   } catch (error) {
@@ -8104,6 +8511,14 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     
     // Add branchId to sale data
     saleData.branchId = req.user.branchId;
+
+    // Assign membership on checkout: convert planToAssignId to ObjectId if present
+    if (saleData.planToAssignId && mongoose.Types.ObjectId.isValid(saleData.planToAssignId)) {
+      saleData.planToAssignId = new mongoose.Types.ObjectId(saleData.planToAssignId);
+    } else if (saleData.planToAssignId) {
+      delete saleData.planToAssignId;
+      delete saleData.membershipPlanPrice;
+    }
     
     const sale = new Sale(saleData);
     await sale.save();
@@ -8135,6 +8550,100 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       } catch (autoConsumptionErr) {
         console.error('Auto consumption on sale create failed:', autoConsumptionErr);
         // Don't fail the sale; consumption can be reviewed
+      }
+    }
+
+    // Membership redeem: create MembershipUsage for service items marked as isMembershipFree
+    const customerId = saleData.customerId || savedSale.customerId;
+    if (customerId && mongoose.Types.ObjectId.isValid(customerId) && savedSale.items && Array.isArray(savedSale.items)) {
+      const { MembershipUsage, MembershipSubscription } = req.businessModels;
+      const subscription = await MembershipSubscription.findOne({
+        branchId: req.user.branchId,
+        customerId: new mongoose.Types.ObjectId(customerId),
+        status: 'ACTIVE'
+      }).populate('planId');
+
+      if (subscription && subscription.planId) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (new Date(subscription.expiryDate) >= today) {
+          for (const item of savedSale.items) {
+            if (item.type === 'service' && item.serviceId && item.isMembershipFree) {
+              const staffId = (item.staffContributions && item.staffContributions[0]?.staffId)
+                ? item.staffContributions[0].staffId
+                : item.staffId || req.user._id;
+              const staffIdObj = staffId && mongoose.Types.ObjectId.isValid(staffId)
+                ? new mongoose.Types.ObjectId(staffId)
+                : req.user._id;
+
+              const included = (subscription.planId.includedServices || []).find(
+                s => (s.serviceId?._id || s.serviceId)?.toString() === item.serviceId.toString()
+              );
+              if (included) {
+                const used = await MembershipUsage.countDocuments({
+                  branchId: req.user.branchId,
+                  subscriptionId: subscription._id,
+                  serviceId: item.serviceId
+                });
+                if (used < (included.usageLimit ?? 0)) {
+                  try {
+                    const usage = new MembershipUsage({
+                      branchId: req.user.branchId,
+                      subscriptionId: subscription._id,
+                      serviceId: item.serviceId,
+                      usedOn: new Date(),
+                      staffId: staffIdObj,
+                      billingId: savedSale._id
+                    });
+                    await usage.save();
+                    console.log('[Membership] Redeemed service for bill:', savedSale.billNo);
+                  } catch (membershipErr) {
+                    console.error('[Membership] Redeem failed for item:', item.name, membershipErr);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Assign membership on checkout: when sale is completed and planToAssignId is present
+    const planIdToAssign = savedSale.planToAssignId || saleData.planToAssignId;
+    if (String(savedSale.status).toLowerCase() === 'completed' && planIdToAssign && customerId && mongoose.Types.ObjectId.isValid(customerId) && mongoose.Types.ObjectId.isValid(planIdToAssign)) {
+      try {
+        const { MembershipPlan, MembershipSubscription } = req.businessModels;
+        const plan = await MembershipPlan.findOne({ _id: planIdToAssign, branchId: req.user.branchId });
+        if (plan && plan.isActive) {
+          const existingActive = await MembershipSubscription.findOne({
+            branchId: req.user.branchId,
+            customerId: new mongoose.Types.ObjectId(customerId),
+            status: 'ACTIVE'
+          });
+          if (!existingActive) {
+            const startDate = new Date();
+            const expiryDate = new Date(startDate);
+            expiryDate.setDate(expiryDate.getDate() + plan.durationInDays);
+            const subscription = new MembershipSubscription({
+              branchId: req.user.branchId,
+              customerId: new mongoose.Types.ObjectId(customerId),
+              planId: plan._id,
+              startDate,
+              expiryDate,
+              status: 'ACTIVE',
+              saleId: savedSale._id
+            });
+            await subscription.save();
+            console.log('[Membership] Assigned plan on checkout for bill:', savedSale.billNo);
+          } else {
+            console.warn('[Membership] Customer already has active membership, skipping assign on checkout for bill:', savedSale.billNo);
+          }
+        } else {
+          console.warn('[Membership] Plan not found or inactive, skipping assign on checkout for bill:', savedSale.billNo);
+        }
+      } catch (membershipAssignErr) {
+        console.error('[Membership] Assign on checkout failed:', membershipAssignErr);
+        // Don't fail the sale; membership can be assigned manually
       }
     }
 
@@ -10451,6 +10960,7 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       Product,
       InventoryTransaction,
       BillArchive,
+      MembershipSubscription,
     } = req.businessModels;
 
     const saleId = req.params.id;
@@ -10469,6 +10979,7 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
     console.log(`✅ Sale found: ${sale.billNo}, items count: ${sale.items?.length || 0}`);
 
     // Archive bill before deletion
+    const deleteReason = (req.body?.reason || '').trim() || 'Bill deleted';
     try {
       if (BillArchive) {
         await BillArchive.create(
@@ -10480,7 +10991,7 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
               archivedAt: new Date(),
               archivedBy: req.user?._id || req.user?.id || null,
               archivedByName: req.user?.name || req.user?.firstName || '',
-              reason: 'Bill deleted',
+              reason: deleteReason,
             },
           ],
           session ? { session } : {},
@@ -10618,6 +11129,18 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
         newStock,
         transactionIds: [savedTxn._id],
       });
+    }
+
+    // Deactivate membership if this bill assigned a plan
+    if (sale.planToAssignId) {
+      const subQuery = { saleId: sale._id, status: 'ACTIVE' };
+      const subUpdate = session
+        ? MembershipSubscription.updateOne(subQuery, { $set: { status: 'CANCELLED' } }).session(session)
+        : MembershipSubscription.updateOne(subQuery, { $set: { status: 'CANCELLED' } });
+      const subResult = await subUpdate;
+      if (subResult.modifiedCount > 0) {
+        console.log(`  ✅ Membership deactivated for bill ${sale.billNo}`);
+      }
     }
 
     if (session) {
@@ -11394,6 +11917,324 @@ app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDat
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export service list report'
+    });
+  }
+});
+
+// Get appointment list for report (with filters)
+app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Appointment, Client, Sale } = req.businessModels;
+    const { dateFrom, dateTo, dateFilterType = 'appointment_date', status, showWalkIn } = req.query;
+
+    const query = {};
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom);
+      const toStr = String(dateTo);
+      if (dateFilterType === 'created_date') {
+        query.createdAt = {
+          $gte: new Date(fromStr + 'T00:00:00.000Z'),
+          $lte: new Date(toStr + 'T23:59:59.999Z')
+        };
+      } else {
+        query.date = { $gte: fromStr, $lte: toStr };
+      }
+    }
+    if (status && status !== 'all') {
+      if (status === 'new') {
+        query.status = { $in: ['scheduled', 'confirmed'] };
+      } else {
+        const statusMap = { arrived: 'arrived', started: 'service_started', completed: 'completed', cancelled: 'cancelled' };
+        const dbStatus = statusMap[status] || status;
+        query.status = dbStatus;
+      }
+    }
+    if (showWalkIn === 'false' || showWalkIn === false) {
+      query.$nor = [{ leadSource: new RegExp('^walk-in$', 'i') }];
+    }
+
+    const rawAppointments = await Appointment.find(query).sort({ date: -1, time: -1 }).limit(5000).lean();
+    const clientIds = [...new Set(rawAppointments.map((a) => a.clientId).filter(Boolean))];
+    const clients = clientIds.length ? await Client.find({ _id: { $in: clientIds } }).select('name').lean() : [];
+    const clientMap = new Map(clients.map((c) => [c._id.toString(), c.name || '—']));
+
+    const appointmentIds = rawAppointments.map((a) => a._id);
+    const sales = appointmentIds.length ? await Sale.find({ appointmentId: { $in: appointmentIds } }).lean() : [];
+    const saleByAppointmentId = new Map(sales.map((s) => [s.appointmentId?.toString(), s]));
+
+    const rows = rawAppointments.map((apt) => {
+      const sale = saleByAppointmentId.get(apt._id.toString());
+      const totalAmount = sale?.paymentStatus?.totalAmount ?? sale?.grossTotal ?? 0;
+      const paidAmount = sale?.paymentStatus?.paidAmount ?? 0;
+      const paymentStatus = totalAmount <= 0 ? '—' : paidAmount >= totalAmount ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
+      const statusLabel = { scheduled: 'New', confirmed: 'New', arrived: 'Arrived', service_started: 'Started', completed: 'Completed', cancelled: 'Cancelled' }[apt.status] || apt.status;
+      return {
+        id: apt._id,
+        customerName: clientMap.get(apt.clientId?.toString()) || '—',
+        createdAt: apt.createdAt,
+        startDate: apt.date,
+        startTime: apt.time,
+        price: apt.price ?? 0,
+        status: statusLabel,
+        paymentStatus,
+        isWalkIn: false
+      };
+    });
+
+    // When showWalkIn is true, add standalone sales (no appointmentId) as walk-in rows
+    if (showWalkIn !== 'false' && showWalkIn !== false) {
+      const saleQuery = {
+        $or: [{ appointmentId: null }, { appointmentId: { $exists: false } }],
+        'items.type': 'service'
+      };
+      if (dateFrom && dateTo) {
+        const fromStr = String(dateFrom).split('T')[0];
+        const toStr = String(dateTo).split('T')[0];
+        if (dateFilterType === 'created_date') {
+          saleQuery.createdAt = {
+            $gte: new Date(fromStr + 'T00:00:00.000Z'),
+            $lte: new Date(toStr + 'T23:59:59.999Z')
+          };
+        } else {
+          saleQuery.date = { $gte: new Date(fromStr + 'T00:00:00.000Z'), $lte: new Date(toStr + 'T23:59:59.999Z') };
+        }
+      }
+      if (status && status !== 'all') {
+        if (status === 'cancelled') {
+          saleQuery.status = new RegExp('^cancelled$', 'i');
+        } else if (status === 'completed') {
+          saleQuery.status = new RegExp('^completed$', 'i');
+        }
+        // new, arrived, started don't apply to sales - walk-ins are typically completed
+      }
+      const walkInSales = await Sale.find(saleQuery).sort({ date: -1, time: -1 }).limit(5000).lean();
+      walkInSales.forEach((sale) => {
+        const saleDate = sale.date ? new Date(sale.date) : null;
+        const dateStr = saleDate ? saleDate.toISOString().slice(0, 10) : '';
+        const totalAmount = sale.paymentStatus?.totalAmount ?? sale.grossTotal ?? 0;
+        const paidAmount = sale.paymentStatus?.paidAmount ?? 0;
+        const paymentStatus = totalAmount <= 0 ? '—' : paidAmount >= totalAmount ? 'Paid' : paidAmount > 0 ? 'Partial' : 'Unpaid';
+        const statusStr = String(sale.status || '').toLowerCase();
+        const statusLabel = statusStr === 'cancelled' ? 'Cancelled' : statusStr === 'completed' ? 'Completed' : 'Completed';
+        rows.push({
+          id: 'sale-' + sale._id,
+          customerName: sale.customerName || '—',
+          createdAt: sale.createdAt,
+          startDate: dateStr,
+          startTime: sale.time || '',
+          price: sale.grossTotal ?? 0,
+          status: statusLabel,
+          paymentStatus,
+          isWalkIn: true,
+          billNo: sale.billNo
+        });
+      });
+      rows.sort((a, b) => {
+        const dA = a.startDate + (a.startTime || '');
+        const dB = b.startDate + (b.startTime || '');
+        return dB.localeCompare(dA);
+      });
+    }
+
+    const totalValue = rows.reduce((sum, r) => sum + (r.price || 0), 0);
+    res.json({
+      success: true,
+      data: rows,
+      summary: { count: rows.length, totalValue }
+    });
+  } catch (error) {
+    console.error('Error fetching appointment list:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch appointment list'
+    });
+  }
+});
+
+// Get unpaid/part-paid bills for report
+app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Sale } = req.businessModels;
+    const { dateFrom, dateTo, status } = req.query;
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const query = {
+      status: { $nin: ['cancelled', 'Cancelled'] },
+      $expr: { $lt: [{ $ifNull: ['$paymentStatus.paidAmount', 0] }, { $ifNull: ['$paymentStatus.totalAmount', 999999999] }] }
+    };
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom).split('T')[0];
+      const toStr = String(dateTo).split('T')[0];
+      query.date = {
+        $gte: new Date(fromStr + 'T00:00:00.000Z'),
+        $lte: new Date(toStr + 'T23:59:59.999Z')
+      };
+    }
+    if (status && status !== 'all') {
+      if (status === 'unpaid') {
+        query['paymentStatus.paidAmount'] = 0;
+      } else if (status === 'part_paid') {
+        query['paymentStatus.paidAmount'] = { $gt: 0 };
+      } else if (status === 'overdue') {
+        query['$and'] = [
+          { 'paymentStatus.dueDate': { $lt: thirtyDaysAgo } },
+          { $or: [
+            { 'paymentStatus.remainingAmount': { $gt: 0 } },
+            { $expr: { $lt: ['$paymentStatus.paidAmount', '$paymentStatus.totalAmount'] } }
+          ]}
+        ];
+      }
+    }
+    const sales = await Sale.find(query).sort({ date: -1 }).limit(5000).lean();
+    const rows = sales.map((s) => {
+      const totalAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? 0;
+      const paidAmount = s.paymentStatus?.paidAmount ?? 0;
+      const remainingAmount = s.paymentStatus?.remainingAmount ?? Math.max(0, totalAmount - paidAmount);
+      const dueDate = s.paymentStatus?.dueDate ? new Date(s.paymentStatus.dueDate) : null;
+      const isOverdue = dueDate && dueDate < thirtyDaysAgo && remainingAmount > 0;
+      let statusLabel = 'Unpaid';
+      if (paidAmount >= totalAmount) statusLabel = 'Full Paid';
+      else if (paidAmount > 0) statusLabel = 'Part Paid';
+      else if (isOverdue) statusLabel = 'Overdue';
+      else statusLabel = 'Unpaid';
+      if (!isOverdue && paidAmount < totalAmount && dueDate && dueDate < thirtyDaysAgo) statusLabel = 'Overdue';
+      return {
+        id: s._id,
+        billNo: s.billNo,
+        customerName: s.customerName || '—',
+        customerPhone: s.customerPhone || '',
+        date: s.date,
+        invoiceAmount: totalAmount,
+        outstandingAmount: remainingAmount,
+        status: statusLabel
+      };
+    });
+    const totalOutstanding = rows.reduce((sum, r) => sum + (r.outstandingAmount || 0), 0);
+    res.json({
+      success: true,
+      data: rows,
+      summary: { count: rows.length, totalOutstanding }
+    });
+  } catch (error) {
+    console.error('Error fetching unpaid/part-paid:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch unpaid/part-paid bills'
+    });
+  }
+});
+
+// Get deleted invoices (archived bills) for report
+app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { BillArchive } = req.businessModels;
+    const { date, dateFrom, dateTo } = req.query;
+    const query = {};
+    if (dateFrom && dateTo) {
+      const fromStr = String(dateFrom).split('T')[0];
+      const toStr = String(dateTo).split('T')[0];
+      query.archivedAt = {
+        $gte: new Date(fromStr + 'T00:00:00.000Z'),
+        $lte: new Date(toStr + 'T23:59:59.999Z')
+      };
+    } else if (date) {
+      const dateStr = String(date).split('T')[0];
+      query.archivedAt = {
+        $gte: new Date(dateStr + 'T00:00:00.000Z'),
+        $lte: new Date(dateStr + 'T23:59:59.999Z')
+      };
+    }
+    const archives = await BillArchive.find(query).sort({ archivedAt: -1 }).limit(5000).lean();
+    const rows = archives.map((a) => ({
+      id: a._id,
+      billNo: a.billNo || a.originalBill?.billNo || '—',
+      customerName: a.originalBill?.customerName || '—',
+      date: a.archivedAt,
+      reason: a.reason || '—',
+      cancelledBy: a.archivedByName || '—',
+      grossTotal: a.originalBill?.grossTotal ?? 0,
+      originalBill: a.originalBill
+    }));
+    const totalValue = rows.reduce((sum, r) => sum + (r.grossTotal || 0), 0);
+    res.json({
+      success: true,
+      data: rows,
+      summary: { count: rows.length, totalValue }
+    });
+  } catch (error) {
+    console.error('Error fetching deleted invoices:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch deleted invoices'
+    });
+  }
+});
+
+// Export unpaid/part-paid report (emailed to admin only)
+app.post('/api/reports/export/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportUnpaidPartPaidReport } = require('./utils/report-exporter');
+    const result = await exportUnpaidPartPaidReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Unpaid/Part-Paid report has been sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting unpaid/part-paid report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export unpaid/part-paid report'
+    });
+  }
+});
+
+// Export deleted invoices report (emailed to admin only)
+app.post('/api/reports/export/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportDeletedInvoicesReport } = require('./utils/report-exporter');
+    const result = await exportDeletedInvoicesReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Deleted invoice report has been sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting deleted invoice report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export deleted invoice report'
+    });
+  }
+});
+
+// Export appointment list report (emailed to admin only)
+app.post('/api/reports/export/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportAppointmentListReport } = require('./utils/report-exporter');
+    const result = await exportAppointmentListReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Appointment list report has been sent to admin email(s)'
+    });
+  } catch (error) {
+    console.error('Error exporting appointment list report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export appointment list report'
     });
   }
 });

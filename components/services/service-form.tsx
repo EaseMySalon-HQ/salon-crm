@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
-import { ServicesAPI, ConsumptionRulesAPI } from "@/lib/api"
+import { ServicesAPI, ConsumptionRulesAPI, SettingsAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
 import { CategoryCombobox } from "../products/category-combobox"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -37,6 +37,18 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
     hsnSacCode: service?.hsnSacCode ?? "",
     isAutoConsumptionEnabled: !!service?.isAutoConsumptionEnabled,
   })
+  const [taxEnabled, setTaxEnabled] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    if (service) return
+    SettingsAPI.getPaymentSettings()
+      .then((res) => {
+        const enabled = res.success && res.data?.enableTax !== false
+        setTaxEnabled(enabled)
+        if (enabled) setFormData((prev) => ({ ...prev, taxApplicable: true }))
+      })
+      .catch(() => setTaxEnabled(false))
+  }, [service])
   const [pendingConsumptionRules, setPendingConsumptionRules] = useState<PendingConsumptionRule[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const { toast } = useToast()
@@ -113,7 +125,7 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
             duration: "",
             fullPrice: "",
             offerPrice: "",
-            taxApplicable: false,
+            taxApplicable: taxEnabled === true,
             hsnSacCode: "",
             isAutoConsumptionEnabled: false,
           })

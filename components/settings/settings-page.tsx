@@ -1,9 +1,10 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useSearchParams } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Settings, Building2, Calendar, CreditCard, Bell, ChevronRight, Receipt, DollarSign, Calculator, Wallet } from "lucide-react"
+import { Settings, Building2, Calendar, CreditCard, Bell, ChevronRight, Receipt, DollarSign, Calculator, Wallet, Wrench, Package } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { useRouter } from "next/navigation"
 import { GeneralSettings } from "./general-settings"
@@ -15,6 +16,15 @@ import { TaxSettings } from "./tax-settings"
 import { NotificationSettings } from "./notification-settings"
 import { POSSettings } from "./pos-settings"
 import { PlanBilling } from "./plan-billing"
+import { MembershipPlansTable } from "@/components/membership/membership-plans-table"
+import { ServicesTable } from "@/components/services/services-table"
+import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
+import { ProductsTable } from "@/components/products/products-table"
+import { ProductStatsCards } from "@/components/dashboard/stats-cards"
+import { CategoryManagement } from "@/components/categories/category-management"
+import { SuppliersAndOrdersTab } from "@/components/suppliers/suppliers-and-orders-tab"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Scissors, FolderTree, Truck } from "lucide-react"
 
 import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
 
@@ -28,12 +38,24 @@ const settingsCategories = [
   { id: "pos", title: "POS Settings", description: "Invoice sequence management and custom prefix configuration", icon: Receipt },
   { id: "notifications", title: "Notifications", description: "Email alerts, SMS notifications, and reminder settings", icon: Bell },
   { id: "plan-billing", title: "Plan & Billing", description: "View plan details, billing information, and manage subscription", icon: Wallet },
+  { id: "membership", title: "Membership", description: "Create tier-based plans and assign memberships to customers", icon: CreditCard },
+  { id: "services", title: "Services", description: "Manage salon services, pricing, and categories", icon: Wrench },
+  { id: "products", title: "Products", description: "Product inventory, stock levels, and suppliers", icon: Package },
 ]
 
 export function SettingsPage() {
-  const [activeSection, setActiveSection] = useState<string | null>(null)
+  const searchParams = useSearchParams()
+  const sectionParam = searchParams.get("section")
+  const [activeSection, setActiveSection] = useState<string | null>(sectionParam || null)
   const { user, isLoading, hasPermission } = useAuth()
   const router = useRouter()
+
+  // Sync activeSection from URL when section param changes
+  useEffect(() => {
+    if (sectionParam && ["general", "business", "appointments", "currency", "tax", "payments", "pos", "notifications", "plan-billing", "membership", "services", "products"].includes(sectionParam)) {
+      setActiveSection(sectionParam)
+    }
+  }, [sectionParam])
 
   // Basic authentication check
   useEffect(() => {
@@ -88,6 +110,67 @@ export function SettingsPage() {
         return <NotificationSettings />
       case "plan-billing":
         return <PlanBilling />
+      case "membership":
+        return (
+          <div className="space-y-6">
+            <MembershipPlansTable />
+          </div>
+        )
+      case "services":
+        return (
+          <Tabs defaultValue="services" className="w-full">
+            <TabsList className="mb-6">
+              <TabsTrigger value="services" className="gap-2">
+                <Scissors className="h-4 w-4" />
+                Services
+              </TabsTrigger>
+              <TabsTrigger value="categories" className="gap-2">
+                <FolderTree className="h-4 w-4" />
+                Categories
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="services" className="space-y-6">
+              <ServiceStatsCards />
+              <div className="rounded-xl border border-gray-200 overflow-hidden">
+                <ServicesTable />
+              </div>
+            </TabsContent>
+            <TabsContent value="categories">
+              <CategoryManagement type="service" title="Service Categories" description="Manage categories for your salon services" />
+            </TabsContent>
+          </Tabs>
+        )
+      case "products":
+        return (
+          <Tabs defaultValue="products" className="w-full">
+            <TabsList className="mb-6 grid grid-cols-3">
+              <TabsTrigger value="products" className="gap-2">
+                <Package className="h-4 w-4" />
+                Products
+              </TabsTrigger>
+              <TabsTrigger value="categories" className="gap-2">
+                <FolderTree className="h-4 w-4" />
+                Categories
+              </TabsTrigger>
+              <TabsTrigger value="suppliers" className="gap-2">
+                <Truck className="h-4 w-4" />
+                Suppliers & Orders
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="products" className="space-y-6">
+              <ProductStatsCards />
+              <div className="rounded-xl border border-gray-200 overflow-hidden">
+                <ProductsTable />
+              </div>
+            </TabsContent>
+            <TabsContent value="categories">
+              <CategoryManagement type="product" title="Product Categories" description="Manage categories for your salon products" />
+            </TabsContent>
+            <TabsContent value="suppliers">
+              <SuppliersAndOrdersTab />
+            </TabsContent>
+          </Tabs>
+        )
       default:
         return null
     }
@@ -95,25 +178,6 @@ export function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
-      {/* Elegant Header Section */}
-      <div className="mb-8">
-        <div className="rounded-3xl border border-slate-100 bg-white/80 shadow-sm backdrop-blur">
-          <div className="grid gap-6 p-6 lg:grid-cols-[auto_minmax(0,1fr)]">
-            <div className="flex items-center gap-4">
-              <div className="rounded-2xl border border-blue-100 bg-blue-50/80 p-3 text-blue-700">
-                <Settings className="h-8 w-8" />
-              </div>
-              <div>
-                <h1 className="text-3xl font-semibold text-slate-900">Settings & Configuration</h1>
-                <p className="text-slate-500">
-                  Personalize every touchpoint—from branding to billing—without leaving this space.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {!activeSection ? (
         /* Initial State: Categories as Cards in Grid */
         <div className="rounded-3xl border border-slate-100 bg-white/90 p-6 shadow-sm backdrop-blur">
@@ -186,101 +250,24 @@ export function SettingsPage() {
           </div>
         </div>
       ) : (
-        /* After Selection: Sidebar + Content Layout */
-        <div className="grid gap-6 lg:grid-cols-4">
-          {/* Settings Navigation - Left Sidebar */}
-          <div className="lg:col-span-1">
-            <Card className="border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2 text-lg text-slate-900">
-                  <Settings className="h-5 w-5 text-blue-600" />
-                  Settings Categories
-                </CardTitle>
-                <CardDescription>Pick a category to configure</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {settingsCategories.map((category) => {
-                  const Icon = category.icon
-                  const hasAccess = canAccessSetting(category.id)
-
-                  return (
-                    <button
-                      key={category.id}
-                      onClick={() => setActiveSection(category.id)}
-                      className={`w-full flex items-center justify-between p-4 rounded-xl text-left transition-all duration-200 ${
-                        activeSection === category.id
-                          ? "bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg"
-                          : hasAccess
-                          ? "hover:bg-slate-50 hover:shadow-md border border-transparent hover:border-slate-200"
-                          : "opacity-50 cursor-not-allowed bg-slate-50"
-                      }`}
-                      disabled={!hasAccess}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`p-2.5 rounded-lg transition-all duration-200 ${
-                            activeSection === category.id ? "bg-white/20" : "bg-blue-50"
-                          }`}
-                        >
-                          <Icon
-                            className={`h-5 w-5 ${
-                              activeSection === category.id ? "text-white" : "text-blue-600"
-                            }`}
-                          />
-                        </div>
-                        <div>
-                          <div
-                            className={`font-semibold text-sm ${
-                              activeSection === category.id ? "text-white" : "text-slate-900"
-                            }`}
-                          >
-                            {category.title}
-                          </div>
-                          <div
-                            className={`text-xs ${
-                              activeSection === category.id ? "text-white/90" : "text-slate-500"
-                            }`}
-                          >
-                            {category.description}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {!hasAccess && (
-                          <Badge
-                            variant="secondary"
-                            className="text-xs bg-slate-200 text-slate-600 px-2 py-1"
-                          >
-                            restricted
-                          </Badge>
-                        )}
-                        <ChevronRight
-                          className={`h-4 w-4 transition-transform duration-200 ${
-                            activeSection === category.id
-                              ? "text-white transform rotate-90"
-                              : "text-slate-400"
-                          }`}
-                        />
-                      </div>
-                    </button>
-                  )
-                })}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Settings Content - Right Panel */}
-          <div className="lg:col-span-3">
-            <Card className="border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
-              <CardContent className="p-6">
-                {activeSection && !canAccessSetting(activeSection) ? (
-                  <p className="text-slate-600">You don&apos;t have permission to access this setting.</p>
-                ) : (
-                  renderSettingComponent()
-                )}
-              </CardContent>
-            </Card>
-          </div>
+        /* After Selection: Content only, with back button */
+        <div className="space-y-6">
+          <button
+            onClick={() => setActiveSection(null)}
+            className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"
+          >
+            <ChevronRight className="h-4 w-4 rotate-180" />
+            Back to Settings
+          </button>
+          <Card className="border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
+            <CardContent className="p-6">
+              {activeSection && !canAccessSetting(activeSection) ? (
+                <p className="text-slate-600">You don&apos;t have permission to access this setting.</p>
+              ) : (
+                renderSettingComponent()
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
     </div>

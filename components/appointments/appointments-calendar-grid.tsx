@@ -298,6 +298,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [appointmentToCancel, setAppointmentToCancel] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [showDeleteInvoiceConfirm, setShowDeleteInvoiceConfirm] = useState(false)
+  const [deleteInvoiceReason, setDeleteInvoiceReason] = useState("")
   const [deletingInvoice, setDeletingInvoice] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [showColorLegend, setShowColorLegend] = useState(false)
@@ -1017,10 +1018,10 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   const confirmDeleteInvoice = async () => {
-    if (!linkedSale?._id || !selectedAppointment?._id) return
+    if (!linkedSale?._id || !selectedAppointment?._id || !deleteInvoiceReason.trim()) return
     setDeletingInvoice(true)
     try {
-      const saleRes = await SalesAPI.delete(linkedSale._id)
+      const saleRes = await SalesAPI.delete(linkedSale._id, deleteInvoiceReason.trim())
       if (!saleRes?.success) {
         alert("Failed to delete invoice. Please try again.")
         return
@@ -1041,6 +1042,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       setLinkedSale(null)
       setShowDetails(false)
       setShowDeleteInvoiceConfirm(false)
+      setDeleteInvoiceReason("")
       window.dispatchEvent(new CustomEvent("appointments-refresh"))
       alert(allAptDeleted ? "Invoice and appointment(s) deleted successfully" : "Invoice deleted. Failed to delete some appointment(s).")
     } catch (e) {
@@ -1578,7 +1580,7 @@ export const AppointmentsCalendarGrid = forwardRef<
               className="text-sm font-medium text-slate-700 bg-transparent border-0 focus:outline-none focus:ring-0 min-w-[120px]"
             />
           </div>
-          <div className="flex items-center gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
+          <div className="flex h-9 items-center gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
             {dayChips.map((day) => {
               const dStr = format(day, "yyyy-MM-dd")
               const isToday = dStr === format(new Date(), "yyyy-MM-dd")
@@ -3039,7 +3041,10 @@ export const AppointmentsCalendarGrid = forwardRef<
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showDeleteInvoiceConfirm} onOpenChange={setShowDeleteInvoiceConfirm}>
+      <Dialog open={showDeleteInvoiceConfirm} onOpenChange={(open) => {
+          setShowDeleteInvoiceConfirm(open)
+          if (!open) setDeleteInvoiceReason("")
+        }}>
         <DialogContent className="rounded-2xl border-0 shadow-2xl max-w-md">
           <DialogHeader className="text-center pb-4">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
@@ -3062,10 +3067,25 @@ export const AppointmentsCalendarGrid = forwardRef<
               This will delete the invoice and the appointment. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="delete-invoice-reason" className="block text-sm font-medium text-slate-700 mb-1.5">
+                Reason for deletion <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                id="delete-invoice-reason"
+                value={deleteInvoiceReason}
+                onChange={(e) => setDeleteInvoiceReason(e.target.value)}
+                placeholder="Enter reason for deleting this invoice..."
+                className="w-full min-h-[80px] px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500 resize-none"
+                disabled={deletingInvoice}
+              />
+            </div>
+          </div>
           <div className="flex gap-3 justify-end">
             <Button
               variant="outline"
-              onClick={() => setShowDeleteInvoiceConfirm(false)}
+              onClick={() => { setShowDeleteInvoiceConfirm(false); setDeleteInvoiceReason("") }}
               disabled={deletingInvoice}
               className="border-slate-300 text-slate-700 hover:bg-slate-50"
             >
@@ -3074,7 +3094,7 @@ export const AppointmentsCalendarGrid = forwardRef<
             <Button
               variant="destructive"
               onClick={confirmDeleteInvoice}
-              disabled={deletingInvoice}
+              disabled={deletingInvoice || !deleteInvoiceReason.trim()}
               className="bg-red-600 hover:bg-red-700 text-white"
             >
               {deletingInvoice ? (

@@ -255,7 +255,7 @@ export function InventoryLogs() {
     return (
       <span className={`flex items-center gap-1 font-medium ${colorClass}`}>
         {icon}
-        {isIncrease ? '+' : ''}{quantity}
+        {isIncrease ? '+' : ''}{Number(quantity).toFixed(2)}
       </span>
     )
   }
@@ -473,7 +473,7 @@ export function InventoryLogs() {
                           <TableCell>
                             <div className="text-sm">
                               <div className="text-gray-500">
-                                {transaction.previousStock} → {transaction.newStock}
+                                {Number(transaction.previousStock).toFixed(2)} → {Number(transaction.newStock).toFixed(2)}
                               </div>
                             </div>
                           </TableCell>

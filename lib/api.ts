@@ -811,8 +811,8 @@ export class SalesAPI {
     return response.data
   }
 
-  static async delete(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.delete(`/sales/${id}`)
+  static async delete(id: string, reason?: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.delete(`/sales/${id}`, reason ? { data: { reason } } : undefined)
     return response.data
   }
 
@@ -853,6 +853,66 @@ export class SalesAPI {
   // Get unpaid/overdue bills
   static async getUnpaidBills(params?: { page?: number; limit?: number }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/sales/unpaid/overdue', { params })
+    return response.data
+  }
+}
+
+export class MembershipAPI {
+  static async getPlans(params?: { isActive?: boolean }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/membership/plans', { params })
+    return response.data
+  }
+
+  static async createPlan(data: {
+    planName: string
+    price: number
+    durationInDays: number
+    discountPercentage?: number
+    includedServices?: Array<{ serviceId: string; usageLimit: number }>
+    isActive?: boolean
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/membership/plans', data)
+    return response.data
+  }
+
+  static async updatePlan(id: string, data: Partial<{
+    planName: string
+    price: number
+    durationInDays: number
+    discountPercentage: number
+    includedServices: Array<{ serviceId: string; usageLimit: number }>
+    isActive: boolean
+  }>): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/membership/plans/${id}`, data)
+    return response.data
+  }
+
+  static async togglePlan(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/membership/plans/${id}/toggle`)
+    return response.data
+  }
+
+  static async subscribe(data: { customerId: string; planId: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/membership/subscribe', data)
+    return response.data
+  }
+
+  static async getByCustomer(customerId: string): Promise<ApiResponse<{
+    subscription: any
+    plan: any
+    usageSummary: Array<{ serviceId: string; serviceName: string; used: number; limit: number; remaining: number }>
+  }>> {
+    const response = await apiClient.get(`/membership/customer/${customerId}`)
+    return response.data
+  }
+
+  static async redeem(data: {
+    customerId: string
+    serviceId: string
+    staffId: string
+    billingId: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/membership/redeem', data)
     return response.data
   }
 }
@@ -1014,6 +1074,45 @@ export class ReportsAPI {
 
   static async exportSummary(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/reports/export/summary', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async getAppointmentList(params?: { dateFrom?: string; dateTo?: string; dateFilterType?: string; status?: string; showWalkIn?: boolean }): Promise<ApiResponse<any> & { data: any[]; summary: { count: number; totalValue: number } }> {
+    const response = await apiClient.get('/reports/appointment-list', { params });
+    return response.data;
+  }
+
+  static async exportAppointmentList(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/appointment-list', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async getUnpaidPartPaid(params?: { dateFrom?: string; dateTo?: string; status?: string }): Promise<ApiResponse<any> & { data: any[]; summary: { count: number; totalOutstanding: number } }> {
+    const response = await apiClient.get('/reports/unpaid-part-paid', { params });
+    return response.data;
+  }
+
+  static async exportUnpaidPartPaid(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/unpaid-part-paid', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async getDeletedInvoices(params?: { date?: string; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any> & { data: any[]; summary: { count: number; totalValue: number } }> {
+    const response = await apiClient.get('/reports/deleted-invoices', { params });
+    return response.data;
+  }
+
+  static async exportDeletedInvoices(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/deleted-invoices', {
       format,
       filters
     });
