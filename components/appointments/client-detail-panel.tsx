@@ -9,9 +9,11 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { ClientsAPI, SalesAPI } from "@/lib/api"
+import { ClientsAPI, SalesAPI, MembershipAPI } from "@/lib/api"
 import type { Client } from "@/lib/client-store"
 import { useCurrency } from "@/hooks/use-currency"
+import { format } from "date-fns"
+import { cn } from "@/lib/utils"
 
 interface ClientDetailPanelProps {
   client: Client
@@ -25,6 +27,7 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
   const [bills, setBills] = useState<any[]>([])
   const [duesUnpaid, setDuesUnpaid] = useState(0)
   const [clientDetails, setClientDetails] = useState<Client | null>(null)
+  const [membershipData, setMembershipData] = useState<{ subscription: any; plan: any } | null>(null)
   const [showAllBills, setShowAllBills] = useState(false)
   const [expandedBillId, setExpandedBillId] = useState<string | null>(null)
   const [billActivityOpen, setBillActivityOpen] = useState(false)
@@ -46,15 +49,22 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
     async function fetchStats() {
       setLoading(true)
       try {
-        const [salesRes, clientRes] = await Promise.all([
+        const [salesRes, clientRes, membershipRes] = await Promise.all([
           client.name ? SalesAPI.getByClient(client.name) : Promise.resolve({ success: false, data: [] as any[] }),
           ClientsAPI.getById(clientId).catch(() => ({ success: false, data: null })),
+          MembershipAPI.getByCustomer(clientId).catch(() => ({ success: false, data: null })),
         ])
 
         if (cancelled) return
 
         if (clientRes?.success && clientRes.data) {
           setClientDetails(clientRes.data)
+        }
+
+        if (membershipRes?.success && membershipRes.data) {
+          setMembershipData(membershipRes.data as any)
+        } else {
+          setMembershipData(null)
         }
 
         const salesList = Array.isArray(salesRes?.data) ? salesRes.data : []
@@ -112,18 +122,52 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
           Client Details
         </CardTitle>
       </CardHeader>
-      <CardContent className="p-4 sm:p-5 lg:p-6 space-y-3 sm:space-y-4 lg:space-y-5 flex-1 flex flex-col min-h-0">
+      <CardContent className="relative p-4 sm:p-5 lg:p-6 space-y-3 sm:space-y-4 lg:space-y-5 flex-1 flex flex-col min-h-0">
+        {membershipData?.subscription?.expiryDate && (
+          <span className="absolute top-4 right-4 sm:top-5 sm:right-5 lg:top-6 lg:right-6 text-xs text-slate-500">
+            Valid till {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
+          </span>
+        )}
         {/* Profile photo (avatar / initial) */}
         <div className="flex justify-center shrink-0">
-          <Avatar className="h-16 w-16 sm:h-20 sm:w-20 lg:h-24 lg:w-24 rounded-full border-2 sm:border-4 border-indigo-100 bg-gradient-to-br from-indigo-100 to-purple-100">
-            <AvatarFallback className="text-xl sm:text-2xl lg:text-3xl font-bold text-indigo-700 bg-transparent">
+          <Avatar
+            className={cn(
+              "h-16 w-16 sm:h-20 sm:w-20 lg:h-24 lg:w-24 rounded-full",
+              membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                ? "border-0 bg-gradient-to-br from-amber-100 via-yellow-50 to-amber-200 ring-4 ring-amber-200/70 shadow-[0_0_20px_rgba(251,191,36,0.3)]"
+                : "border-2 sm:border-4 border-indigo-100 bg-gradient-to-br from-indigo-100 to-purple-100"
+            )}
+          >
+            <AvatarFallback
+              className={cn(
+                "text-xl sm:text-2xl lg:text-3xl font-bold bg-transparent",
+                membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                  ? "text-amber-700"
+                  : "text-indigo-700"
+              )}
+            >
               {initial}
             </AvatarFallback>
           </Avatar>
         </div>
 
         <div className="text-center space-y-1 sm:space-y-1.5 shrink-0">
-          <p className="font-semibold text-slate-900 text-base sm:text-lg lg:text-xl truncate px-1">{displayName}</p>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <p className="font-semibold text-slate-900 text-base sm:text-lg lg:text-xl truncate px-1">{displayName}</p>
+            {membershipData?.subscription && membershipData?.plan && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "text-xs font-medium shrink-0",
+                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                    ? "border-amber-300 bg-amber-50/80 text-amber-800"
+                    : "border-emerald-300 bg-emerald-50/80 text-emerald-700"
+                )}
+              >
+                {membershipData.plan.planName || "Membership"}
+              </Badge>
+            )}
+          </div>
           <div className="flex items-center justify-center gap-2 text-slate-600">
             <Phone className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" />
             <span className="text-sm sm:text-base font-medium truncate">{displayPhone}</span>

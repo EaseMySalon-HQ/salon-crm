@@ -24,7 +24,10 @@ const itemSchema = new mongoose.Schema({
   staffId: { type: String, default: '' },
   staffName: { type: String, default: '' },
   // New multi-staff support
-  staffContributions: [staffContributionSchema]
+  staffContributions: [staffContributionSchema],
+  // Membership audit fields
+  isMembershipFree: { type: Boolean, default: false },
+  membershipDiscountPercent: { type: Number, default: 0 }
 }, { _id: false });
 
 const paymentHistorySchema = new mongoose.Schema({
@@ -37,6 +40,7 @@ const paymentHistorySchema = new mongoose.Schema({
 
 const saleSchema = new mongoose.Schema({
   billNo: { type: String, required: true, unique: true },
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' },
   customerName: { type: String, required: true },
   customerPhone: { type: String, default: '' },
   appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
@@ -100,7 +104,10 @@ const saleSchema = new mongoose.Schema({
     type: String, 
     unique: true,
     sparse: true // Allows null values but enforces uniqueness when present
-  }
+  },
+  // Assign membership on checkout (Quick Sale flow)
+  planToAssignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MembershipPlan', default: null },
+  membershipPlanPrice: { type: Number, default: 0 }
 }, {
   timestamps: true
 });

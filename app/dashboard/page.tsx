@@ -1,12 +1,11 @@
 import Link from "next/link"
-import { Receipt, TrendingUp, Calendar, Users, BarChart3, Package } from "lucide-react"
+import { Receipt, TrendingUp, Calendar, Users, BarChart3, Package, CreditCard } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Overview } from "@/components/dashboard/overview"
 import { RecentAppointments } from "@/components/dashboard/recent-appointments"
-import { DashboardStatsCards } from "@/components/dashboard/stats-cards"
-import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
+import { DashboardStatsCards, MembershipStatsCards, ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { ProductStatsCards } from "@/components/dashboard/stats-cards"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 
@@ -81,6 +80,14 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           </div>
+        </div>
+
+        <div className="mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "700ms" }}>
+          <div className="flex items-center gap-3 mb-6">
+            <CreditCard className="h-6 w-6 text-violet-600" />
+            <h2 className="text-2xl font-semibold text-gray-800">Membership</h2>
+          </div>
+          <MembershipStatsCards />
         </div>
 
         <div className="mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "800ms" }}>

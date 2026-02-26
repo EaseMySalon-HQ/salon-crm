@@ -8,6 +8,7 @@ const permissionSchema = new mongoose.Schema({
       'dashboard',
       'appointments',
       'clients',
+      'membership',
       'services',
       'products',
       'staff',
@@ -54,6 +55,13 @@ const roleDefinitions = {
       { module: 'clients', feature: 'edit', enabled: true },
       { module: 'clients', feature: 'delete', enabled: true },
       { module: 'clients', feature: 'manage', enabled: true },
+      
+      // Membership
+      { module: 'membership', feature: 'view', enabled: true },
+      { module: 'membership', feature: 'create', enabled: true },
+      { module: 'membership', feature: 'edit', enabled: true },
+      { module: 'membership', feature: 'delete', enabled: true },
+      { module: 'membership', feature: 'manage', enabled: true },
       
       // Services
       { module: 'services', feature: 'view', enabled: true },
@@ -156,6 +164,13 @@ const roleDefinitions = {
       { module: 'products', feature: 'delete', enabled: true },
       { module: 'products', feature: 'manage', enabled: true },
       
+      // Membership
+      { module: 'membership', feature: 'view', enabled: true },
+      { module: 'membership', feature: 'create', enabled: true },
+      { module: 'membership', feature: 'edit', enabled: true },
+      { module: 'membership', feature: 'delete', enabled: true },
+      { module: 'membership', feature: 'manage', enabled: true },
+      
       // Sales
       { module: 'sales', feature: 'view', enabled: true },
       { module: 'sales', feature: 'create', enabled: true },
@@ -195,6 +210,9 @@ const roleDefinitions = {
       { module: 'clients', feature: 'view', enabled: true },
       { module: 'clients', feature: 'create', enabled: true },
       { module: 'clients', feature: 'edit', enabled: true },
+      
+      // Membership (view only)
+      { module: 'membership', feature: 'view', enabled: true },
       
       // Services (view only)
       { module: 'services', feature: 'view', enabled: true },

@@ -459,9 +459,54 @@ async function sendWeeklySummaries() {
 }
 
 /**
+ * Expire membership subscriptions where expiryDate < today
+ */
+async function expireMembershipSubscriptions() {
+  try {
+    console.log('📅 Starting membership expiry job...');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const businesses = await Business.find({ status: 'active' });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (const business of businesses) {
+      try {
+        const businessDb = await databaseManager.getConnection(business._id, mainConnection);
+        const businessModels = modelFactory.createBusinessModels(businessDb);
+        const { MembershipSubscription } = businessModels;
+
+        const result = await MembershipSubscription.updateMany(
+          { status: 'ACTIVE', expiryDate: { $lt: today } },
+          { $set: { status: 'EXPIRED' } }
+        );
+
+        if (result.modifiedCount > 0) {
+          console.log(`📅 Expired ${result.modifiedCount} membership(s) for ${business.name}`);
+        }
+      } catch (err) {
+        console.error(`❌ Error expiring memberships for ${business.name}:`, err);
+      }
+    }
+    console.log('✅ Membership expiry job completed');
+  } catch (error) {
+    console.error('❌ Membership expiry job failed:', error);
+  }
+}
+
+/**
  * Setup email scheduler cron jobs
  */
 function setupEmailScheduler() {
+  // Membership expiry - runs daily at 00:05 IST
+  cron.schedule('5 0 * * *', async () => {
+    console.log('⏰ Running membership expiry job...');
+    await expireMembershipSubscriptions();
+  }, {
+    scheduled: true,
+    timezone: 'Asia/Kolkata'
+  });
+
   // Daily summary - runs every day at configured time (default 9 PM)
   // For now, we'll check all businesses and use their configured times
   // In production, you might want separate cron jobs per business
@@ -492,6 +537,7 @@ function setupEmailScheduler() {
   });
   
   console.log('✅ Email scheduler jobs configured');
+  console.log('   - Membership expiry: Every day at 12:05 AM IST');
   console.log('   - Daily summary: Every day at 9:00 PM IST');
   console.log('   - Weekly summary: Every Sunday at 8:00 PM IST');
   console.log('   - Low inventory check: Every day at 10:00 AM IST');
@@ -631,6 +677,7 @@ module.exports = {
   sendDailySummaries,
   sendWeeklySummaries,
   checkLowInventory,
+  expireMembershipSubscriptions,
   setupEmailScheduler
 };
 

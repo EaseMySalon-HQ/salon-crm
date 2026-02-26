@@ -134,6 +134,24 @@ export function MultiCategorySelect({ value, onChange, disabled }: MultiCategory
           <CommandList>
             <CommandEmpty>No categories found.</CommandEmpty>
             <CommandGroup>
+              <CommandItem
+                value="Select all"
+                onSelect={() => {
+                  const allSelected = categories.length > 0 && value.length === categories.length
+                  onChange(allSelected ? [] : categories.map((c) => c.name))
+                }}
+                className="font-medium border-b"
+              >
+                <div
+                  className={cn(
+                    "mr-2 flex h-4 w-4 items-center justify-center rounded-sm border border-primary",
+                    categories.length > 0 && value.length === categories.length ? "bg-primary text-primary-foreground" : "opacity-50"
+                  )}
+                >
+                  {categories.length > 0 && value.length === categories.length ? "✓" : ""}
+                </div>
+                {categories.length > 0 && value.length === categories.length ? "Deselect all" : "Select all"}
+              </CommandItem>
               {categories.map((cat) => (
                 <CommandItem
                   key={cat.name}

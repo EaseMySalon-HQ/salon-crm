@@ -48,7 +48,7 @@ function toSale(sale: any): Sale {
     items: (sale.items || []).map((item: any) => ({
       id: item._id || item.id || "",
       name: item.name,
-      type: (item.type === "service" ? "service" : item.type === "product" ? "product" : "service") as "service" | "product",
+      type: (item.type === "service" ? "service" : item.type === "product" ? "product" : item.type === "membership" ? "membership" : item.type === "package" ? "package" : item.type === "prepaid" ? "prepaid" : "service") as "service" | "product" | "membership" | "package" | "prepaid",
       quantity: item.quantity ?? 1,
       price: item.price ?? 0,
       total: item.total ?? (item.price ?? 0) * (item.quantity ?? 1),
@@ -85,6 +85,7 @@ export function StaffServiceDetailDrawer({
   const [loading, setLoading] = useState(false)
   const [showServices, setShowServices] = useState(true)
   const [showProducts, setShowProducts] = useState(true)
+  const [showMemberships, setShowMemberships] = useState(true)
   const [selectedServiceFilter, setSelectedServiceFilter] = useState<string>("all")
   const [selectedProductFilter, setSelectedProductFilter] = useState<string>("all")
   // Sync drawer date range from parent when it changes
@@ -158,16 +159,19 @@ export function StaffServiceDetailDrawer({
   const fallbackFromAggregates = () => {
     const svc = aggregateByType("service")
     const prod = aggregateByType("product")
+    const memb = aggregateByType("membership")
     return {
       serviceRevenue: svc.reduce((s, r) => s + r.grossTotal, 0),
       productRevenue: prod.reduce((s, r) => s + r.grossTotal, 0),
+      membershipRevenue: memb.reduce((s, r) => s + r.grossTotal, 0),
       serviceCount: svc.reduce((s, r) => s + r.quantitySold, 0),
-      productCount: prod.reduce((s, r) => s + r.quantitySold, 0)
+      productCount: prod.reduce((s, r) => s + r.quantitySold, 0),
+      membershipCount: memb.reduce((s, r) => s + r.quantitySold, 0)
     }
   }
   const fallback = commissionResult == null ? fallbackFromAggregates() : null
 
-  const totalRevenue = commissionResult?.totalRevenue ?? (fallback ? fallback.serviceRevenue + fallback.productRevenue : 0)
+  const totalRevenue = commissionResult?.totalRevenue ?? (fallback ? fallback.serviceRevenue + fallback.productRevenue + fallback.membershipRevenue : 0)
   const serviceRevenueForStaff = commissionResult?.serviceRevenue ?? fallback?.serviceRevenue ?? 0
   const productRevenueForStaff = commissionResult?.productRevenue ?? fallback?.productRevenue ?? 0
   const totalCommission = commissionResult?.totalCommission ?? 0
@@ -178,18 +182,7 @@ export function StaffServiceDetailDrawer({
   const averageServiceValue =
     totalServicesPerformed > 0 ? serviceRevenueForStaff / totalServicesPerformed : 0
 
-  // Card values filtered by Service/Product checkboxes
-  const displayTotalRevenue = (showServices ? serviceRevenueForStaff : 0) + (showProducts ? productRevenueForStaff : 0)
-  const displayTotalServicesPerformed = showServices ? totalServicesPerformed : 0
-  const displayTotalProductsSold = showProducts ? totalProductCount : 0
-  const displayServiceRevenue = showServices ? serviceRevenueForStaff : 0
-  const displayProductRevenue = showProducts ? productRevenueForStaff : 0
-  const displayTotalCommission = (showServices ? serviceCommission : 0) + (showProducts ? productCommissionAmount : 0)
-  const displayServiceCommission = showServices ? serviceCommission : 0
-  const displayProductCommission = showProducts ? productCommissionAmount : 0
-  const displayAverageServiceValue = showServices && totalServicesPerformed > 0 ? serviceRevenueForStaff / totalServicesPerformed : 0
-
-  function aggregateByType(type: "service" | "product"): AggregatedRow[] {
+  function aggregateByType(type: "service" | "product" | "membership"): AggregatedRow[] {
     const map = new Map<string, AggregatedRow>()
     filteredSales.forEach((sale: any) => {
       const saleTotal = sale.total || 0
@@ -198,8 +191,9 @@ export function StaffServiceDetailDrawer({
       ;(sale.items || []).forEach((item: any) => {
         const isService = (item.type || "").toLowerCase() === "service"
         const isProduct = (item.type || "").toLowerCase() === "product"
+        const isMembership = (item.type || "").toLowerCase() === "membership"
         const match =
-          (type === "service" && isService) || (type === "product" && isProduct)
+          (type === "service" && isService) || (type === "product" && isProduct) || (type === "membership" && isMembership)
         if (!match) return
         const staffMatch =
           (item.staffId != null && String(item.staffId) === String(staffId)) ||
@@ -227,6 +221,9 @@ export function StaffServiceDetailDrawer({
 
   const serviceRows = aggregateByType("service")
   const productRows = aggregateByType("product")
+  const membershipRows = aggregateByType("membership")
+  const membershipRevenue = membershipRows.reduce((s, r) => s + r.grossTotal, 0)
+  const membershipCount = membershipRows.reduce((s, r) => s + r.quantitySold, 0)
   const serviceNames = [...new Set(serviceRows.map((r) => r.name))]
   const productNames = [...new Set(productRows.map((r) => r.name))]
 
@@ -238,6 +235,17 @@ export function StaffServiceDetailDrawer({
     selectedProductFilter === "all"
       ? productRows
       : productRows.filter((r) => r.name === selectedProductFilter)
+
+  // Card values filtered by Service/Product/Membership checkboxes
+  const displayTotalRevenue = (showServices ? serviceRevenueForStaff : 0) + (showProducts ? productRevenueForStaff : 0) + (showMemberships ? membershipRevenue : 0)
+  const displayTotalServicesPerformed = showServices ? totalServicesPerformed : 0
+  const displayTotalProductsSold = showProducts ? totalProductCount : 0
+  const displayServiceRevenue = showServices ? serviceRevenueForStaff : 0
+  const displayProductRevenue = showProducts ? productRevenueForStaff : 0
+  const displayTotalCommission = (showServices ? serviceCommission : 0) + (showProducts ? productCommissionAmount : 0)
+  const displayServiceCommission = showServices ? serviceCommission : 0
+  const displayProductCommission = showProducts ? productCommissionAmount : 0
+  const displayAverageServiceValue = showServices && totalServicesPerformed > 0 ? serviceRevenueForStaff / totalServicesPerformed : 0
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -416,6 +424,13 @@ export function StaffServiceDetailDrawer({
                     />
                     <span className="text-sm text-foreground">Product</span>
                   </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <Checkbox
+                      checked={showMemberships}
+                      onCheckedChange={(c) => setShowMemberships(!!c)}
+                    />
+                    <span className="text-sm text-foreground">Memberships</span>
+                  </label>
                   <div className="flex items-center gap-2 flex-nowrap">
                     <Select
                       value={selectedServiceFilter}
@@ -514,6 +529,44 @@ export function StaffServiceDetailDrawer({
                           </TableRow>
                         ) : (
                           filteredProductRows.map((row) => (
+                            <TableRow key={row.name} className="border-border/60">
+                              <TableCell className="text-sm font-medium py-2">{row.name}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">{row.quantitySold}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.netTotal.toFixed(2)}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.taxAmount.toFixed(2)}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.grossTotal.toFixed(2)}</TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </section>
+              )}
+
+              {showMemberships && (
+                <section className="space-y-2">
+                  <h3 className="text-xs font-medium text-muted-foreground">Memberships</h3>
+                  <div className="rounded-lg border border-border/60 overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="text-xs font-medium text-muted-foreground">Plan Name</TableHead>
+                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Qty</TableHead>
+                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Net Total</TableHead>
+                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Tax</TableHead>
+                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Gross Total</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {membershipRows.length === 0 ? (
+                          <TableRow className="hover:bg-transparent">
+                            <TableCell colSpan={5} className="h-20 text-center text-sm text-muted-foreground">
+                              No memberships
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          membershipRows.map((row) => (
                             <TableRow key={row.name} className="border-border/60">
                               <TableCell className="text-sm font-medium py-2">{row.name}</TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{row.quantitySold}</TableCell>
