@@ -22,8 +22,12 @@ const SERVICE_FIELDS = [
   { value: 'name', label: 'Name', required: true, description: 'Service name' },
   { value: 'category', label: 'Category', required: true, description: 'Service category' },
   { value: 'duration', label: 'Duration', required: true, description: 'Duration in minutes' },
-  { value: 'price', label: 'Price', required: true, description: 'Service price' },
-  { value: 'description', label: 'Description', required: false, description: 'Service description' }
+  { value: 'fullPrice', label: 'Full Price', required: true, description: 'Regular price' },
+  { value: 'offerPrice', label: 'Offer Price', required: false, description: 'Discounted price (optional)' },
+  { value: 'description', label: 'Description', required: false, description: 'Service description' },
+  { value: 'taxApplicable', label: 'Tax Applicable', required: false, description: 'yes/no' },
+  { value: 'hsnSacCode', label: 'HSN/SAC Code', required: false, description: 'Tax code e.g. 998313' },
+  { value: 'isAutoConsumptionEnabled', label: 'Auto Consumption', required: false, description: 'yes/no - deduct inventory' }
 ]
 
 export function ServiceColumnMapping({ 

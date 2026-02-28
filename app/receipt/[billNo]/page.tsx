@@ -6,11 +6,12 @@ import { ProtectedRoute } from "@/components/auth/protected-route"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { Button } from "@/components/ui/button"
-import { Printer, ArrowLeft, Thermometer } from "lucide-react"
+import { Printer, ArrowLeft, Thermometer, MessageCircle } from "lucide-react"
 import Link from "next/link"
 import { SettingsAPI } from "@/lib/api"
 import { SalesAPI } from "@/lib/api"
 import { ThermalReceiptGenerator } from "@/components/receipts/thermal-receipt-generator"
+import { useToast } from "@/hooks/use-toast"
 
 interface ReceiptData {
   id: string
@@ -44,6 +45,7 @@ interface ReceiptData {
     serviceRate: number
     productTaxByRate: { [rate: string]: number }
   }
+  shareToken?: string
 }
 
 export default function ReceiptPage() {
@@ -53,6 +55,7 @@ export default function ReceiptPage() {
   const [businessSettings, setBusinessSettings] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { toast } = useToast()
 
   // Load business settings
   useEffect(() => {
@@ -112,11 +115,18 @@ export default function ReceiptPage() {
                 quantity: item.quantity,
                 price: item.price,
                 total: item.total,
-                staffName: item.staffName || frontendData.staffName
+                discount: item.discount ?? 0,
+                discountType: item.discountType || 'percentage',
+                staffName: item.staffName || frontendData.staffName,
+                hsnSacCode: item.hsnSacCode || '',
+                taxAmount: item.taxAmount,
+                priceExcludingGST: item.priceExcludingGST,
+                taxRate: item.taxRate
               })),
               netTotal: frontendData.subtotal,
               taxAmount: frontendData.tax,
               grossTotal: frontendData.total - (frontendData.tip || 0),
+              subtotalExcludingTax: frontendData.subtotalExcludingTax,
               tip: frontendData.tip || 0,
               tipStaffName: frontendData.tipStaffName,
               paymentMode: frontendData.payments?.[0]?.type || 'Cash',
@@ -124,7 +134,8 @@ export default function ReceiptPage() {
               staffName: frontendData.staffName,
               status: 'completed',
               // Include taxBreakdown for correct tax display
-              taxBreakdown: frontendData.taxBreakdown
+              taxBreakdown: frontendData.taxBreakdown,
+              shareToken: frontendData.shareToken
             }
             
             console.log('🔍 Frontend receipt data:', receiptData)
@@ -162,11 +173,21 @@ export default function ReceiptPage() {
                 quantity: item.quantity,
                 price: item.price,
                 total: item.total,
-                staffName: item.staffName || saleData.staffName
+                discount: item.discount ?? 0,
+                discountType: item.discountType || 'percentage',
+                staffName: item.staffName || saleData.staffName,
+                hsnSacCode: item.hsnSacCode || '',
+                taxAmount: item.taxAmount,
+                priceExcludingGST: item.priceExcludingGST,
+                taxRate: item.taxRate
               })),
               netTotal: saleData.netTotal,
               taxAmount: saleData.taxAmount,
               grossTotal: saleData.grossTotal,
+              subtotalExcludingTax: (saleData.items || []).reduce((sum: number, item: any) => {
+                const base = item.priceExcludingGST != null ? item.priceExcludingGST * (item.quantity || 1) : (item.total || 0) - (item.taxAmount || 0)
+                return sum + base
+              }, 0) || (saleData.grossTotal - saleData.taxAmount),
               tip: saleData.tip || 0,
               tipStaffName: saleData.tipStaffName,
               paymentMode: saleData.paymentMode,
@@ -180,7 +201,13 @@ export default function ReceiptPage() {
                 }
               }) : [{ type: (saleData.paymentMode?.toLowerCase() || 'unknown'), amount: saleData.grossTotal }],
               staffName: saleData.staffName,
-              status: saleData.status
+              status: saleData.status,
+              taxBreakdown: saleData.taxBreakdown ? {
+                serviceTax: saleData.taxBreakdown.serviceTax ?? 0,
+                serviceRate: saleData.taxBreakdown.serviceRate ?? 5,
+                productTaxByRate: saleData.taxBreakdown.productTaxByRate || {}
+              } : undefined,
+              shareToken: saleData.shareToken
             }
             
             console.log('🔍 Final receipt data from API:', receiptData)
@@ -209,6 +236,45 @@ export default function ReceiptPage() {
     window.print()
   }
 
+  const handleShareWhatsApp = () => {
+    const phone = receipt?.customerPhone || (receipt as any)?.clientPhone || ''
+    const digitsOnly = phone.replace(/\D/g, '')
+    let waPhone = digitsOnly
+    if (digitsOnly.length === 10) {
+      waPhone = '91' + digitsOnly
+    } else if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) {
+      waPhone = '91' + digitsOnly.slice(1)
+    } else if (digitsOnly.length >= 10) {
+      waPhone = digitsOnly.startsWith('91') ? digitsOnly : '91' + digitsOnly.slice(-10)
+    }
+    if (!waPhone || waPhone.length < 10) {
+      toast({
+        title: "No phone number",
+        description: "Customer phone number is not available for this receipt.",
+        variant: "destructive",
+      })
+      return
+    }
+    let baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
+    if (baseUrl.startsWith('https://localhost') || baseUrl.startsWith('https://127.0.0.1')) {
+      baseUrl = baseUrl.replace('https://', 'http://')
+    }
+    const publicUrl = receipt?.shareToken
+      ? `${baseUrl}/receipt/public/${receipt.billNo}/${receipt.shareToken}`
+      : (typeof window !== 'undefined' ? window.location.href : '')
+    const clientName = receipt?.customerName || (receipt as any)?.clientName || 'Customer'
+    const totalAmount = receipt?.grossTotal ?? receipt?.netTotal ?? 0
+    const message = `Hi ${clientName},
+
+Your invoice ${receipt?.billNo || ''} is ready.
+Total: ₹${totalAmount}
+
+View here:
+${publicUrl}`
+    const whatsappUrl = `https://wa.me/${waPhone}?text=${encodeURIComponent(message)}`
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer')
+  }
+
   const handleThermalPrint = () => {
     if (!receipt || !businessSettings) return
     
@@ -221,6 +287,7 @@ export default function ReceiptPage() {
       clientPhone: receipt.customerPhone,
       date: receipt.date,
       time: receipt.time,
+      subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
       items: receipt.items.map(item => ({
         id: Math.random().toString(),
         name: item.name,
@@ -228,10 +295,14 @@ export default function ReceiptPage() {
         quantity: item.quantity,
         price: item.price,
         total: item.total,
-        discount: 0,
-        discountType: "percentage" as const,
+        discount: item.discount ?? 0,
+        discountType: (item.discountType || "percentage") as const,
         staffId: "",
-        staffName: item.staffName || ""
+        staffName: item.staffName || "",
+        hsnSacCode: (item as any).hsnSacCode || "",
+        taxAmount: (item as any).taxAmount,
+        priceExcludingGST: (item as any).priceExcludingGST,
+        taxRate: (item as any).taxRate
       })),
       subtotal: receipt.netTotal,
       tip: receipt.tip || 0,
@@ -310,6 +381,10 @@ export default function ReceiptPage() {
               <Thermometer className="h-4 w-4 mr-2" />
               Thermal Print
             </Button>
+            <Button onClick={handleShareWhatsApp} variant="outline" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+              <MessageCircle className="h-4 w-4 mr-2" />
+              Share via WhatsApp
+            </Button>
           </div>
         </div>
       </div>
@@ -332,13 +407,18 @@ export default function ReceiptPage() {
                 type: item.type as "service" | "product",
                 price: item.price,
                 quantity: item.quantity,
-                discount: 0,
-                discountType: 'percentage' as const,
+                discount: item.discount ?? 0,
+                discountType: (item.discountType || 'percentage') as const,
                 staffId: receipt.id,
                 staffName: item.staffName || receipt.staffName,
-                total: item.total
+                total: item.total,
+                hsnSacCode: (item as any).hsnSacCode || '',
+                taxAmount: (item as any).taxAmount,
+                priceExcludingGST: (item as any).priceExcludingGST,
+                taxRate: (item as any).taxRate
               })) || [],
               subtotal: receipt.netTotal,
+              subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
               tip: receipt.tip || 0,
               tipStaffName: receipt.tipStaffName,
               discount: 0,

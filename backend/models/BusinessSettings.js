@@ -53,6 +53,7 @@ const businessSettingsSchema = new mongoose.Schema({
   luxuryProductRate: { type: Number, default: 28 },
   exemptProductRate: { type: Number, default: 0 },
   taxCategories: { type: Array, default: [] }, // Array of tax category objects
+  priceInclusiveOfTax: { type: Boolean, default: true }, // true = price includes GST, false = GST added on top
   
   // Multi-tenant support
   branchId: {

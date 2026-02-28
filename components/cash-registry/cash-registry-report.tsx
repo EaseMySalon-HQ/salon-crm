@@ -722,6 +722,13 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     return matchesSearch && matchesShift && matchesReportType && matchesDateRange
   })
 
+  // Filter daily summaries by date range (for Summary By Day report)
+  const filteredDailySummaries = dailySummaries.filter(summary => {
+    if (!activeDateRange) return true
+    const summaryDate = new Date(summary.date + 'T12:00:00')
+    return summaryDate >= activeDateRange.from && summaryDate <= activeDateRange.to
+  })
+
   // Calculate real-time stats from sales and expenses data
   const getRealTimeCashSales = () => {
     if (!activeDateRange) return 0
@@ -1714,7 +1721,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(reportType === "summary" ? dailySummaries.length === 0 : filteredData.length === 0) ? (
+                  {(reportType === "summary" ? filteredDailySummaries.length === 0 : filteredData.length === 0) ? (
                     <TableRow className="border-0">
                       <TableCell colSpan={reportType === "summary" ? 14 : 6} className="text-center py-16 border-0">
                         <div className="flex flex-col items-center space-y-5">
@@ -1748,7 +1755,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                       </TableCell>
                     </TableRow>
                   ) : (
-                    (reportType === "summary" ? dailySummaries : filteredData).map((entry) => {
+                    (reportType === "summary" ? filteredDailySummaries : filteredData).map((entry) => {
                       if (reportType === "summary") {
                         // SUMMARY REPORT - Shows actual data from daily summaries
                         // Type guard to ensure this is a summary entry

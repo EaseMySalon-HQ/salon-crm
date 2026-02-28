@@ -109,16 +109,12 @@ export function ProductImportModal({ isOpen, onClose, onImportComplete }: Produc
             autoMapping[header] = 'barcode'
           } else if (lowerHeader.includes('hsn') || lowerHeader.includes('sac')) {
             autoMapping[header] = 'hsnSacCode'
-          } else if (lowerHeader.includes('supplier')) {
-            autoMapping[header] = 'supplier'
           } else if (lowerHeader.includes('description')) {
             autoMapping[header] = 'description'
           } else if (lowerHeader.includes('tax')) {
             autoMapping[header] = 'taxCategory'
           } else if (lowerHeader.includes('type') && lowerHeader.includes('product')) {
             autoMapping[header] = 'productType'
-          } else if (lowerHeader.includes('transaction')) {
-            autoMapping[header] = 'transactionType'
           }
         })
         
@@ -250,13 +246,13 @@ export function ProductImportModal({ isOpen, onClose, onImportComplete }: Produc
     onClose()
   }
 
-  // Download template (columns match Add Product form)
+  // Download template (columns match Add Product form - no Transaction Type, Volume optional, Supplier in separate section)
   const downloadTemplate = () => {
     const templateData = [
-      ['Product Name', 'Category', 'Cost Price', 'Selling Price', 'Offer Price', 'Current Stock', 'Minimum Stock Level', 'Volume', 'Volume Unit', 'Tax Category', 'Product Type', 'Transaction Type', 'Description', 'SKU/Barcode', 'HSN/SAC Code', 'Supplier'],
-      ['Shampoo', 'Hair Care', '150', '250', '200', '50', '10', '500', 'ml', 'standard', 'retail', 'purchase', 'Premium Shampoo', 'SH001', '998313', 'ABC Corp'],
-      ['Haircut', 'Services', '', '500', '', '', '5', '', 'pcs', 'standard', 'service', 'purchase', 'Professional Haircut', '', '', ''],
-      ['Conditioner', 'Hair Care', '180', '300', '', '30', '5', '250', 'ml', 'luxury', 'retail', 'purchase', 'Moisturizing Conditioner', 'CON001', '998313', 'ABC Corp']
+      ['Product Name', 'Category', 'Cost Price', 'Selling Price', 'Offer Price', 'Current Stock', 'Minimum Stock Level', 'Volume', 'Volume Unit', 'Tax Category', 'Product Type', 'Description', 'SKU/Barcode', 'HSN/SAC Code'],
+      ['Shampoo', 'Hair Care', '150', '250', '200', '50', '10', '500', 'ml', 'standard', 'retail', 'Premium Shampoo', 'SH001', '998313'],
+      ['Haircut', 'Services', '', '500', '', '0', '5', '', 'pcs', 'standard', 'service', 'Professional Haircut', '', ''],
+      ['Conditioner', 'Hair Care', '180', '300', '', '30', '5', '250', 'ml', 'luxury', 'retail', 'Moisturizing Conditioner', 'CON001', '998313']
     ]
     
     const ws = XLSX.utils.aoa_to_sheet(templateData)

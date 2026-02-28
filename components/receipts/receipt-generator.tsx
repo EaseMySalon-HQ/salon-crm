@@ -161,36 +161,40 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
         </div>
 
         <div class="items">
-          ${receipt.items
-            .map(
-              (item) => {
-                console.log('=== RECEIPT ITEM DEBUG ===')
-                console.log('Item name:', item.name)
-                console.log('Item staffId:', item.staffId)
-                console.log('Item staffName:', item.staffName)
-                console.log('Item type:', item.type)
-                return `
-            <div class="item">
-              <div class="item-header">
-                <span>${item.name}</span>
-                <span>${formatCurrency(item.total, businessSettings)}</span>
-              </div>
-              <div class="item-details">
-                ${item.quantity} x ${formatCurrency(item.price, businessSettings)}
-                ${item.discount > 0 ? ` (${item.discountType === "percentage" ? item.discount + "%" : "$" + item.discount} off)` : ""}
-                ${item.staffName ? ` - ${item.staffName}` : ""}
-              </div>
-            </div>
-          `
-              },
-            )
-            .join("")}
+          <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+            <thead>
+              <tr style="border-bottom: 1px solid #000;">
+                <th style="text-align: left; padding: 4px 2px;">HSN</th>
+                <th style="text-align: left; padding: 4px 2px;">Service/Product</th>
+                <th style="text-align: right; padding: 4px 2px;">Price</th>
+                <th style="text-align: right; padding: 4px 2px;">Disc(%)</th>
+                <th style="text-align: right; padding: 4px 2px;">Tax Rate</th>
+                <th style="text-align: right; padding: 4px 2px;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${receipt.items
+                .map(
+                  (item) => `
+                <tr style="border-bottom: 1px dashed #999;">
+                  <td style="padding: 3px 2px;">${item.hsnSacCode || "-"}</td>
+                  <td style="padding: 3px 2px;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}${item.staffName ? `<br><span style="font-size: 10px; color: #666;">${item.staffName}</span>` : ""}</td>
+                  <td style="text-align: right; padding: 3px 2px;">${formatCurrency((item as any).priceExcludingGST ?? (item.total - ((item as any).taxAmount ?? 0)) / (item.quantity || 1), businessSettings)}</td>
+                  <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : formatCurrency(item.discount, businessSettings)) : "-"}</td>
+                  <td style="text-align: right; padding: 3px 2px;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
+                  <td style="text-align: right; padding: 3px 2px; font-weight: bold;">${formatCurrency(item.total, businessSettings)}</td>
+                </tr>
+              `
+                )
+                .join("")}
+            </tbody>
+          </table>
         </div>
 
         <div class="totals">
           <div class="total-line">
-            <span>Subtotal:</span>
-            <span>${formatCurrency(receipt.subtotal, businessSettings)}</span>
+            <span>Subtotal (Excl. Tax):</span>
+            <span>${formatCurrency((receipt as any).subtotalExcludingTax ?? receipt.subtotal, businessSettings)}</span>
           </div>
           ${
             receipt.discount > 0
@@ -259,14 +263,14 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
                 return breakdown
               }
               
-              // Fallback to simple breakdown if taxBreakdown is not available
+              // Fallback when taxBreakdown is not available: use 5% service rate (2.5% CGST + 2.5% SGST)
               return `
               <div class="total-line" style="margin-left: 10px; font-size: 11px;">
-                <span>CGST (${(businessSettings.taxRate || 18) / 2}%):</span>
+                <span>CGST (2.5%):</span>
                 <span>${formatCurrency(receipt.tax / 2, businessSettings)}</span>
               </div>
               <div class="total-line" style="margin-left: 10px; font-size: 11px;">
-                <span>SGST (${(businessSettings.taxRate || 18) / 2}%):</span>
+                <span>SGST (2.5%):</span>
                 <span>${formatCurrency(receipt.tax / 2, businessSettings)}</span>
               </div>
               `

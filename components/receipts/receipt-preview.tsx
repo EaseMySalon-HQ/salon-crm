@@ -20,7 +20,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
   }, [receipt])
   
   return (
-    <Card className="max-w-sm mx-auto bg-white">
+    <Card className="max-w-2xl w-full mx-auto bg-white">
       <CardContent className="p-6 font-mono text-sm">
         {/* Header */}
         <div className="text-center border-b-2 border-black pb-3 mb-4">
@@ -80,37 +80,53 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
           </div>
         </div>
 
-        {/* Items */}
-        <div className="border-t border-b border-dashed border-black py-3 mb-3">
-          {receipt.items.map((item, index) => {
-            console.log('=== RECEIPT PREVIEW ITEM DEBUG ===')
-            console.log('Item index:', index)
-            console.log('Item name:', item.name)
-            console.log('Item staffId:', item.staffId)
-            console.log('Item staffName:', item.staffName)
-            console.log('Item type:', item.type)
-            return (
-            <div key={index} className="mb-2">
-              <div className="flex justify-between font-semibold">
-                <span>{item.name}</span>
-                <span>{formatAmount(item.total)}</span>
-              </div>
-              <div className="text-xs text-gray-600 ml-2">
-                {item.quantity} x {formatAmount(item.price)}
-                {item.discount > 0 && (
-                  <span> ({item.discountType === "percentage" ? `${item.discount}%` : `${formatAmount(item.discount)}`} off)</span>
-                )}
-                {item.staffName && <span> - {item.staffName}</span>}
-              </div>
-            </div>
-          )})}
+        {/* Items - Table: HSN, Service/Product, Price, Disc(%), Tax Rate, Total */}
+        <div className="border-t border-b border-dashed border-black py-3 mb-3 overflow-x-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-black">
+                <th className="text-left py-1 font-semibold">HSN</th>
+                <th className="text-left py-1 font-semibold">Service/Product</th>
+                <th className="text-right py-1 font-semibold">Price</th>
+                <th className="text-right py-1 font-semibold">Disc(%)</th>
+                <th className="text-right py-1 font-semibold">Tax Rate</th>
+                <th className="text-right py-1 font-semibold">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {receipt.items.map((item, index) => (
+                <tr key={index} className="border-b border-dashed border-gray-300 last:border-0">
+                  <td className="py-1.5">{item.hsnSacCode || "-"}</td>
+                  <td className="py-1.5">
+                    <span className="font-medium">{item.name}</span>
+                    {item.quantity > 1 && (
+                      <span className="text-xs text-gray-600 ml-1">(x{item.quantity})</span>
+                    )}
+                    {item.staffName && (
+                      <span className="block text-xs text-gray-600">{item.staffName}</span>
+                    )}
+                  </td>
+                  <td className="py-1.5 text-right">{formatAmount((item as any).priceExcludingGST ?? ((item.total - ((item as any).taxAmount ?? 0)) / (item.quantity || 1)))}</td>
+                  <td className="py-1.5 text-right">
+                    {(item.discount || 0) > 0
+                      ? item.discountType === "percentage"
+                        ? `${item.discount}%`
+                        : formatAmount(item.discount)
+                      : "-"}
+                  </td>
+                  <td className="py-1.5 text-right">{((item as any).taxRate ?? 0) > 0 ? `${(item as any).taxRate}%` : "-"}</td>
+                  <td className="py-1.5 text-right font-medium">{formatAmount(item.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
         {/* Totals */}
         <div className="space-y-1 mb-4">
           <div className="flex justify-between">
-            <span>Subtotal:</span>
-            <span>{formatAmount(receipt.subtotal)}</span>
+            <span>Subtotal (Excl. Tax):</span>
+            <span>{formatAmount((receipt as any).subtotalExcludingTax ?? receipt.subtotal)}</span>
           </div>
           {receipt.discount > 0 && (
             <div className="flex justify-between">
@@ -179,14 +195,14 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
                         })}
                       </div>
                     ) : (
-                      // Fallback to simple breakdown if taxBreakdown is not available
+                      // Fallback when taxBreakdown is not available: use 5% service rate (2.5% CGST + 2.5% SGST)
                       <div className="space-y-1">
                         <div className="flex justify-between text-xs ml-2">
-                          <span>CGST (9%):</span>
+                          <span>CGST (2.5%):</span>
                           <span>{formatAmount(receipt.tax / 2)}</span>
                         </div>
                         <div className="flex justify-between text-xs ml-2">
-                          <span>SGST (9%):</span>
+                          <span>SGST (2.5%):</span>
                           <span>{formatAmount(receipt.tax / 2)}</span>
                         </div>
                       </div>

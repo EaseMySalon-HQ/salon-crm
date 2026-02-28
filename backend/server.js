@@ -3207,6 +3207,36 @@ app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requir
   }
 });
 
+// Bulk update tax applicable for all services
+app.patch('/api/services/tax-applicable', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+  try {
+    const { Service } = req.businessModels;
+    const { taxApplicable } = req.body;
+
+    if (typeof taxApplicable !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        error: 'taxApplicable must be a boolean'
+      });
+    }
+
+    const query = req.user.branchId ? { branchId: req.user.branchId } : {};
+    const result = await Service.updateMany(query, { $set: { taxApplicable } });
+
+    res.json({
+      success: true,
+      message: `Tax Applicable ${taxApplicable ? 'enabled' : 'disabled'} for ${result.modifiedCount} services`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Error bulk updating service tax applicable:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
 // Bulk delete services
 app.delete('/api/services', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
   try {
@@ -3275,12 +3305,13 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
           }
         });
 
-        // Validate required fields (price can be 0, so check for undefined/null/empty string)
-        if (!mappedData.name || !mappedData.category || !mappedData.duration || 
-            mappedData.price === undefined || mappedData.price === null || mappedData.price === '') {
+        // Validate required fields (fullPrice or price required)
+        const effectivePriceVal = mappedData.fullPrice ?? mappedData.price;
+        if (!mappedData.name || !mappedData.category || !mappedData.duration ||
+            effectivePriceVal === undefined || effectivePriceVal === null || effectivePriceVal === '') {
           results.errors.push({
             row: rowNumber,
-            error: 'Name, category, duration, and price are required',
+            error: 'Name, category, duration, and full price are required',
             data: mappedData
           });
           continue;
@@ -3308,7 +3339,8 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
 
         // Validate duration and price are numbers
         const duration = parseInt(mappedData.duration);
-        const price = parseFloat(mappedData.price);
+        const fullPrice = parseFloat(mappedData.fullPrice ?? mappedData.price);
+        const offerPrice = mappedData.offerPrice != null && mappedData.offerPrice !== '' ? parseFloat(mappedData.offerPrice) : undefined;
 
         if (isNaN(duration) || duration < 1) {
           results.errors.push({
@@ -3319,23 +3351,50 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
           continue;
         }
 
-        // Price can be 0 or greater (will be adjusted at billing time)
-        if (isNaN(price) || price < 0) {
+        // Price can be 0 or greater
+        if (isNaN(fullPrice) || fullPrice < 0) {
           results.errors.push({
             row: rowNumber,
-            error: 'Price must be a valid number (0 or greater)',
+            error: 'Full price must be a valid number (0 or greater)',
             data: mappedData
           });
           continue;
         }
 
-        // Prepare service data
+        if (offerPrice !== undefined && (isNaN(offerPrice) || offerPrice < 0)) {
+          results.errors.push({
+            row: rowNumber,
+            error: 'Offer price must be a valid number (0 or greater)',
+            data: mappedData
+          });
+          continue;
+        }
+
+        // Effective price: offerPrice if provided, else fullPrice
+        const price = offerPrice != null ? offerPrice : fullPrice;
+
+        // Parse taxApplicable (yes/no, true/false, 1/0)
+        const taxApplicableRaw = mappedData.taxApplicable;
+        const taxApplicable = taxApplicableRaw === true || taxApplicableRaw === 1 || taxApplicableRaw === '1' ||
+          (typeof taxApplicableRaw === 'string' && taxApplicableRaw.toLowerCase() === 'yes');
+
+        // Parse isAutoConsumptionEnabled
+        const autoConsumptionRaw = mappedData.isAutoConsumptionEnabled;
+        const isAutoConsumptionEnabled = autoConsumptionRaw === true || autoConsumptionRaw === 1 || autoConsumptionRaw === '1' ||
+          (typeof autoConsumptionRaw === 'string' && autoConsumptionRaw.toLowerCase() === 'yes');
+
+        // Prepare service data (matches Add New Service form)
         const serviceToCreate = {
           name: String(mappedData.name).trim(),
           category: String(mappedData.category).trim(),
           duration: duration,
           price: price,
+          fullPrice: fullPrice,
+          offerPrice: offerPrice,
           description: mappedData.description ? String(mappedData.description).trim() : '',
+          taxApplicable: taxApplicable,
+          hsnSacCode: mappedData.hsnSacCode ? String(mappedData.hsnSacCode).trim() : '',
+          isAutoConsumptionEnabled: isAutoConsumptionEnabled,
           branchId: req.user.branchId,
           isActive: true
         };
@@ -10858,7 +10917,8 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         standardProductRate: settings.standardProductRate || 18,
         luxuryProductRate: settings.luxuryProductRate || 28,
         exemptProductRate: settings.exemptProductRate || 0,
-        taxCategories: taxCategories
+        taxCategories: taxCategories,
+        priceInclusiveOfTax: settings.priceInclusiveOfTax !== false
       }
     });
   } catch (error) {
@@ -10890,7 +10950,8 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       standardProductRate,
       luxuryProductRate,
       exemptProductRate,
-      taxCategories
+      taxCategories,
+      priceInclusiveOfTax
     } = req.body;
     const { BusinessSettings } = req.businessModels;
 
@@ -10926,6 +10987,7 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
     if (taxCategories !== undefined && Array.isArray(taxCategories)) {
       settings.taxCategories = taxCategories;
     }
+    if (priceInclusiveOfTax !== undefined) settings.priceInclusiveOfTax = priceInclusiveOfTax;
 
     await settings.save();
 

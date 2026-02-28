@@ -307,6 +307,11 @@ export class ServicesAPI {
     const response = await apiClient.delete(`/services/${id}`)
     return response.data
   }
+
+  static async bulkUpdateTaxApplicable(taxApplicable: boolean): Promise<ApiResponse<{ modifiedCount: number }>> {
+    const response = await apiClient.patch('/services/tax-applicable', { taxApplicable })
+    return response.data
+  }
 }
 
 export class ConsumptionRulesAPI {

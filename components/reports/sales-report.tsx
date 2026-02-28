@@ -36,6 +36,7 @@ interface SalesRecord {
   netTotal: number
   taxAmount: number
   grossTotal: number
+  paymentStatus?: { paidAmount?: number; totalAmount?: number; remainingAmount?: number }
   status: "completed" | "partial" | "unpaid" | "cancelled"
   staffName: string
   tipStaffId?: string
@@ -166,6 +167,7 @@ export function SalesReport() {
             netTotal: sale.netTotal,
             taxAmount: sale.taxAmount,
             grossTotal: sale.grossTotal,
+            paymentStatus: sale.paymentStatus,
             status: sale.status,
             staffName: sale.staffName,
             items: sale.items || [],
@@ -1222,41 +1224,17 @@ export function SalesReport() {
     return ''
   }
 
-  // Net Total = bill + tip (including tip); Gross Total = bill only (excluding tip)
-  const getDisplayNetTotal = (sale: SalesRecord) => (sale.grossTotal || 0) + (sale.tip || 0)
-  const getDisplayGrossTotal = (sale: SalesRecord) => sale.grossTotal || 0
-
-  // Get filtered amount based on payment filter (Net Total = incl tip)
-  const getFilteredAmount = (sale: SalesRecord) => {
-    if (paymentFilter === "all") {
-      return getDisplayNetTotal(sale)
-    }
-    
+  // Payment summary: Taxable Amount | GST | Total Paid
+  const getTaxableAmount = (sale: SalesRecord) => Math.max(0, (sale.grossTotal || 0) - (sale.taxAmount || 0))
+  const getGST = (sale: SalesRecord) => sale.taxAmount || 0
+  const getTotalPaid = (sale: SalesRecord, forceFull = false) => {
+    const fullPaid = sale.paymentStatus?.paidAmount ?? sale.payments?.reduce((s, p) => s + (p.amount || 0), 0) ?? 0
+    if (forceFull || paymentFilter === "all") return fullPaid
     if (sale.payments && sale.payments.length > 0) {
       const filteredPayment = sale.payments.find(payment => payment.mode === paymentFilter)
       return filteredPayment ? filteredPayment.amount : 0
-    } else {
-      return sale.paymentMode === paymentFilter ? getDisplayNetTotal(sale) : 0
     }
-  }
-
-  // Get filtered gross total based on payment filter (Gross Total = excl tip)
-  const getFilteredGrossTotal = (sale: SalesRecord) => {
-    if (paymentFilter === "all") {
-      return getDisplayGrossTotal(sale)
-    }
-    
-    if (sale.payments && sale.payments.length > 0) {
-      const filteredPayment = sale.payments.find(payment => payment.mode === paymentFilter)
-      if (filteredPayment) {
-        const netTotal = getDisplayNetTotal(sale)
-        const ratio = netTotal > 0 ? filteredPayment.amount / netTotal : 0
-        return (sale.grossTotal || 0) * ratio
-      }
-      return 0
-    } else {
-      return sale.paymentMode === paymentFilter ? getDisplayGrossTotal(sale) : 0
-    }
+    return sale.paymentMode === paymentFilter ? fullPaid : 0
   }
 
   if (loading) {
@@ -2663,36 +2641,11 @@ export function SalesReport() {
                 <TableHead className="font-semibold text-slate-800">Date</TableHead>
                 <TableHead className="font-semibold text-slate-800">Status</TableHead>
                 <TableHead className="font-semibold text-slate-800">Payment Mode</TableHead>
+                <TableHead className="font-semibold text-slate-800">Taxable Amount</TableHead>
+                <TableHead className="font-semibold text-slate-800">GST</TableHead>
                 <TableHead className="font-semibold text-slate-800">
                   <span className="inline-flex items-center gap-1">
-                    Net Total
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs p-3">
-                        <p className="text-sm">This is the final amount collected from the customer after discounts, plus tax and tip.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    {paymentFilter !== "all" && (
-                    <Badge variant="secondary" className="ml-2 text-xs bg-blue-100 text-blue-700 border-blue-200">
-                      {paymentFilter} only
-                    </Badge>
-                    )}
-                  </span>
-                </TableHead>
-                <TableHead className="font-semibold text-slate-800">Tax Amount</TableHead>
-                <TableHead className="font-semibold text-slate-800">
-                  <span className="inline-flex items-center gap-1">
-                    Gross Total
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs p-3">
-                        <p className="text-sm">This is the total bill amount before applying any discount, tax, or tip. Used to calculate your business revenue.</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    Total Paid
                     {paymentFilter !== "all" && (
                     <Badge variant="secondary" className="ml-2 text-xs bg-blue-100 text-blue-700 border-blue-200">
                       {paymentFilter} only
@@ -2731,9 +2684,9 @@ export function SalesReport() {
                         {getPaymentModeDisplay(sale)}
                       </span>
                     </TableCell>
-                    <TableCell className="font-semibold text-green-700">₹{getFilteredAmount(sale).toFixed(2)}</TableCell>
-                    <TableCell className="text-slate-600">₹{sale.taxAmount.toFixed(2)}</TableCell>
-                    <TableCell className="font-bold text-emerald-700">₹{getFilteredGrossTotal(sale).toFixed(2)}</TableCell>
+                    <TableCell className="text-slate-600">₹{getTaxableAmount(sale).toFixed(2)}</TableCell>
+                    <TableCell className="text-slate-600">₹{getGST(sale).toFixed(2)}</TableCell>
+                    <TableCell className="font-semibold text-green-700">₹{getTotalPaid(sale).toFixed(2)}</TableCell>
                     <TableCell>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -2810,36 +2763,16 @@ export function SalesReport() {
                   <p className="text-lg">{getPaymentModeDisplay(selectedBill)}</p>
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-muted-foreground inline-flex items-center gap-1">
-                    Net Total
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs p-3">
-                        <p className="text-sm">This is the final amount collected from the customer after discounts, plus tax and tip.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </label>
-                  <p className="text-lg">₹{getDisplayNetTotal(selectedBill).toFixed(2)}</p>
+                  <label className="text-sm font-medium text-muted-foreground">Taxable Amount</label>
+                  <p className="text-lg">₹{getTaxableAmount(selectedBill).toFixed(2)}</p>
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-muted-foreground">Tax Amount</label>
-                  <p className="text-lg">₹{selectedBill.taxAmount.toFixed(2)}</p>
+                  <label className="text-sm font-medium text-muted-foreground">GST</label>
+                  <p className="text-lg">₹{getGST(selectedBill).toFixed(2)}</p>
                 </div>
-                <div className="col-span-2">
-                  <label className="text-sm font-medium text-muted-foreground inline-flex items-center gap-1">
-                    Gross Total
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs p-3">
-                        <p className="text-sm">This is the total bill amount before applying any discount, tax, or tip. Used to calculate your business revenue.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </label>
-                  <p className="text-2xl font-bold text-green-600">₹{getDisplayGrossTotal(selectedBill).toFixed(2)}</p>
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground">Total Paid</label>
+                  <p className="text-2xl font-bold text-green-600">₹{getTotalPaid(selectedBill, true).toFixed(2)}</p>
                 </div>
               </div>
               {selectedBill.payments && selectedBill.payments.length > 0 && (
