@@ -7,10 +7,11 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { useToast } from "@/components/ui/use-toast"
-import { SettingsAPI } from "@/lib/api"
+import { SettingsAPI, ServicesAPI } from "@/lib/api"
 import { Receipt, Plus, Pencil, Trash2 } from "lucide-react"
 
 const TAX_TYPES = [
@@ -36,6 +37,7 @@ export function TaxSettings() {
   const [settings, setSettings] = useState({
     enableTax: true,
     taxType: "gst",
+    priceInclusiveOfTax: true, // true = Included (price has GST), false = Excluded (GST added on top)
     taxRate: "18",
     cgstRate: "9",
     sgstRate: "9",
@@ -54,6 +56,7 @@ export function TaxSettings() {
 
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [isEnablingTaxForAll, setIsEnablingTaxForAll] = useState(false)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -75,6 +78,7 @@ export function TaxSettings() {
         setSettings({
           enableTax: response.data.enableTax !== false,
           taxType: response.data.taxType || "gst",
+          priceInclusiveOfTax: response.data.priceInclusiveOfTax !== false,
           taxRate: response.data.taxRate?.toString() || "18",
           cgstRate: response.data.cgstRate?.toString() || "9",
           sgstRate: response.data.sgstRate?.toString() || "9",
@@ -111,6 +115,7 @@ export function TaxSettings() {
       const response = await SettingsAPI.updatePaymentSettings({
         enableTax: settings.enableTax,
         taxType: settings.taxType,
+        priceInclusiveOfTax: settings.priceInclusiveOfTax,
         taxRate: parseFloat(settings.taxRate),
         cgstRate: parseFloat(settings.cgstRate),
         sgstRate: parseFloat(settings.sgstRate),
@@ -282,78 +287,54 @@ export function TaxSettings() {
             
             {settings.enableTax && (
               <div className="space-y-6">
-                <div className="space-y-2">
-                  <Label htmlFor="taxType" className="text-sm font-medium text-slate-700">
-                    Tax Type
-                  </Label>
-                  <Select
-                    value={settings.taxType}
-                    onValueChange={(value) => setSettings({ ...settings, taxType: value })}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select tax type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TAX_TYPES.map((type) => (
-                        <SelectItem key={type.value} value={type.value}>
-                          {type.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {settings.taxType === "gst" && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="cgstRate" className="text-sm font-medium text-slate-700">
-                          CGST Rate (%)
-                        </Label>
-                        <Input
-                          id="cgstRate"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          max="100"
-                          value={settings.cgstRate}
-                          onChange={(e) => setSettings({ ...settings, cgstRate: e.target.value })}
-                          placeholder="Central GST"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="sgstRate" className="text-sm font-medium text-slate-700">
-                          SGST Rate (%)
-                        </Label>
-                        <Input
-                          id="sgstRate"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          max="100"
-                          value={settings.sgstRate}
-                          onChange={(e) => setSettings({ ...settings, sgstRate: e.target.value })}
-                          placeholder="State GST"
-                        />
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="igstRate" className="text-sm font-medium text-slate-700">
-                        IGST Rate (%) - Inter-state transactions
-                      </Label>
-                      <Input
-                        id="igstRate"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="100"
-                        value={settings.igstRate}
-                        onChange={(e) => setSettings({ ...settings, igstRate: e.target.value })}
-                        placeholder="Integrated GST"
-                      />
-                    </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="taxType" className="text-sm font-medium text-slate-700">
+                      Tax Category
+                    </Label>
+                    <Select
+                      value={settings.taxType}
+                      onValueChange={(value) => setSettings({ ...settings, taxType: value })}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select tax category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TAX_TYPES.map((type) => (
+                          <SelectItem key={type.value} value={type.value}>
+                            {type.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                )}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium text-slate-700">Tax Type</Label>
+                    <RadioGroup
+                      value={settings.priceInclusiveOfTax ? "included" : "excluded"}
+                      onValueChange={(value) => setSettings({ ...settings, priceInclusiveOfTax: value === "included" })}
+                      className="flex gap-6 mt-2"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="included" id="included" />
+                        <Label htmlFor="included" className="text-sm font-normal cursor-pointer">
+                          Included
+                        </Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="excluded" id="excluded" />
+                        <Label htmlFor="excluded" className="text-sm font-normal cursor-pointer">
+                          Excluded
+                        </Label>
+                      </div>
+                    </RadioGroup>
+                    <p className="text-sm text-slate-500 mt-1">
+                      {settings.priceInclusiveOfTax
+                        ? "Price includes GST"
+                        : "GST will be added on top of price"}
+                    </p>
+                  </div>
+                </div>
 
                 {/* Service and Product specific tax rates */}
                 <div className="border-t pt-4">
@@ -361,21 +342,59 @@ export function TaxSettings() {
                   
                   {/* Service Tax Rate */}
                   <div className="mb-6">
-                    <Label htmlFor="serviceTaxRate" className="text-sm font-medium text-slate-700">
-                      Service Tax Rate (%)
-                    </Label>
-                    <Input
-                      id="serviceTaxRate"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      max="100"
-                      value={settings.serviceTaxRate}
-                      onChange={(e) => setSettings({ ...settings, serviceTaxRate: e.target.value })}
-                      placeholder="Service tax rate"
-                      className="mt-2"
-                    />
-                    <p className="text-sm text-slate-500 mt-1">Applied to all salon services (haircuts, styling, treatments)</p>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 space-y-2">
+                        <Label htmlFor="serviceTaxRate" className="text-sm font-medium text-slate-700">
+                          Service Tax Rate (%)
+                        </Label>
+                        <Input
+                          id="serviceTaxRate"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={settings.serviceTaxRate}
+                          onChange={(e) => setSettings({ ...settings, serviceTaxRate: e.target.value })}
+                          placeholder="Service tax rate"
+                          className="mt-2"
+                        />
+                        <p className="text-sm text-slate-500 mt-1">Applied to all salon services (haircuts, styling, treatments)</p>
+                      </div>
+                      <div className="flex flex-col items-end gap-2 pt-6">
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            id="enableTaxForAll"
+                            disabled={isEnablingTaxForAll}
+                            onCheckedChange={async (checked) => {
+                              setIsEnablingTaxForAll(true)
+                              try {
+                                const response = await ServicesAPI.bulkUpdateTaxApplicable(checked)
+                                if (response.success) {
+                                  toast({
+                                    title: "Success",
+                                    description: response.message || `Tax Applicable ${checked ? "enabled" : "disabled"} for ${response.modifiedCount ?? 0} services`,
+                                  })
+                                } else {
+                                  throw new Error(response.error)
+                                }
+                              } catch (error) {
+                                toast({
+                                  title: "Error",
+                                  description: "Failed to update services. Please try again.",
+                                  variant: "destructive",
+                                })
+                              } finally {
+                                setIsEnablingTaxForAll(false)
+                              }
+                            }}
+                          />
+                          <Label htmlFor="enableTaxForAll" className="text-sm font-medium text-slate-700 cursor-pointer">
+                            Enable Tax for all services
+                          </Label>
+                        </div>
+                        <p className="text-xs text-slate-500 text-right">Turn ON &quot;Tax Applicable&quot; for all services</p>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Product Category Tax Rates */}

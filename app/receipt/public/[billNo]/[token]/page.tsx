@@ -87,11 +87,21 @@ export default function PublicReceiptPage() {
                 quantity: item.quantity,
                 price: item.price,
                 total: item.total,
-                staffName: item.staffName || saleData.staffName
+                discount: item.discount ?? 0,
+                discountType: item.discountType || 'percentage',
+                staffName: item.staffName || saleData.staffName,
+                hsnSacCode: item.hsnSacCode || '',
+                taxAmount: item.taxAmount,
+                priceExcludingGST: item.priceExcludingGST,
+                taxRate: item.taxRate
               })),
               netTotal: saleData.netTotal,
               taxAmount: saleData.taxAmount,
               grossTotal: saleData.grossTotal,
+              subtotalExcludingTax: (saleData.items || []).reduce((sum: number, item: any) => {
+                const base = item.priceExcludingGST != null ? item.priceExcludingGST * (item.quantity || 1) : (item.total || 0) - (item.taxAmount || 0)
+                return sum + base
+              }, 0) || (saleData.grossTotal - saleData.taxAmount),
               paymentMode: saleData.paymentMode,
               payments: saleData.payments?.length > 0 ? saleData.payments.map((payment: any) => {
                 const paymentType = payment.mode || payment.type
@@ -204,13 +214,18 @@ export default function PublicReceiptPage() {
                 type: item.type as "service" | "product",
                 price: item.price,
                 quantity: item.quantity,
-                discount: 0,
-                discountType: 'percentage' as const,
+                discount: (item as any).discount ?? 0,
+                discountType: ((item as any).discountType || 'percentage') as const,
                 staffId: receipt.id,
                 staffName: item.staffName || receipt.staffName,
-                total: item.total
+                total: item.total,
+                hsnSacCode: (item as any).hsnSacCode || '',
+                taxAmount: (item as any).taxAmount,
+                priceExcludingGST: (item as any).priceExcludingGST,
+                taxRate: (item as any).taxRate
               })) || [],
               subtotal: receipt.netTotal,
+              subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
               tip: 0,
               discount: 0,
               tax: receipt.taxAmount,

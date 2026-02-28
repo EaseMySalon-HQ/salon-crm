@@ -140,23 +140,25 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           </div>
 
           <div class="items">
-            ${receipt.items.map(item => `
-              <div class="item">
-                <div class="item-name">${item.name}</div>
-                <div class="item-details">
-                  ${item.quantity} x ₹${item.price.toFixed(2)}
-                  ${item.discount > 0 ? ` (${item.discountType === "percentage" ? `${item.discount}%` : `₹${item.discount.toFixed(2)}`} off)` : ''}
-                  ${item.staffName ? ` - ${item.staffName}` : ''}
-                </div>
-                <div class="item-details">Total: ₹${item.total.toFixed(2)}</div>
-              </div>
-            `).join('')}
+            <table style="width: 100%; border-collapse: collapse; font-size: 17px;">
+              <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
+              ${receipt.items.map(item => `
+                <tr style="border-bottom: 1px dashed #999;">
+                  <td>${(item as any).hsnSacCode || "-"}</td>
+                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}</td>
+                  <td style="text-align: right;">₹${((item as any).priceExcludingGST ?? (item.total - ((item as any).taxAmount ?? 0)) / (item.quantity || 1)).toFixed(2)}</td>
+                  <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
+                  <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
+                  <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
+                </tr>
+              `).join('')}
+            </table>
           </div>
 
           <div class="totals">
             <div class="total-line">
-              <span>Subtotal:</span>
-              <span>₹${receipt.subtotal.toFixed(2)}</span>
+              <span>Subtotal (Excl. Tax):</span>
+              <span>₹${((receipt as any).subtotalExcludingTax ?? receipt.subtotal).toFixed(2)}</span>
             </div>
             ${receipt.discount > 0 ? `
               <div class="total-line">
@@ -209,8 +211,8 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
 
                 return breakdown || `
                   <div class="tax-breakdown">
-                    <div class="total-line">CGST (9%): ₹${(receipt.tax / 2).toFixed(2)}</div>
-                    <div class="total-line">SGST (9%): ₹${(receipt.tax / 2).toFixed(2)}</div>
+                    <div class="total-line">CGST (2.5%): ₹${(receipt.tax / 2).toFixed(2)}</div>
+                    <div class="total-line">SGST (2.5%): ₹${(receipt.tax / 2).toFixed(2)}</div>
                   </div>
                 `
               })()}
@@ -397,23 +399,25 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
         </div>
 
         <div class="items">
-          ${receipt.items.map(item => `
-            <div class="item">
-              <div class="item-name">${item.name}</div>
-              <div class="item-details">
-                ${item.quantity} x ₹${item.price.toFixed(2)}
-                ${item.discount > 0 ? ` (${item.discountType === "percentage" ? `${item.discount}%` : `₹${item.discount.toFixed(2)}`} off)` : ''}
-                ${item.staffName ? ` - ${item.staffName}` : ''}
-              </div>
-              <div class="item-details">Total: ₹${item.total.toFixed(2)}</div>
-            </div>
-          `).join('')}
+          <table style="width: 100%; border-collapse: collapse; font-size: 17px;">
+            <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
+            ${receipt.items.map(item => `
+              <tr style="border-bottom: 1px dashed #999;">
+                <td>${(item as any).hsnSacCode || "-"}</td>
+                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}</td>
+                <td style="text-align: right;">₹${((item as any).priceExcludingGST ?? (item.total - ((item as any).taxAmount ?? 0)) / (item.quantity || 1)).toFixed(2)}</td>
+                <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
+                <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
+                <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
+              </tr>
+            `).join('')}
+          </table>
         </div>
 
         <div class="totals">
           <div class="total-line">
-            <span>Subtotal:</span>
-            <span>₹${receipt.subtotal.toFixed(2)}</span>
+            <span>Subtotal (Excl. Tax):</span>
+            <span>₹${((receipt as any).subtotalExcludingTax ?? receipt.subtotal).toFixed(2)}</span>
           </div>
           ${receipt.discount > 0 ? `
             <div class="total-line">
@@ -466,8 +470,8 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
 
               return breakdown || `
                 <div class="tax-breakdown">
-                  <div class="total-line">CGST (9%): ₹${(receipt.tax / 2).toFixed(2)}</div>
-                  <div class="total-line">SGST (9%): ₹${(receipt.tax / 2).toFixed(2)}</div>
+                  <div class="total-line">CGST (2.5%): ₹${(receipt.tax / 2).toFixed(2)}</div>
+                  <div class="total-line">SGST (2.5%): ₹${(receipt.tax / 2).toFixed(2)}</div>
                 </div>
               `
             })()}

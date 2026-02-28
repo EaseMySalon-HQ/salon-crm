@@ -105,6 +105,7 @@ export interface ReceiptItem {
   staffId?: string
   staffName?: string
   total: number
+  hsnSacCode?: string
 }
 
 export interface PaymentMethod {
