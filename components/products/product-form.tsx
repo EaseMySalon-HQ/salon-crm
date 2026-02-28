@@ -46,7 +46,6 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
     barcode: product?.barcode || "",
     taxCategory: product?.taxCategory || "standard",
     productType: product?.productType || "retail",
-    transactionType: "purchase", // Default to purchase for new products
   })
 
   // Search functionality states
@@ -144,7 +143,6 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
         barcode: product.barcode || "",
         taxCategory: product.taxCategory || "standard",
         productType: product.productType || "retail",
-        transactionType: "purchase",
       })
       setSearchQuery(product.name || "")
     }
@@ -210,7 +208,6 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
       barcode: selectedProduct.barcode || "",
       taxCategory: selectedProduct.taxCategory || "standard",
       productType: selectedProduct.productType || "retail",
-      transactionType: "purchase",
     })
     
     setSearchQuery(selectedProduct.name)
@@ -255,7 +252,6 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
         description: formData.description,
         taxCategory: formData.taxCategory,
         productType: formData.productType,
-        transactionType: formData.transactionType,
         isActive: true
       }
       
@@ -556,7 +552,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:col-span-2">
           <div className="space-y-2">
             <div className="flex items-center gap-1.5 min-h-[22px]">
-              <Label htmlFor="volume">Volume *</Label>
+              <Label htmlFor="volume">Volume</Label>
             </div>
             <div className="flex rounded-md border border-input overflow-hidden h-9">
               <Select
@@ -585,7 +581,6 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
                 value={formData.volume}
                 onChange={(e) => handleChange("volume", e.target.value)}
                 placeholder="0"
-                required
                 className="h-9 flex-1 rounded-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 min-w-0"
               />
             </div>
@@ -633,7 +628,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
           </div>
         </div>
 
-        {/* Row 5: Product Type and Transaction Type */}
+        {/* Row 5: Product Type */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:col-span-2">
           <div className="space-y-2">
             <div className="flex items-center gap-1.5 min-h-[22px]">
@@ -660,35 +655,6 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
                 <SelectItem value="retail">Retail - Sold to customers</SelectItem>
                 <SelectItem value="service">Service - Used in services only</SelectItem>
                 <SelectItem value="both">Both - Retail & Service</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center gap-1.5 min-h-[22px]">
-              <Label htmlFor="transactionType">Transaction Type *</Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
-                    <HelpCircle className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-xs">
-                  <p>How this product is being added to inventory.</p>
-                </TooltipContent>
-              </Tooltip>
-            </div>
-            <Select
-              value={formData.transactionType}
-              onValueChange={(value) => handleChange("transactionType", value)}
-            >
-              <SelectTrigger className="h-9">
-                <SelectValue placeholder="Select transaction type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="purchase">Purchase - New stock received</SelectItem>
-                <SelectItem value="return">Return - Customer return</SelectItem>
-                <SelectItem value="adjustment">Adjustment - Stock correction</SelectItem>
-                <SelectItem value="restock">Restock - Manual restock</SelectItem>
               </SelectContent>
             </Select>
           </div>

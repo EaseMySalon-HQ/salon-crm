@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Printer, Download, Mail, Edit, Save, X, Thermometer } from "lucide-react"
+import { Printer, Download, Mail, Edit, Save, X, Thermometer, MessageCircle } from "lucide-react"
 import type { Receipt } from "@/lib/data"
 import { ReceiptPreview } from "./receipt-preview"
 import { ReceiptGenerator } from "./receipt-generator"
@@ -108,6 +108,46 @@ export function ReceiptDialog({ receipt, open, onOpenChange, onReceiptUpdate }: 
     })
   }
 
+  const handleShareWhatsApp = () => {
+    const r = currentReceipt || receipt
+    const phone = r?.clientPhone || (r as any)?.customerPhone || ''
+    const digitsOnly = phone.replace(/\D/g, '')
+    let waPhone = digitsOnly
+    if (digitsOnly.length === 10) {
+      waPhone = '91' + digitsOnly
+    } else if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) {
+      waPhone = '91' + digitsOnly.slice(1)
+    } else if (digitsOnly.length >= 10) {
+      waPhone = digitsOnly.startsWith('91') ? digitsOnly : '91' + digitsOnly.slice(-10)
+    }
+    if (!waPhone || waPhone.length < 10) {
+      toast({
+        title: "No phone number",
+        description: "Customer phone number is not available for this receipt.",
+        variant: "destructive",
+      })
+      return
+    }
+    let baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
+    if (baseUrl.startsWith('https://localhost') || baseUrl.startsWith('https://127.0.0.1')) {
+      baseUrl = baseUrl.replace('https://', 'http://')
+    }
+    const publicUrl = (r as any)?.shareToken
+      ? `${baseUrl}/receipt/public/${r.receiptNumber}/${(r as any).shareToken}`
+      : `${baseUrl}/receipt/${r?.receiptNumber}`
+    const clientName = r?.clientName || (r as any)?.customerName || 'Customer'
+    const totalAmount = (r as any)?.grossTotal ?? (r as any)?.netTotal ?? r?.total ?? 0
+    const message = `Hi ${clientName},
+
+Your invoice ${r?.receiptNumber || ''} is ready.
+Total: ₹${totalAmount}
+
+View here:
+${publicUrl}`
+    const whatsappUrl = `https://wa.me/${waPhone}?text=${encodeURIComponent(message)}`
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer')
+  }
+
   const currentReceipt = editedReceipt || receipt
 
   return (
@@ -130,6 +170,10 @@ export function ReceiptDialog({ receipt, open, onOpenChange, onReceiptUpdate }: 
                   <Button variant="outline" size="sm" onClick={printThermalReceipt} className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100">
                     <Thermometer className="h-4 w-4 mr-2" />
                     Thermal
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleShareWhatsApp} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+                    <MessageCircle className="h-4 w-4 mr-2" />
+                    Share via WhatsApp
                   </Button>
                   <Button variant="outline" size="sm" onClick={downloadReceipt}>
                     <Download className="h-4 w-4 mr-2" />
@@ -246,8 +290,8 @@ export function ReceiptDialog({ receipt, open, onOpenChange, onReceiptUpdate }: 
                     <h4 className="font-semibold mb-2">Totals</h4>
                     <div className="space-y-1 text-sm">
                       <div className="flex justify-between">
-                        <span>Subtotal:</span>
-                        <span>{formatAmount(editedReceipt.subtotal)}</span>
+                        <span>Subtotal (Excl. Tax):</span>
+                        <span>{formatAmount((editedReceipt as any).subtotalExcludingTax ?? editedReceipt.subtotal)}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>Discount:</span>

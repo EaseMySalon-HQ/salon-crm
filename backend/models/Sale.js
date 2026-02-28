@@ -27,7 +27,13 @@ const itemSchema = new mongoose.Schema({
   staffContributions: [staffContributionSchema],
   // Membership audit fields
   isMembershipFree: { type: Boolean, default: false },
-  membershipDiscountPercent: { type: Number, default: 0 }
+  membershipDiscountPercent: { type: Number, default: 0 },
+  // HSN/SAC code for receipt display
+  hsnSacCode: { type: String, default: '' },
+  // Price per unit excluding GST (for receipt display)
+  priceExcludingGST: { type: Number },
+  // Applicable tax rate % (for receipt display)
+  taxRate: { type: Number }
 }, { _id: false });
 
 const paymentHistorySchema = new mongoose.Schema({
@@ -107,7 +113,13 @@ const saleSchema = new mongoose.Schema({
   },
   // Assign membership on checkout (Quick Sale flow)
   planToAssignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MembershipPlan', default: null },
-  membershipPlanPrice: { type: Number, default: 0 }
+  membershipPlanPrice: { type: Number, default: 0 },
+  // Tax breakdown for receipt display (serviceRate, serviceTax, productTaxByRate)
+  taxBreakdown: {
+    serviceTax: { type: Number, default: 0 },
+    serviceRate: { type: Number, default: 5 },
+    productTaxByRate: { type: mongoose.Schema.Types.Mixed, default: {} }
+  }
 }, {
   timestamps: true
 });

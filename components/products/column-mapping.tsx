@@ -30,11 +30,9 @@ const PRODUCT_FIELDS = [
   { value: 'volumeUnit', label: 'Volume Unit', required: false, description: 'mg, g, kg, ml, l, oz, pcs, pkt' },
   { value: 'taxCategory', label: 'Tax Category', required: false, description: 'essential, intermediate, standard, luxury, exempt' },
   { value: 'productType', label: 'Product Type', required: false, description: 'retail, service, or both' },
-  { value: 'transactionType', label: 'Transaction Type', required: false, description: 'purchase, return, adjustment, restock' },
   { value: 'description', label: 'Description', required: false, description: 'Product description' },
   { value: 'barcode', label: 'SKU/Barcode', required: false, description: 'SKU or barcode number' },
-  { value: 'hsnSacCode', label: 'HSN/SAC Code', required: false, description: 'Tax code for invoicing' },
-  { value: 'supplier', label: 'Supplier', required: false, description: 'Supplier name' }
+  { value: 'hsnSacCode', label: 'HSN/SAC Code', required: false, description: 'Tax code for invoicing' }
 ]
 
 export function ColumnMapping({ 

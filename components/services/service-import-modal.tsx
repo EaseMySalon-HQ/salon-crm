@@ -78,21 +78,31 @@ export function ServiceImportModal({ isOpen, onClose, onImportComplete }: Servic
         const headers = jsonData[0].map((h: any) => String(h || ''))
         const rows = jsonData.slice(1).filter(row => row.some(cell => cell !== '' && cell !== null && cell !== undefined))
         
-        // Auto-detect column mapping
+        // Auto-detect column mapping (matches Add New Service form)
         const autoMapping: Record<string, string> = {}
         headers.forEach(header => {
           const lowerHeader = header?.toString().toLowerCase() || ''
           
-          if (lowerHeader.includes('name')) {
+          if (lowerHeader.includes('name') && !lowerHeader.includes('plan')) {
             autoMapping[header] = 'name'
           } else if (lowerHeader.includes('category')) {
             autoMapping[header] = 'category'
           } else if (lowerHeader.includes('duration') || lowerHeader.includes('time')) {
             autoMapping[header] = 'duration'
-          } else if (lowerHeader.includes('price') || lowerHeader.includes('cost') || lowerHeader.includes('amount')) {
-            autoMapping[header] = 'price'
+          } else if (lowerHeader.includes('full') && lowerHeader.includes('price')) {
+            autoMapping[header] = 'fullPrice'
+          } else if (lowerHeader.includes('offer') && lowerHeader.includes('price')) {
+            autoMapping[header] = 'offerPrice'
+          } else if ((lowerHeader === 'price' || lowerHeader.includes('cost') || lowerHeader.includes('amount')) && !lowerHeader.includes('offer') && !lowerHeader.includes('full')) {
+            autoMapping[header] = 'fullPrice'
           } else if (lowerHeader.includes('description') || lowerHeader.includes('desc')) {
             autoMapping[header] = 'description'
+          } else if (lowerHeader.includes('tax') && lowerHeader.includes('applicable')) {
+            autoMapping[header] = 'taxApplicable'
+          } else if (lowerHeader.includes('hsn') || lowerHeader.includes('sac')) {
+            autoMapping[header] = 'hsnSacCode'
+          } else if (lowerHeader.includes('auto') && lowerHeader.includes('consumption')) {
+            autoMapping[header] = 'isAutoConsumptionEnabled'
           }
         })
         
@@ -226,13 +236,13 @@ export function ServiceImportModal({ isOpen, onClose, onImportComplete }: Servic
     onClose()
   }
 
-  // Download template
+  // Download template (columns match Add New Service form)
   const downloadTemplate = () => {
     const templateData = [
-      ['Name', 'Category', 'Duration', 'Price', 'Description'],
-      ['Haircut', 'Hair Services', '30', '500', 'Professional haircut with styling'],
-      ['Hair Coloring', 'Hair Services', '90', '1500', 'Full hair coloring service'],
-      ['Facial', 'Skin Care', '45', '800', 'Deep cleansing facial treatment']
+      ['Name', 'Category', 'Duration', 'Full Price', 'Offer Price', 'Description', 'Tax Applicable', 'HSN/SAC Code'],
+      ['Haircut', 'Hair Services', '30', '500', '', 'Professional haircut with styling', 'yes', '998313'],
+      ['Hair Coloring', 'Hair Services', '90', '1500', '1200', 'Full hair coloring service', 'yes', '998313'],
+      ['Facial', 'Skin Care', '45', '800', '', 'Deep cleansing facial treatment', 'yes', '']
     ]
     
     const ws = XLSX.utils.aoa_to_sheet(templateData)

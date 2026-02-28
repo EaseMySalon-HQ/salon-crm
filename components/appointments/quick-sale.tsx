@@ -397,9 +397,23 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
   // Add item to cart function
   const addToCart = (item: any, type: "service" | "product") => {
+    const priceInclusiveOfTax = paymentSettings?.priceInclusiveOfTax !== false
+    const computeLineTotalAndTaxForAdd = (
+      baseAmount: number,
+      discountPct: number,
+      taxRate: number,
+      applyTax: boolean
+    ): number => {
+      const discountedAmount = baseAmount * (1 - (discountPct || 0) / 100)
+      if (!applyTax) return discountedAmount
+      if (priceInclusiveOfTax) return discountedAmount
+      return discountedAmount + (discountedAmount * taxRate) / 100
+    }
+
     if (type === "service") {
-      let price = item.price || 0
-      let total = price
+      const basePrice = item.price || 0
+      let discount = 0
+      let total = basePrice
       let isMembershipFree = false
       let membershipDiscountPercent = 0
 
@@ -408,14 +422,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         const usage = membershipData.usageSummary.find((u: any) => String(u.serviceId || u.serviceId?._id) === svcId)
         const plan = membershipData.plan
         if (usage && usage.remaining > 0) {
-          price = 0
+          discount = 100
           total = 0
           isMembershipFree = true
+          membershipDiscountPercent = 100
         } else if (plan?.discountPercentage > 0) {
+          discount = plan.discountPercentage
           membershipDiscountPercent = plan.discountPercentage
-          price = price * (1 - plan.discountPercentage / 100)
-          total = price
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+          const applyTax = item.taxApplicable && taxSettings?.enableTax !== false
+          total = computeLineTotalAndTaxForAdd(basePrice, discount, serviceTaxRate, applyTax)
         }
+      } else {
+        const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+        const applyTax = item.taxApplicable && taxSettings?.enableTax !== false
+        total = computeLineTotalAndTaxForAdd(basePrice, 0, serviceTaxRate, applyTax)
       }
 
       const newItem: ServiceItem = {
@@ -423,22 +444,36 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         serviceId: item._id || item.id,
         staffId: "",
         quantity: 1,
-        price,
-        discount: 0,
+        price: basePrice,
+        discount,
         total,
         isMembershipFree,
         membershipDiscountPercent,
       }
       setServiceItems([...serviceItems, newItem])
     } else if (type === "product") {
+      const basePrice = item.price || 0
+      const productForTax = products.find((p) => (p._id || p.id) === (item._id || item.id)) || item
+      let productTaxRate = 18
+      if (productForTax?.taxCategory && taxSettings) {
+        switch (productForTax.taxCategory) {
+          case 'essential': productTaxRate = taxSettings.essentialProductRate || 5; break
+          case 'intermediate': productTaxRate = taxSettings.intermediateProductRate || 12; break
+          case 'standard': productTaxRate = taxSettings.standardProductRate || 18; break
+          case 'luxury': productTaxRate = taxSettings.luxuryProductRate || 28; break
+          case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
+        }
+      }
+      const applyTax = taxSettings?.enableTax !== false
+      const total = computeLineTotalAndTaxForAdd(basePrice, 0, productTaxRate, applyTax)
       const newItem: ProductItem = {
         id: Date.now().toString(),
         productId: item._id || item.id,
         staffId: "",
         quantity: 1,
-        price: item.price || 0,
+        price: basePrice,
         discount: 0,
-        total: item.price || 0,
+        total,
       }
       setProductItems([...productItems, newItem])
     }
@@ -1476,8 +1511,24 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }, [selectedCustomer])
 
   // Apply membership pricing to service items when membership loads or changes
+  // Price = base cost, Disc(%) = membership discount, Total = price after discount
   useEffect(() => {
-    if (!membershipData?.plan || !membershipData?.usageSummary?.length) return
+    if (!membershipData?.plan) {
+      // When no membership, reset any membership-applied discounts to base price
+      setServiceItems((items) =>
+        items.map((item) => {
+          if (!item.serviceId || (!item.isMembershipFree && (item.membershipDiscountPercent ?? 0) === 0)) return item
+          const service = services.find((s) => (s._id || s.id) === item.serviceId)
+          const basePrice = service?.price ?? item.price
+          const baseAmount = basePrice * item.quantity
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+          const applyTax = isServiceTaxable(item)
+          const { total } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax)
+          return { ...item, price: basePrice, discount: 0, total, isMembershipFree: false, membershipDiscountPercent: 0 }
+        })
+      )
+      return
+    }
     const usageMap = new Map(membershipData.usageSummary.map((u: any) => [u.serviceId, u]))
     const plan = membershipData.plan
     const discountPct = plan?.discountPercentage || 0
@@ -1495,25 +1546,19 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
         if (u && remaining[sid] > 0 && item.quantity <= remaining[sid]) {
           remaining[sid] -= item.quantity
-          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-          const applyTax = service?.taxApplicable && taxSettings?.enableTax !== false
-          const gstAmount = applyTax ? 0 : 0
-          return { ...item, price: 0, total: 0, discount: 0, isMembershipFree: true, membershipDiscountPercent: 0 }
+          return { ...item, price: basePrice, total: 0, discount: 100, isMembershipFree: true, membershipDiscountPercent: 100 }
         }
         if (discountPct > 0 && !item.isMembershipFree) {
-          const discounted = basePrice * (1 - discountPct / 100)
-          const baseAmount = discounted * item.quantity
-          const itemDiscountPct = item.discount || 0
-          const discountedAmount = baseAmount - (baseAmount * itemDiscountPct) / 100
+          const baseAmount = basePrice * item.quantity
           const serviceTaxRate = taxSettings?.serviceTaxRate || 5
           const applyTax = service?.taxApplicable && taxSettings?.enableTax !== false
-          const gstAmount = applyTax ? (discountedAmount * serviceTaxRate) / 100 : 0
-          return { ...item, price: discounted, total: discountedAmount + gstAmount, membershipDiscountPercent: discountPct }
+          const { total } = computeLineTotalAndTax(baseAmount, discountPct, serviceTaxRate, applyTax)
+          return { ...item, price: basePrice, total, discount: discountPct, membershipDiscountPercent: discountPct }
         }
         return item
       })
     })
-  }, [membershipData])
+  }, [membershipData, paymentSettings?.priceInclusiveOfTax])
 
   // Fetch customer statistics including visits, revenue, and last visit
   const fetchCustomerStats = async (customerId: string) => {
@@ -1643,8 +1688,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       const serviceItemsWithGST = serviceItems.map(item => {
         const baseAmount = item.price * item.quantity
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
-        return { ...item, totalWithGST: baseAmount + gstAmount }
+        const applyTax = isServiceTaxable(item)
+        const { total } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax)
+        return { ...item, totalWithGST: total }
       })
       
       const productItemsWithGST = productItems.map(item => {
@@ -1660,8 +1706,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
           }
         }
-        const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * productTaxRate) / 100 : 0
-        return { ...item, totalWithGST: baseAmount + gstAmount }
+        const applyTax = taxSettings?.enableTax !== false
+        const { total } = computeLineTotalAndTax(baseAmount, 0, productTaxRate, applyTax)
+        return { ...item, totalWithGST: total }
       })
       
       const totalPayableAmount = serviceItemsWithGST.reduce((sum, item) => sum + item.totalWithGST, 0) + 
@@ -1671,8 +1718,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         setServiceItems(prev => prev.map((item, index) => {
           const baseAmount = item.price * item.quantity
           const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-          const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
-          const totalWithGST = baseAmount + gstAmount
+          const applyTax = isServiceTaxable(item)
+          const { total: totalWithGST } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax)
           const proportionalDiscountValue = (totalWithGST / totalPayableAmount) * discountValue
           const proportionalDiscountPercentage = (proportionalDiscountValue / totalWithGST) * 100
           const finalTotal = totalWithGST - proportionalDiscountValue
@@ -1683,7 +1730,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             price: item.price,
             quantity: item.quantity,
             baseAmount,
-            gstAmount,
             totalWithGST,
             proportionalDiscountValue,
             proportionalDiscountPercentage,
@@ -1709,8 +1755,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
             }
           }
-          const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * productTaxRate) / 100 : 0
-          const totalWithGST = baseAmount + gstAmount
+          const applyTax = taxSettings?.enableTax !== false
+          const { total: totalWithGST } = computeLineTotalAndTax(baseAmount, 0, productTaxRate, applyTax)
           const proportionalDiscountValue = (totalWithGST / totalPayableAmount) * discountValue
           const proportionalDiscountPercentage = (proportionalDiscountValue / totalWithGST) * 100
           const finalTotal = totalWithGST - proportionalDiscountValue
@@ -1722,8 +1768,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       const serviceItemsWithGST = serviceItems.map(item => {
         const baseAmount = item.price * item.quantity
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
-        return { ...item, totalWithGST: baseAmount + gstAmount }
+        const applyTax = isServiceTaxable(item)
+        const { total } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax)
+        return { ...item, totalWithGST: total }
       })
       
       const productItemsWithGST = productItems.map(item => {
@@ -1739,8 +1786,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
           }
         }
-        const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * productTaxRate) / 100 : 0
-        return { ...item, totalWithGST: baseAmount + gstAmount }
+        const applyTax = taxSettings?.enableTax !== false
+        const { total } = computeLineTotalAndTax(baseAmount, 0, productTaxRate, applyTax)
+        return { ...item, totalWithGST: total }
       })
       
       const totalPayableAmount = serviceItemsWithGST.reduce((sum, item) => sum + item.totalWithGST, 0) + 
@@ -1751,8 +1799,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       setServiceItems(prev => prev.map(item => {
         const baseAmount = item.price * item.quantity
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = isServiceTaxable(item) ? (baseAmount * serviceTaxRate) / 100 : 0
-        const totalWithGST = baseAmount + gstAmount
+        const applyTax = isServiceTaxable(item)
+        const { total: totalWithGST } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax)
         const proportionalDiscountValue = (totalWithGST / totalPayableAmount) * totalDiscountAmount
         const proportionalDiscountPercentage = (proportionalDiscountValue / totalWithGST) * 100
         const finalTotal = totalWithGST - proportionalDiscountValue
@@ -1760,7 +1808,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         console.log('🔧 Service item calculation (percentage):', {
           name: item.serviceId,
           baseAmount,
-          gstAmount,
           totalWithGST,
           proportionalDiscountValue,
           proportionalDiscountPercentage,
@@ -1783,8 +1830,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
           }
         }
-        const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * productTaxRate) / 100 : 0
-        const totalWithGST = baseAmount + gstAmount
+        const applyTax = taxSettings?.enableTax !== false
+        const { total: totalWithGST } = computeLineTotalAndTax(baseAmount, 0, productTaxRate, applyTax)
         const proportionalDiscountValue = (totalWithGST / totalPayableAmount) * totalDiscountAmount
         const proportionalDiscountPercentage = (proportionalDiscountValue / totalWithGST) * 100
         const finalTotal = totalWithGST - proportionalDiscountValue
@@ -1795,16 +1842,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       setServiceItems(prev => prev.map(item => {
         const baseAmount = item.price * item.quantity
         const itemDiscPct = item.discount || 0
-        const discountedBase = baseAmount - (baseAmount * itemDiscPct) / 100
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = isServiceTaxable(item) ? (discountedBase * serviceTaxRate) / 100 : 0
-        return { ...item, discount: itemDiscPct, total: discountedBase + gstAmount }
+        const applyTax = isServiceTaxable(item)
+        const { total } = computeLineTotalAndTax(baseAmount, itemDiscPct, serviceTaxRate, applyTax)
+        return { ...item, discount: itemDiscPct, total }
       }))
       
       setProductItems(prev => prev.map(item => {
         const baseAmount = item.price * item.quantity
         const itemDiscPct = item.discount || 0
-        const discountedBase = baseAmount - (baseAmount * itemDiscPct) / 100
         const product = products.find((p) => p._id === item.productId || p.id === item.productId)
         let productTaxRate = 18
         if (product?.taxCategory && taxSettings) {
@@ -1816,8 +1862,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
           }
         }
-        const gstAmount = (taxSettings?.enableTax !== false) ? (discountedBase * productTaxRate) / 100 : 0
-        return { ...item, discount: itemDiscPct, total: discountedBase + gstAmount }
+        const applyTax = taxSettings?.enableTax !== false
+        const { total } = computeLineTotalAndTax(baseAmount, itemDiscPct, productTaxRate, applyTax)
+        return { ...item, discount: itemDiscPct, total }
       }))
     }
   }
@@ -1825,7 +1872,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // Recalculate discounts when discount values or tax settings change
   useEffect(() => {
     recalculateDiscounts()
-  }, [discountValue, discountPercentage, taxSettings])
+  }, [discountValue, discountPercentage, taxSettings, paymentSettings?.priceInclusiveOfTax])
 
   // Log when service items change
   useEffect(() => {
@@ -1970,11 +2017,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         if (item.id === id) {
           const updatedItem = { ...item, [field]: value }
 
-          // Auto-fill price when service is selected (apply membership if applicable)
+          // Auto-fill price when service is selected (Price = base cost, Disc = membership discount %, Total = after discount)
           if (field === "serviceId" && value) {
             const service = services.find((s) => s._id === value || s.id === value)
             if (service) {
-              let price = service.price
+              const basePrice = service.price ?? 0
+              let discount = 0
               let isMembershipFree = false
               let membershipDiscountPercent = 0
 
@@ -1982,38 +2030,33 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 const usage = membershipData.usageSummary.find((u: any) => String(u.serviceId || u.serviceId?._id) === String(value))
                 const plan = membershipData.plan
                 if (usage && usage.remaining > 0) {
-                  price = 0
+                  discount = 100
                   isMembershipFree = true
+                  membershipDiscountPercent = 100
                 } else if (plan?.discountPercentage > 0) {
+                  discount = plan.discountPercentage
                   membershipDiscountPercent = plan.discountPercentage
-                  price = price * (1 - plan.discountPercentage / 100)
                 }
               }
 
-              updatedItem.price = price
+              updatedItem.price = basePrice
+              updatedItem.discount = discount
               updatedItem.isMembershipFree = isMembershipFree
               updatedItem.membershipDiscountPercent = membershipDiscountPercent
             }
           }
 
-          // Calculate total with GST for services (only when global tax ON and service Tax Applicable ON)
+          // Calculate total (Inclusive: price has tax; Excluded: add tax on top)
           const baseAmount = updatedItem.price * updatedItem.quantity
           const serviceTaxRate = taxSettings?.serviceTaxRate || 5
           const applyTax = isServiceTaxable(updatedItem)
-          // If item-level discount edited, apply it immediately to this row
           if (field === 'discount') {
             const itemDiscountPct = Number(value) || 0
-            const discountedAmount = baseAmount - (baseAmount * itemDiscountPct) / 100
-            const gstAmount = applyTax ? (discountedAmount * serviceTaxRate) / 100 : 0
-            updatedItem.total = discountedAmount + gstAmount
-          } else {
-            const gstAmount = applyTax ? (baseAmount * serviceTaxRate) / 100 : 0
-            // Only update total if no GLOBAL discount is active, otherwise let global discount logic handle it
-            if (discountValue === 0 && discountPercentage === 0) {
-              // Respect item discount even when global is off
-              const discountedAmount = baseAmount - (baseAmount * (updatedItem.discount || 0)) / 100
-              updatedItem.total = discountedAmount + (applyTax ? (discountedAmount * serviceTaxRate) / 100 : 0)
-            }
+            const { total } = computeLineTotalAndTax(baseAmount, itemDiscountPct, serviceTaxRate, applyTax)
+            updatedItem.total = total
+          } else if (discountValue === 0 && discountPercentage === 0) {
+            const { total } = computeLineTotalAndTax(baseAmount, updatedItem.discount ?? 0, serviceTaxRate, applyTax)
+            updatedItem.total = total
           }
 
           return updatedItem
@@ -2042,37 +2085,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             }
           }
 
-          // Calculate total with GST for products
+          // Calculate total (Inclusive: price has tax; Excluded: add tax on top)
           const baseAmount = updatedItem.price * updatedItem.quantity
-          
-          // Add GST for products based on tax category (only if tax is enabled)
-          let productTaxRate = 18 // default standard rate
-          if (field === "productId" && value) {
-            const product = products.find((p) => p._id === value || p.id === value)
-            if (product?.taxCategory && taxSettings) {
-              switch (product.taxCategory) {
-                case 'essential': productTaxRate = taxSettings.essentialProductRate || 5; break
-                case 'intermediate': productTaxRate = taxSettings.intermediateProductRate || 12; break
-                case 'standard': productTaxRate = taxSettings.standardProductRate || 18; break
-                case 'luxury': productTaxRate = taxSettings.luxuryProductRate || 28; break
-                case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
-              }
+          let productTaxRate = 18
+          const product = products.find((p) => p._id === updatedItem.productId || p.id === updatedItem.productId)
+          if (product?.taxCategory && taxSettings) {
+            switch (product.taxCategory) {
+              case 'essential': productTaxRate = taxSettings.essentialProductRate || 5; break
+              case 'intermediate': productTaxRate = taxSettings.intermediateProductRate || 12; break
+              case 'standard': productTaxRate = taxSettings.standardProductRate || 18; break
+              case 'luxury': productTaxRate = taxSettings.luxuryProductRate || 28; break
+              case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
             }
           }
-          
-          // If item-level discount edited, apply it immediately to this row
+          const applyTax = taxSettings?.enableTax !== false
           if (field === 'discount') {
             const itemDiscountPct = Number(value) || 0
-            const discountedAmount = baseAmount - (baseAmount * itemDiscountPct) / 100
-            const gstAmount = (taxSettings?.enableTax !== false) ? (discountedAmount * productTaxRate) / 100 : 0
-            updatedItem.total = discountedAmount + gstAmount
-          } else {
-            const gstAmount = (taxSettings?.enableTax !== false) ? (baseAmount * productTaxRate) / 100 : 0
-            // Only update total if no GLOBAL discount is active, otherwise let global discount logic handle it
-            if (discountValue === 0 && discountPercentage === 0) {
-              const discountedAmount = baseAmount - (baseAmount * (updatedItem.discount || 0)) / 100
-              updatedItem.total = discountedAmount + ((taxSettings?.enableTax !== false) ? (discountedAmount * productTaxRate) / 100 : 0)
-            }
+            const { total } = computeLineTotalAndTax(baseAmount, itemDiscountPct, productTaxRate, applyTax)
+            updatedItem.total = total
+          } else if (discountValue === 0 && discountPercentage === 0) {
+            const { total } = computeLineTotalAndTax(baseAmount, updatedItem.discount ?? 0, productTaxRate, applyTax)
+            updatedItem.total = total
           }
 
           console.log('Updated Product Item:', updatedItem)
@@ -2163,18 +2196,47 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     const service = services.find((s) => (s._id || s.id) === serviceItem.serviceId)
     return service?.taxApplicable === true
   }
+
+  // Tax Type: Included = price has GST, Excluded = GST added on top
+  const priceInclusiveOfTax = paymentSettings?.priceInclusiveOfTax !== false
+
+  // Compute line total and tax: when Inclusive, price already has tax; when Excluded, add tax on top
+  const computeLineTotalAndTax = (
+    baseAmount: number,
+    discountPct: number,
+    taxRate: number,
+    applyTax: boolean
+  ): { total: number; taxAmount: number } => {
+    const discountedAmount = baseAmount * (1 - (discountPct || 0) / 100)
+    if (!applyTax) return { total: discountedAmount, taxAmount: 0 }
+    if (priceInclusiveOfTax) {
+      // Price includes GST - total = discountedAmount, extract tax for display
+      const taxAmount = discountedAmount - discountedAmount / (1 + taxRate / 100)
+      return { total: discountedAmount, taxAmount }
+    } else {
+      // GST added on top
+      const taxAmount = (discountedAmount * taxRate) / 100
+      return { total: discountedAmount + taxAmount, taxAmount }
+    }
+  }
+
+  // Total column display: price - discount (excludes tax)
+  const getDisplayTotal = (item: { price: number; quantity: number; discount?: number }) => {
+    const baseAmount = (item.price || 0) * (item.quantity || 1)
+    const discountPct = item.discount ?? 0
+    return baseAmount * (1 - discountPct / 100)
+  }
   
-  // Calculate service tax on discounted amounts (global tax ON + only services with Tax Applicable = ON)
+  // Calculate service tax (Inclusive: extract from price; Excluded: add on top)
   const serviceTax = (taxSettings?.enableTax !== false) ? serviceItems.reduce((sum, item) => {
     if (!isServiceTaxable(item)) return sum
     const baseAmount = item.price * item.quantity
     const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-    const discountedAmount = getDiscountedBase(baseAmount, item.discount, serviceTaxRate)
-    const gstAmount = (discountedAmount * serviceTaxRate) / 100
-    return sum + gstAmount
+    const { taxAmount } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, serviceTaxRate, true)
+    return sum + taxAmount
   }, 0) : 0
   
-  // Calculate product tax on discounted amounts (only if tax is enabled)
+  // Calculate product tax (Inclusive: extract from price; Excluded: add on top)
   const productTax = (taxSettings?.enableTax !== false) ? productItems.reduce((sum, item) => {
     const baseAmount = item.price * item.quantity
     const product = products.find((p) => p._id === item.productId || p.id === item.productId)
@@ -2188,9 +2250,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
       }
     }
-    const discountedAmount = getDiscountedBase(baseAmount, item.discount, productTaxRate)
-    const gstAmount = (discountedAmount * productTaxRate) / 100
-    return sum + gstAmount
+    const applyTax = taxSettings?.enableTax !== false
+    const { taxAmount } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, productTaxRate, applyTax)
+    return sum + taxAmount
   }, 0) : 0
 
   const totalTax = serviceTax + productTax
@@ -2599,7 +2661,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             staffId: item.staffId,
             staffName: staffMember?.name || "Unassigned Staff",
             total: item.total,
-            staffContributions: staffContributions
+            staffContributions: staffContributions,
+            hsnSacCode: (service as any)?.hsnSacCode || ""
           }
         }),
         ...validProductItems.map((item) => {
@@ -2620,11 +2683,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             staffId: item.staffId,
             staffName: staffMember?.name || "Unassigned Staff",
             total: item.total,
+            hsnSacCode: (product as any)?.hsnSacCode || ""
           }
         }),
         ...membershipItems
           .filter((m) => m.planId)
-          .map((m) => ({
+            .map((m) => ({
             id: m.id,
             name: `${m.planName} (${m.durationInDays} days)`,
             type: "membership" as const,
@@ -2632,6 +2696,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             price: m.price,
             discount: 0,
             discountType: "percentage" as const,
+            hsnSacCode: "",
             staffId: m.staffId || staff[0]?._id || staff[0]?.id || "",
             staffName: (m.staffId ? staff.find((s) => (s._id || s.id) === m.staffId)?.name : null) || staff[0]?.name || "Unassigned Staff",
             total: m.total,
@@ -2664,8 +2729,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         staffName: receiptItems[0].staffName
       } : 'No items')
       
-      // Calculate tax breakdown from individual items (GST already included in item totals)
-      // Note: subtotal already includes tax (item.total includes tax)
+      // Calculate tax breakdown from individual items (uses Inclusive/Excluded logic via computeLineTotalAndTax)
       let calculatedTax = 0
       // Base bill amount (for sales/revenue) = subtotal + membership plan (discount already baked into item totals)
       const baseTotalForSale = subtotal + membershipTotal
@@ -2673,30 +2737,28 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       const roundOff = roundedBaseTotalForSale - baseTotalForSale
       // calculatedTotal = bill amount used for sales/grossTotal (EXCLUDES tip)
       let calculatedTotal = roundedBaseTotalForSale
-      let taxBreakdown = { cgst: 0, sgst: 0, igst: 0 }
+      let taxBreakdown: { cgst: number; sgst: number; igst: number; serviceTax: number; serviceRate: number; productTaxByRate: Record<string, number> } = {
+        cgst: 0, sgst: 0, igst: 0, serviceTax: 0, serviceRate: 5, productTaxByRate: {}
+      }
 
-      // Calculate tax breakdown from individual items (service tax only when global tax ON and service Tax Applicable ON)
-        const serviceTax = (taxSettings?.enableTax !== false) ? serviceItems.reduce((sum, item) => {
+      // Service tax (Inclusive: extract from price; Excluded: add on top)
+      const serviceTax = (taxSettings?.enableTax !== false) ? serviceItems.reduce((sum, item) => {
         if (!isServiceTaxable(item)) return sum
         const baseAmount = item.price * item.quantity
-        const discountAmount = (baseAmount * item.discount) / 100
-        const discountedAmount = baseAmount - discountAmount
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const gstAmount = (discountedAmount * serviceTaxRate) / 100
-        return sum + gstAmount
+        const { taxAmount } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, serviceTaxRate, true)
+        return sum + taxAmount
       }, 0) : 0
 
-      // Build product tax by rate map for receipt bifurcation
+      // Build product tax by rate map for receipt bifurcation (Inclusive: extract from price; Excluded: add on top)
       const productTaxByRate: Record<string, number> = {}
 
       const productTax = (taxSettings?.enableTax !== false) ? productItems.reduce((sum, item) => {
         const baseAmount = item.price * item.quantity
-        const discountAmount = (baseAmount * item.discount) / 100
-        const discountedAmount = baseAmount - discountAmount
         const product = products.find((p) => p._id === item.productId || p.id === item.productId)
         let productTaxRate = 18 // default standard rate
-          if (product?.taxCategory && taxSettings) {
-            switch (product.taxCategory) {
+        if (product?.taxCategory && taxSettings) {
+          switch (product.taxCategory) {
             case 'essential': productTaxRate = taxSettings.essentialProductRate || 5; break
             case 'intermediate': productTaxRate = taxSettings.intermediateProductRate || 12; break
             case 'standard': productTaxRate = taxSettings.standardProductRate || 18; break
@@ -2704,10 +2766,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
           }
         }
-        const gstAmount = (discountedAmount * productTaxRate) / 100
+        const { taxAmount } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, productTaxRate, true)
         const key = String(productTaxRate)
-        productTaxByRate[key] = (productTaxByRate[key] || 0) + gstAmount
-        return sum + gstAmount
+        productTaxByRate[key] = (productTaxByRate[key] || 0) + taxAmount
+        return sum + taxAmount
       }, 0) : 0
 
       calculatedTax = serviceTax + productTax
@@ -2720,52 +2782,45 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           productTaxByRate
         } as any
 
-      // Update receipt items with tax information (service tax only when Tax Applicable ON)
+      // Update receipt items with tax information (uses Inclusive/Excluded logic via computeLineTotalAndTax)
       receiptItems.forEach((item) => {
         if (item.type === 'service') {
+          const origService = validServiceItems.find((s) => s.id === item.id)
+          const applyTax = origService ? isServiceTaxable(origService) : false
           const baseAmount = item.price * item.quantity
-          const discountAmount = (baseAmount * item.discount) / 100
-          const discountedAmount = baseAmount - discountAmount
-          
-          if (isServiceTaxable(item)) {
-            const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-            const gstAmount = (discountedAmount * serviceTaxRate) / 100
-            item.taxAmount = gstAmount
-            item.cgst = gstAmount / 2
-            item.sgst = gstAmount / 2
-          } else {
-            item.taxAmount = 0
-            item.cgst = 0
-            item.sgst = 0
-          }
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+          const { taxAmount } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, serviceTaxRate, applyTax)
+          item.taxAmount = taxAmount
+          item.cgst = taxAmount / 2
+          item.sgst = taxAmount / 2
           item.totalWithTax = item.total
+          item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
+          item.taxRate = applyTax ? serviceTaxRate : 0
         } else if (item.type === 'product') {
-          const baseAmount = item.price * item.quantity
-          const discountAmount = (baseAmount * item.discount) / 100
-          const discountedAmount = baseAmount - discountAmount
-          
-          if (taxSettings?.enableTax !== false) {
-            const product = products.find((p) => p._id === item.productId || p.id === item.productId)
-            let productTaxRate = 18
-            if (product?.taxCategory && taxSettings) {
-              switch (product.taxCategory) {
-                case 'essential': productTaxRate = taxSettings.essentialProductRate || 5; break
-                case 'intermediate': productTaxRate = taxSettings.intermediateProductRate || 12; break
-                case 'standard': productTaxRate = taxSettings.standardProductRate || 18; break
-                case 'luxury': productTaxRate = taxSettings.luxuryProductRate || 28; break
-                case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
-              }
+          const origProduct = validProductItems.find((p) => p.id === item.id)
+          const product = origProduct ? products.find((prod) => prod._id === origProduct.productId || prod.id === origProduct.productId) : null
+          let productTaxRate = 18
+          if (product?.taxCategory && taxSettings) {
+            switch (product.taxCategory) {
+              case 'essential': productTaxRate = taxSettings.essentialProductRate || 5; break
+              case 'intermediate': productTaxRate = taxSettings.intermediateProductRate || 12; break
+              case 'standard': productTaxRate = taxSettings.standardProductRate || 18; break
+              case 'luxury': productTaxRate = taxSettings.luxuryProductRate || 28; break
+              case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
             }
-            const gstAmount = (discountedAmount * productTaxRate) / 100
-            item.taxAmount = gstAmount
-            item.cgst = gstAmount / 2
-            item.sgst = gstAmount / 2
-          } else {
-            item.taxAmount = 0
-            item.cgst = 0
-            item.sgst = 0
           }
+          const applyTax = (taxSettings?.enableTax !== false) && productTaxRate > 0
+          const baseAmount = item.price * item.quantity
+          const { taxAmount } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, productTaxRate, applyTax)
+          item.taxAmount = taxAmount
+          item.cgst = taxAmount / 2
+          item.sgst = taxAmount / 2
           item.totalWithTax = item.total
+          item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
+          item.taxRate = applyTax ? productTaxRate : 0
+        } else if (item.type === 'membership') {
+          item.priceExcludingGST = (item.total || 0) / (item.quantity || 1)
+          item.taxRate = 0
         }
       })
       
@@ -2820,25 +2875,32 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             ...validServiceItems.map((item: any) => {
               const service = services.find((s) => s._id === item.serviceId || s.id === item.serviceId)
               const staffMember = staff.find((s) => s._id === item.staffId || s.id === item.staffId)
-              return {
+              const receiptItem = receiptItems.find((r) => r.id === item.id)
+              const itemTax = receiptItem?.taxAmount ?? 0
+          return {
                 serviceId: item.serviceId,
                 productId: null,
                 name: service?.name || 'Unknown Service',
                 type: 'service' as const,
                 quantity: item.quantity,
                 price: item.price,
+                priceExcludingGST: (item.total - itemTax) / (item.quantity || 1),
                 total: item.total,
                 discount: item.discount ?? 0,
                 staffId: item.staffId || '',
                 staffName: staffMember?.name || '',
                 staffContributions: item.staffContributions || [],
                 isMembershipFree: item.isMembershipFree ?? false,
-                membershipDiscountPercent: item.membershipDiscountPercent ?? 0
+                membershipDiscountPercent: item.membershipDiscountPercent ?? 0,
+                hsnSacCode: (service as any)?.hsnSacCode || '',
+                taxRate: (receiptItem as any)?.taxRate ?? 0
               }
             }),
             ...validProductItems.map((item: any) => {
               const product = products.find((p) => p._id === item.productId || p.id === item.productId)
               const staffMember = staff.find((s) => s._id === item.staffId || s.id === item.staffId)
+              const receiptItem = receiptItems.find((r) => r.id === item.id)
+              const itemTax = receiptItem?.taxAmount ?? 0
               return {
                 productId: item.productId,
                 serviceId: null,
@@ -2846,11 +2908,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 type: 'product' as const,
                 quantity: item.quantity,
                 price: item.price,
+                priceExcludingGST: (item.total - itemTax) / (item.quantity || 1),
                 total: item.total,
                 discount: item.discount ?? 0,
                 staffId: item.staffId || '',
                 staffName: staffMember?.name || '',
-                staffContributions: item.staffContributions || []
+                staffContributions: item.staffContributions || [],
+                hsnSacCode: (product as any)?.hsnSacCode || '',
+                taxRate: (receiptItem as any)?.taxRate ?? 0
               }
             })
           ],
@@ -2891,6 +2956,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             planToAssignId: membershipItems.find((m) => m.planId)?.planId,
             membershipPlanPrice: membershipTotal,
           }),
+          taxBreakdown: {
+            serviceTax: taxBreakdown.serviceTax,
+            serviceRate: taxBreakdown.serviceRate,
+            productTaxByRate: taxBreakdown.productTaxByRate,
+          },
         }
 
         console.log('💾 Creating sale in backend:', saleData)
@@ -3027,6 +3097,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         ? staff.find((s) => (s._id || s.id) === tipStaffId)
         : null
 
+      const subtotalExcludingTax = receiptItems.reduce((sum, item) => sum + (item.total - ((item as any).taxAmount || 0)), 0)
       const receipt: any = {
         id: Date.now().toString(),
         receiptNumber: receiptNumber,
@@ -3037,6 +3108,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         time: format(new Date(), "HH:mm"),
         items: receiptItems,
         subtotal: subtotal,
+        subtotalExcludingTax,
         tip: tip,
         discount: totalDiscount,
         tax: calculatedTax,
@@ -3050,6 +3122,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         tipStaffId: tipStaffId || undefined,
         tipStaffName: tipStaff?.name || undefined,
         notes: remarks,
+        shareToken: result.data?.shareToken,
       }
 
             // Store the receipt locally
@@ -3660,7 +3733,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           </p>
                         </div>
                         <div className="text-right">
-                          <p className="font-semibold text-gray-800">₹{item.total?.toFixed(2)}</p>
+                          <p className="font-semibold text-gray-800">₹{getDisplayTotal(item).toFixed(2)}</p>
                           {item.discount > 0 && (
                             <p className="text-xs text-red-600">
                               -₹{((item.price * item.quantity * item.discount) / 100).toFixed(2)}
@@ -4242,7 +4315,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     />
 
                     <div className="text-sm font-medium">
-                      ₹{getDiscountedBase(item.price * item.quantity, item.discount, taxSettings?.serviceTaxRate || 5).toFixed(2)}
+                      ₹{getDisplayTotal(item).toFixed(2)}
                     </div>
 
                     <Button
@@ -4458,23 +4531,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       />
 
                       <div className="text-sm font-medium">
-                        ₹{getDiscountedBase(
-                          item.price * item.quantity,
-                          item.discount,
-                          (() => {
-                            const product = products.find((p) => p._id === item.productId || p.id === item.productId)
-                            if (product?.taxCategory && taxSettings) {
-                              switch (product.taxCategory) {
-                                case "essential": return taxSettings.essentialProductRate || 5
-                                case "intermediate": return taxSettings.intermediateProductRate || 12
-                                case "standard": return taxSettings.standardProductRate || 18
-                                case "luxury": return taxSettings.luxuryProductRate || 28
-                                case "exempt": return taxSettings.exemptProductRate || 0
-                              }
-                            }
-                            return 18
-                          })()
-                        ).toFixed(2)}
+                        ₹{getDisplayTotal(item).toFixed(2)}
                       </div>
 
                       <Button
@@ -4625,7 +4682,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             readOnly
                             className="h-8 bg-muted"
                           />
-                          <div className="text-sm font-medium">₹{item.total.toFixed(2)}</div>
+                          <div className="text-sm font-medium">₹{getDisplayTotal(item).toFixed(2)}</div>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -4753,7 +4810,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   onClick={() => setSummaryExpanded((v) => !v)}
                   className="flex w-full justify-between items-center py-1 hover:bg-gray-100/50 rounded-md transition-colors -mx-1 px-1"
                 >
-                  <span className="text-sm text-gray-600">GST</span>
+                  <span className="text-sm text-gray-600">GST{priceInclusiveOfTax ? " (included)" : ""}</span>
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm font-medium text-gray-900">{formatCurrency(totalTax)}</span>
                     {summaryExpanded ? (
