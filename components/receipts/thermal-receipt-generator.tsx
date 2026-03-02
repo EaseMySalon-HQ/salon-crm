@@ -146,7 +146,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
                 <tr style="border-bottom: 1px dashed #999;">
                   <td>${(item as any).hsnSacCode || "-"}</td>
                   <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}</td>
-                  <td style="text-align: right;">₹${((item as any).priceExcludingGST ?? (item.total - ((item as any).taxAmount ?? 0)) / (item.quantity || 1)).toFixed(2)}</td>
+                  <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                   <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                   <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
                   <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
@@ -405,7 +405,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               <tr style="border-bottom: 1px dashed #999;">
                 <td>${(item as any).hsnSacCode || "-"}</td>
                 <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}</td>
-                <td style="text-align: right;">₹${((item as any).priceExcludingGST ?? (item.total - ((item as any).taxAmount ?? 0)) / (item.quantity || 1)).toFixed(2)}</td>
+                <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                 <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                 <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
                 <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
