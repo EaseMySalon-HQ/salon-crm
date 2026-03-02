@@ -179,7 +179,7 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
                 <tr style="border-bottom: 1px dashed #999;">
                   <td style="padding: 3px 2px;">${item.hsnSacCode || "-"}</td>
                   <td style="padding: 3px 2px;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}${item.staffName ? `<br><span style="font-size: 10px; color: #666;">${item.staffName}</span>` : ""}</td>
-                  <td style="text-align: right; padding: 3px 2px;">${formatCurrency((item as any).priceExcludingGST ?? (item.total - ((item as any).taxAmount ?? 0)) / (item.quantity || 1), businessSettings)}</td>
+                  <td style="text-align: right; padding: 3px 2px;">${formatCurrency(item.price, businessSettings)}</td>
                   <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : formatCurrency(item.discount, businessSettings)) : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px; font-weight: bold;">${formatCurrency(item.total, businessSettings)}</td>

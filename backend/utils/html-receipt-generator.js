@@ -206,7 +206,7 @@ function generateReceiptHTML(receipt, businessSettings) {
                 <tr style="border-bottom: 1px dashed #999;">
                   <td style="padding: 3px 2px;">${item.hsnSacCode || "-"}</td>
                   <td style="padding: 3px 2px;">${item.name || "Item"}${(item.quantity || 1) > 1 ? " (x" + (item.quantity || 1) + ")" : ""}${item.staffName ? "<br><span style=\"font-size: 10px; color: #666;\">" + item.staffName + "</span>" : ""}</td>
-                  <td style="text-align: right; padding: 3px 2px;">${formatCurrency(item.priceExcludingGST ?? ((item.total || 0) - (item.taxAmount || 0)) / (item.quantity || 1), businessSettings)}</td>
+                  <td style="text-align: right; padding: 3px 2px;">${formatCurrency(item.price ?? 0, businessSettings)}</td>
                   <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : formatCurrency(item.discount, businessSettings)) : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px;">${(item.taxRate || 0) > 0 ? item.taxRate + "%" : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px; font-weight: bold;">${formatCurrency(item.total || item.price || 0, businessSettings)}</td>
