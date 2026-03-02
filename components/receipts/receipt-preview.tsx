@@ -106,7 +106,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
                       <span className="block text-xs text-gray-600">{item.staffName}</span>
                     )}
                   </td>
-                  <td className="py-1.5 text-right">{formatAmount((item as any).priceExcludingGST ?? ((item.total - ((item as any).taxAmount ?? 0)) / (item.quantity || 1)))}</td>
+                  <td className="py-1.5 text-right">{formatAmount(item.price)}</td>
                   <td className="py-1.5 text-right">
                     {(item.discount || 0) > 0
                       ? item.discountType === "percentage"
