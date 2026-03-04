@@ -7296,7 +7296,10 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             console.log('   - Check if admin users have email addresses');
           }
           
-          for (const recipient of recipients) {
+          const emailDelayMs = 600; // Resend limit: 2 req/sec
+          for (let i = 0; i < recipients.length; i++) {
+            if (i > 0) await new Promise(r => setTimeout(r, emailDelayMs));
+            const recipient = recipients[i];
             try {
               console.log(`📧 Sending appointment notification to: ${recipient.email} (${recipient.name || recipient.role})`);
               
@@ -8184,7 +8187,10 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
             
             console.log(`📧 Found ${recipients.length} total recipients for cancellation notification`);
             
-            for (const recipient of recipients) {
+            const cancelDelayMs = 600; // Resend limit: 2 req/sec
+            for (let i = 0; i < recipients.length; i++) {
+              if (i > 0) await new Promise(r => setTimeout(r, cancelDelayMs));
+              const recipient = recipients[i];
               try {
                 console.log(`📧 Sending cancellation notification to: ${recipient.email} (${recipient.name || recipient.role})`);
                 await emailService.sendAppointmentCancellationNotification({
