@@ -33,7 +33,7 @@ export const metadata: Metadata = {
     "salon package management"
   ],
   openGraph: {
-    title: "Complete Salon Management Software Features | Ease My Salon",
+    title: "Complete Salon Management Software Features | EaseMySalon",
     description: "Explore all features: POS with GST, appointment booking, CRM, inventory, staff management, analytics, and more. Built for Indian salons.",
   },
   alternates: {
@@ -155,7 +155,7 @@ export default function FeaturesPage() {
           <div className="rounded-3xl bg-gradient-to-r from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white p-10 lg:p-16 text-center shadow-2xl">
             <h2 className="text-3xl sm:text-4xl font-bold mb-4">Ready to Experience All Features?</h2>
             <p className="text-xl text-purple-100 mb-8 max-w-2xl mx-auto">
-              Book a personalized demo and see exactly how Ease My Salon can transform your salon operations.
+              Book a personalized demo and see exactly how EaseMySalon can transform your salon operations.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Button

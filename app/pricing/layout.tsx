@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     "salon software pricing comparison"
   ],
   openGraph: {
-    title: "Salon Software Pricing | Ease My Salon",
+    title: "Salon Software Pricing | EaseMySalon",
     description: "Transparent pricing starting at ₹999/month. 14-day free trial, no credit card required. Perfect for salons of all sizes.",
   },
   alternates: {

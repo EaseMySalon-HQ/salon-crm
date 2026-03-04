@@ -251,4 +251,4 @@ className="w-64"  // 256px = 16rem
 - New multi-staff data uses enhanced schema
 - Seamless transition without data loss
 
-This feature significantly enhances the Ease My Salon's capability to handle complex services while maintaining data integrity and providing clear staff attribution for better business management.
+This feature significantly enhances the EaseMySalon's capability to handle complex services while maintaining data integrity and providing clear staff attribution for better business management.

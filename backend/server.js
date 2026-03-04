@@ -1,4 +1,4 @@
-console.log('🚀 Starting Ease My Salon Backend Server...');
+console.log('🚀 Starting EaseMySalon Backend Server...');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -7296,7 +7296,10 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             console.log('   - Check if admin users have email addresses');
           }
           
-          for (const recipient of recipients) {
+          const emailDelayMs = 600; // Resend limit: 2 req/sec
+          for (let i = 0; i < recipients.length; i++) {
+            if (i > 0) await new Promise(r => setTimeout(r, emailDelayMs));
+            const recipient = recipients[i];
             try {
               console.log(`📧 Sending appointment notification to: ${recipient.email} (${recipient.name || recipient.role})`);
               
@@ -8184,7 +8187,10 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
             
             console.log(`📧 Found ${recipients.length} total recipients for cancellation notification`);
             
-            for (const recipient of recipients) {
+            const cancelDelayMs = 600; // Resend limit: 2 req/sec
+            for (let i = 0; i < recipients.length; i++) {
+              if (i > 0) await new Promise(r => setTimeout(r, cancelDelayMs));
+              const recipient = recipients[i];
               try {
                 console.log(`📧 Sending cancellation notification to: ${recipient.email} (${recipient.name || recipient.role})`);
                 await emailService.sendAppointmentCancellationNotification({
@@ -10815,7 +10821,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       }
       
       settings = new BusinessSettings({
-        name: "Ease My Salon",
+        name: "EaseMySalon",
         email: req.user?.email || "info@easemysalon.in",
         phone: "",
         website: "",
@@ -12755,7 +12761,7 @@ app.post('/api/gdpr/consent/:userId', authenticateToken, setupBusinessDatabase, 
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
-    message: 'Ease My Salon API is running',
+    message: 'EaseMySalon API is running',
     timestamp: new Date().toISOString()
   });
 });
@@ -12807,7 +12813,7 @@ app.use('*', (req, res) => {
 // Start server
 
 app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`🚀 Ease My Salon Backend running on port ${PORT}`);
+  console.log(`🚀 EaseMySalon Backend running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🔐 API Base: http://localhost:${PORT}/api`);
   // Old initialization functions disabled for multi-tenant architecture

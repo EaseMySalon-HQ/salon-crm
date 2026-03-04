@@ -4,7 +4,7 @@ export function OrganizationSchema() {
   const schema = {
     "@context": "https://schema.org",
     "@type": "Organization",
-    "name": "Ease My Salon",
+    "name": "EaseMySalon",
     "url": siteUrl,
     "logo": `${siteUrl}/images/logo.png`,
     "description": "India's #1 Salon Management Software - Complete POS, CRM, appointments, inventory & analytics platform for salons and spas. Reduce no-shows by 40%, cut billing time by 70%, increase revenue by 35%.",
@@ -39,7 +39,7 @@ export function SoftwareApplicationSchema() {
   const schema = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    "name": "Ease My Salon",
+    "name": "EaseMySalon",
     "applicationCategory": "BusinessApplication",
     "operatingSystem": "Web",
     "offers": {

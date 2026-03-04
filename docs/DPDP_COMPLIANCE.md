@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the Digital Personal Data Protection Act, 2023 (DPDP Act) compliance measures implemented in the Ease My Salon system.
+This document outlines the Digital Personal Data Protection Act, 2023 (DPDP Act) compliance measures implemented in the EaseMySalon system.
 
 ## Compliance Status
 

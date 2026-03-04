@@ -694,6 +694,15 @@ export function SalesReport() {
     return matchesSearch && matchesPayment && matchesStatus && matchesStaffTip && matchesDateRange
   })
 
+  // Sort by bill number descending (latest first) - extract numeric part for correct ordering
+  const extractBillNum = (billNo: string) => {
+    const m = (billNo || "").match(/\d+/)
+    return m ? parseInt(m[0], 10) : 0
+  }
+  const sortedFilteredSales = [...filteredSales].sort(
+    (a, b) => extractBillNum(b.billNo) - extractBillNum(a.billNo)
+  )
+
   console.log(`🔍 Payment filter "${paymentFilter}" applied:`, {
     totalSales: salesData.length,
     filteredSales: filteredSales.length,
@@ -2664,7 +2673,7 @@ export function SalesReport() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredSales.map((sale) => (
+                sortedFilteredSales.map((sale) => (
                   <TableRow key={sale.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                     <TableCell className="font-medium text-slate-900">
                       <Button

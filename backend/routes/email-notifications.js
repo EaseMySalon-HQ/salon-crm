@@ -1591,7 +1591,10 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
     }).lean();
 
     const results = [];
-    for (const staff of recipients) {
+    const delayMs = 600; // Resend limit: 2 req/sec
+    for (let i = 0; i < recipients.length; i++) {
+      if (i > 0) await new Promise(r => setTimeout(r, delayMs));
+      const staff = recipients[i];
       const result = await emailService.sendDailySummary({
         to: staff.email,
         businessName: business.name,

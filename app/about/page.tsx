@@ -8,21 +8,21 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
-  title: "About Us - Built for Indian Salons | Ease My Salon",
-  description: "Learn why we built Ease My Salon, our mission to digitize every Indian salon, and the team behind the platform. Built by industry leaders from Accenture and SaaS unicorns.",
+  title: "About Us - Built for Indian Salons | EaseMySalon",
+  description: "Learn why we built EaseMySalon, our mission to digitize every Indian salon, and the team behind the platform. Built by industry leaders from Accenture and SaaS unicorns.",
   keywords: [
     "about salon software",
     "salon management company",
     "salon software team",
     "salon software company India",
-    "about Ease My Salon",
+    "about EaseMySalon",
     "salon software founders",
     "salon management platform team",
     "salon software mission",
     "salon software vision"
   ],
   openGraph: {
-    title: "About Ease My Salon - Our Mission & Team",
+    title: "About EaseMySalon - Our Mission & Team",
     description: "Built by product leaders, designers & engineers obsessed with salons. Learn our mission to digitize every Indian salon.",
   },
   alternates: {
@@ -50,7 +50,7 @@ export default function AboutPage() {
             Built by Product Leaders, Designers & Engineers Obsessed with Salons
           </h1>
           <p className="text-xl sm:text-2xl text-purple-100 leading-relaxed">
-            Ease My Salon was born after <span className="font-semibold text-white">hundreds of hours</span> sitting with front desks, stylists and owners who juggled spreadsheets, WhatsApp and legacy POS. We set out to build an operating system that feels as <span className="font-semibold text-white">premium as the salons it powers</span>.
+            EaseMySalon was born after <span className="font-semibold text-white">hundreds of hours</span> sitting with front desks, stylists and owners who juggled spreadsheets, WhatsApp and legacy POS. We set out to build an operating system that feels as <span className="font-semibold text-white">premium as the salons it powers</span>.
           </p>
         </div>
       </section>
@@ -82,7 +82,7 @@ export default function AboutPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <p className="text-slate-600 leading-relaxed">From single-chair stylists to nationwide brands, Ease My Salon should be synonymous with smoother operations and happier teams. We're building the infrastructure that powers India's salon industry.</p>
+              <p className="text-slate-600 leading-relaxed">From single-chair stylists to nationwide brands, EaseMySalon should be synonymous with smoother operations and happier teams. We're building the infrastructure that powers India's salon industry.</p>
             </CardContent>
           </Card>
         </div>

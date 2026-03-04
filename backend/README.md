@@ -1,6 +1,6 @@
-# Ease My Salon Backend API
+# EaseMySalon Backend API
 
-A Node.js/Express.js backend API for the Ease My Salon system.
+A Node.js/Express.js backend API for the EaseMySalon system.
 
 ## 🚀 Quick Start
 

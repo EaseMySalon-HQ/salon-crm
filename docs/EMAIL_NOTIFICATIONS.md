@@ -52,7 +52,7 @@ Add to your `.env` file:
 # Email Service Configuration (Resend)
 EMAIL_API_KEY=your-resend-api-key-here
 EMAIL_FROM=noreply@easemysalon.in
-EMAIL_FROM_NAME=Ease My Salon
+EMAIL_FROM_NAME=EaseMySalon
 ```
 
 ### 2. Get Resend API Key

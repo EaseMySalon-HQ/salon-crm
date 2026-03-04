@@ -18,7 +18,7 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between">
               <div className="space-y-2">
                 <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-100">
-                  Welcome to Ease My Salon
+                  Welcome to EaseMySalon
                 </h1>
                 <p className="text-indigo-100 text-lg">Manage your salon operations with ease and efficiency</p>
               </div>
