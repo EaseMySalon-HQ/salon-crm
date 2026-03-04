@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
   title: "Contact & Book Demo | Salon Software Consultation",
-  description: "Book a free personalized demo of Ease My Salon. Talk to our team, schedule a consultation, or chat on WhatsApp. Get started with India's #1 salon management software.",
+  description: "Book a free personalized demo of EaseMySalon. Talk to our team, schedule a consultation, or chat on WhatsApp. Get started with India's #1 salon management software.",
   keywords: [
     "salon software demo",
     "contact salon software",
@@ -24,8 +24,8 @@ export const metadata: Metadata = {
     "salon software trial"
   ],
   openGraph: {
-    title: "Contact Ease My Salon | Book a Free Demo",
-    description: "Schedule a personalized demo and see how Ease My Salon can transform your salon operations. Free consultation available.",
+    title: "Contact EaseMySalon | Book a Free Demo",
+    description: "Schedule a personalized demo and see how EaseMySalon can transform your salon operations. Free consultation available.",
   },
   alternates: {
     canonical: '/contact',

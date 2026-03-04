@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     "salon success stories"
   ],
   openGraph: {
-    title: "Salon Management Blog | Ease My Salon",
+    title: "Salon Management Blog | EaseMySalon",
     description: "Insights, playbooks and best practices for Indian salons, spas and grooming brands.",
   },
   alternates: {
@@ -56,7 +56,7 @@ export default function BlogPage() {
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 space-y-4 text-center max-w-3xl">
           <Badge className="bg-orange-100 text-orange-700">Insights</Badge>
           <h1 className="text-4xl font-semibold text-slate-900">Salon growth playbooks</h1>
-          <p className="text-lg text-slate-600">Actionable tips from the Ease My Salon community. Subscribe to get monthly updates in your inbox.</p>
+          <p className="text-lg text-slate-600">Actionable tips from the EaseMySalon community. Subscribe to get monthly updates in your inbox.</p>
           <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9]">
             <a href="mailto:hello@easemysalon.in">Subscribe to newsletter</a>
           </Button>

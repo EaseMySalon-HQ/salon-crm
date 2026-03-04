@@ -29,7 +29,7 @@ export function PrivacyPolicyContent() {
           </CardHeader>
           <CardContent className="space-y-4 text-gray-700">
             <p>
-              At Ease My Salon, we are committed to protecting your privacy and ensuring the security of your personal data. 
+              At EaseMySalon, we are committed to protecting your privacy and ensuring the security of your personal data. 
               This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use 
               our salon management system.
             </p>

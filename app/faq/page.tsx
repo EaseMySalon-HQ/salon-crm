@@ -16,7 +16,7 @@ import { FAQSchema } from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
   title: "Salon Software FAQ | Common Questions Answered",
-  description: "Answers to common questions about Ease My Salon's salon management software platform, onboarding, pricing, features, and support. Get all your questions answered.",
+  description: "Answers to common questions about EaseMySalon's salon management software platform, onboarding, pricing, features, and support. Get all your questions answered.",
   keywords: [
     "salon software FAQ",
     "salon management questions",
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
     "salon software answers"
   ],
   openGraph: {
-    title: "Salon Software FAQ | Ease My Salon",
+    title: "Salon Software FAQ | EaseMySalon",
     description: "Get answers to common questions about salon management software, pricing, features, and support.",
   },
   alternates: {
@@ -37,7 +37,7 @@ export const metadata: Metadata = {
 }
 
 const faqs = [
-  { q: "Is Ease My Salon cloud-based?", a: "Yes, it’s a secure cloud platform accessible from any device with real-time sync across branches." },
+  { q: "Is EaseMySalon cloud-based?", a: "Yes, it’s a secure cloud platform accessible from any device with real-time sync across branches." },
   { q: "How long does implementation take?", a: "Most salons go live in under a week including data migration, staff training and trial run." },
   { q: "Can you migrate data from my existing system?", a: "Absolutely. We import clients, memberships, services, price lists and stock from Excel/CSV exports for free." },
   { q: "Do you support GST invoices?", a: "Yes. POS and receipt flows are GST-compliant with configurable tax profiles per branch." },

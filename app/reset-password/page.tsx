@@ -195,7 +195,7 @@ function ResetPasswordContent() {
           <div className="flex justify-center">
             <div className="flex items-center gap-2">
               <Lock className="h-8 w-8 text-primary" />
-              <span className="text-2xl font-bold">Ease My Salon</span>
+              <span className="text-2xl font-bold">EaseMySalon</span>
             </div>
           </div>
           <h2 className="mt-6 text-3xl font-extrabold text-gray-900">Reset your password</h2>

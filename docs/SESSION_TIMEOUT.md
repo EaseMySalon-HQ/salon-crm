@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Ease My Salon now includes an automatic session timeout feature that logs out users after a period of inactivity to enhance security and prevent unauthorized access.
+The EaseMySalon now includes an automatic session timeout feature that logs out users after a period of inactivity to enhance security and prevent unauthorized access.
 
 ## Features
 
@@ -94,4 +94,4 @@ You can easily customize the timeout behavior by:
 4. **Customizing UI**: Modify the session status component
 5. **Adding callbacks**: Use `onTimeout` and `onWarning` options
 
-This feature enhances the security of your Ease My Salon while maintaining a great user experience!
+This feature enhances the security of your EaseMySalon while maintaining a great user experience!

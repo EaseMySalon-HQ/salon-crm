@@ -61,7 +61,7 @@ export function PublicNav() {
           <Link href="/dashboard" className="flex items-center gap-3 group">
             <Image
               src="/images/logo-no-background.png"
-              alt="Ease My Salon"
+              alt="EaseMySalon"
               width={150}
               height={40}
               className="object-contain transition-all duration-300 group-hover:scale-105"
@@ -111,7 +111,7 @@ export function PublicNav() {
                             className="block rounded-2xl border-2 border-slate-100 bg-gradient-to-br from-purple-50 to-indigo-50 p-5 hover:border-[#7C3AED]/30 hover:shadow-lg transition-all group"
                           >
                             <p className="text-base font-bold text-slate-900 group-hover:text-[#7C3AED] transition-colors mb-2">Explore All Features</p>
-                            <p className="text-xs text-slate-600 leading-relaxed">Deep dive into every automation and dashboard Ease My Salon unlocks.</p>
+                            <p className="text-xs text-slate-600 leading-relaxed">Deep dive into every automation and dashboard EaseMySalon unlocks.</p>
                           </Link>
                           <div className="grid gap-3 md:grid-cols-2">
                             <Link 

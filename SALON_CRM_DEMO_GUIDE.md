@@ -1,4 +1,4 @@
-# 🎯 Ease My Salon - Complete Demo Guide
+# 🎯 EaseMySalon - Complete Demo Guide
 
 ## 📋 Table of Contents
 1. [Getting Started](#getting-started)
@@ -627,4 +627,4 @@
 
 ---
 
-*This demo guide covers all major features of the Ease My Salon system. Each section provides step-by-step instructions for using the features effectively.*
+*This demo guide covers all major features of the EaseMySalon system. Each section provides step-by-step instructions for using the features effectively.*

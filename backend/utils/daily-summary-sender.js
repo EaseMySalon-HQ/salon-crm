@@ -114,7 +114,10 @@ async function sendDailySummaryForDate(businessId, branchId, targetDate) {
     }
 
     let sentCount = 0;
-    for (const staff of recipients) {
+    const delayMs = 600; // Resend limit: 2 req/sec
+    for (let i = 0; i < recipients.length; i++) {
+      if (i > 0) await new Promise(r => setTimeout(r, delayMs));
+      const staff = recipients[i];
       try {
         await emailService.sendDailySummary({
           to: staff.email,

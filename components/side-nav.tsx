@@ -6,6 +6,7 @@ import Image from "next/image"
 import { usePathname } from "next/navigation"
 import { CalendarDays, Home, PieChart, Settings, Users, Receipt, Banknote, ChevronLeft, ChevronRight, Phone, Megaphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context"
 import { SETTINGS_MODULES } from "@/lib/permission-mappings"
@@ -105,7 +106,7 @@ export function SideNav() {
             {isCollapsed ? (
               <Image
                 src="/images/monogram-circle-color-transparent.png"
-                alt="Ease My Salon"
+                alt="EaseMySalon"
                 width={40}
                 height={40}
                 className="object-contain transition-all duration-300 group-hover:scale-105"
@@ -114,7 +115,7 @@ export function SideNav() {
             ) : (
               <Image
                 src="/images/logo-no-background.png"
-                alt="Ease My Salon"
+                alt="EaseMySalon"
                 width={150}
                 height={40}
                 className="object-contain transition-all duration-300 group-hover:scale-105"
@@ -125,88 +126,97 @@ export function SideNav() {
         </div>
         
         <div className="flex-1 py-2 overflow-y-auto">
-          <nav className="grid gap-2.5">
-            {navigationItems.map((item) => {
-              const canAccess = hasAccess(item)
-              const Icon = item.icon
-              const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href))
+          <TooltipProvider delayDuration={50}>
+            <nav className="grid gap-2.5">
+              {navigationItems.map((item) => {
+                const canAccess = hasAccess(item)
+                const Icon = item.icon
+                const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href))
 
-              return (
-                <div key={item.href} className="relative">
-                  {isCollapsed ? (
-                    <Link 
-                      href={canAccess ? item.href : "#"} 
-                      className={cn(
-                        "flex items-center justify-center w-full h-12 rounded-xl transition-all duration-300 group",
-                        !canAccess && "opacity-50 cursor-not-allowed",
-                        isActive 
-                          ? "bg-indigo-600 text-white shadow-lg hover:bg-indigo-600 hover:text-white" 
-                          : "hover:bg-indigo-50 hover:text-indigo-600 text-gray-600"
-                      )}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (!canAccess) {
-                          e.preventDefault()
-                        }
-                      }}
-                    >
-                      <Icon className={cn(
-                        "h-5 w-5 transition-all",
-                        isActive ? "text-white" : ""
-                      )} />
-                      {isActive && (
-                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 rounded-r-full" />
-                      )}
-                    </Link>
-                  ) : (
-                    <Button
-                      variant={isActive ? "secondary" : "ghost"}
-                      className={cn(
-                        "w-full h-12 rounded-xl transition-all duration-300 group justify-start text-left px-4",
-                        !canAccess && "opacity-50 cursor-not-allowed",
-                        isActive 
-                          ? "bg-indigo-600 text-white shadow-lg !text-white hover:!bg-indigo-600 hover:!text-white" 
-                          : "hover:bg-indigo-50 hover:text-indigo-700 hover:shadow-md text-gray-700"
-                      )}
-                      disabled={!canAccess}
-                      asChild
-                    >
-                      <Link 
-                        href={canAccess ? item.href : "#"} 
-                        className="flex items-center w-full"
+                return (
+                  <div key={item.href} className="relative">
+                    {isCollapsed ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Link 
+                            href={canAccess ? item.href : "#"} 
+                            className={cn(
+                              "flex items-center justify-center w-full h-12 rounded-xl transition-all duration-300 group",
+                              !canAccess && "opacity-50 cursor-not-allowed",
+                              isActive 
+                                ? "bg-indigo-600 text-white shadow-lg hover:bg-indigo-600 hover:text-white" 
+                                : "hover:bg-indigo-50 hover:text-indigo-600 text-gray-600"
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (!canAccess) {
+                                e.preventDefault()
+                              }
+                            }}
+                          >
+                            <Icon className={cn(
+                              "h-5 w-5 transition-all",
+                              isActive ? "text-white" : ""
+                            )} />
+                            {isActive && (
+                              <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-600 rounded-r-full" />
+                            )}
+                          </Link>
+                        </TooltipTrigger>
+                        <TooltipContent side="right" sideOffset={8}>
+                          {item.title}
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <Button
+                        variant={isActive ? "secondary" : "ghost"}
+                        className={cn(
+                          "w-full h-12 rounded-xl transition-all duration-300 group justify-start text-left px-4",
+                          !canAccess && "opacity-50 cursor-not-allowed",
+                          isActive 
+                            ? "bg-indigo-600 text-white shadow-lg !text-white hover:!bg-indigo-600 hover:!text-white" 
+                            : "hover:bg-indigo-50 hover:text-indigo-700 hover:shadow-md text-gray-700"
+                        )}
+                        disabled={!canAccess}
+                        asChild
                       >
-                        <div className={cn(
+                        <Link 
+                          href={canAccess ? item.href : "#"} 
+                          className="flex items-center w-full"
+                        >
+                          <div className={cn(
                           "p-2 rounded-lg transition-all duration-300 mr-3 flex-shrink-0",
                           isActive 
                             ? "bg-white/20 text-white" 
                             : "bg-gray-100 text-gray-600 group-hover:bg-indigo-100 group-hover:text-indigo-600"
-                        )}>
-                          <Icon className="h-5 w-5" />
-                        </div>
-                        <span className={cn(
+                          )}>
+                            <Icon className="h-5 w-5" />
+                          </div>
+                          <span className={cn(
                           "font-medium flex-1",
                           isActive ? "text-white" : "text-gray-700"
-                        )}>{item.title}</span>
-                        {!canAccess && (
-                          <span className="ml-auto text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full flex-shrink-0">
-                            restricted
-                          </span>
-                        )}
-                        {isActive && (
-                          <div className="absolute right-4 w-2 h-2 bg-white rounded-full animate-pulse" />
-                        )}
-                      </Link>
-                    </Button>
-                  )}
+                          )}>{item.title}</span>
+                          {!canAccess && (
+                            <span className="ml-auto text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full flex-shrink-0">
+                              restricted
+                            </span>
+                          )}
+                          {isActive && (
+                            <div className="absolute right-4 w-2 h-2 bg-white rounded-full animate-pulse" />
+                          )}
+                        </Link>
+                      </Button>
+                    )}
                   
-                  {/* Hover indicator */}
-                  {!isActive && canAccess && !isCollapsed && (
-                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-0 bg-indigo-600 rounded-r-full opacity-0 group-hover:opacity-100 group-hover:h-8 transition-all duration-300" />
-                  )}
-                </div>
-              )
-            })}
-          </nav>
+                    {/* Hover indicator */}
+                    {!isActive && canAccess && !isCollapsed && (
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-0 bg-indigo-600 rounded-r-full opacity-0 group-hover:opacity-100 group-hover:h-8 transition-all duration-300" />
+                    )}
+                  </div>
+                )
+              })}
+            </nav>
+          </TooltipProvider>
         </div>
         
         {/* Bottom Section */}

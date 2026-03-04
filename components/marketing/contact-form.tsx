@@ -57,7 +57,7 @@ export function ContactForm() {
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 1000))
-      const whatsappMessage = `Hi Ease My Salon! I'm ${values.name} from ${values.salon} in ${values.city}.
+      const whatsappMessage = `Hi EaseMySalon! I'm ${values.name} from ${values.salon} in ${values.city}.
 
 Phone: ${values.phone}
 Email: ${values.email}

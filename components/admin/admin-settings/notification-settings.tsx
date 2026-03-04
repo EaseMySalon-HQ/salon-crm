@@ -45,7 +45,7 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
       smtpUser: "",
       smtpPassword: "",
       fromEmail: "noreply@easemysalon.in",
-      fromName: "Ease My Salon",
+      fromName: "EaseMySalon",
       replyTo: "support@easemysalon.in",
       maxRetries: 3,
       retryDelay: 5000
@@ -68,7 +68,7 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
     // Notification Templates
     templates: {
       businessCreated: {
-        subject: "Welcome to Ease My Salon - Business Account Created",
+        subject: "Welcome to EaseMySalon - Business Account Created",
         body: "Your business account has been successfully created. Business Code: {businessCode}",
         enabled: true
       },
@@ -83,7 +83,7 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
         enabled: true
       },
       userCreated: {
-        subject: "Welcome to Ease My Salon - User Account Created",
+        subject: "Welcome to EaseMySalon - User Account Created",
         body: "Your user account has been created. Please log in to access the system.",
         enabled: true
       }
@@ -466,7 +466,7 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                     value={settings.email.fromName}
                     onChange={(e) => handleSettingChange('email.fromName', e.target.value)}
                     className="w-full"
-                    placeholder="Ease My Salon"
+                    placeholder="EaseMySalon"
                   />
                 </div>
 

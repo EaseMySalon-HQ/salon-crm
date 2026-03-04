@@ -931,7 +931,7 @@ class WhatsAppService {
       } else {
         // Fallback: if no mapping configured, send minimal test with body_1
         // This handles templates that haven't been configured with JavaScript code yet
-        testVariables.body_1 = 'Test Message from Ease My Salon';
+        testVariables.body_1 = 'Test Message from EaseMySalon';
         console.log(`[WhatsApp Test] No variable mapping found for ${templateType}, using default body_1`);
       }
 

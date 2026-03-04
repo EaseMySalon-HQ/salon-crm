@@ -1,7 +1,7 @@
-# Ease My Salon Transfer Guide
+# EaseMySalon Transfer Guide
 
 ## Overview
-This guide will help you transfer your Ease My Salon from your current MacBook to a new MacBook with all data and settings intact.
+This guide will help you transfer your EaseMySalon from your current MacBook to a new MacBook with all data and settings intact.
 
 ## What's Included in the Transfer
 - **Frontend**: Next.js application with all components and UI
@@ -291,4 +291,4 @@ After successful transfer:
 
 **Transfer completed successfully!** 🎉
 
-Your Ease My Salon should now be running on your new MacBook with all data and settings intact.
+Your EaseMySalon should now be running on your new MacBook with all data and settings intact.

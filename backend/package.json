@@ -1,7 +1,7 @@
 {
   "name": "ease-my-salon-backend",
   "version": "1.0.0",
-  "description": "Backend API for Ease My Salon",
+  "description": "Backend API for EaseMySalon",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

@@ -48,7 +48,7 @@ class EmailService {
         provider: 'resend',
         resendApiKey: process.env.EMAIL_API_KEY,
         fromEmail: process.env.EMAIL_FROM || 'noreply@easemysalon.in',
-        fromName: process.env.EMAIL_FROM_NAME || 'Ease My Salon',
+        fromName: process.env.EMAIL_FROM_NAME || 'EaseMySalon',
         replyTo: process.env.EMAIL_REPLY_TO || 'support@easemysalon.in'
       };
       this.provider = 'resend';
@@ -212,7 +212,7 @@ class EmailService {
   getFromAddress() {
     return {
       email: this.config?.fromEmail || process.env.EMAIL_FROM || 'noreply@easemysalon.in',
-      name: this.config?.fromName || process.env.EMAIL_FROM_NAME || 'Ease My Salon'
+      name: this.config?.fromName || process.env.EMAIL_FROM_NAME || 'EaseMySalon'
     };
   }
 
@@ -805,7 +805,7 @@ class EmailService {
     try {
       const result = await this.sendEmail({
         to: testEmail,
-        subject: 'Test Email from Ease My Salon',
+        subject: 'Test Email from EaseMySalon',
         html: '<p>This is a test email to verify email service configuration.</p>',
         text: 'This is a test email to verify email service configuration.',
       });

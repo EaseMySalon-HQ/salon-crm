@@ -2,18 +2,28 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
-import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package } from "lucide-react"
+import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { ClientsAPI, SalesAPI, MembershipAPI } from "@/lib/api"
+import { ClientsAPI, SalesAPI, MembershipAPI, AppointmentsAPI } from "@/lib/api"
 import type { Client } from "@/lib/client-store"
 import { useCurrency } from "@/hooks/use-currency"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
+
+interface CustomerNote {
+  id: string
+  source: "appointment" | "quicksale"
+  content: string
+  createdAt: string
+  staffName?: string
+  recordId: string
+  href: string
+}
 
 interface ClientDetailPanelProps {
   client: Client
@@ -31,6 +41,8 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
   const [showAllBills, setShowAllBills] = useState(false)
   const [expandedBillId, setExpandedBillId] = useState<string | null>(null)
   const [billActivityOpen, setBillActivityOpen] = useState(false)
+  const [customerNotes, setCustomerNotes] = useState<CustomerNote[]>([])
+  const [customerNotesOpen, setCustomerNotesOpen] = useState(false)
 
   const BILLS_VISIBLE_DEFAULT = 5
   const visibleBills = showAllBills ? bills : bills.slice(0, BILLS_VISIBLE_DEFAULT)
@@ -49,8 +61,9 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
     async function fetchStats() {
       setLoading(true)
       try {
-        const [salesRes, clientRes, membershipRes] = await Promise.all([
+        const [salesRes, appointmentsRes, clientRes, membershipRes] = await Promise.all([
           client.name ? SalesAPI.getByClient(client.name) : Promise.resolve({ success: false, data: [] as any[] }),
+          AppointmentsAPI.getAll({ clientId, limit: 200 }).catch(() => ({ success: false, data: [] as any[] })),
           ClientsAPI.getById(clientId).catch(() => ({ success: false, data: null })),
           MembershipAPI.getByCustomer(clientId).catch(() => ({ success: false, data: null })),
         ])
@@ -82,6 +95,47 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
           return remaining > 0 ? acc + remaining : acc
         }, 0)
         setDuesUnpaid(duesSum)
+
+        // Build customer notes from appointments and sales
+        const appointmentsList = Array.isArray(appointmentsRes?.data) ? appointmentsRes.data : []
+        const notes: CustomerNote[] = []
+
+        appointmentsList.forEach((apt: any) => {
+          const content = (apt.notes || "").trim()
+          if (!content) return
+          const staffName =
+            apt.staffId?.name ||
+            apt.staffAssignments?.[0]?.staffId?.name ||
+            apt.staffAssignments?.[0]?.staffId
+          const aptId = apt._id || apt.id
+          notes.push({
+            id: `apt-${aptId}`,
+            source: "appointment",
+            content,
+            createdAt: apt.createdAt || apt.date || new Date().toISOString(),
+            staffName: typeof staffName === "string" ? staffName : staffName?.name,
+            recordId: aptId,
+            href: `/appointments/new?edit=${aptId}`,
+          })
+        })
+
+        salesList.forEach((s: any) => {
+          const content = (s.notes || "").trim()
+          if (!content) return
+          const billNo = s.billNo || s._id || s.id
+          notes.push({
+            id: `sale-${billNo}`,
+            source: "quicksale",
+            content,
+            createdAt: s.createdAt || s.date || new Date().toISOString(),
+            staffName: s.staffName,
+            recordId: billNo,
+            href: `/receipt/${encodeURIComponent(billNo)}?returnTo=${encodeURIComponent(`/clients/${clientId}`)}`,
+          })
+        })
+
+        notes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        setCustomerNotes(notes)
       } catch (e) {
         console.error("Error fetching client stats:", e)
       } finally {
@@ -203,6 +257,59 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
             </span>
           </div>
         </div>
+
+        <Separator className="shrink-0" />
+
+        {/* Customer Notes */}
+        <Collapsible open={customerNotesOpen} onOpenChange={setCustomerNotesOpen} className="flex flex-col min-h-0 shrink-0">
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="w-full text-left text-xs sm:text-sm font-semibold text-slate-600 mb-2 sm:mb-3 flex items-center justify-between gap-1.5 shrink-0 hover:bg-slate-50 rounded-lg px-1 py-0.5 -mx-1 transition-colors"
+            >
+              <span className="flex items-center gap-1.5">
+                <MessageSquare className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
+                Customer Notes
+                {customerNotes.length > 0 && (
+                  <span className="font-normal text-slate-500">({customerNotes.length})</span>
+                )}
+              </span>
+              <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform shrink-0 ${customerNotesOpen ? "rotate-180" : ""}`} />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col min-h-0 data-[state=closed]:hidden">
+            {customerNotes.length === 0 ? (
+              <p className="text-xs sm:text-sm text-slate-500 shrink-0">No notes yet</p>
+            ) : (
+              <ul className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-0.5 sm:pr-1 max-h-40">
+                {customerNotes.map((note) => (
+                  <li key={note.id}>
+                    <Link
+                      href={note.href}
+                      className="block rounded-lg border border-slate-200/80 bg-slate-50/60 hover:bg-slate-100/80 p-2.5 sm:p-3 transition-colors text-left"
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                        <span className="text-[10px] sm:text-xs text-slate-500">
+                          {format(new Date(note.createdAt), "dd MMM yyyy, HH:mm")}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] px-1.5 py-0 capitalize"
+                        >
+                          {note.source === "appointment" ? "Appointment" : "QuickSale"}
+                        </Badge>
+                        {note.staffName && (
+                          <span className="text-[10px] sm:text-xs text-slate-600">• {note.staffName}</span>
+                        )}
+                      </div>
+                      <p className="text-xs sm:text-sm text-slate-800 line-clamp-3">{note.content}</p>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
 
         <Separator className="shrink-0" />
 
