@@ -70,7 +70,7 @@ export default function LoginPage() {
           <div className="text-white space-y-8">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-sm font-semibold tracking-wide shadow-lg shadow-purple-900/30">
               <Sparkles className="h-4 w-4 text-amber-300" />
-              Ease My Salon • Trusted Salon OS
+              EaseMySalon • Trusted Salon OS
             </div>
             <div className="space-y-4">
               <h1 className="text-4xl sm:text-5xl font-bold leading-tight">

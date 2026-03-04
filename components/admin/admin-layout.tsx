@@ -151,7 +151,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
                 <Menu className="h-5 w-5" />
               </Button>
               <h1 className="text-xl font-semibold text-gray-900">
-                Ease My Salon Admin
+                EaseMySalon Admin
               </h1>
             </div>
             

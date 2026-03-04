@@ -14,8 +14,8 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://easemysalon.com'
 
 export const metadata: Metadata = {
   title: {
-    default: "Ease My Salon - India's #1 Salon Management Software",
-    template: "%s | Ease My Salon"
+    default: "EaseMySalon - India's #1 Salon Management Software",
+    template: "%s | EaseMySalon"
   },
   description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. India's leading salon POS, CRM, appointments, inventory & analytics platform. 14-day free trial, no credit card required.",
   keywords: [
@@ -79,9 +79,9 @@ export const metadata: Metadata = {
     "automated salon software",
     "salon management tools"
   ],
-  authors: [{ name: "Ease My Salon" }],
-  creator: "Ease My Salon",
-  publisher: "Ease My Salon",
+  authors: [{ name: "EaseMySalon" }],
+  creator: "EaseMySalon",
+  publisher: "EaseMySalon",
   formatDetection: {
     email: false,
     address: false,
@@ -95,21 +95,21 @@ export const metadata: Metadata = {
     type: 'website',
     locale: 'en_IN',
     url: '/',
-    siteName: 'Ease My Salon',
-    title: "Ease My Salon - India's #1 Salon Management Software",
+    siteName: 'EaseMySalon',
+    title: "EaseMySalon - India's #1 Salon Management Software",
     description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics platform. 14-day free trial.",
     images: [
       {
         url: '/images/dashboard.png',
         width: 1200,
         height: 630,
-        alt: 'Ease My Salon - Salon Management Software Dashboard',
+        alt: 'EaseMySalon - Salon Management Software Dashboard',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: "Ease My Salon - India's #1 Salon Management Software",
+    title: "EaseMySalon - India's #1 Salon Management Software",
     description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics.",
     images: ['/images/dashboard.png'],
     creator: '@easemysalon',

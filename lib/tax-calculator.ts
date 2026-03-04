@@ -1,5 +1,5 @@
 /**
- * GST Tax Calculator for Ease My Salon
+ * GST Tax Calculator for EaseMySalon
  * Handles CGST + SGST calculation for local salon business
  */
 

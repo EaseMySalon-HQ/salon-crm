@@ -1,10 +1,10 @@
-# Ease My Salon Documentation
+# EaseMySalon Documentation
 
-Welcome to the comprehensive documentation for the Ease My Salon system. This documentation covers all major features and components of the application, providing detailed information about functionality, implementation, and usage.
+Welcome to the comprehensive documentation for the EaseMySalon system. This documentation covers all major features and components of the application, providing detailed information about functionality, implementation, and usage.
 
 ## 📚 Documentation Overview
 
-This documentation is organized by feature, with each document providing comprehensive information about specific functionality within the Ease My Salon system.
+This documentation is organized by feature, with each document providing comprehensive information about specific functionality within the EaseMySalon system.
 
 ## 🚀 Quick Start
 

@@ -1,4 +1,4 @@
-console.log('🚀 Starting Ease My Salon Backend Server...');
+console.log('🚀 Starting EaseMySalon Backend Server...');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -10815,7 +10815,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       }
       
       settings = new BusinessSettings({
-        name: "Ease My Salon",
+        name: "EaseMySalon",
         email: req.user?.email || "info@easemysalon.in",
         phone: "",
         website: "",
@@ -12755,7 +12755,7 @@ app.post('/api/gdpr/consent/:userId', authenticateToken, setupBusinessDatabase, 
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
-    message: 'Ease My Salon API is running',
+    message: 'EaseMySalon API is running',
     timestamp: new Date().toISOString()
   });
 });
@@ -12807,7 +12807,7 @@ app.use('*', (req, res) => {
 // Start server
 
 app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`🚀 Ease My Salon Backend running on port ${PORT}`);
+  console.log(`🚀 EaseMySalon Backend running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🔐 API Base: http://localhost:${PORT}/api`);
   // Old initialization functions disabled for multi-tenant architecture

@@ -1,8 +1,8 @@
-# Database Migration Guide: Salon CRM → Ease My Salon
+# Database Migration Guide: Salon CRM → EaseMySalon
 
 ## Overview
 
-This guide helps you migrate your existing databases from the old naming convention (`ease_my_salon_*`) to the new naming convention (`ease_my_salon_*`) after rebranding from "Salon CRM" to "Ease My Salon".
+This guide helps you migrate your existing databases from the old naming convention (`ease_my_salon_*`) to the new naming convention (`ease_my_salon_*`) after rebranding from "Salon CRM" to "EaseMySalon".
 
 ## ⚠️ Important Notes
 
@@ -243,6 +243,6 @@ If you encounter issues during migration:
 
 ---
 
-**Last Updated**: After rebranding to Ease My Salon
+**Last Updated**: After rebranding to EaseMySalon
 **Version**: 1.0.0
 

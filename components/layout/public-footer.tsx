@@ -35,11 +35,11 @@ export function PublicFooter() {
                 E
               </div>
               <div>
-                <p className="font-semibold text-white">Ease My Salon</p>
+                <p className="font-semibold text-white">EaseMySalon</p>
                 <p className="text-xs text-slate-400">Salon OS for India</p>
               </div>
             </div>
-            <p className="text-sm text-slate-400 leading-relaxed">From POS to payroll, Ease My Salon powers every workflow so you can focus on exceptional client experiences. Trusted by 350+ salons across India.</p>
+            <p className="text-sm text-slate-400 leading-relaxed">From POS to payroll, EaseMySalon powers every workflow so you can focus on exceptional client experiences. Trusted by 350+ salons across India.</p>
             
             {/* Trust Badges */}
             <div className="pt-4 space-y-3">
@@ -114,7 +114,7 @@ export function PublicFooter() {
           </div>
         </div>
         <div className="mt-12 border-t border-white/10 pt-6 flex flex-col md:flex-row gap-4 justify-between text-xs text-slate-500">
-          <p>© {new Date().getFullYear()} Ease My Salon. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} EaseMySalon. All rights reserved.</p>
           <div className="flex gap-6">
             <Link href="/privacy-policy" className="hover:text-white transition">
               Privacy

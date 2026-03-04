@@ -84,7 +84,7 @@ export function LoginForm() {
           }
           toast({
             title: "Login successful",
-            description: "Welcome back to Ease My Salon!",
+            description: "Welcome back to EaseMySalon!",
           })
           router.push("/")
         } else {
@@ -99,7 +99,7 @@ export function LoginForm() {
         if (result.success) {
           toast({
             title: "Login successful",
-            description: "Welcome back to Ease My Salon!",
+            description: "Welcome back to EaseMySalon!",
           })
           router.push("/")
         } else if (result.error === 'ACCOUNT_SUSPENDED') {
@@ -144,7 +144,7 @@ export function LoginForm() {
         <div className="mx-auto w-fit rounded-2xl bg-gradient-to-r from-purple-50 to-indigo-50 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#7C3AED]">
           Secure login portal
         </div>
-        <CardTitle className="text-3xl text-slate-900">Access your Ease My Salon HQ</CardTitle>
+        <CardTitle className="text-3xl text-slate-900">Access your EaseMySalon HQ</CardTitle>
         <CardDescription className="text-base">
           Choose your role and enter your credentials to continue
         </CardDescription>

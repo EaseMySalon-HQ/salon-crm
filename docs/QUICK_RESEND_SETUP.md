@@ -33,7 +33,7 @@ Follow these steps to quickly set up Resend for email service.
    - Select **"Resend"** from **"Email Provider"** dropdown
    - Paste your **Resend API Key** in the field
    - Set **From Email**: `onboarding@resend.dev` (for testing)
-   - Set **From Name**: `Ease My Salon`
+   - Set **From Name**: `EaseMySalon`
    - Set **Reply To**: Your support email
 
 4. **Save:**
@@ -54,7 +54,7 @@ You should see:
 
 ### Check Your Email
 - Look in inbox (and spam folder)
-- You should receive: "Test Email from Ease My Salon"
+- You should receive: "Test Email from EaseMySalon"
 
 ### Check Resend Dashboard
 - Go to [resend.com](https://resend.com) → Logs
@@ -81,7 +81,7 @@ If you prefer using `.env` file:
    ```env
    EMAIL_API_KEY=re_xxxxxxxxxxxxx
    EMAIL_FROM=noreply@easemysalon.in
-   EMAIL_FROM_NAME=Ease My Salon
+   EMAIL_FROM_NAME=EaseMySalon
    EMAIL_REPLY_TO=support@easemysalon.in
    ```
 

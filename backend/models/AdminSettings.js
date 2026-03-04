@@ -82,7 +82,7 @@ const adminSettingsSchema = new mongoose.Schema({
       mailgunDomain: { type: String, default: '' },
       // Common settings
       fromEmail: { type: String, default: 'noreply@easemysalon.in' },
-      fromName: { type: String, default: 'Ease My Salon' },
+      fromName: { type: String, default: 'EaseMySalon' },
       replyTo: { type: String, default: 'support@easemysalon.in' },
       maxRetries: { type: Number, default: 3 },
       retryDelay: { type: Number, default: 5000 }
@@ -147,7 +147,7 @@ const adminSettingsSchema = new mongoose.Schema({
     },
     templates: {
       businessCreated: {
-        subject: { type: String, default: 'Welcome to Ease My Salon - Business Account Created' },
+        subject: { type: String, default: 'Welcome to EaseMySalon - Business Account Created' },
         body: { type: String, default: 'Your business account has been successfully created. Business Code: {businessCode}' },
         enabled: { type: Boolean, default: true }
       },
@@ -162,7 +162,7 @@ const adminSettingsSchema = new mongoose.Schema({
         enabled: { type: Boolean, default: true }
       },
       userCreated: {
-        subject: { type: String, default: 'Welcome to Ease My Salon - User Account Created' },
+        subject: { type: String, default: 'Welcome to EaseMySalon - User Account Created' },
         body: { type: String, default: 'Your user account has been created. Please log in to access the system.' },
         enabled: { type: Boolean, default: true }
       },

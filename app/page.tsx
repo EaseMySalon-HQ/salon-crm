@@ -10,7 +10,7 @@ import { PublicShell } from "@/components/layout/public-shell"
 
 export const metadata: Metadata = {
   title: "India's #1 Salon Management Software | Reduce No-Shows by 40%",
-  description: "Stop losing money. Start growing your salon business. Ease My Salon reduces no-shows by 40%, cuts billing time by 70%, and increases revenue by 35%. Complete salon POS, CRM, appointments, inventory & analytics platform. 14-day free trial, no credit card required.",
+  description: "Stop losing money. Start growing your salon business. EaseMySalon reduces no-shows by 40%, cuts billing time by 70%, and increases revenue by 35%. Complete salon POS, CRM, appointments, inventory & analytics platform. 14-day free trial, no credit card required.",
   keywords: [
     "salon management software",
     "salon POS system",
@@ -24,7 +24,7 @@ export const metadata: Metadata = {
     "cloud-based salon management system"
   ],
   openGraph: {
-    title: "India's #1 Salon Management Software | Ease My Salon",
+    title: "India's #1 Salon Management Software | EaseMySalon",
     description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics platform.",
     images: ['/images/dashboard.png'],
   },
@@ -282,7 +282,7 @@ export default function MarketingHome() {
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center space-y-4 max-w-3xl mx-auto">
             <h2 className="text-3xl md:text-4xl font-semibold text-slate-900">Everything you need to run a high-growth salon</h2>
-            <p className="text-lg text-slate-600">Ease My Salon unifies POS, appointments, CRM, inventory, staff payroll and analytics—no integrations required.</p>
+            <p className="text-lg text-slate-600">EaseMySalon unifies POS, appointments, CRM, inventory, staff payroll and analytics—no integrations required.</p>
           </div>
           <div className="mt-12 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {coreFeatures.map((feature) => (
@@ -327,7 +327,7 @@ export default function MarketingHome() {
       <section className="py-20 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 grid gap-12 lg:grid-cols-2 items-start">
           <div className="space-y-6">
-            <p className="text-sm uppercase tracking-wide text-white/60">Why Ease My Salon</p>
+            <p className="text-sm uppercase tracking-wide text-white/60">Why EaseMySalon</p>
             <h2 className="text-3xl md:text-4xl font-semibold">Purpose-built for Indian salons and spas</h2>
             <p className="text-lg text-white/70">Every feature is informed by hundreds of hours sitting with front desks, stylists and owners who demanded speed, accuracy and simplicity.</p>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -359,7 +359,7 @@ export default function MarketingHome() {
               <p className="text-sm font-semibold text-[#7C3AED] uppercase tracking-wide">Product preview</p>
               <h3 className="text-2xl font-semibold mt-2">Designed for the front desk, built for the CEO</h3>
             </div>
-            <Image src="/images/dashboard.png" alt="Ease My Salon salon management software dashboard showing POS, appointments, CRM, inventory and analytics features" width={1200} height={675} className="rounded-2xl border border-slate-100" />
+            <Image src="/images/dashboard.png" alt="EaseMySalon salon management software dashboard showing POS, appointments, CRM, inventory and analytics features" width={1200} height={675} className="rounded-2xl border border-slate-100" />
             <p className="text-sm text-slate-500">Go from Excel chaos to live dashboards and smart workflows—without retraining your teams.</p>
           </div>
         </div>

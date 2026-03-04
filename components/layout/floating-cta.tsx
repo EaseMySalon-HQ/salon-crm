@@ -90,7 +90,7 @@ export function FloatingCTA() {
         <div className="fixed bottom-6 left-6 z-50 w-96 rounded-3xl border-2 border-slate-200 bg-white shadow-2xl animate-in slide-in-from-bottom-4">
           <div className="bg-gradient-to-r from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white rounded-t-3xl px-6 py-5 flex items-center justify-between">
             <div>
-              <p className="text-base font-bold">Ease My Salon Concierge</p>
+              <p className="text-base font-bold">EaseMySalon Concierge</p>
               <p className="text-xs text-purple-100 mt-0.5">⚡ Replies in under 5 minutes</p>
             </div>
             <button
@@ -104,7 +104,7 @@ export function FloatingCTA() {
           <div className="p-6 space-y-4">
             <div className="space-y-2">
               <p className="text-base font-semibold text-slate-900">Hi! 👋 Ready to transform your salon?</p>
-              <p className="text-sm text-slate-600">Get a free personalized demo. We'll show you exactly how Ease My Salon can help your business grow.</p>
+              <p className="text-sm text-slate-600">Get a free personalized demo. We'll show you exactly how EaseMySalon can help your business grow.</p>
             </div>
             <div className="space-y-3 pt-2">
               <Button asChild className="w-full bg-[#25D366] hover:bg-[#20BA5A] text-white font-semibold shadow-lg">

@@ -21,7 +21,7 @@ This guide will help you set up Resend as your email service provider.
 
 1. After logging in, go to **API Keys** section (usually in Settings or Dashboard)
 2. Click **"Create API Key"**
-3. Give it a name (e.g., "Ease My Salon Production")
+3. Give it a name (e.g., "EaseMySalon Production")
 4. Select permissions (usually "Full Access" for sending emails)
 5. Click **"Add"** or **"Create"**
 6. **Copy the API key immediately** - it starts with `re_` and looks like: `re_xxxxxxxxxxxxx`
@@ -73,7 +73,7 @@ If you just want to test quickly:
    - **From Email:** 
      - For testing: `onboarding@resend.dev` (Resend test domain)
      - For production: `noreply@yourdomain.com` (your verified domain)
-   - **From Name:** `Ease My Salon` (or your business name)
+   - **From Name:** `EaseMySalon` (or your business name)
    - **Reply To:** `support@yourdomain.com` (or your support email)
 
 7. **Save Settings:**
@@ -94,7 +94,7 @@ If you prefer to use environment variables:
 ```env
 EMAIL_API_KEY=re_xxxxxxxxxxxxx
 EMAIL_FROM=noreply@easemysalon.in
-EMAIL_FROM_NAME=Ease My Salon
+EMAIL_FROM_NAME=EaseMySalon
 EMAIL_REPLY_TO=support@easemysalon.in
 ```
 
@@ -252,9 +252,9 @@ For production use:
 
 ### Test Email Format
 ```
-From: Ease My Salon <noreply@easemysalon.in>
+From: EaseMySalon <noreply@easemysalon.in>
 To: test@example.com
-Subject: Test Email from Ease My Salon
+Subject: Test Email from EaseMySalon
 Body: This is a test email to verify email service configuration.
 ```
 

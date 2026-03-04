@@ -3,7 +3,7 @@ import { PrivacyPolicyContent } from "@/components/gdpr/privacy-policy-content"
 
 export const metadata: Metadata = {
   title: "Privacy Policy | GDPR & DPDP Compliant Salon Software",
-  description: "Ease My Salon's privacy policy and GDPR compliance information. Learn how we protect your salon data and client information. DPDP compliant salon management software.",
+  description: "EaseMySalon's privacy policy and GDPR compliance information. Learn how we protect your salon data and client information. DPDP compliant salon management software.",
   keywords: [
     "salon software privacy",
     "GDPR compliant salon software",
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
     "salon management data security"
   ],
   openGraph: {
-    title: "Privacy Policy | Ease My Salon",
+    title: "Privacy Policy | EaseMySalon",
     description: "Our privacy policy and GDPR/DPDP compliance information. Learn how we protect your salon data.",
   },
   alternates: {

@@ -150,7 +150,7 @@ function weeklySummary({ businessName, weekStart, weekEnd, totalRevenue, totalSa
           ` : ''}
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -173,7 +173,7 @@ New Clients: ${newClients || 0}
 
 ${topServices && topServices.length > 0 ? `Top Services:\n${topServices.map(s => `- ${s.name}: ${s.count} bookings`).join('\n')}\n` : ''}
 
-This is an automated email from Ease My Salon CRM
+This is an automated email from EaseMySalon CRM
   `;
 
   return { html, text };
@@ -216,7 +216,7 @@ function receipt({ clientName, receiptNumber, businessName, date, items, subtota
           
           <div class="footer">
             <p>Thank you for choosing ${businessName}!</p>
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -280,7 +280,7 @@ function appointmentConfirmation({ clientName, serviceName, date, time, staffNam
           <p>We look forward to seeing you!</p>
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -351,7 +351,7 @@ function appointmentReminder({ clientName, serviceName, date, time, staffName, b
           <p>We look forward to seeing you!</p>
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -419,7 +419,7 @@ function appointmentCancellation({ clientName, serviceName, date, time, business
           </div>
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -484,7 +484,7 @@ function exportReady({ exportType, downloadUrl, businessName, hasAttachment = fa
           `}
           
           <div class="footer">
-            <p>This is an automated email from ${businessName || 'Ease My Salon CRM'}</p>
+            <p>This is an automated email from ${businessName || 'EaseMySalon CRM'}</p>
           </div>
         </div>
       </div>
@@ -506,7 +506,7 @@ Download Link: ${downloadUrl}
 Note: This link will expire in 7 days.`
 }
 
-This is an automated email from ${businessName || 'Ease My Salon CRM'}
+This is an automated email from ${businessName || 'EaseMySalon CRM'}
   `;
 
   return { html, text };
@@ -543,7 +543,7 @@ function systemAlert({ alertType, message, businessName }) {
           <p>Please check your admin panel for more details.</p>
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -600,7 +600,7 @@ function lowInventory({ products, businessName }) {
           <p>Please consider restocking these items soon.</p>
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -671,7 +671,7 @@ function appointmentNotification({ appointmentCount, businessName, date, time, c
           <p>Please check your admin panel for more details.</p>
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -696,7 +696,7 @@ ${time ? `Time: ${time}` : ''}
 
 Please check your admin panel for more details.
 
-This is an automated email from Ease My Salon CRM
+This is an automated email from EaseMySalon CRM
   `;
 
   return { html, text };
@@ -750,7 +750,7 @@ function appointmentCancellationNotification({ appointmentCount, businessName, a
           <p>Please check your admin panel for more details.</p>
           
           <div class="footer">
-            <p>This is an automated email from Ease My Salon CRM</p>
+            <p>This is an automated email from EaseMySalon CRM</p>
           </div>
         </div>
       </div>
@@ -775,7 +775,7 @@ ${appointmentDetails.time ? `Time: ${appointmentDetails.time}` : ''}
 
 Please check your admin panel for more details.
 
-This is an automated email from Ease My Salon CRM
+This is an automated email from EaseMySalon CRM
   `;
 
   return { html, text };

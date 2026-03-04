@@ -186,8 +186,11 @@ async function sendDailySummaries() {
           continue;
         }
         
-        // Send emails
-        for (const staff of recipients) {
+        // Send emails (Resend limit: 2 req/sec - add delay between sends)
+        const delayMs = 600; // Stay under 2 req/sec
+        for (let i = 0; i < recipients.length; i++) {
+          if (i > 0) await new Promise(r => setTimeout(r, delayMs));
+          const staff = recipients[i];
           try {
             await emailService.sendDailySummary({
               to: staff.email,
@@ -212,6 +215,8 @@ async function sendDailySummaries() {
             console.error(`❌ Error sending daily summary to ${staff.email}:`, error);
           }
         }
+        // Small delay before next business to avoid burst across businesses
+        await new Promise(r => setTimeout(r, delayMs));
       } catch (error) {
         console.error(`❌ Error processing daily summary for business ${business.name}:`, error);
       }
@@ -424,8 +429,11 @@ async function sendWeeklySummaries() {
           continue;
         }
         
-        // Send emails
-        for (const staff of recipients) {
+        // Send emails (Resend limit: 2 req/sec - add delay between sends)
+        const weeklyDelayMs = 600;
+        for (let i = 0; i < recipients.length; i++) {
+          if (i > 0) await new Promise(r => setTimeout(r, weeklyDelayMs));
+          const staff = recipients[i];
           try {
             await emailService.sendWeeklySummary({
               to: staff.email,
@@ -447,6 +455,7 @@ async function sendWeeklySummaries() {
             console.error(`❌ Error sending weekly summary to ${staff.email}:`, error);
           }
         }
+        await new Promise(r => setTimeout(r, weeklyDelayMs));
       } catch (error) {
         console.error(`❌ Error processing weekly summary for business ${business.name}:`, error);
       }
@@ -649,8 +658,11 @@ async function checkLowInventory() {
           unit: p.unit || 'units'
         }));
         
-        // Send emails to all recipients
-        for (const recipient of recipients) {
+        // Send emails to all recipients (Resend limit: 2 req/sec)
+        const invDelayMs = 600;
+        for (let i = 0; i < recipients.length; i++) {
+          if (i > 0) await new Promise(r => setTimeout(r, invDelayMs));
+          const recipient = recipients[i];
           try {
             await emailService.sendLowInventoryAlert({
               to: recipient.email,

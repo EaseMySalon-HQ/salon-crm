@@ -1,4 +1,4 @@
-# Ease My Salon CRM
+# EaseMySalon CRM
 
 A comprehensive salon and spa management system with appointment scheduling, point-of-sale, client management, inventory, and reporting.
 

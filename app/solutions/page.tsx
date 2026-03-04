@@ -30,7 +30,7 @@ export const metadata: Metadata = {
     "salon management for franchises"
   ],
   openGraph: {
-    title: "Salon Software Solutions for Every Business Type | Ease My Salon",
+    title: "Salon Software Solutions for Every Business Type | EaseMySalon",
     description: "Custom solutions for boutiques, spas, barbershops, and multi-location chains. Built for every salon type.",
   },
   alternates: {
@@ -84,7 +84,7 @@ export default function SolutionsPage() {
             Built for Every Salon Type, Every Growth Stage
           </h1>
           <p className="text-xl sm:text-2xl text-purple-100 leading-relaxed">
-            From single-chair boutiques to nationwide chains—<span className="font-semibold text-white">Ease My Salon adapts to your business model</span> with purpose-built workflows and proven playbooks.
+            From single-chair boutiques to nationwide chains—<span className="font-semibold text-white">EaseMySalon adapts to your business model</span> with purpose-built workflows and proven playbooks.
           </p>
         </div>
       </section>
@@ -141,7 +141,7 @@ export default function SolutionsPage() {
             <Target className="h-12 w-12 mx-auto mb-4 text-white/80" />
             <h2 className="text-3xl sm:text-4xl font-bold mb-4">Ready to Transform Your Salon Operations?</h2>
             <p className="text-xl text-purple-100 mb-8 max-w-2xl mx-auto">
-              Book a personalized demo and see exactly how Ease My Salon can solve your unique challenges.
+              Book a personalized demo and see exactly how EaseMySalon can solve your unique challenges.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button
