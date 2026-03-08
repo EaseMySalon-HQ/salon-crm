@@ -10033,24 +10033,25 @@ app.get('/api/consumption-logs', authenticateToken, setupBusinessDatabase, requi
   }
 });
 
-// Get sales by client name
-app.get('/api/sales/client/:clientName', authenticateToken, setupBusinessDatabase, async (req, res) => {
+// Get sales by client phone (exact match only - avoids substring issues with names)
+app.get('/api/sales/by-phone/:phone', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    const { clientName } = req.params;
+    const phone = decodeURIComponent(req.params.phone || '').trim();
+    
+    if (!phone) {
+      return res.json({ success: true, data: [] });
+    }
     
     const { Sale } = req.businessModels;
     
-    // Search for sales by customer name (case-insensitive)
-    const sales = await Sale.find({
-      customerName: { $regex: clientName, $options: 'i' }
-    }).sort({ date: -1 });
+    const sales = await Sale.find({ customerPhone: phone }).sort({ date: -1 });
     
     res.json({
       success: true,
       data: sales
     });
   } catch (error) {
-    console.error('Error fetching sales by client:', error);
+    console.error('Error fetching sales by client phone:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch client sales'

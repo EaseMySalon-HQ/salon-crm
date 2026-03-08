@@ -776,9 +776,9 @@ export class SalesAPI {
     return response.data
   }
 
-  static async getByClient(clientName: string): Promise<ApiResponse<any[]>> {
-    const encoded = encodeURIComponent(clientName)
-    const response = await apiClient.get(`/sales/client/${encoded}`)
+  static async getByClient(clientPhone: string): Promise<ApiResponse<any[]>> {
+    const encoded = encodeURIComponent(clientPhone || '')
+    const response = await apiClient.get(`/sales/by-phone/${encoded}`)
     return response.data
   }
 

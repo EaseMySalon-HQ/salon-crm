@@ -1370,8 +1370,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         
         console.log('👤 Fetching bills for customer:', customer.name)
         
-        // Get sales data for this customer by name
-        const salesResponse = await SalesAPI.getByClient(customer.name)
+        // Get sales data for this customer by phone (exact match)
+        const salesResponse = await SalesAPI.getByClient(customer.phone || '')
         if (salesResponse.success) {
           // Transform sales data to match the expected bill format
           const bills = salesResponse.data.map((sale: any) => ({
@@ -1416,9 +1416,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }
 
   // Fetch unpaid/partially paid bills for the customer
-  const fetchUnpaidBills = async (customerName: string) => {
+  const fetchUnpaidBills = async (customerPhone: string) => {
     try {
-      const salesResponse = await SalesAPI.getByClient(customerName)
+      const salesResponse = await SalesAPI.getByClient(customerPhone)
       if (salesResponse.success) {
         const sales = salesResponse.data || []
         
@@ -1468,7 +1468,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const handlePaymentCollected = async () => {
     // Refresh unpaid bills list
     if (selectedCustomer) {
-      await fetchUnpaidBills(selectedCustomer.name)
+      await fetchUnpaidBills(selectedCustomer.phone || '')
       // Refresh customer stats to update dues amount
       const customerId = getCustomerId(selectedCustomer)
       if (customerId) {
@@ -1573,8 +1573,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       
       console.log('👤 Customer found:', customer.name)
       
-      // Get sales data for this customer by name
-      const salesResponse = await SalesAPI.getByClient(customer.name)
+      // Get sales data for this customer by phone (exact match)
+      const salesResponse = await SalesAPI.getByClient(customer.phone || '')
       console.log('📊 Sales API response:', salesResponse)
       
       if (salesResponse.success) {
@@ -1611,11 +1611,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }
 
   // Fetch customer bills for Bill Activity dialog
-  const fetchCustomerBills = async (customerName: string) => {
-    console.log('🔍 fetchCustomerBills called with:', customerName)
+  const fetchCustomerBills = async (customerPhone: string) => {
+    console.log('🔍 fetchCustomerBills called with phone')
     try {
       console.log('🔍 Calling SalesAPI.getByClient...')
-      const salesResponse = await SalesAPI.getByClient(customerName)
+      const salesResponse = await SalesAPI.getByClient(customerPhone)
       console.log('📊 Customer bills API response:', salesResponse)
       
       if (salesResponse.success) {
@@ -3448,7 +3448,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         className="text-center cursor-pointer hover:bg-red-50 rounded-lg p-2 transition-all duration-200"
                         onClick={async () => {
                           if (selectedCustomer) {
-                            await fetchUnpaidBills(selectedCustomer.name)
+                            await fetchUnpaidBills(selectedCustomer.phone || '')
                             setShowDuesDialog(true)
                           }
                         }}
@@ -3469,7 +3469,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                        className="flex-1 bg-transparent"
                        onClick={async () => {
                          if (selectedCustomer) {
-                           await fetchCustomerBills(selectedCustomer.name)
+                           await fetchCustomerBills(selectedCustomer.phone || '')
                            setShowBillActivityDialog(true)
                          }
                        }}
@@ -4002,7 +4002,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         className="text-center p-3 bg-red-50/80 rounded-lg border border-red-200/50 cursor-pointer hover:bg-red-100/80 hover:border-red-300 transition-all duration-200"
                         onClick={async () => {
                           if (selectedCustomer) {
-                            await fetchUnpaidBills(selectedCustomer.name)
+                            await fetchUnpaidBills(selectedCustomer.phone || '')
                             setShowDuesDialog(true)
                           }
                         }}
