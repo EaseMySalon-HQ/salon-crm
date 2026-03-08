@@ -22,7 +22,8 @@ const adminActivityLogSchema = new mongoose.Schema({
     enum: [
       'create', 'update', 'delete', 'login', 'logout', 'password_reset',
       'status_change', 'permission_change', 'role_assigned', 'role_removed',
-      'export', 'assign', 'activate', 'deactivate'
+      'export', 'assign', 'activate', 'deactivate',
+      'admin_impersonation', 'admin_view_business', 'admin_password_reset', 'admin_log_access'
     ],
     index: true
   },

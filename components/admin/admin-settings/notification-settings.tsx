@@ -22,19 +22,17 @@ import {
 import { useToast } from "@/components/ui/use-toast"
 import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { ChevronDown, HelpCircle } from "lucide-react"
 import { WhatsAppAdminSettings } from "./whatsapp-admin-settings"
 
-interface NotificationSettingsProps {
-  settings?: any
-  onSettingsChange: (settings: any) => void
-}
+const TEMPLATE_VARIABLES = [
+  "{businessCode}", "{days}", "{alertType}", "{message}", "{clientName}", "{receiptNumber}",
+  "{date}", "{time}", "{serviceName}", "{staffName}", "{businessName}", "{businessPhone}",
+  "{items}", "{subtotal}", "{tax}", "{discount}", "{total}", "{paymentMethod}", "{notes}"
+]
 
-export function NotificationSettings({ settings: propSettings, onSettingsChange }: NotificationSettingsProps) {
-  const { toast } = useToast()
-  const [testEmail, setTestEmail] = useState('')
-  const [isTestingEmail, setIsTestingEmail] = useState(false)
-  const isInitialMount = useRef(true)
-  const [settings, setSettings] = useState(propSettings || {
+const DEFAULT_NOTIFICATION_SETTINGS = {
     // Email Configuration
     email: {
       enabled: true,
@@ -51,16 +49,17 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
       retryDelay: 5000
     },
     
-    // SMS Configuration
+    // SMS Configuration (MSG91)
     sms: {
       enabled: false,
-      provider: "twilio",
-      twilioAccountSid: "",
-      twilioAuthToken: "",
-      twilioFromNumber: "",
-      awsAccessKeyId: "",
-      awsSecretAccessKey: "",
-      awsRegion: "us-east-1",
+      provider: "msg91",
+      msg91AuthKey: "",
+      templates: {
+        receipt: "",
+        appointmentConfirmation: "",
+        appointmentCancellation: "",
+        test: ""
+      },
       maxRetries: 3,
       retryDelay: 5000
     },
@@ -130,13 +129,63 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
         sms: false,
         inApp: true
       }
-    }
-  })
+    },
+    whatsapp: {
+    enabled: false,
+    provider: "msg91",
+    msg91ApiKey: "",
+    msg91SenderId: "",
+    templates: {},
+    templateVariables: {},
+    templateJavaScriptCodes: {}
+  }
+}
+
+function mergeWithDefaults(prop?: any) {
+  const def = JSON.parse(JSON.stringify(DEFAULT_NOTIFICATION_SETTINGS))
+  if (!prop || typeof prop !== "object") return def
+  return JSON.parse(JSON.stringify({
+    email: { ...def.email, ...(prop.email || {}) },
+    sms: { ...def.sms, ...(prop.sms || {}), templates: { ...def.sms.templates, ...(prop.sms?.templates || {}) } },
+    templates: { ...def.templates, ...(prop.templates || {}) },
+    alerts: {
+      systemHealth: { ...def.alerts.systemHealth, ...(prop.alerts?.systemHealth || {}) },
+      businessInactive: { ...def.alerts.businessInactive, ...(prop.alerts?.businessInactive || {}) },
+      errorAlerts: { ...def.alerts.errorAlerts, ...(prop.alerts?.errorAlerts || {}) },
+      securityAlerts: { ...def.alerts.securityAlerts, ...(prop.alerts?.securityAlerts || {}) }
+    },
+    preferences: {
+      ...def.preferences,
+      ...(prop.preferences || {}),
+      quietHours: { ...def.preferences.quietHours, ...(prop.preferences?.quietHours || {}) },
+      channels: { ...def.preferences.channels, ...(prop.preferences?.channels || {}) }
+    },
+    whatsapp: prop.whatsapp ? { ...def.whatsapp, ...prop.whatsapp } : def.whatsapp
+  }))
+}
+
+interface NotificationSettingsProps {
+  settings?: any
+  onSettingsChange: (settings: any) => void
+}
+
+export function NotificationSettings({ settings: propSettings, onSettingsChange }: NotificationSettingsProps) {
+  const { toast } = useToast()
+  const [testEmail, setTestEmail] = useState('')
+  const [isTestingEmail, setIsTestingEmail] = useState(false)
+  const [testSmsPhone, setTestSmsPhone] = useState('')
+  const [testSmsMessage, setTestSmsMessage] = useState('Test message from EaseMySalon')
+  const [isTestingSms, setIsTestingSms] = useState(false)
+  const [receiptTemplateVariables, setReceiptTemplateVariables] = useState<string[]>([])
+  const [receiptTemplateBodyPaste, setReceiptTemplateBodyPaste] = useState('')
+  const [isFetchingTemplate, setIsFetchingTemplate] = useState(false)
+  const isInitialMount = useRef(true)
+  const [settings, setSettings] = useState(() => mergeWithDefaults(propSettings))
 
   // Update settings when propSettings change
   useEffect(() => {
-    if (propSettings) {
-      setSettings(propSettings)
+    if (propSettings && Object.keys(propSettings).length > 0) {
+      setSettings(mergeWithDefaults(propSettings))
       isInitialMount.current = true
     }
   }, [propSettings])
@@ -159,15 +208,17 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
   }, [settings])
 
   const handleSettingChange = (path: string, value: any) => {
-    setSettings(prev => {
-      const newSettings = { ...prev }
+    setSettings((prev: typeof settings) => {
+      const newSettings = JSON.parse(JSON.stringify(prev))
       const keys = path.split('.')
       let current = newSettings
-      
       for (let i = 0; i < keys.length - 1; i++) {
-        current = current[keys[i]]
+        const key = keys[i]
+        if (current[key] == null || typeof current[key] !== 'object') {
+          current[key] = {}
+        }
+        current = current[key]
       }
-      
       current[keys[keys.length - 1]] = value
       return newSettings
     })
@@ -221,9 +272,96 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
     }
   }
 
-  const handleTestSMS = () => {
-    // Test SMS functionality
-    console.log("Testing SMS...")
+  const handleTestSMS = async () => {
+    if (!testSmsPhone || testSmsPhone.replace(/\D/g, '').length < 10) {
+      toast({
+        title: "Error",
+        description: "Please enter a valid phone number with country code",
+        variant: "destructive",
+      })
+      return
+    }
+    setIsTestingSms(true)
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+      const token = getAdminAuthToken()
+      const response = await fetch(`${API_URL}/admin/settings/test/sms`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          phone: testSmsPhone,
+          message: testSmsMessage || 'Test message from EaseMySalon'
+        })
+      })
+      const data = await response.json()
+      if (data.success) {
+        toast({
+          title: "Success",
+          description: "Test SMS sent successfully",
+        })
+      } else {
+        throw new Error(data.error || 'Failed to send test SMS')
+      }
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to send test SMS",
+        variant: "destructive",
+      })
+    } finally {
+      setIsTestingSms(false)
+    }
+  }
+
+  const handleFetchReceiptTemplateVariables = async () => {
+    const templateId = settings?.sms?.templates?.receipt?.trim()
+    const templateBody = receiptTemplateBodyPaste?.trim()
+    if (!templateId && !templateBody) {
+      toast({
+        title: "Missing input",
+        description: "Enter a Receipt template ID above and click Fetch, or paste your template body below (e.g. Hi {{VAR1}}, amount {{VAR2}}) and click Fetch.",
+        variant: "destructive",
+      })
+      return
+    }
+    setIsFetchingTemplate(true)
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+      const token = getAdminAuthToken()
+      const response = await fetch(`${API_URL}/admin/settings/sms/template-details`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          templateId: templateId || undefined,
+          templateBody: templateBody || undefined
+        })
+      })
+      const data = await response.json()
+      if (data.success && Array.isArray(data.data?.variables)) {
+        setReceiptTemplateVariables(data.data.variables)
+        if (data.data.templateBody) setReceiptTemplateBodyPaste(data.data.templateBody)
+        toast({
+          title: "Variables loaded",
+          description: `Found ${data.data.variables.length} variable(s): ${data.data.variables.join(', ')}. Assign data for each below.`,
+        })
+      } else {
+        throw new Error(data.error || data.hint || 'Could not fetch template variables')
+      }
+    } catch (error: any) {
+      toast({
+        title: "Could not fetch variables",
+        description: error.message || "Save your MSG91 auth key and try again, or paste your template body and click Fetch.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsFetchingTemplate(false)
+    }
   }
 
   const handleSendTestNotification = () => {
@@ -233,41 +371,41 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
 
   return (
     <Tabs defaultValue="email" className="w-full">
-      <TabsList className="grid w-full grid-cols-3">
-        <TabsTrigger value="email" className="flex items-center gap-2">
-          <Mail className="h-4 w-4" />
-          Email
-        </TabsTrigger>
-        <TabsTrigger value="whatsapp" className="flex items-center gap-2">
-          <MessageCircle className="h-4 w-4" />
-          WhatsApp
-        </TabsTrigger>
-        <TabsTrigger value="sms" className="flex items-center gap-2" disabled>
-          <MessageSquare className="h-4 w-4" />
-          SMS
-          <Badge variant="secondary" className="ml-2">Coming Soon</Badge>
-        </TabsTrigger>
-      </TabsList>
+      {/* Segmented control: Email | WhatsApp | SMS */}
+      <div className="inline-flex p-1 rounded-lg bg-slate-100 border border-slate-200/80 mb-6">
+        <TabsList className="grid w-full grid-cols-3 h-auto p-0 bg-transparent border-0 rounded-lg gap-0 min-w-[240px]">
+          <TabsTrigger
+            value="email"
+            className="rounded-md px-4 py-2.5 text-sm font-medium data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm border-0"
+          >
+            <Mail className="h-4 w-4 mr-2" />
+            Email
+          </TabsTrigger>
+          <TabsTrigger
+            value="whatsapp"
+            className="rounded-md px-4 py-2.5 text-sm font-medium text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm border-0"
+          >
+            <MessageCircle className="h-4 w-4 mr-2" />
+            WhatsApp
+          </TabsTrigger>
+          <TabsTrigger
+            value="sms"
+            className="rounded-md px-4 py-2.5 text-sm font-medium text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm border-0"
+          >
+            <MessageSquare className="h-4 w-4 mr-2" />
+            SMS
+          </TabsTrigger>
+        </TabsList>
+      </div>
 
       <TabsContent value="email" className="space-y-6 mt-6">
       {/* Email Configuration */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <Mail className="h-5 w-5 text-blue-600" />
-            <span>Email Configuration</span>
-          </CardTitle>
-          <CardDescription>
-            Configure email service provider and settings
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
-              <Label className="text-sm font-medium">Enable Email Notifications</Label>
-              <p className="text-xs text-gray-500">
-                Send notifications via email
-              </p>
+      <Card className="rounded-xl border-slate-200/80 shadow-sm">
+        <CardContent className="space-y-6 pt-6">
+          <div className="flex items-center justify-between py-1">
+            <div>
+              <Label className="text-sm font-medium text-slate-900">Enable Email Notifications</Label>
+              <p className="text-xs text-slate-500 mt-0.5">Send notifications via email</p>
             </div>
             <Switch
               checked={settings.email.enabled}
@@ -496,218 +634,115 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                 />
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <Label className="text-sm font-medium text-slate-700">Test email</Label>
+                <div className="flex flex-wrap items-center gap-2">
                   <Input
                     type="email"
                     placeholder="Enter email address to test"
                     value={testEmail}
                     onChange={(e) => setTestEmail(e.target.value)}
-                    className="flex-1"
+                    className="flex-1 min-w-[200px]"
                   />
-                  <Button 
-                    onClick={handleTestEmail} 
+                  <Button
+                    onClick={handleTestEmail}
                     variant="outline"
                     disabled={isTestingEmail || !testEmail}
+                    className="border-slate-200"
                   >
                     <TestTube className="h-4 w-4 mr-2" />
-                    {isTestingEmail ? 'Sending...' : 'Test Email'}
+                    {isTestingEmail ? "Sending…" : "Send test"}
                   </Button>
                 </div>
-                <p className="text-xs text-gray-500">
-                  Enter an email address to test the current email configuration
-                </p>
+                <p className="text-xs text-slate-500">Send a test email to verify configuration</p>
               </div>
             </>
           )}
         </CardContent>
       </Card>
 
-      {/* SMS Configuration */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <MessageSquare className="h-5 w-5 text-green-600" />
-            <span>SMS Configuration</span>
-          </CardTitle>
-          <CardDescription>
-            Configure SMS service provider and settings
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
-              <Label className="text-sm font-medium">Enable SMS Notifications</Label>
-              <p className="text-xs text-gray-500">
-                Send notifications via SMS
-              </p>
+      {/* Email Templates - each as a card */}
+      <div className="space-y-6">
+        <div>
+          <h3 className="text-lg font-semibold text-slate-900 mb-1">Email Templates</h3>
+          <p className="text-sm text-slate-500">Customize notification templates and messages</p>
+        </div>
+
+        <Collapsible className="group mb-4">
+          <CollapsibleTrigger className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900">
+            <HelpCircle className="h-4 w-4" />
+            Available variables
+            <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="mt-2 p-3 rounded-lg bg-slate-50 border border-slate-100 flex flex-wrap gap-2">
+              {TEMPLATE_VARIABLES.map((v) => (
+                <code key={v} className="text-xs px-2 py-1 rounded bg-white border border-slate-200 text-slate-700">{v}</code>
+              ))}
             </div>
-            <Switch
-              checked={settings.sms.enabled}
-              onCheckedChange={(checked) => handleSettingChange('sms.enabled', checked)}
-            />
-          </div>
+          </CollapsibleContent>
+        </Collapsible>
 
-          {settings.sms.enabled && (
-            <>
-              <div className="space-y-2">
-                <Label htmlFor="smsProvider">SMS Provider</Label>
-                <Select
-                  value={settings.sms.provider}
-                  onValueChange={(value) => handleSettingChange('sms.provider', value)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="twilio">Twilio</SelectItem>
-                    <SelectItem value="aws">AWS SNS</SelectItem>
-                    <SelectItem value="nexmo">Nexmo</SelectItem>
-                    <SelectItem value="textlocal">TextLocal</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {settings.sms.provider === "twilio" && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="twilioAccountSid">Twilio Account SID</Label>
-                    <Input
-                      id="twilioAccountSid"
-                      value={settings.sms.twilioAccountSid}
-                      onChange={(e) => handleSettingChange('sms.twilioAccountSid', e.target.value)}
-                      className="w-full"
-                      placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="twilioAuthToken">Twilio Auth Token</Label>
-                    <Input
-                      id="twilioAuthToken"
-                      type="password"
-                      value={settings.sms.twilioAuthToken}
-                      onChange={(e) => handleSettingChange('sms.twilioAuthToken', e.target.value)}
-                      className="w-full"
-                      placeholder="Your auth token"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="twilioFromNumber">From Number</Label>
-                    <Input
-                      id="twilioFromNumber"
-                      value={settings.sms.twilioFromNumber}
-                      onChange={(e) => handleSettingChange('sms.twilioFromNumber', e.target.value)}
-                      className="w-full"
-                      placeholder="+1234567890"
-                    />
-                  </div>
+        {Object.entries(settings.templates).map(([key, template]) => {
+          const t = template as { enabled?: boolean; subject?: string; body?: string }
+          return (
+            <Card key={key} className="rounded-xl border-slate-200/80 shadow-sm">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base font-semibold capitalize">{key.replace(/([A-Z])/g, " $1")}</CardTitle>
+                  <Switch
+                    checked={t.enabled ?? false}
+                    onCheckedChange={(checked) => handleSettingChange(`templates.${key}.enabled`, checked)}
+                  />
                 </div>
-              )}
-
-              {settings.sms.provider === "aws" && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="awsAccessKeyId">AWS Access Key ID</Label>
-                    <Input
-                      id="awsAccessKeyId"
-                      value={settings.sms.awsAccessKeyId}
-                      onChange={(e) => handleSettingChange('sms.awsAccessKeyId', e.target.value)}
-                      className="w-full"
-                      placeholder="AKIAIOSFODNN7EXAMPLE"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="awsSecretAccessKey">AWS Secret Access Key</Label>
-                    <Input
-                      id="awsSecretAccessKey"
-                      type="password"
-                      value={settings.sms.awsSecretAccessKey}
-                      onChange={(e) => handleSettingChange('sms.awsSecretAccessKey', e.target.value)}
-                      className="w-full"
-                      placeholder="Your secret key"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="awsRegion">AWS Region</Label>
-                    <Input
-                      id="awsRegion"
-                      value={settings.sms.awsRegion}
-                      onChange={(e) => handleSettingChange('sms.awsRegion', e.target.value)}
-                      className="w-full"
-                      placeholder="us-east-1"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="flex space-x-2">
-                <Button onClick={handleTestSMS} variant="outline">
-                  <TestTube className="h-4 w-4 mr-2" />
-                  Test SMS
-                </Button>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Notification Templates */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <Bell className="h-5 w-5 text-purple-600" />
-            <span>Notification Templates</span>
-          </CardTitle>
-          <CardDescription>
-            Customize notification templates and messages
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {Object.entries(settings.templates).map(([key, template]) => (
-            <div key={key} className="space-y-4 p-4 border rounded-lg">
-              <div className="flex items-center justify-between">
-                <h4 className="font-medium capitalize">{key.replace(/([A-Z])/g, ' $1')}</h4>
-                <Switch
-                  checked={template.enabled}
-                  onCheckedChange={(checked) => handleSettingChange(`templates.${key}.enabled`, checked)}
-                />
-              </div>
-
-              {template.enabled && (
-                <div className="space-y-4">
+              </CardHeader>
+              {t.enabled && (
+                <CardContent className="space-y-4 pt-0">
                   <div className="space-y-2">
                     <Label htmlFor={`${key}-subject`}>Subject</Label>
                     <Input
                       id={`${key}-subject`}
-                      value={template.subject}
+                      value={t.subject ?? ""}
                       onChange={(e) => handleSettingChange(`templates.${key}.subject`, e.target.value)}
                       className="w-full"
                     />
                   </div>
-
                   <div className="space-y-2">
-                    <Label htmlFor={`${key}-body`}>Message Body</Label>
+                    <Label htmlFor={`${key}-body`}>Message body</Label>
                     <Textarea
                       id={`${key}-body`}
-                      value={template.body}
+                      value={t.body ?? ""}
                       onChange={(e) => handleSettingChange(`templates.${key}.body`, e.target.value)}
-                      className="w-full"
-                      rows={3}
+                      className="w-full min-h-[100px]"
+                      rows={4}
                     />
-                    <p className="text-xs text-gray-500">
-                      Use variables like {`{businessCode}`, `{days}`, `{alertType}`, `{message}`, `{clientName}`, `{receiptNumber}`, `{date}`, `{time}`, `{serviceName}`, `{staffName}`, `{businessName}`, `{businessPhone}`, `{items}`, `{subtotal}`, `{tax}`, `{discount}`, `{total}`, `{paymentMethod}`, `{notes}`} in your templates
-                    </p>
                   </div>
-                </div>
+                  <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-slate-200"
+                      onClick={() => toast({ title: "Preview", description: "Subject: " + (t.subject ?? "") + ". Body preview: " + (t.body ?? "").slice(0, 120) + "…" })}
+                    >
+                      Preview template
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-slate-200"
+                      onClick={() => toast({ title: "Send test", description: "Test email would be sent for this template. Use the test field in Email Configuration to send a test." })}
+                    >
+                      Send test
+                    </Button>
+                  </div>
+                </CardContent>
               )}
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+            </Card>
+          )
+        })}
+      </div>
 
       {/* Alert Rules */}
       <Card>
@@ -1036,23 +1071,155 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
         />
       </TabsContent>
 
-      <TabsContent value="sms" className="mt-6">
+      <TabsContent value="sms" className="mt-6 space-y-6">
+        <Card>
+          <CardContent className="space-y-6 pt-6">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="sms-enabled">Enable SMS notifications</Label>
+              <Switch
+                id="sms-enabled"
+                checked={settings?.sms?.enabled ?? false}
+                onCheckedChange={(checked) => handleSettingChange('sms.enabled', checked)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sms-authkey">MSG91 Auth Key</Label>
+              <Input
+                id="sms-authkey"
+                type="password"
+                placeholder="Your MSG91 auth key"
+                value={settings?.sms?.msg91AuthKey ?? ''}
+                onChange={(e) => handleSettingChange('sms.msg91AuthKey', e.target.value)}
+              />
+            </div>
+            <div className="space-y-4">
+              <Label>Template IDs (from MSG91 dashboard)</Label>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="sms-template-receipt" className="text-muted-foreground text-sm">Receipt</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="sms-template-receipt"
+                      placeholder="Template ID for receipts"
+                      className="flex-1"
+                      value={settings?.sms?.templates?.receipt ?? ''}
+                      onChange={(e) => handleSettingChange('sms.templates.receipt', e.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isFetchingTemplate}
+                      onClick={handleFetchReceiptTemplateVariables}
+                    >
+                      {isFetchingTemplate ? 'Fetching…' : 'Fetch variables'}
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground text-xs">Optional: paste template body below if Fetch fails (e.g. &quot;Hi {`{{VAR1}}`}, amount {`{{VAR2}}`}&quot;).</p>
+                  <Textarea
+                    placeholder="Paste template body to extract variables (e.g. Hi {{VAR1}}, your total is {{VAR2}})"
+                    value={receiptTemplateBodyPaste}
+                    onChange={(e) => setReceiptTemplateBodyPaste(e.target.value)}
+                    rows={2}
+                    className="resize-none"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sms-template-appointmentConfirmation" className="text-muted-foreground text-sm">Appointment confirmation</Label>
+                  <Input
+                    id="sms-template-appointmentConfirmation"
+                    placeholder="Template ID for appointment confirmation"
+                    value={settings?.sms?.templates?.appointmentConfirmation ?? ''}
+                    onChange={(e) => handleSettingChange('sms.templates.appointmentConfirmation', e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sms-template-appointmentCancellation" className="text-muted-foreground text-sm">Appointment cancellation</Label>
+                  <Input
+                    id="sms-template-appointmentCancellation"
+                    placeholder="Template ID for cancellation"
+                    value={settings?.sms?.templates?.appointmentCancellation ?? ''}
+                    onChange={(e) => handleSettingChange('sms.templates.appointmentCancellation', e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sms-template-test" className="text-muted-foreground text-sm">Test (optional)</Label>
+                  <Input
+                    id="sms-template-test"
+                    placeholder="Template ID for test SMS"
+                    value={settings?.sms?.templates?.test ?? ''}
+                    onChange={(e) => handleSettingChange('sms.templates.test', e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="space-y-4 pt-4 border-t">
+              <Label className="text-sm font-medium">Receipt template variables (MSG91)</Label>
+              <p className="text-muted-foreground text-sm">
+                Use &quot;Fetch variables&quot; above to load variables from your template, then assign data for each.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {(receiptTemplateVariables.length > 0 ? receiptTemplateVariables : ['VAR1', 'VAR2', 'VAR3', 'VAR4', 'VAR5']).map((varKey) => {
+                  const raw = settings?.sms?.receiptVariableMapping?.[varKey];
+                  const selectValue = (raw === '' || raw === undefined || raw === '__none__') ? '__none__' : raw;
+                  return (
+                  <div key={varKey} className="space-y-2">
+                    <Label htmlFor={`sms-receipt-${varKey}`} className="text-muted-foreground text-sm">{varKey}</Label>
+                    <Select
+                      value={selectValue}
+                      onValueChange={(value) => handleSettingChange(`sms.receiptVariableMapping.${varKey}`, value === '__none__' ? undefined : value)}
+                    >
+                      <SelectTrigger id={`sms-receipt-${varKey}`}>
+                        <SelectValue placeholder="— Don't use" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">— Don't use</SelectItem>
+                        <SelectItem value="clientName">Client name</SelectItem>
+                        <SelectItem value="businessName">Business name</SelectItem>
+                        <SelectItem value="total">Total amount</SelectItem>
+                        <SelectItem value="receiptNumber">Receipt / Bill number</SelectItem>
+                        <SelectItem value="receiptLink">Receipt link</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  );
+                })}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
-              <MessageSquare className="h-5 w-5 text-green-600" />
-              <span>SMS Configuration</span>
+              <TestTube className="h-5 w-5" />
+              <span>Test SMS</span>
             </CardTitle>
             <CardDescription>
-              SMS notifications are coming soon
+              Send a test SMS to verify your MSG91 configuration. Requires a test template ID above (with VAR1 for message).
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="text-center py-8 text-gray-500">
-              <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p className="text-lg font-medium mb-2">SMS Notifications Coming Soon</p>
-              <p className="text-sm">We're working on adding SMS notification support. Stay tuned!</p>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="test-sms-phone">Phone number (with country code, e.g. 919876543210)</Label>
+              <Input
+                id="test-sms-phone"
+                placeholder="919876543210"
+                value={testSmsPhone}
+                onChange={(e) => setTestSmsPhone(e.target.value)}
+              />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="test-sms-message">Message (VAR1 in test template)</Label>
+              <Input
+                id="test-sms-message"
+                placeholder="Test message from EaseMySalon"
+                value={testSmsMessage}
+                onChange={(e) => setTestSmsMessage(e.target.value)}
+              />
+            </div>
+            <Button onClick={handleTestSMS} disabled={isTestingSms}>
+              {isTestingSms ? "Sending..." : "Send test SMS"}
+            </Button>
           </CardContent>
         </Card>
       </TabsContent>

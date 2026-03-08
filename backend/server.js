@@ -709,7 +709,8 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           commissionProfileIds: req.user.commissionProfileIds,
           notes: req.user.notes,
           createdAt: req.user.createdAt,
-          updatedAt: req.user.updatedAt
+          updatedAt: req.user.updatedAt,
+          ...(req.user.isImpersonation && { isImpersonation: true, impersonatedBy: req.user.impersonatedBy })
         }
       });
     } else {
@@ -725,9 +726,14 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
       }
 
       const { password: _, ...userWithoutPassword } = user.toObject();
+      const data = { ...userWithoutPassword };
+      if (req.user.isImpersonation) {
+        data.isImpersonation = true;
+        data.impersonatedBy = req.user.impersonatedBy;
+      }
       res.json({
         success: true,
-        data: userWithoutPassword
+        data
       });
     }
   } catch (error) {
@@ -3458,6 +3464,41 @@ app.get('/api/membership/plans', authenticateToken, setupBusinessDatabase, requi
     res.json({ success: true, data: plans });
   } catch (error) {
     console.error('Error fetching membership plans:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// List active subscriptions (for membership report filter)
+app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { MembershipSubscription, Client, MembershipPlan } = req.businessModels;
+    const { planId, search, status = 'ACTIVE' } = req.query;
+    const branchId = req.user.branchId;
+
+    const query = { branchId };
+    if (status) query.status = status;
+    if (planId && mongoose.Types.ObjectId.isValid(planId)) query.planId = new mongoose.Types.ObjectId(planId);
+
+    let subs = await MembershipSubscription.find(query)
+      .populate('customerId', 'name phone email')
+      .populate('planId', 'planName price durationInDays')
+      .sort({ expiryDate: 1 })
+      .lean();
+
+    if (search && String(search).trim()) {
+      const term = String(search).trim().toLowerCase();
+      subs = subs.filter((s) => {
+        const name = (s.customerId?.name || '').toLowerCase();
+        const phone = (s.customerId?.phone || '').toLowerCase();
+        const email = (s.customerId?.email || '').toLowerCase();
+        const planName = (s.planId?.planName || '').toLowerCase();
+        return name.includes(term) || phone.includes(term) || email.includes(term) || planName.includes(term);
+      });
+    }
+
+    res.json({ success: true, data: subs });
+  } catch (error) {
+    console.error('Error fetching membership subscriptions:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -7489,6 +7530,72 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       // Don't fail appointment creation if WhatsApp fails
     }
 
+    // Send SMS appointment confirmation if enabled
+    try {
+      const smsService = require('./services/sms-service');
+      const { canUseAddon } = require('./lib/entitlements');
+      await smsService.initialize();
+      if (smsService.enabled) {
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        const adminSettings = await AdminSettings.getSettings();
+        const smsEnabled = adminSettings?.notifications?.sms?.enabled === true && (adminSettings?.notifications?.sms?.provider === 'msg91' || !!(adminSettings?.notifications?.sms?.msg91AuthKey && String(adminSettings.notifications.sms.msg91AuthKey).trim()));
+        if (smsEnabled) {
+          const business = await Business.findById(req.user.branchId).lean();
+          if (canUseAddon(business, 'sms')) {
+            const { Client, Staff } = req.businessModels;
+            for (const appointment of createdAppointments) {
+              let client = null;
+              if (appointment.clientId && typeof appointment.clientId === 'object') {
+                client = appointment.clientId;
+              } else {
+                const clientId = appointment.clientId?._id || appointment.clientId;
+                if (clientId) client = await Client.findById(clientId);
+              }
+              if (!client?.phone) continue;
+              let serviceName = 'Service';
+              if (appointment.serviceId) {
+                if (typeof appointment.serviceId === 'object' && appointment.serviceId.name) serviceName = appointment.serviceId.name;
+                else {
+                  const { Service } = req.businessModels;
+                  const service = await Service.findById(appointment.serviceId);
+                  serviceName = service?.name || 'Service';
+                }
+              }
+              let staffName = 'Not assigned';
+              if (appointment.staffId && typeof appointment.staffId === 'object' && appointment.staffId.name) staffName = appointment.staffId.name;
+              else if (appointment.staffId) {
+                const staff = await Staff.findById(appointment.staffId);
+                staffName = staff?.name || 'Not assigned';
+              }
+              const result = await smsService.sendAppointmentConfirmation({
+                to: client.phone,
+                clientName: client.name || 'Client',
+                appointmentData: {
+                  serviceName,
+                  date: appointment.date,
+                  time: appointment.time,
+                  staffName,
+                  businessName: business.name,
+                  businessPhone: business.contact?.phone
+                }
+              });
+              if (result.success) {
+                await Business.updateOne(
+                  { _id: business._id },
+                  { $inc: { 'plan.addons.sms.used': 1 } }
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (smsErr) {
+      console.error('Error sending appointment confirmation SMS:', smsErr);
+    }
+
     res.status(201).json({
       success: true,
       data: createdAppointments,
@@ -7829,6 +7936,66 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
       // Don't fail receipt creation if WhatsApp fails
     }
 
+    // Send SMS receipt if enabled
+    try {
+      const smsService = require('./services/sms-service');
+      const { canUseAddon, getEffectiveLimit } = require('./lib/entitlements');
+      await smsService.initialize();
+      if (smsService.enabled) {
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        const adminSettings = await AdminSettings.getSettings();
+        const smsEnabled = adminSettings?.notifications?.sms?.enabled === true && (adminSettings?.notifications?.sms?.provider === 'msg91' || !!(adminSettings?.notifications?.sms?.msg91AuthKey && String(adminSettings.notifications.sms.msg91AuthKey).trim()));
+        if (smsEnabled) {
+          let business = await Business.findById(req.user.branchId).lean();
+          let canSendSms = canUseAddon(business, 'sms');
+          if (!canSendSms) {
+            const smsLimit = getEffectiveLimit(business, 'smsMessages');
+            if (smsLimit > 0) {
+              await Business.updateOne(
+                { _id: business._id },
+                { $set: { 'plan.addons.sms': { enabled: true, quota: smsLimit, used: business.plan?.addons?.sms?.used ?? 0 } } }
+              );
+              business = await Business.findById(req.user.branchId).lean();
+              canSendSms = true;
+            }
+          }
+          if (canSendSms) {
+            const { Client } = req.businessModels;
+            const client = await Client.findById(clientId);
+            if (client?.phone) {
+              let receiptLink = null;
+              try {
+                const { Sale } = req.businessModels;
+                const relatedSale = await Sale.findOne({ billNo: savedReceipt.receiptNumber });
+                if (relatedSale?.shareToken) {
+                  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+                  receiptLink = `${frontendUrl}/receipt/public/${relatedSale.billNo}/${relatedSale.shareToken}`;
+                }
+              } catch (e) {}
+              const result = await smsService.sendReceipt({
+                to: client.phone,
+                clientName: client.name,
+                receiptNumber: savedReceipt.receiptNumber,
+                receiptData: { businessName: business.name, total: savedReceipt.total },
+                receiptLink
+              });
+              if (result.success) {
+                await Business.updateOne(
+                  { _id: business._id },
+                  { $inc: { 'plan.addons.sms.used': 1 } }
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (smsErr) {
+      console.error('Error sending receipt SMS:', smsErr);
+    }
+
     res.status(201).json({
       success: true,
       data: savedReceipt
@@ -8102,6 +8269,45 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
               } else {
                 console.error(`❌ Failed to send cancellation email:`, emailResult?.error);
                 console.error(`❌ Full error:`, JSON.stringify(emailResult, null, 2));
+              }
+
+              // Send SMS appointment cancellation if enabled
+              if (client?.phone) {
+                try {
+                  const smsService = require('./services/sms-service');
+                  const { canUseAddon } = require('./lib/entitlements');
+                  await smsService.initialize();
+                  if (smsService.enabled) {
+                    const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
+                    const Business = mainConnection.model('Business', require('./models/Business').schema);
+                    const adminSettings = await AdminSettings.getSettings();
+                    const smsEnabled = adminSettings?.notifications?.sms?.enabled === true && (adminSettings?.notifications?.sms?.provider === 'msg91' || !!(adminSettings?.notifications?.sms?.msg91AuthKey && String(adminSettings.notifications.sms.msg91AuthKey).trim()));
+                    if (smsEnabled) {
+                      const businessForSms = await Business.findById(req.user.branchId).lean();
+                      if (canUseAddon(businessForSms, 'sms')) {
+                        const result = await smsService.sendAppointmentCancellation({
+                          to: client.phone,
+                          clientName: client.name || 'Client',
+                          appointmentData: {
+                            serviceName: serviceName,
+                            date: updatedAppointment.date,
+                            time: updatedAppointment.time,
+                            businessName: business?.name || 'Business'
+                          },
+                          cancellationReason: 'Cancelled'
+                        });
+                        if (result.success) {
+                          await Business.updateOne(
+                            { _id: businessForSms._id },
+                            { $inc: { 'plan.addons.sms.used': 1 } }
+                          );
+                        }
+                      }
+                    }
+                  }
+                } catch (smsErr) {
+                  console.error('Error sending appointment cancellation SMS:', smsErr);
+                }
               }
             } else {
               console.log(`⚠️ Skipping cancellation email - client has no email address`);
@@ -9121,6 +9327,68 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       console.error('❌ [WhatsApp] Error stack:', whatsappError.stack);
       whatsappStatus.error = whatsappError.message;
       // Don't fail sale creation if WhatsApp fails
+    }
+
+    // Send SMS receipt for sale if enabled
+    try {
+      const smsService = require('./services/sms-service');
+      const { canUseAddon, getEffectiveLimit } = require('./lib/entitlements');
+      await smsService.initialize();
+      if (smsService.enabled) {
+        const databaseManager = require('./config/database-manager');
+        const mainConnection = await databaseManager.getMainConnection();
+        const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
+        const Business = mainConnection.model('Business', require('./models/Business').schema);
+        const adminSettings = await AdminSettings.getSettings();
+        const smsEnabled = adminSettings?.notifications?.sms?.enabled === true && (adminSettings?.notifications?.sms?.provider === 'msg91' || !!(adminSettings?.notifications?.sms?.msg91AuthKey && String(adminSettings.notifications.sms.msg91AuthKey).trim()));
+        if (smsEnabled) {
+          let business = await Business.findById(req.user.branchId).lean();
+          let canSendSms = canUseAddon(business, 'sms');
+          if (!canSendSms) {
+            const smsLimit = getEffectiveLimit(business, 'smsMessages');
+            if (smsLimit > 0) {
+              await Business.updateOne(
+                { _id: business._id },
+                { $set: { 'plan.addons.sms': { enabled: true, quota: smsLimit, used: business.plan?.addons?.sms?.used ?? 0 } } }
+              );
+              business = await Business.findById(req.user.branchId).lean();
+              canSendSms = true;
+            }
+          }
+          if (canSendSms) {
+            const customerPhone = sale?.customerPhone || sale?.customerMobile;
+            if (!customerPhone) {
+              console.log('📱 [SMS] Sale receipt skipped: no customer phone on bill (customerPhone/customerMobile)');
+            }
+            if (customerPhone) {
+              const saleForSms = savedSale || sale;
+              let receiptLink = null;
+              if (saleForSms?.shareToken) {
+                const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+                receiptLink = `${frontendUrl}/receipt/public/${saleForSms.billNo}/${saleForSms.shareToken}`;
+              }
+              const result = await smsService.sendReceipt({
+                to: customerPhone,
+                clientName: sale.customerName || 'Customer',
+                receiptNumber: sale.billNo,
+                receiptData: { businessName: business?.name || 'Business', total: sale.netTotal || sale.grossTotal || 0 },
+                receiptLink
+              });
+              if (result.success) {
+                await Business.updateOne(
+                  { _id: business._id },
+                  { $inc: { 'plan.addons.sms.used': 1 } }
+                );
+                console.log('📱 [SMS] Sale receipt sent to', customerPhone);
+              } else {
+                console.warn('📱 [SMS] Sale receipt failed:', result.error);
+              }
+            }
+          }
+        }
+      }
+    } catch (smsErr) {
+      console.error('Error sending sale receipt SMS:', smsErr);
     }
     
     console.log('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);

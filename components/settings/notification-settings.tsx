@@ -338,7 +338,7 @@ export function NotificationSettings() {
       </div>
 
       <Tabs defaultValue="email" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="email" className="flex items-center gap-2">
             <Mail className="h-4 w-4" />
             Email
@@ -346,11 +346,6 @@ export function NotificationSettings() {
           <TabsTrigger value="whatsapp" className="flex items-center gap-2">
             <MessageCircle className="h-4 w-4" />
             WhatsApp
-          </TabsTrigger>
-          <TabsTrigger value="sms" className="flex items-center gap-2" disabled>
-            <AlertTriangle className="h-4 w-4" />
-            SMS
-            <Badge variant="secondary" className="ml-2">Coming Soon</Badge>
           </TabsTrigger>
         </TabsList>
 
@@ -826,27 +821,6 @@ export function NotificationSettings() {
 
         <TabsContent value="whatsapp" className="mt-6">
           <WhatsAppBusinessSettings />
-        </TabsContent>
-
-        <TabsContent value="sms" className="mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <AlertTriangle className="h-5 w-5 text-green-600" />
-                <span>SMS Configuration</span>
-              </CardTitle>
-              <CardDescription>
-                SMS notifications are coming soon
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="text-center py-8 text-gray-500">
-                <AlertTriangle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p className="text-lg font-medium mb-2">SMS Notifications Coming Soon</p>
-                <p className="text-sm">We're working on adding SMS notification support. Stay tuned!</p>
-              </div>
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
     </div>

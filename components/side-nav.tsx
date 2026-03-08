@@ -1,6 +1,5 @@
 "use client"
 
-import { useState, useEffect } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
@@ -9,26 +8,16 @@ import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context"
+import { useSidebar } from "@/lib/sidebar-context"
 import { SETTINGS_MODULES } from "@/lib/permission-mappings"
 
 export function SideNav() {
   const pathname = usePathname()
   const { user } = useAuth()
-  const [isCollapsed, setIsCollapsed] = useState(() => {
-    // Initialize from localStorage if available
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('sidebar-collapsed')
-      return saved === 'true'
-    }
-    return false
-  })
-
-  // Save to localStorage when collapsed state changes
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('sidebar-collapsed', String(isCollapsed))
-    }
-  }, [isCollapsed])
+  const { isCollapsed, toggleCollapsed } = useSidebar() ?? {
+    isCollapsed: false,
+    toggleCollapsed: () => {},
+  }
 
   const navigationItems = [
     { title: "Dashboard", href: "/dashboard", icon: Home, permissionModule: "dashboard" },
@@ -75,8 +64,8 @@ export function SideNav() {
   }
 
   return (
-    <div className={cn(
-      "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 relative",
+    <aside className={cn(
+      "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 relative fixed inset-y-0 left-0 z-40 h-screen shrink-0",
       isCollapsed ? "w-24" : "w-56"
     )}>
       <div className="flex h-full flex-col gap-4 p-5">
@@ -85,7 +74,7 @@ export function SideNav() {
           variant="ghost"
           size="icon"
           className="absolute -right-3 top-20 z-10 h-6 w-6 rounded-full bg-white border-2 border-gray-200 shadow-md hover:shadow-lg transition-all"
-          onClick={() => setIsCollapsed(!isCollapsed)}
+          onClick={toggleCollapsed}
         >
           {isCollapsed ? (
             <ChevronRight className="h-4 w-4" />
@@ -249,6 +238,6 @@ export function SideNav() {
           </div>
         </div>
       </div>
-    </div>
+    </aside>
   )
 }

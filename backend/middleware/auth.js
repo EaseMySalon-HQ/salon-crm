@@ -158,7 +158,11 @@ const authenticateToken = (req, res, next) => {
         notes: user.notes,
         commissionProfileIds: user.commissionProfileIds,
         createdAt: user.createdAt,
-        updatedAt: user.updatedAt
+        updatedAt: user.updatedAt,
+        ...(decoded.isImpersonation && {
+          isImpersonation: true,
+          impersonatedBy: decoded.impersonatedBy,
+        }),
       };
 
       console.log('🔍 Auth middleware req.user set:', {

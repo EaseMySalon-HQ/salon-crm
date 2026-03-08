@@ -4,12 +4,12 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateToken } = require('../middleware/auth');
-const { authenticateAdmin, checkAdminPermission } = require('../middleware/admin-auth');
+const { authenticateAdmin, checkAdminPermission, requireAdminRole } = require('../middleware/admin-auth');
 const { logAdminActivity, getClientIp } = require('../utils/admin-logger');
-const Business = require('../models/Business').model;
-const User = require('../models/User').model;
+const { getBusinessMetrics, attachMetricsToBusinesses } = require('../lib/business-metrics');
 const databaseManager = require('../config/database-manager');
-const { modelFactory } = require('../models/model-factory');
+const modelFactory = require('../models/model-factory');
+const crypto = require('crypto');
 
 const router = express.Router();
 
@@ -128,6 +128,27 @@ router.get('/profile', setupMainDatabase, authenticateAdmin, async (req, res) =>
   }
 });
 
+// Get business counts by status (for dashboard metrics)
+router.get('/businesses/stats', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
+  try {
+    const { Business } = req.mainModels;
+    const [total, active, suspended, inactive, deleted] = await Promise.all([
+      Business.countDocuments({}),
+      Business.countDocuments({ status: 'active' }),
+      Business.countDocuments({ status: 'suspended' }),
+      Business.countDocuments({ status: 'inactive' }),
+      Business.countDocuments({ status: 'deleted' }),
+    ]);
+    res.json({
+      success: true,
+      data: { total, active, suspended, inactive, deleted },
+    });
+  } catch (error) {
+    console.error('Businesses stats error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // Get All Businesses
 router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
   try {
@@ -178,10 +199,23 @@ router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermis
       .limit(parseInt(limit));
     
     const total = await Business.countDocuments(query);
-    
+
+    await attachMetricsToBusinesses(businesses, req.mainConnection);
+
+    const data = businesses.map((b) => {
+      const plain = b.toObject ? b.toObject() : b;
+      return {
+        ...plain,
+        usersCount: b.usersCount,
+        invoicesCount: b.invoicesCount,
+        revenue: b.revenue,
+        nextBillingDate: b.nextBillingDate,
+      };
+    });
+
     res.json({
       success: true,
-      data: businesses,
+      data,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -195,29 +229,28 @@ router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermis
   }
 });
 
-// Get Single Business
-router.get('/businesses/:id', authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
+// Get Single Business (with metrics for View Business page)
+router.get('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
   try {
-    // Setup main database connection
-    await new Promise((resolve, reject) => {
-      setupMainDatabase(req, res, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-    
     const { Business } = req.mainModels;
     const business = await Business.findById(req.params.id)
-      .populate('owner', 'firstName lastName email mobile role')
-      .populate('deletedBy', 'firstName lastName email');
+      .populate('owner', 'firstName lastName email mobile role lastLoginAt')
+      .populate('deletedBy', 'firstName lastName email')
+      .lean();
     
     if (!business) {
       return res.status(404).json({ success: false, error: 'Business not found' });
     }
+
+    const metrics = await getBusinessMetrics(business.code || req.params.id, req.mainConnection);
+    const owner = business.owner;
+    const ownerName = owner
+      ? `${owner.firstName || ''} ${owner.lastName || ''}`.trim() || owner.email || '—'
+      : '—';
     
-    // Transform the business data to match frontend expectations
     const businessData = {
       _id: business._id,
+      businessId: business.code || business._id.toString(),
       name: business.name,
       code: business.code,
       businessType: business.businessType,
@@ -225,6 +258,11 @@ router.get('/businesses/:id', authenticateAdmin, checkAdminPermission('businesse
       address: business.address,
       contact: business.contact,
       subscription: business.subscription,
+      plan: business.subscription?.plan || '—',
+      staffCount: metrics.usersCount ?? 0,
+      invoiceCount: metrics.invoicesCount ?? 0,
+      totalRevenue: metrics.revenue ?? 0,
+      lastActiveAt: owner?.lastLoginAt || business.updatedAt || null,
       deletedAt: business.deletedAt,
       deletedBy: business.deletedBy ? {
         _id: business.deletedBy._id,
@@ -233,9 +271,10 @@ router.get('/businesses/:id', authenticateAdmin, checkAdminPermission('businesse
       } : null,
       owner: business.owner ? {
         _id: business.owner._id,
-        name: `${business.owner.firstName || ''} ${business.owner.lastName || ''}`.trim() || 'Business Owner',
+        name: ownerName,
         email: business.owner.email,
-        phone: business.owner.mobile
+        phone: business.owner.mobile,
+        lastLoginAt: business.owner.lastLoginAt
       } : null,
       createdAt: business.createdAt,
       updatedAt: business.updatedAt,
@@ -246,6 +285,158 @@ router.get('/businesses/:id', authenticateAdmin, checkAdminPermission('businesse
     res.json({ success: true, data: businessData });
   } catch (error) {
     console.error('Get business error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// --- Platform Admin Only (super_admin) Business Actions ---
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
+
+// POST /businesses/:id/impersonate - Impersonate business owner
+router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    const { id: businessId } = req.params;
+    const { Business } = req.mainModels;
+
+    const business = await Business.findById(businessId).populate('owner');
+    if (!business) return res.status(404).json({ success: false, error: 'Business not found' });
+    if (!business.owner) return res.status(400).json({ success: false, error: 'Business has no owner' });
+    if (business.status === 'suspended') return res.status(403).json({ success: false, error: 'Cannot impersonate suspended business' });
+
+    const owner = business.owner;
+    const payload = {
+      id: owner._id,
+      email: owner.email,
+      role: owner.role || 'admin',
+      branchId: business._id,
+      impersonatedBy: req.admin._id.toString(),
+      isImpersonation: true,
+    };
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
+
+    await logAdminActivity({
+      adminId: req.admin,
+      action: 'admin_impersonation',
+      module: 'businesses',
+      resourceId: businessId,
+      resourceType: 'Business',
+      details: { businessName: business.name, businessCode: business.code, ownerEmail: owner.email },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, data: { token, businessId: business._id.toString(), businessCode: business.code } });
+  } catch (error) {
+    console.error('Impersonate error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// POST /businesses/:id/reset-owner-password
+router.post('/businesses/:id/reset-owner-password', setupMainDatabase, authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    const { id: businessId } = req.params;
+    const { Business, User } = req.mainModels;
+
+    const business = await Business.findById(businessId).populate('owner');
+    if (!business) return res.status(404).json({ success: false, error: 'Business not found' });
+    if (!business.owner) return res.status(400).json({ success: false, error: 'Business has no owner' });
+
+    const owner = business.owner;
+    const tempPassword = crypto.randomBytes(8).toString('hex');
+    const hashed = await bcrypt.hash(tempPassword, 10);
+    await User.findByIdAndUpdate(owner._id, { password: hashed, updatedAt: new Date() });
+
+    await logAdminActivity({
+      adminId: req.admin,
+      action: 'admin_password_reset',
+      module: 'businesses',
+      resourceId: businessId,
+      resourceType: 'Business',
+      details: { businessName: business.name, ownerEmail: owner.email },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'],
+    });
+
+    res.json({
+      success: true,
+      data: {
+        message: 'Password reset successfully. Share the temporary password with the owner securely.',
+        tempPassword,
+      },
+    });
+  } catch (error) {
+    console.error('Reset owner password error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// GET /businesses/:id/logs - Business activity logs
+router.get('/businesses/:id/logs', setupMainDatabase, authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
+  try {
+    const { id: businessId } = req.params;
+    const { page = 1, limit = 20, action: actionFilter, startDate, endDate } = req.query;
+    const { Business } = req.mainModels;
+
+    const business = await Business.findById(businessId).lean();
+    if (!business) return res.status(404).json({ success: false, error: 'Business not found' });
+
+    await logAdminActivity({
+      adminId: req.admin,
+      action: 'admin_log_access',
+      module: 'businesses',
+      resourceId: businessId,
+      resourceType: 'Business',
+      details: { businessName: business.name },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'],
+    });
+
+    const conn = await databaseManager.getConnection(business.code || businessId, req.mainConnection);
+    const models = modelFactory.createBusinessModels(conn);
+    const Sale = models.Sale;
+    const Staff = models.Staff;
+    const Appointment = models.Appointment;
+
+    const dateFilter = {};
+    if (startDate || endDate) {
+      dateFilter.createdAt = {};
+      if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
+      if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+    }
+
+    const logs = [];
+    const limitNum = Math.min(parseInt(limit, 10) || 20, 100);
+
+    const sales = await Sale.find(dateFilter).sort({ createdAt: -1 }).limit(limitNum * 2).populate('staffId', 'name').lean();
+    for (const s of sales) {
+      if (actionFilter && !['invoice_created', 'sale_created'].includes(actionFilter)) continue;
+      logs.push({ action: 'invoice_created', user: s.staffId?.name || 'System', description: `Invoice ${s.receiptNumber || s._id} created`, createdAt: s.createdAt });
+    }
+    const staffAdded = await Staff.find(dateFilter).sort({ createdAt: -1 }).limit(limitNum).lean();
+    for (const st of staffAdded) {
+      if (actionFilter && actionFilter !== 'staff_added') continue;
+      logs.push({ action: 'staff_added', user: 'Owner', description: `Added staff member ${st.name || st.email}`, createdAt: st.createdAt });
+    }
+    const appointments = await Appointment.find(dateFilter).sort({ createdAt: -1 }).limit(limitNum).populate('clientId', 'name').populate('staffId', 'name').lean();
+    for (const a of appointments) {
+      if (actionFilter && actionFilter !== 'appointment_created') continue;
+      logs.push({ action: 'appointment_created', user: a.staffId?.name || 'System', description: `Appointment for ${a.clientId?.name || 'Client'}`, createdAt: a.createdAt });
+    }
+
+    logs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const total = logs.length;
+    const pageNum = parseInt(page, 10);
+    const skip = (pageNum - 1) * limitNum;
+    const paginatedLogs = logs.slice(skip, skip + limitNum);
+
+    res.json({
+      success: true,
+      data: paginatedLogs,
+      pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error) {
+    console.error('Get business logs error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -650,7 +841,7 @@ router.get('/businesses/:id/stats', authenticateAdmin, checkAdminPermission('bus
 router.get('/dashboard/stats', setupMainDatabase, authenticateAdmin, checkAdminPermission('dashboard', 'view'), async (req, res) => {
   try {
     const { Business, User } = req.mainModels;
-    
+
     const [
       totalBusinesses,
       activeBusinesses,
@@ -686,7 +877,13 @@ router.get('/dashboard/stats', setupMainDatabase, authenticateAdmin, checkAdminP
         totalBusinesses,
         activeBusinesses,
         totalUsers,
-        recentBusinesses
+        totalRevenue: 0,
+        recentBusinesses,
+        systemStatus: {
+          api: 'operational',
+          database: 'operational',
+          uptime: 99.9
+        }
       }
     });
   } catch (error) {

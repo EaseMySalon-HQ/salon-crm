@@ -104,7 +104,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   }
 
   return (
-    <header className="border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30 backdrop-blur-sm w-full px-8 py-4 shadow-sm">
+    <header className="sticky top-0 z-30 shrink-0 border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30 backdrop-blur-sm w-full px-8 py-4 shadow-sm">
       <div className="flex items-center justify-between">
         {/* Left section - Business Name */}
         <div className="flex items-center">
