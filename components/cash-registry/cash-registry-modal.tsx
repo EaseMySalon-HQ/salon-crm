@@ -50,6 +50,8 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
   const [cashInPosMachine, setCashInPosMachine] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
   const [errors, setErrors] = useState<{ [key: string]: string }>({})
+  const [focusedCountIndex, setFocusedCountIndex] = useState<number | null>(null)
+  const [isPosCashFocused, setIsPosCashFocused] = useState(false)
 
   const totalBalance = denominations.reduce((sum, denom) => sum + denom.total, 0)
   const displayTotal = totalBalance
@@ -398,8 +400,10 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
                       <Input
                         type="number"
                         min="0"
-                        value={denom.count}
+                        value={focusedCountIndex === index && denom.count === 0 ? "" : denom.count}
                         onChange={(e) => handleCountChange(index, e.target.value)}
+                        onFocus={() => setFocusedCountIndex(index)}
+                        onBlur={() => setFocusedCountIndex(null)}
                         className="w-20 h-9 border-border focus:ring-2 focus:ring-primary/20 text-center"
                         placeholder="0"
                       />
@@ -467,8 +471,10 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
                       type="number"
                       min="0"
                       step="0.01"
-                      value={cashInPosMachine}
+                      value={isPosCashFocused && cashInPosMachine === 0 ? "" : cashInPosMachine}
                       onChange={(e) => handlePosCashChange(parseFloat(e.target.value) || 0)}
+                      onFocus={() => setIsPosCashFocused(true)}
+                      onBlur={() => setIsPosCashFocused(false)}
                       className={`pl-8 h-10 border-border focus:ring-2 focus:ring-primary/20 ${errors.cashInPosMachine ? 'border-red-500 focus:ring-red-500/20' : ''}`}
                       placeholder="0.00"
                       required={cashCollectedOnline > 0}

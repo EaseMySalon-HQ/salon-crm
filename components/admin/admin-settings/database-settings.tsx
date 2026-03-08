@@ -87,6 +87,12 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
         const next = { ...prev, ...propSettings }
         if (!next.database || typeof next.database !== 'object') next.database = { connectionString: 'mongodb://localhost:27017/ease_my_salon_main', maxConnections: 10, connectionTimeout: 30000, socketTimeout: 30000, retryWrites: true, readPreference: 'primary', writeConcern: 'majority', ...(prev?.database || {}), ...(propSettings?.database || {}) }
         if (!next.backup || typeof next.backup !== 'object') next.backup = prev?.backup || {}
+        const defaultDataRetention = { userDataRetentionDays: 365, businessDataRetentionDays: 2555, logRetentionDays: 90, auditLogRetentionDays: 2555, tempDataRetentionDays: 7, autoCleanup: true }
+        if (!next.dataRetention || typeof next.dataRetention !== 'object') next.dataRetention = { ...defaultDataRetention, ...(prev?.dataRetention || {}), ...(propSettings?.dataRetention || {}) }
+        const defaultPerformance = { slowQueryThreshold: 100, maxQueryTime: 30, enableQueryLogging: true, enableIndexMonitoring: true, enableConnectionPooling: true, enableProfiling: false }
+        if (!next.performance || typeof next.performance !== 'object') next.performance = { ...defaultPerformance, ...(prev?.performance || {}), ...(propSettings?.performance || {}) }
+        const defaultMaintenance = { maintenanceWindow: '02:00-04:00', timezone: 'Asia/Kolkata', enableAutoOptimization: true, enableIndexRebuilding: true, enableDataCompression: true, maintenanceFrequency: 'weekly' }
+        if (!next.maintenance || typeof next.maintenance !== 'object') next.maintenance = { ...defaultMaintenance, ...(prev?.maintenance || {}), ...(propSettings?.maintenance || {}) }
         return next
       })
     }
@@ -393,7 +399,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="30"
                 max="3650"
-                value={settings.dataRetention.userDataRetentionDays}
+                value={settings.dataRetention?.userDataRetentionDays ?? 365}
                 onChange={(e) => handleSettingChange('dataRetention.userDataRetentionDays', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -406,7 +412,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="365"
                 max="3650"
-                value={settings.dataRetention.businessDataRetentionDays}
+                value={settings.dataRetention?.businessDataRetentionDays ?? 2555}
                 onChange={(e) => handleSettingChange('dataRetention.businessDataRetentionDays', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -419,7 +425,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="7"
                 max="365"
-                value={settings.dataRetention.logRetentionDays}
+                value={settings.dataRetention?.logRetentionDays ?? 90}
                 onChange={(e) => handleSettingChange('dataRetention.logRetentionDays', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -432,7 +438,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="90"
                 max="3650"
-                value={settings.dataRetention.auditLogRetentionDays}
+                value={settings.dataRetention?.auditLogRetentionDays ?? 2555}
                 onChange={(e) => handleSettingChange('dataRetention.auditLogRetentionDays', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -445,7 +451,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="1"
                 max="30"
-                value={settings.dataRetention.tempDataRetentionDays}
+                value={settings.dataRetention?.tempDataRetentionDays ?? 7}
                 onChange={(e) => handleSettingChange('dataRetention.tempDataRetentionDays', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -460,7 +466,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
               </p>
             </div>
             <Switch
-              checked={settings.dataRetention.autoCleanup}
+              checked={settings.dataRetention?.autoCleanup ?? true}
               onCheckedChange={(checked) => handleSettingChange('dataRetention.autoCleanup', checked)}
             />
           </div>
@@ -487,7 +493,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="10"
                 max="10000"
-                value={settings.performance.slowQueryThreshold}
+                value={settings.performance?.slowQueryThreshold ?? 100}
                 onChange={(e) => handleSettingChange('performance.slowQueryThreshold', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -500,7 +506,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="1"
                 max="300"
-                value={settings.performance.maxQueryTime}
+                value={settings.performance?.maxQueryTime ?? 30}
                 onChange={(e) => handleSettingChange('performance.maxQueryTime', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -516,7 +522,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 </p>
               </div>
               <Switch
-                checked={settings.performance.enableQueryLogging}
+                checked={settings.performance?.enableQueryLogging ?? true}
                 onCheckedChange={(checked) => handleSettingChange('performance.enableQueryLogging', checked)}
               />
             </div>
@@ -529,7 +535,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 </p>
               </div>
               <Switch
-                checked={settings.performance.enableIndexMonitoring}
+                checked={settings.performance?.enableIndexMonitoring ?? true}
                 onCheckedChange={(checked) => handleSettingChange('performance.enableIndexMonitoring', checked)}
               />
             </div>
@@ -542,7 +548,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 </p>
               </div>
               <Switch
-                checked={settings.performance.enableConnectionPooling}
+                checked={settings.performance?.enableConnectionPooling ?? true}
                 onCheckedChange={(checked) => handleSettingChange('performance.enableConnectionPooling', checked)}
               />
             </div>
@@ -555,7 +561,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 </p>
               </div>
               <Switch
-                checked={settings.performance.enableProfiling}
+                checked={settings.performance?.enableProfiling ?? false}
                 onCheckedChange={(checked) => handleSettingChange('performance.enableProfiling', checked)}
               />
             </div>
@@ -585,7 +591,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
               <Label htmlFor="maintenanceWindow">Maintenance Window</Label>
               <Input
                 id="maintenanceWindow"
-                value={settings.maintenance.maintenanceWindow}
+                value={settings.maintenance?.maintenanceWindow ?? '02:00-04:00'}
                 onChange={(e) => handleSettingChange('maintenance.maintenanceWindow', e.target.value)}
                 className="w-full"
                 placeholder="02:00-04:00"
@@ -598,7 +604,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
             <div className="space-y-2">
               <Label htmlFor="timezone">Timezone</Label>
               <Select
-                value={settings.maintenance.timezone}
+                value={settings.maintenance?.timezone ?? 'Asia/Kolkata'}
                 onValueChange={(value) => handleSettingChange('maintenance.timezone', value)}
               >
                 <SelectTrigger>
@@ -616,7 +622,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
             <div className="space-y-2">
               <Label htmlFor="maintenanceFrequency">Frequency</Label>
               <Select
-                value={settings.maintenance.maintenanceFrequency}
+                value={settings.maintenance?.maintenanceFrequency ?? 'weekly'}
                 onValueChange={(value) => handleSettingChange('maintenance.maintenanceFrequency', value)}
               >
                 <SelectTrigger>
@@ -640,7 +646,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 </p>
               </div>
               <Switch
-                checked={settings.maintenance.enableAutoOptimization}
+                checked={settings.maintenance?.enableAutoOptimization ?? true}
                 onCheckedChange={(checked) => handleSettingChange('maintenance.enableAutoOptimization', checked)}
               />
             </div>
@@ -653,7 +659,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 </p>
               </div>
               <Switch
-                checked={settings.maintenance.enableIndexRebuilding}
+                checked={settings.maintenance?.enableIndexRebuilding ?? true}
                 onCheckedChange={(checked) => handleSettingChange('maintenance.enableIndexRebuilding', checked)}
               />
             </div>
@@ -666,7 +672,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 </p>
               </div>
               <Switch
-                checked={settings.maintenance.enableDataCompression}
+                checked={settings.maintenance?.enableDataCompression ?? true}
                 onCheckedChange={(checked) => handleSettingChange('maintenance.enableDataCompression', checked)}
               />
             </div>

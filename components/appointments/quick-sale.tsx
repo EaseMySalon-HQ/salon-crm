@@ -3320,6 +3320,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }
 
   const [showBillHistoryDialog, setShowBillHistoryDialog] = useState(false)
+  const [focusedZeroInputKey, setFocusedZeroInputKey] = useState<string | null>(null)
   const [generatedReceipt, setGeneratedReceipt] = useState<any | null>(null)
 
   const handleNewCustomerSubmit = (event: React.FormEvent) => {
@@ -4299,16 +4300,23 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
                     <Input
                       type="number"
-                      value={item.price}
+                      value={focusedZeroInputKey === `service-price-${item.id}` && item.price === 0 ? "" : item.price}
                       onChange={(e) => updateServiceItem(item.id, "price", Number(e.target.value))}
+                      onFocus={() => setFocusedZeroInputKey(`service-price-${item.id}`)}
+                      onBlur={() => setFocusedZeroInputKey(null)}
                       className="h-8"
                     />
 
                     <Input
                       type="number"
-                      value={isGlobalDiscountActive ? discountPercentage : item.discount}
+                      value={
+                        focusedZeroInputKey === `service-discount-${item.id}` && (isGlobalDiscountActive ? discountPercentage : item.discount) === 0
+                          ? ""
+                          : isGlobalDiscountActive ? discountPercentage : item.discount
+                      }
                       onChange={(e) => updateServiceItem(item.id, "discount", Number(e.target.value))}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={() => setFocusedZeroInputKey(`service-discount-${item.id}`)}
+                      onBlur={() => setFocusedZeroInputKey(null)}
                       className={`h-8 ${(isGlobalDiscountActive || isValueDiscountActive) ? 'bg-amber-50 border-amber-200' : ''}`}
                       disabled={isGlobalDiscountActive || isValueDiscountActive}
                       placeholder={(isGlobalDiscountActive || isValueDiscountActive) ? "Global discount" : "0"}
@@ -4515,16 +4523,23 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
                       <Input
                         type="number"
-                        value={item.price}
+                        value={focusedZeroInputKey === `product-price-${item.id}` && item.price === 0 ? "" : item.price}
                         onChange={(e) => updateProductItem(item.id, "price", Number(e.target.value))}
+                        onFocus={() => setFocusedZeroInputKey(`product-price-${item.id}`)}
+                        onBlur={() => setFocusedZeroInputKey(null)}
                         className="h-8"
                       />
 
                       <Input
                         type="number"
-                        value={isGlobalDiscountActive ? discountPercentage : item.discount}
+                        value={
+                          focusedZeroInputKey === `product-discount-${item.id}` && (isGlobalDiscountActive ? discountPercentage : item.discount) === 0
+                            ? ""
+                            : isGlobalDiscountActive ? discountPercentage : item.discount
+                        }
                         onChange={(e) => updateProductItem(item.id, "discount", Number(e.target.value))}
-                        onFocus={(e) => e.target.select()}
+                        onFocus={() => setFocusedZeroInputKey(`product-discount-${item.id}`)}
+                        onBlur={() => setFocusedZeroInputKey(null)}
                         className={`h-8 ${(isGlobalDiscountActive || isValueDiscountActive) ? 'bg-amber-50 border-amber-200' : ''}`}
                         disabled={isGlobalDiscountActive || isValueDiscountActive}
                         placeholder={(isGlobalDiscountActive || isValueDiscountActive) ? "Global discount" : "0"}

@@ -19,6 +19,8 @@ export interface User {
   permissions?: Array<{ module: string; feature: string; enabled: boolean }>
   createdAt?: string
   updatedAt?: string
+  isImpersonation?: boolean
+  impersonatedBy?: string
 }
 
 interface AuthContextType {
@@ -26,6 +28,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string; message?: string }>
   staffLogin: (email: string, password: string, businessCode: string) => Promise<boolean>
   logout: () => void
+  exitImpersonation: () => void
   updateUser: (userData: Partial<User>) => void
   isLoading: boolean
   hasRole: (roles: string[]) => boolean
@@ -264,6 +267,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [router])
 
+  const exitImpersonation = useCallback(() => {
+    setUser(null)
+    clearAuthStorage()
+    AuthAPI.logout().catch(() => {})
+    if (typeof window !== 'undefined') {
+      window.location.href = '/admin/businesses'
+    } else {
+      router.push('/admin/businesses')
+    }
+  }, [router])
+
   // Role-based helper functions
   const hasRole = (roles: string[]): boolean => {
     return user ? roles.includes(user.role) : false
@@ -319,7 +333,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user, 
       login, 
       staffLogin,
-      logout, 
+      logout,
+      exitImpersonation, 
       updateUser,
       isLoading, 
       hasRole, 

@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 import { SideNav } from "@/components/side-nav"
 import { TopNav } from "@/components/top-nav"
+import { Button } from "@/components/ui/button"
+import { LogOut } from "lucide-react"
+import { SidebarProvider, useSidebar } from "@/lib/sidebar-context"
+import { cn } from "@/lib/utils"
 
 interface ProtectedLayoutProps {
   children: React.ReactNode
@@ -14,8 +18,57 @@ interface ProtectedLayoutProps {
   topNavRightSlot?: React.ReactNode
 }
 
+function ProtectedLayoutContent({
+  children,
+  user,
+  exitImpersonation,
+  topNavQuickAdd,
+  topNavRightSlot,
+}: {
+  children: React.ReactNode
+  user: NonNullable<ReturnType<typeof useAuth>["user"]>
+  exitImpersonation: () => void
+  topNavQuickAdd: boolean
+  topNavRightSlot?: React.ReactNode
+}) {
+  const sidebar = useSidebar()
+
+  return (
+    <div className="flex h-screen min-w-0 flex-col overflow-hidden">
+      {user?.isImpersonation && (
+        <div className="bg-amber-500 text-amber-950 px-4 py-2 flex items-center justify-between gap-4 shrink-0">
+          <span className="text-sm font-medium">You are impersonating this business</span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exitImpersonation}
+            className="border-amber-700 text-amber-950 hover:bg-amber-600 hover:text-white shrink-0"
+          >
+            <LogOut className="h-4 w-4 mr-2" />
+            Exit Impersonation
+          </Button>
+        </div>
+      )}
+      <div className="flex flex-1 min-w-0 min-h-0 overflow-hidden">
+        <SideNav />
+        <div
+          className={cn(
+            "flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden",
+            sidebar?.isCollapsed ? "md:ml-24" : "md:ml-56"
+          )}
+        >
+          <TopNav showQuickAdd={topNavQuickAdd} rightSlot={topNavRightSlot} />
+          <main className="flex-1 overflow-auto p-6 min-w-0 min-h-0">
+            {children}
+          </main>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ProtectedLayout({ children, requiredModule, topNavQuickAdd = true, topNavRightSlot }: ProtectedLayoutProps) {
-  const { user, isLoading, hasPermission } = useAuth()
+  const { user, isLoading, hasPermission, exitImpersonation } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
@@ -70,14 +123,15 @@ export function ProtectedLayout({ children, requiredModule, topNavQuickAdd = tru
   }
 
   return (
-    <div className="flex h-screen min-w-0">
-      <SideNav />
-      <div className="flex-1 flex flex-col min-w-0">
-        <TopNav showQuickAdd={topNavQuickAdd} rightSlot={topNavRightSlot} />
-        <main className="flex-1 overflow-auto p-6 min-w-0">
-          {children}
-        </main>
-      </div>
-    </div>
+    <SidebarProvider>
+      <ProtectedLayoutContent
+        user={user}
+        exitImpersonation={exitImpersonation}
+        topNavQuickAdd={topNavQuickAdd}
+        topNavRightSlot={topNavRightSlot}
+      >
+        {children}
+      </ProtectedLayoutContent>
+    </SidebarProvider>
   )
 } 

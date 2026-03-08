@@ -96,9 +96,14 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
       setSettings(prev => {
         const next = { ...prev, ...propSettings }
         if (!next.defaults || typeof next.defaults !== 'object') next.defaults = { timezone: 'Asia/Kolkata', currency: 'INR', currencySymbol: '₹', taxRate: 18, dateFormat: 'DD/MM/YYYY', timeFormat: '12', businessType: 'salon', gstNumber: '', businessLicense: '', ...(prev?.defaults || {}), ...(propSettings?.defaults || {}) }
-        if (!next.operatingHours || typeof next.operatingHours !== 'object') next.operatingHours = prev?.operatingHours || {}
-        if (!next.appointmentSettings || typeof next.appointmentSettings !== 'object') next.appointmentSettings = prev?.appointmentSettings || {}
-        if (!next.creationRules || typeof next.creationRules !== 'object') next.creationRules = prev?.creationRules || {}
+        const defaultOperatingHours = { monday: { open: '09:00', close: '18:00', closed: false }, tuesday: { open: '09:00', close: '18:00', closed: false }, wednesday: { open: '09:00', close: '18:00', closed: false }, thursday: { open: '09:00', close: '18:00', closed: false }, friday: { open: '09:00', close: '18:00', closed: false }, saturday: { open: '09:00', close: '18:00', closed: false }, sunday: { open: '09:00', close: '18:00', closed: true } }
+        if (!next.operatingHours || typeof next.operatingHours !== 'object') next.operatingHours = { ...defaultOperatingHours, ...(prev?.operatingHours || {}), ...(propSettings?.operatingHours || {}) }
+        const defaultAppointmentSettings = { slotDuration: 30, advanceBookingDays: 30, bufferTime: 15, allowOnlineBooking: false, requireDeposit: false, depositPercentage: 20, cancellationWindow: 24, noShowPolicy: 'charge_full' }
+        if (!next.appointmentSettings || typeof next.appointmentSettings !== 'object') next.appointmentSettings = { ...defaultAppointmentSettings, ...(prev?.appointmentSettings || {}), ...(propSettings?.appointmentSettings || {}) }
+        const defaultCreationRules = { requireGSTNumber: false, requireBusinessLicense: false, requireWebsite: false, requireSocialMedia: false, autoGenerateCode: true, codePrefix: 'SALON', codeLength: 6, requireOnboarding: true, onboardingSteps: ['business_info', 'owner_details', 'settings_config', 'staff_setup', 'service_setup'] }
+        if (!next.creationRules || typeof next.creationRules !== 'object') next.creationRules = { ...defaultCreationRules, ...(prev?.creationRules || {}), ...(propSettings?.creationRules || {}) }
+        const defaultBranding = { primaryColor: '#3B82F6', secondaryColor: '#1E40AF', fontFamily: 'Inter', logo: '', favicon: '' }
+        if (!next.branding || typeof next.branding !== 'object') next.branding = { ...defaultBranding, ...(prev?.branding || {}), ...(propSettings?.branding || {}) }
         return next
       })
     }
@@ -124,9 +129,9 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
     setSettings(prev => ({
       ...prev,
       operatingHours: {
-        ...prev.operatingHours,
+        ...(prev.operatingHours || {}),
         [day]: {
-          ...prev.operatingHours[day],
+          ...(prev.operatingHours?.[day] || { open: '09:00', close: '18:00', closed: false }),
           [field]: value
         }
       }
@@ -338,7 +343,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 min="15"
                 max="120"
                 step="15"
-                value={settings.appointmentSettings.slotDuration}
+                value={settings.appointmentSettings?.slotDuration ?? 30}
                 onChange={(e) => handleSettingChange('appointmentSettings.slotDuration', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -351,7 +356,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 type="number"
                 min="1"
                 max="365"
-                value={settings.appointmentSettings.advanceBookingDays}
+                value={settings.appointmentSettings?.advanceBookingDays ?? 30}
                 onChange={(e) => handleSettingChange('appointmentSettings.advanceBookingDays', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -364,7 +369,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 type="number"
                 min="0"
                 max="60"
-                value={settings.appointmentSettings.bufferTime}
+                value={settings.appointmentSettings?.bufferTime ?? 15}
                 onChange={(e) => handleSettingChange('appointmentSettings.bufferTime', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -377,7 +382,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 type="number"
                 min="0"
                 max="100"
-                value={settings.appointmentSettings.depositPercentage}
+                value={settings.appointmentSettings?.depositPercentage ?? 20}
                 onChange={(e) => handleSettingChange('appointmentSettings.depositPercentage', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -390,7 +395,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 type="number"
                 min="1"
                 max="168"
-                value={settings.appointmentSettings.cancellationWindow}
+                value={settings.appointmentSettings?.cancellationWindow ?? 24}
                 onChange={(e) => handleSettingChange('appointmentSettings.cancellationWindow', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -399,7 +404,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
             <div className="space-y-2">
               <Label htmlFor="noShowPolicy">No-Show Policy</Label>
               <Select
-                value={settings.appointmentSettings.noShowPolicy}
+                value={settings.appointmentSettings?.noShowPolicy ?? 'charge_full'}
                 onValueChange={(value) => handleSettingChange('appointmentSettings.noShowPolicy', value)}
               >
                 <SelectTrigger>
@@ -424,7 +429,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 </p>
               </div>
               <Switch
-                checked={settings.appointmentSettings.allowOnlineBooking}
+                checked={settings.appointmentSettings?.allowOnlineBooking ?? false}
                 onCheckedChange={(checked) => handleSettingChange('appointmentSettings.allowOnlineBooking', checked)}
               />
             </div>
@@ -437,7 +442,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 </p>
               </div>
               <Switch
-                checked={settings.appointmentSettings.requireDeposit}
+                checked={settings.appointmentSettings?.requireDeposit ?? false}
                 onCheckedChange={(checked) => handleSettingChange('appointmentSettings.requireDeposit', checked)}
               />
             </div>
@@ -462,7 +467,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
               <Label htmlFor="codePrefix">Business Code Prefix</Label>
               <Input
                 id="codePrefix"
-                value={settings.creationRules.codePrefix}
+                value={settings.creationRules?.codePrefix ?? 'SALON'}
                 onChange={(e) => handleSettingChange('creationRules.codePrefix', e.target.value)}
                 className="w-full"
                 placeholder="SALON"
@@ -476,7 +481,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 type="number"
                 min="4"
                 max="10"
-                value={settings.creationRules.codeLength}
+                value={settings.creationRules?.codeLength ?? 6}
                 onChange={(e) => handleSettingChange('creationRules.codeLength', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -492,7 +497,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.requireGSTNumber}
+                checked={settings.creationRules?.requireGSTNumber ?? false}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.requireGSTNumber', checked)}
               />
             </div>
@@ -505,7 +510,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.requireBusinessLicense}
+                checked={settings.creationRules?.requireBusinessLicense ?? false}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.requireBusinessLicense', checked)}
               />
             </div>
@@ -518,7 +523,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.requireWebsite}
+                checked={settings.creationRules?.requireWebsite ?? false}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.requireWebsite', checked)}
               />
             </div>
@@ -531,7 +536,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.autoGenerateCode}
+                checked={settings.creationRules?.autoGenerateCode ?? true}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.autoGenerateCode', checked)}
               />
             </div>
@@ -544,7 +549,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.requireOnboarding}
+                checked={settings.creationRules?.requireOnboarding ?? true}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.requireOnboarding', checked)}
               />
             </div>
@@ -571,12 +576,12 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 <Input
                   id="primaryColor"
                   type="color"
-                  value={settings.branding.primaryColor}
+                  value={settings.branding?.primaryColor ?? '#3B82F6'}
                   onChange={(e) => handleSettingChange('branding.primaryColor', e.target.value)}
                   className="w-16 h-10 p-1 border rounded"
                 />
                 <Input
-                  value={settings.branding.primaryColor}
+                  value={settings.branding?.primaryColor ?? '#3B82F6'}
                   onChange={(e) => handleSettingChange('branding.primaryColor', e.target.value)}
                   className="flex-1"
                   placeholder="#3B82F6"
@@ -590,12 +595,12 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
                 <Input
                   id="secondaryColor"
                   type="color"
-                  value={settings.branding.secondaryColor}
+                  value={settings.branding?.secondaryColor ?? '#1E40AF'}
                   onChange={(e) => handleSettingChange('branding.secondaryColor', e.target.value)}
                   className="w-16 h-10 p-1 border rounded"
                 />
                 <Input
-                  value={settings.branding.secondaryColor}
+                  value={settings.branding?.secondaryColor ?? '#1E40AF'}
                   onChange={(e) => handleSettingChange('branding.secondaryColor', e.target.value)}
                   className="flex-1"
                   placeholder="#1E40AF"
@@ -606,7 +611,7 @@ export function BusinessSettings({ settings: propSettings, onSettingsChange }: B
             <div className="space-y-2">
               <Label htmlFor="fontFamily">Font Family</Label>
               <Select
-                value={settings.branding.fontFamily}
+                value={settings.branding?.fontFamily ?? 'Inter'}
                 onValueChange={(value) => handleSettingChange('branding.fontFamily', value)}
               >
                 <SelectTrigger>

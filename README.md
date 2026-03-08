@@ -41,11 +41,12 @@ cd backend && npm install
 
 ### Environment Setup
 
-1. **Backend** – Copy `backend/.env.example` to `backend/.env`:
+1. **Backend** – Copy `backend/env.example` to `backend/.env`:
    - `PORT` – API port (default: 3001)
    - `JWT_SECRET` – Secret for JWT tokens
    - `MONGODB_URI` – MongoDB connection string
    - `CORS_ORIGIN` – Frontend URL (e.g. http://localhost:3000)
+   - Optional: `MSG91_SMS_AUTH_KEY` for SMS (receipts/appointments); template IDs can be set in Admin → Notifications → SMS (MSG91 Flow API v5).
 
 2. **Frontend** – Create `.env.local`:
    - `NEXT_PUBLIC_API_URL` – Backend API URL (e.g. http://localhost:3001/api)
