@@ -436,6 +436,19 @@ router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, checkA
 
     if (planId !== undefined) {
       business.plan.planId = planId;
+      // Sync addon quota/enabled from plan limits when plan changes
+      const planConfig = getPlanConfig(planId);
+      if (planConfig && planConfig.limits) {
+        if (!business.plan.addons) business.plan.addons = {};
+        const smsLimit = planConfig.limits.smsMessages ?? 0;
+        if (!business.plan.addons.sms) business.plan.addons.sms = {};
+        business.plan.addons.sms.quota = smsLimit;
+        business.plan.addons.sms.enabled = smsLimit > 0;
+        const whatsappLimit = planConfig.limits.whatsappMessages ?? 0;
+        if (!business.plan.addons.whatsapp) business.plan.addons.whatsapp = {};
+        business.plan.addons.whatsapp.quota = whatsappLimit;
+        business.plan.addons.whatsapp.enabled = whatsappLimit > 0;
+      }
     }
     if (billingPeriod !== undefined) {
       business.plan.billingPeriod = billingPeriod;

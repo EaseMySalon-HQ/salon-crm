@@ -89,13 +89,22 @@ const adminSettingsSchema = new mongoose.Schema({
     },
     sms: {
       enabled: { type: Boolean, default: false },
-      provider: { type: String, enum: ['twilio', 'aws', 'nexmo', 'textlocal'], default: 'twilio' },
+      provider: { type: String, enum: ['twilio', 'aws', 'nexmo', 'textlocal', 'msg91'], default: 'twilio' },
       twilioAccountSid: { type: String, default: '' },
       twilioAuthToken: { type: String, default: '' },
       twilioFromNumber: { type: String, default: '' },
       awsAccessKeyId: { type: String, default: '' },
       awsSecretAccessKey: { type: String, default: '' },
       awsRegion: { type: String, default: 'us-east-1' },
+      msg91AuthKey: { type: String, default: '' },
+      templates: {
+        receipt: { type: String, default: '' },
+        appointmentConfirmation: { type: String, default: '' },
+        appointmentCancellation: { type: String, default: '' },
+        test: { type: String, default: '' }
+      },
+      // Optional: map MSG91 variables to receipt fields (e.g. { VAR1: 'clientName', VAR2: 'businessName', VAR3: 'total', VAR4: 'receiptNumber' })
+      receiptVariableMapping: { type: mongoose.Schema.Types.Mixed, default: undefined },
       maxRetries: { type: Number, default: 3 },
       retryDelay: { type: Number, default: 5000 }
     },
@@ -372,33 +381,30 @@ adminSettingsSchema.statics.updateSettings = async function(category, updates) {
   };
   
   if (category) {
-    // Deep merge for nested objects like notifications.whatsapp
-    if (category === 'notifications' && updates.whatsapp) {
+    // Deep merge for nested objects like notifications.whatsapp and notifications.sms
+    if (category === 'notifications' && (updates.whatsapp || updates.sms)) {
       if (!settings[category]) {
         settings[category] = {};
       }
-      if (!settings[category].whatsapp) {
-        settings[category].whatsapp = {};
+      if (updates.whatsapp) {
+        if (!settings[category].whatsapp) {
+          settings[category].whatsapp = {};
+        }
+        deepMerge(settings[category].whatsapp, updates.whatsapp);
+        settings.markModified(`notifications.whatsapp.templateJavaScriptCodes`);
+        settings.markModified(`notifications.whatsapp.templateVariables`);
+        settings.markModified('notifications.whatsapp');
       }
-      
-      // Log before merge for debugging
-      console.log('🔄 [updateSettings] Before merge - enabled:', settings[category].whatsapp.enabled, 'Updates enabled:', updates.whatsapp.enabled);
-      console.log('🔄 [updateSettings] Before merge - templateJavaScriptCodes keys:', Object.keys(settings[category].whatsapp.templateJavaScriptCodes || {}));
-      console.log('🔄 [updateSettings] Updates - templateJavaScriptCodes keys:', Object.keys(updates.whatsapp.templateJavaScriptCodes || {}));
-      
-      deepMerge(settings[category].whatsapp, updates.whatsapp);
-      
-      // Log after merge for debugging
-      console.log('🔄 [updateSettings] After merge - enabled:', settings[category].whatsapp.enabled);
-      console.log('🔄 [updateSettings] After merge - templateJavaScriptCodes keys:', Object.keys(settings[category].whatsapp.templateJavaScriptCodes || {}));
-      
-      // Mark Mixed type fields as modified for Mongoose
-      settings.markModified(`notifications.whatsapp.templateJavaScriptCodes`);
-      settings.markModified(`notifications.whatsapp.templateVariables`);
-      
-      // Also merge other notification fields
+      if (updates.sms) {
+        if (!settings[category].sms) {
+          settings[category].sms = {};
+        }
+        deepMerge(settings[category].sms, updates.sms);
+        settings.markModified('notifications.sms');
+      }
+      // Merge other notification keys (email, etc.)
       Object.keys(updates).forEach(key => {
-        if (key !== 'whatsapp') {
+        if (key !== 'whatsapp' && key !== 'sms') {
           if (!settings[category][key]) {
             settings[category][key] = {};
           }
@@ -416,25 +422,7 @@ adminSettingsSchema.statics.updateSettings = async function(category, updates) {
     deepMerge(settings, updates);
   }
   
-  // Log before save for debugging
-  if (category === 'notifications' && settings.notifications?.whatsapp) {
-    console.log('💾 [updateSettings] Before save - enabled:', settings.notifications.whatsapp.enabled);
-    console.log('💾 [updateSettings] Before save - templateJavaScriptCodes keys:', Object.keys(settings.notifications.whatsapp.templateJavaScriptCodes || {}));
-  }
-  
-  // Mark the entire whatsapp object as modified to ensure all fields are saved
-  if (category === 'notifications' && updates.whatsapp) {
-    settings.markModified('notifications.whatsapp');
-  }
-  
   await settings.save();
-  
-  // Log after save for debugging
-  if (category === 'notifications' && settings.notifications?.whatsapp) {
-    console.log('✅ [updateSettings] After save - enabled:', settings.notifications.whatsapp.enabled);
-    console.log('✅ [updateSettings] After save - templateJavaScriptCodes keys:', Object.keys(settings.notifications.whatsapp.templateJavaScriptCodes || {}));
-  }
-  
   return settings;
 };
 

@@ -810,18 +810,8 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
 
   return (
     <div className="space-y-6">
-      {/* WhatsApp Configuration */}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <MessageCircle className="h-5 w-5 text-green-600" />
-            <span>WhatsApp Configuration</span>
-          </CardTitle>
-          <CardDescription>
-            Configure MSG91 WhatsApp API settings
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-6 pt-6">
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <Label className="text-sm font-medium">Enable WhatsApp Notifications</Label>

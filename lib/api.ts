@@ -868,6 +868,11 @@ export class MembershipAPI {
     return response.data
   }
 
+  static async getSubscriptions(params?: { planId?: string; search?: string; status?: string }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/membership/subscriptions', { params })
+    return response.data
+  }
+
   static async createPlan(data: {
     planName: string
     price: number

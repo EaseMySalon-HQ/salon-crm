@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ArrowLeft, Building2, User, CreditCard, Loader2, Phone, MapPin, TrendingUp, Settings, Edit, Users, Shield, Clock, Calendar, DollarSign, Calculator, Bell, Palette } from "lucide-react"
+import { ArrowLeft, Building2, User, Loader2, Phone, MapPin, TrendingUp, Settings, Edit, Users, Shield, Clock, Calendar, DollarSign, Calculator, Bell, Palette, FileText } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -36,7 +36,13 @@ interface BusinessDetails {
     name: string
     email: string
     phone: string
+    lastLoginAt?: string
   }
+  plan?: string
+  staffCount?: number
+  invoiceCount?: number
+  totalRevenue?: number
+  lastActiveAt?: string | null
   settings?: {
     timezone: string
     currency: string
@@ -224,6 +230,56 @@ export function BusinessDetailsForm() {
         </div>
       </div>
 
+      {/* Metrics Cards */}
+      <div className="max-w-6xl mx-auto mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Card className="bg-white/80 backdrop-blur-sm">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 text-slate-500 text-sm">
+                <Users className="h-4 w-4" />
+                Staff
+              </div>
+              <p className="text-2xl font-semibold mt-1">{business.staffCount ?? "—"}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white/80 backdrop-blur-sm">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 text-slate-500 text-sm">
+                <FileText className="h-4 w-4" />
+                Invoices
+              </div>
+              <p className="text-2xl font-semibold mt-1">{business.invoiceCount ?? "—"}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white/80 backdrop-blur-sm">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 text-slate-500 text-sm">
+                <DollarSign className="h-4 w-4" />
+                Revenue
+              </div>
+              <p className="text-2xl font-semibold mt-1">
+                {business.totalRevenue != null
+                  ? new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(business.totalRevenue)
+                  : "—"}
+              </p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white/80 backdrop-blur-sm">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 text-slate-500 text-sm">
+                <Clock className="h-4 w-4" />
+                Last Active
+              </div>
+              <p className="text-lg font-semibold mt-1">
+                {business.lastActiveAt
+                  ? new Date(business.lastActiveAt).toLocaleString()
+                  : "—"}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
       {/* Business Form in Read-Only Mode */}
       <div className="max-w-6xl mx-auto space-y-8">
         {/* Business Information */}
@@ -267,7 +323,7 @@ export function BusinessDetailsForm() {
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-gray-700">Street Address</Label>
                   <Input
-                    value={business.address.street}
+                    value={business.address?.street ?? ""}
                     readOnly
                     className="bg-gray-50 cursor-not-allowed"
                   />
@@ -276,7 +332,7 @@ export function BusinessDetailsForm() {
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-gray-700">City</Label>
                   <Input
-                    value={business.address.city}
+                    value={business.address?.city ?? ""}
                     readOnly
                     className="bg-gray-50 cursor-not-allowed"
                   />
@@ -285,7 +341,7 @@ export function BusinessDetailsForm() {
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-gray-700">State</Label>
                   <Input
-                    value={business.address.state}
+                    value={business.address?.state ?? ""}
                     readOnly
                     className="bg-gray-50 cursor-not-allowed"
                   />
@@ -294,7 +350,7 @@ export function BusinessDetailsForm() {
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-gray-700">ZIP Code</Label>
                   <Input
-                    value={business.address.zipCode}
+                    value={business.address?.zipCode ?? ""}
                     readOnly
                     className="bg-gray-50 cursor-not-allowed"
                   />
@@ -303,7 +359,7 @@ export function BusinessDetailsForm() {
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-gray-700">Country</Label>
                   <Input
-                    value={business.address.country}
+                    value={business.address?.country ?? ""}
                     readOnly
                     className="bg-gray-50 cursor-not-allowed"
                   />
@@ -787,236 +843,6 @@ export function BusinessDetailsForm() {
             </CardContent>
           </Card>
         )}
-
-        {/* Payment Settings */}
-        <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-          <CardHeader className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-t-lg border-b border-emerald-100">
-            <CardTitle className="flex items-center gap-2 text-emerald-800">
-              <CreditCard className="h-5 w-5" />
-              Payment Settings
-            </CardTitle>
-            <CardDescription>
-              Payment methods and processing configuration
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-6 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Cash Payments</Label>
-                <Input
-                  value="Enabled"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Card Payments</Label>
-                <Input
-                  value="Enabled"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">UPI Payments</Label>
-                <Input
-                  value="Enabled"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Digital Wallet</Label>
-                <Input
-                  value="Enabled"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* POS Settings */}
-        <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-          <CardHeader className="bg-gradient-to-r from-orange-50 to-amber-50 rounded-t-lg border-b border-orange-100">
-            <CardTitle className="flex items-center gap-2 text-orange-800">
-              <Calculator className="h-5 w-5" />
-              POS Settings
-            </CardTitle>
-            <CardDescription>
-              Invoice sequence management and custom prefix configuration
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-6 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Invoice Prefix</Label>
-                <Input
-                  value="INV"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Receipt Prefix</Label>
-                <Input
-                  value="RCP"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Next Invoice Number</Label>
-                <Input
-                  value="001"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Auto Numbering</Label>
-                <Input
-                  value="Enabled"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Business User Overview */}
-        <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-          <CardHeader className="bg-gradient-to-r from-violet-50 to-purple-50 rounded-t-lg border-b border-violet-100">
-            <CardTitle className="flex items-center gap-2 text-violet-800">
-              <Users className="h-5 w-5" />
-              Business User Overview
-            </CardTitle>
-            <CardDescription>
-              High-level user structure and branch information
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-6 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Business Admins</Label>
-                <Input
-                  value="1"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-                <p className="text-xs text-gray-500">Total admin accounts</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Active Staff</Label>
-                <Input
-                  value="0"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-                <p className="text-xs text-gray-500">Currently active staff members</p>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Total Branches</Label>
-                <Input
-                  value="1"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-                <p className="text-xs text-gray-500">Number of business locations</p>
-              </div>
-            </div>
-            
-            <div className="pt-4 border-t border-violet-100">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium text-gray-700">Branch 1 - Main Location</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value="Active Staff: 0"
-                      readOnly
-                      className="bg-gray-50 cursor-not-allowed"
-                    />
-                    <Badge variant="default" className="text-xs">Main Branch</Badge>
-                  </div>
-                </div>
-                
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium text-gray-700">User Management</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value="Self-managed"
-                      readOnly
-                      className="bg-gray-50 cursor-not-allowed"
-                    />
-                    <Badge variant="outline" className="text-xs">Business handles own staff</Badge>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Commission Management */}
-        <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-          <CardHeader className="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-t-lg border-b border-amber-100">
-            <CardTitle className="flex items-center gap-2 text-amber-800">
-              <TrendingUp className="h-5 w-5" />
-              Commission Management
-            </CardTitle>
-            <CardDescription>
-              Commission profiles and target-based incentives
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-6 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Commission Enabled</Label>
-                <Input
-                  value="No"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Commission Type</Label>
-                <Input
-                  value="Not configured"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Default Rate (%)</Label>
-                <Input
-                  value="0"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium text-gray-700">Target Tracking</Label>
-                <Input
-                  value="Disabled"
-                  readOnly
-                  className="bg-gray-50 cursor-not-allowed"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
         {/* Additional Information */}
         <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">

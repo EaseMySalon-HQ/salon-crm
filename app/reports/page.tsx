@@ -6,16 +6,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 import { FeatureGate } from "@/components/ui/feature-gate"
 import { SalesReport } from "@/components/reports/sales-report"
+import { MembershipReport } from "@/components/reports/membership-report"
 import { ExpenseReport } from "@/components/reports/expense-report"
 import { StaffPerformanceReport } from "@/components/reports/staff-performance-report"
-import { BarChart3, TrendingUp, Receipt, Users } from "lucide-react"
+import { BarChart3, TrendingUp, Receipt, Users, CreditCard } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 
 export default function ReportsPage() {
   const { user, hasPermission } = useAuth()
   const canViewFinancialReports = !user || hasPermission("reports", "view_financial_reports")
   const canViewStaffCommission = !user || hasPermission("reports", "view_staff_commission")
-  const tabCount = (canViewFinancialReports ? 2 : 0) + (canViewStaffCommission ? 1 : 0)
+  const tabCount = (canViewFinancialReports ? 3 : 0) + (canViewStaffCommission ? 1 : 0)
 
   return (
     <ProtectedRoute requiredModule="reports">
@@ -43,10 +44,14 @@ export default function ReportsPage() {
               
               {/* Feature Highlights */}
               <div className="px-8 py-4 bg-white border-t border-slate-100">
-                <div className="flex items-center gap-8 text-sm text-slate-600">
+                <div className="flex items-center gap-8 text-sm text-slate-600 flex-wrap">
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
                     <span>Sales performance analysis</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                    <span>Membership overview</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 bg-indigo-500 rounded-full"></div>
@@ -72,7 +77,7 @@ export default function ReportsPage() {
               >
                 <TabsList
                   className={`grid w-full bg-slate-100 p-1 rounded-lg ${
-                    tabCount === 1 ? "grid-cols-1" : tabCount === 2 ? "grid-cols-2" : "grid-cols-3"
+                    tabCount === 1 ? "grid-cols-1" : tabCount === 2 ? "grid-cols-2" : tabCount === 3 ? "grid-cols-3" : "grid-cols-4"
                   }`}
                 >
                   {canViewFinancialReports && (
@@ -83,6 +88,13 @@ export default function ReportsPage() {
                       >
                         <TrendingUp className="h-4 w-4 mr-2" />
                         Sales
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="membership"
+                        className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                      >
+                        <CreditCard className="h-4 w-4 mr-2" />
+                        Membership
                       </TabsTrigger>
                       <TabsTrigger
                         value="expense"
@@ -110,6 +122,14 @@ export default function ReportsPage() {
                       <Card className="border-0 shadow-sm bg-slate-50/50">
                         <CardContent className="pt-6">
                           <SalesReport />
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+
+                    <TabsContent value="membership" className="space-y-6">
+                      <Card className="border-0 shadow-sm bg-slate-50/50">
+                        <CardContent className="pt-6">
+                          <MembershipReport />
                         </CardContent>
                       </Card>
                     </TabsContent>

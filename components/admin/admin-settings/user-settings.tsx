@@ -164,6 +164,8 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
         if (!next.defaultPermissions || typeof next.defaultPermissions !== 'object') {
           next.defaultPermissions = prev?.defaultPermissions || {}
         }
+        if (!Array.isArray(next.roles)) next.roles = prev?.roles ?? []
+        if (!Array.isArray(next.adminUsers)) next.adminUsers = prev?.adminUsers ?? []
         return next
       })
     }
@@ -288,7 +290,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
                 </p>
               </div>
               <Switch
-                checked={settings.creationRules.requirePhoneVerification}
+                checked={settings?.creationRules?.requirePhoneVerification ?? false}
                 onCheckedChange={(checked) => handleSettingChange('creationRules.requirePhoneVerification', checked)}
               />
             </div>
@@ -422,7 +424,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
           </div>
           
           <div className="space-y-3">
-            {settings.roles.map(role => (
+            {(settings.roles ?? []).map(role => (
               <div key={role.id} className="flex items-center justify-between p-4 border rounded-lg">
                 <div className="flex-1">
                   <div className="flex items-center space-x-2">
@@ -433,14 +435,14 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
                   </div>
                   <p className="text-sm text-gray-500">{role.description}</p>
                   <div className="flex flex-wrap gap-1 mt-2">
-                    {role.permissions.slice(0, 3).map(permission => (
+                    {(role.permissions ?? []).slice(0, 3).map(permission => (
                       <Badge key={permission} variant="secondary" className="text-xs">
                         {permission}
                       </Badge>
                     ))}
-                    {role.permissions.length > 3 && (
+                    {(role.permissions ?? []).length > 3 && (
                       <Badge variant="secondary" className="text-xs">
-                        +{role.permissions.length - 3} more
+                        +{(role.permissions ?? []).length - 3} more
                       </Badge>
                     )}
                   </div>
@@ -482,7 +484,7 @@ export function UserSettings({ settings: propSettings, onSettingsChange }: UserS
           </div>
           
           <div className="space-y-3">
-            {settings.adminUsers.map(user => (
+            {(settings.adminUsers ?? []).map(user => (
               <div key={user.id} className="flex items-center justify-between p-4 border rounded-lg">
                 <div className="flex-1">
                   <div className="flex items-center space-x-2">

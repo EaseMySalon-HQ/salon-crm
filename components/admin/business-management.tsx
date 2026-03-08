@@ -2,18 +2,38 @@
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Plus, Search, Filter, MoreHorizontal, Eye, Edit, Trash2, Building2, Users, Calendar, Shield, Ban, CreditCard } from "lucide-react"
-
+import {
+  Plus,
+  Search,
+  MoreHorizontal,
+  Eye,
+  Edit,
+  Trash2,
+  Building2,
+  Users,
+  Calendar,
+  Shield,
+  Ban,
+  CreditCard,
+  RefreshCw,
+  Download,
+  LogIn,
+  Key,
+  FileText,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { PlanEditDialog } from "./plan-edit-dialog"
+import { BusinessActivityLogsDialog } from "./business-activity-logs-dialog"
 import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { cn } from "@/lib/utils"
 
 interface Business {
   _id: string
@@ -21,247 +41,344 @@ interface Business {
   code: string
   businessType: string
   status: string
-  subscription: {
-    plan: string
-    status: string
-  }
+  address?: { city?: string; state?: string; street?: string }
+  contact?: { email?: string }
+  subscription?: { plan?: string }
   plan?: {
     planId: string
     planName: string
     billingPeriod: string
     renewalDate: string | null
     isTrial: boolean
-  }
+  } | null
   owner: {
-    name: string
-    email: string
+    firstName?: string
+    lastName?: string
+    name?: string
+    email?: string
+    lastLoginAt?: string | null
   } | null
   createdAt: string
-  address: {
-    city: string
-    state: string
-  }
   deletedAt?: string
-  deletedBy?: {
-    name: string
-    email: string
-  } | null
+  deletedBy?: { name?: string; email?: string } | null
+  usersCount?: number
+  invoicesCount?: number
+  revenue?: number
+  nextBillingDate?: string | null
+}
+
+interface Stats {
+  total: number
+  active: number
+  suspended: number
+  inactive: number
+  deleted?: number
+}
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
+
+function authHeaders(extra: HeadersInit = {}) {
+  const token = getAdminAuthToken()
+  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra }
+}
+
+function formatRelative(date: string | null | undefined): string {
+  if (!date) return "—"
+  const d = new Date(date)
+  const now = new Date()
+  const diffMs = now.getTime() - d.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+  const diffDays = Math.floor(diffMs / 86400000)
+  if (diffMins < 60) return `${diffMins} min ago`
+  if (diffHours < 24) return `${diffHours} hr ago`
+  if (diffDays < 30) return `${diffDays} days ago`
+  return d.toLocaleDateString()
+}
+
+function formatDate(dateString: string) {
+  return new Date(dateString).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  })
+}
+
+function formatCurrency(amount: number | undefined): string {
+  if (amount == null || Number.isNaN(amount)) return "—"
+  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount)
+}
+
+function formatNextBilling(date: string | null | undefined): string {
+  if (!date) return "N/A"
+  return new Date(date).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })
+}
+
+function getStatusBadge(status: string) {
+  const map: Record<string, { label: string; className: string }> = {
+    active: { label: "Active", className: "bg-emerald-500/10 text-emerald-700 border-emerald-200" },
+    suspended: { label: "Suspended", className: "bg-red-500/10 text-red-700 border-red-200" },
+    inactive: { label: "Inactive", className: "bg-amber-500/10 text-amber-700 border-amber-200" },
+    deleted: { label: "Deleted", className: "bg-slate-200 text-slate-600 border-slate-300" },
+  }
+  const s = map[status] || { label: status, className: "bg-slate-100 text-slate-600 border-slate-200" }
+  return <Badge variant="outline" className={cn("font-medium", s.className)}>{s.label}</Badge>
 }
 
 export function BusinessManagement() {
   const [businesses, setBusinesses] = useState<Business[]>([])
+  const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
+  const [planFilter, setPlanFilter] = useState("all")
+  const [billingFilter, setBillingFilter] = useState("all")
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [selectedBusinessForPlan, setSelectedBusinessForPlan] = useState<Business | null>(null)
   const [isPlanDialogOpen, setIsPlanDialogOpen] = useState(false)
+  const [activityLogsBusiness, setActivityLogsBusiness] = useState<Business | null>(null)
+  const [isActivityLogsOpen, setIsActivityLogsOpen] = useState(false)
+  const limit = 20
   const { toast } = useToast()
   const router = useRouter()
-  
-  // Define API_URL at component level
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
-  const authHeaders = (extra: HeadersInit = {}) => {
-    const token = getAdminAuthToken()
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...extra,
-    }
+  const fetchStats = async () => {
+    try {
+      const res = await fetch(`${API_URL}/admin/businesses/stats`, { headers: authHeaders() })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.success) setStats(data.data)
+      }
+    } catch (_) {}
   }
-
-  useEffect(() => {
-    fetchBusinesses()
-  }, [currentPage, searchTerm, statusFilter])
 
   const fetchBusinesses = async () => {
     try {
       setLoading(true)
       const params = new URLSearchParams({
         page: currentPage.toString(),
-        limit: "10",
+        limit: limit.toString(),
         ...(searchTerm && { search: searchTerm }),
         ...(statusFilter !== "all" && { status: statusFilter }),
+        ...(planFilter !== "all" && { plan: planFilter }),
       })
-
-      // Fetch businesses with plan info
-      const [businessesResponse, plansResponse] = await Promise.all([
-        fetch(`${API_URL}/admin/businesses?${params}`, {
-          headers: authHeaders({
-            'Content-Type': 'application/json'
-          })
-        }),
-        fetch(`${API_URL}/admin/plans/businesses?${params}`, {
-          headers: authHeaders(),
-        })
+      const [businessesRes, plansRes] = await Promise.all([
+        fetch(`${API_URL}/admin/businesses?${params}`, { headers: authHeaders({ "Content-Type": "application/json" }) }),
+        fetch(`${API_URL}/admin/plans/businesses?${params}`, { headers: authHeaders() }),
       ])
 
-      if (businessesResponse.ok && plansResponse.ok) {
-        const businessesData = await businessesResponse.json()
-        const plansData = await plansResponse.json()
-        
-        if (businessesData.success && plansData.success) {
-          // Merge plan info with businesses
-          const businessesWithPlans = businessesData.data.map((business: Business) => {
-            const planInfo = plansData.data.businesses.find((b: any) => b._id === business._id)
+      if (businessesRes.ok && plansRes.ok) {
+        const businessesData = await businessesRes.json()
+        const plansData = await plansRes.json()
+        if (businessesData.success) {
+          const list: Business[] = (businessesData.data || []).map((b: Business) => {
+            const planInfo = plansData.success && plansData.data?.businesses
+              ? plansData.data.businesses.find((x: { _id: string }) => x._id === b._id)
+              : null
+            const owner = b.owner as any
             return {
-              ...business,
+              ...b,
+              owner: owner ? {
+                ...owner,
+                name: [owner.firstName, owner.lastName].filter(Boolean).join(" ") || owner.name || "—",
+              } : null,
               plan: planInfo?.plan || null,
             }
           })
-          
-          setBusinesses(businessesWithPlans)
-          setTotalPages(businessesData.pagination?.totalPages || 1)
+          setBusinesses(list)
+          setTotalPages(businessesData.pagination?.totalPages ?? 1)
+          setTotalCount(businessesData.pagination?.total ?? 0)
         }
       }
-    } catch (error) {
-      console.error('Error fetching businesses:', error)
-      toast({
-        title: "Error",
-        description: "Failed to fetch businesses",
-        variant: "destructive",
-      })
+    } catch (e) {
+      console.error(e)
+      toast({ title: "Error", description: "Failed to fetch businesses", variant: "destructive" })
     } finally {
       setLoading(false)
     }
   }
 
-  const handleManagePlan = (business: Business) => {
-    setSelectedBusinessForPlan(business)
-    setIsPlanDialogOpen(true)
+  useEffect(() => {
+    fetchStats()
+  }, [])
+
+  useEffect(() => {
+    fetchBusinesses()
+  }, [currentPage, searchTerm, statusFilter, planFilter])
+
+  const handleRefresh = () => {
+    fetchStats()
+    fetchBusinesses()
+    toast({ title: "Refreshed", description: "Data updated" })
+  }
+
+  const handleExport = () => {
+    toast({ title: "Export", description: "Export will download selected businesses. Bulk export can be wired here." })
   }
 
   const handleStatusChange = async (businessId: string, newStatus: string) => {
     try {
-      const response = await fetch(`${API_URL}/admin/businesses/${businessId}/status`, {
-        method: 'PATCH',
-        headers: authHeaders({
-          'Content-Type': 'application/json',
-        }),
-        body: JSON.stringify({ status: newStatus })
+      const res = await fetch(`${API_URL}/admin/businesses/${businessId}/status`, {
+        method: "PATCH",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status: newStatus }),
       })
-
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          toast({
-            title: "Success",
-            description: `Business ${newStatus} successfully`,
-          })
-          fetchBusinesses() // Refresh the list
-        }
+      if (res.ok) {
+        toast({ title: "Success", description: `Business ${newStatus} successfully` })
+        fetchStats()
+        fetchBusinesses()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || "Failed")
       }
-    } catch (error) {
-      console.error('Error updating business status:', error)
-      toast({
-        title: "Error",
-        description: "Failed to update business status",
-        variant: "destructive",
-      })
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed to update status", variant: "destructive" })
     }
   }
 
   const handleDeleteBusiness = async (businessId: string, businessName: string, status: string) => {
-    if (!businessId) {
-      toast({
-        title: "Error",
-        description: "Business ID is missing. Cannot delete business.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const isSoftDelete = status !== 'deleted'
-    const confirmMessage = isSoftDelete
-      ? `Are you sure you want to delete "${businessName}"? This will mark the business as deleted and remove its data, but you can still see it in the list for audit.`
-      : `This business is already marked as deleted. Permanently delete "${businessName}"? This will remove it from the list and free the business code for reuse.`
-
-    if (!confirm(confirmMessage)) {
-      return
-    }
-
+    const isSoft = status !== "deleted"
+    if (!confirm(isSoft ? `Delete "${businessName}"? It will be marked as deleted.` : `Permanently delete "${businessName}"?`)) return
     try {
-      const response = await fetch(`${API_URL}/admin/businesses/${businessId}`, {
-        method: 'DELETE',
-        headers: authHeaders({
-          'Content-Type': 'application/json'
-        })
+      const res = await fetch(`${API_URL}/admin/businesses/${businessId}`, {
+        method: "DELETE",
+        headers: authHeaders({ "Content-Type": "application/json" }),
       })
-      
-      if (response.ok) {
-        const successMessage = isSoftDelete
-          ? `"${businessName}" has been marked as deleted.`
-          : `"${businessName}" has been permanently deleted and the code can now be reused.`
-
-        toast({
-          title: "Business Deleted",
-          description: successMessage,
-        })
-        // Refresh the businesses list
+      if (res.ok) {
+        toast({ title: "Business deleted", description: isSoft ? `"${businessName}" marked as deleted.` : `"${businessName}" permanently deleted.` })
+        fetchStats()
         fetchBusinesses()
       } else {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to delete business')
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || "Delete failed")
       }
-    } catch (error) {
-      console.error('Error deleting business:', error)
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to delete business. Please try again.",
-        variant: "destructive",
-      })
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Delete failed", variant: "destructive" })
     }
   }
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'bg-green-100 text-green-800'
-      case 'inactive':
-        return 'bg-gray-100 text-gray-800'
-      case 'suspended':
-        return 'bg-red-100 text-red-800'
-      case 'deleted':
-        return 'bg-gray-200 text-gray-600'
-      default:
-        return 'bg-gray-100 text-gray-800'
-    }
+  const toggleSelectAll = () => {
+    if (selectedIds.size === businesses.length) setSelectedIds(new Set())
+    else setSelectedIds(new Set(businesses.map((b) => b._id)))
   }
 
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
     })
   }
 
-  if (loading) {
+  const handleBulkSuspend = () => {
+    if (selectedIds.size === 0) return
+    if (!confirm(`Suspend ${selectedIds.size} selected business(es)?`)) return
+    Promise.all(Array.from(selectedIds).map((id) => fetch(`${API_URL}/admin/businesses/${id}/status`, {
+      method: "PATCH",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ status: "suspended" }),
+    }))).then(() => {
+      toast({ title: "Done", description: "Selected businesses suspended." })
+      setSelectedIds(new Set())
+      fetchStats()
+      fetchBusinesses()
+    })
+  }
+
+  const handleImpersonate = async (business: Business) => {
+    try {
+      const res = await fetch(`${API_URL}/admin/businesses/${business._id}/impersonate`, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || "Impersonation failed")
+      }
+      const data = await res.json()
+      if (data.success && data.data?.token) {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("salon-auth-token", data.data.token)
+          localStorage.setItem("salon-auth-user", JSON.stringify({ _id: "pending", email: "", role: "admin" }))
+          window.location.href = "/dashboard"
+        }
+      }
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Impersonation failed", variant: "destructive" })
+    }
+  }
+
+  const handleResetOwnerPassword = async (business: Business) => {
+    if (!confirm(`Reset password for owner of "${business.name}"? A temporary password will be generated.`)) return
+    try {
+      const res = await fetch(`${API_URL}/admin/businesses/${business._id}/reset-owner-password`, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || "Reset failed")
+      }
+      const data = await res.json()
+      if (data.success && data.data?.tempPassword) {
+        toast({
+          title: "Password reset",
+          description: `Temporary password: ${data.data.tempPassword}. Share securely with the owner.`,
+        })
+      } else {
+        toast({ title: "Success", description: data.data?.message || "Password reset." })
+      }
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Reset failed", variant: "destructive" })
+    }
+  }
+
+  const viewActivityLogs = (business: Business) => {
+    setActivityLogsBusiness(business)
+    setIsActivityLogsOpen(true)
+  }
+
+  const location = (b: Business) => {
+    const a = b.address
+    if (!a) return "—"
+    return [a.city, a.state].filter(Boolean).join(", ") || "—"
+  }
+
+  const ownerName = (b: Business) => b.owner?.name ?? (b.owner as any)?.firstName ? [(b.owner as any).firstName, (b.owner as any).lastName].filter(Boolean).join(" ") : "—"
+  const ownerEmail = (b: Business) => (b.owner as any)?.email ?? "—"
+
+  if (loading && !businesses.length) {
     return (
-      <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <h1 className="text-3xl font-bold text-gray-900">Business Management</h1>
-          <div className="h-10 w-32 bg-gray-200 rounded animate-pulse" />
+      <div className="space-y-8">
+        <div className="flex justify-between items-start gap-4">
+          <div>
+            <div className="h-8 w-56 bg-slate-200 rounded-lg animate-pulse mb-2" />
+            <div className="h-4 w-96 bg-slate-100 rounded animate-pulse" />
+          </div>
+          <div className="flex gap-2">
+            <div className="h-9 w-28 bg-slate-200 rounded-md animate-pulse" />
+            <div className="h-9 w-32 bg-slate-200 rounded-md animate-pulse" />
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
-            <Card key={i}>
-              <CardHeader className="pb-2">
-                <div className="h-4 w-20 bg-gray-200 rounded animate-pulse" />
-              </CardHeader>
-              <CardContent>
-                <div className="h-8 w-16 bg-gray-200 rounded animate-pulse" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i} className="rounded-xl border-slate-200/80 shadow-sm">
+              <CardContent className="pt-6">
+                <div className="h-4 w-24 bg-slate-100 rounded animate-pulse mb-4" />
+                <div className="h-8 w-16 bg-slate-200 rounded animate-pulse" />
               </CardContent>
             </Card>
           ))}
         </div>
-        <Card>
+        <Card className="rounded-xl border-slate-200/80 shadow-sm">
           <CardContent className="p-6">
             <div className="space-y-4">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="h-16 bg-gray-200 rounded animate-pulse" />
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <div key={i} className="h-14 bg-slate-100 rounded animate-pulse" />
               ))}
             </div>
           </CardContent>
@@ -271,305 +388,342 @@ export function BusinessManagement() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
+    <div className="space-y-8">
+      {/* Page header */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Business Management</h1>
-          <p className="text-gray-600">Manage all salon businesses on the platform</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Business Management</h1>
+          <p className="text-sm text-slate-500 mt-1">Monitor, manage, and control all salon businesses on the platform.</p>
         </div>
-        <Button onClick={() => router.push('/admin/businesses/new')}>
-          <Plus className="h-4 w-4 mr-2" />
-          Create Business
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleExport} className="border-slate-200">
+            <Download className="h-4 w-4 mr-2" />
+            Export Businesses
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading} className="border-slate-200">
+            <RefreshCw className={cn("h-4 w-4 mr-2", loading && "animate-spin")} />
+            Refresh Data
+          </Button>
+          <Button onClick={() => router.push("/admin/businesses/new")} className="bg-slate-900 hover:bg-slate-800">
+            <Plus className="h-4 w-4 mr-2" />
+            Create Business
+          </Button>
+        </div>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Businesses</CardTitle>
-            <Building2 className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{businesses.length}</div>
-            <p className="text-xs text-muted-foreground">
-              All registered businesses
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Businesses</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {businesses.filter(b => b.status === 'active').length}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Currently active
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Suspended Businesses</CardTitle>
-            <Shield className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-600">
-              {businesses.filter(b => b.status === 'suspended').length}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Currently suspended
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Inactive Businesses</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">
-              {businesses.filter(b => b.status === 'inactive').length}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              No login for 7+ days (indicator only)
-            </p>
-          </CardContent>
-        </Card>
-
-      </div>
-
-      {/* Filters */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Businesses</CardTitle>
-          <CardDescription>
-            Manage and monitor all salon businesses
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col sm:flex-row gap-4 mb-6">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <Input
-                  placeholder="Search businesses..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
+      {/* Platform metrics */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card className="rounded-xl border-slate-200/80 shadow-sm bg-white">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-500">Total Businesses</p>
+                <p className="text-2xl font-semibold text-slate-900 mt-1">{stats?.total ?? totalCount ?? "—"}</p>
+                <p className="text-xs text-slate-400 mt-0.5">All registered salons</p>
+              </div>
+              <div className="h-10 w-10 rounded-lg bg-slate-100 flex items-center justify-center">
+                <Building2 className="h-5 w-5 text-slate-600" />
               </div>
             </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full sm:w-48">
-                <SelectValue placeholder="Filter by status" />
+          </CardContent>
+        </Card>
+        <Card className="rounded-xl border-slate-200/80 shadow-sm bg-white">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-500">Active Businesses</p>
+                <p className="text-2xl font-semibold text-emerald-600 mt-1">{stats?.active ?? "—"}</p>
+                <p className="text-xs text-slate-400 mt-0.5">Currently active</p>
+              </div>
+              <div className="h-10 w-10 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                <Users className="h-5 w-5 text-emerald-600" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="rounded-xl border-slate-200/80 shadow-sm bg-white">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-500">Suspended</p>
+                <p className="text-2xl font-semibold text-red-600 mt-1">{stats?.suspended ?? "—"}</p>
+                <p className="text-xs text-slate-400 mt-0.5">Access disabled</p>
+              </div>
+              <div className="h-10 w-10 rounded-lg bg-red-500/10 flex items-center justify-center">
+                <Shield className="h-5 w-5 text-red-600" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="rounded-xl border-slate-200/80 shadow-sm bg-white">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-500">Inactive</p>
+                <p className="text-2xl font-semibold text-amber-600 mt-1">{stats?.inactive ?? "—"}</p>
+                <p className="text-xs text-slate-400 mt-0.5">No login for 7+ days</p>
+              </div>
+              <div className="h-10 w-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                <Calendar className="h-5 w-5 text-amber-600" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Filters and table */}
+      <Card className="rounded-xl border-slate-200/80 shadow-sm bg-white overflow-hidden">
+        <div className="p-4 border-b border-slate-100">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Input
+                placeholder="Search businesses by name, owner, email, or business code"
+                value={searchTerm}
+                onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                className="pl-9 border-slate-200"
+              />
+            </div>
+            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setCurrentPage(1); }}>
+              <SelectTrigger className="w-full sm:w-[140px] border-slate-200">
+                <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="all">All status</SelectItem>
                 <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="inactive">Inactive</SelectItem>
                 <SelectItem value="suspended">Suspended</SelectItem>
                 <SelectItem value="deleted">Deleted</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={planFilter} onValueChange={(v) => { setPlanFilter(v); setCurrentPage(1); }}>
+              <SelectTrigger className="w-full sm:w-[140px] border-slate-200">
+                <SelectValue placeholder="Plan" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All plans</SelectItem>
+                <SelectItem value="starter">Starter</SelectItem>
+                <SelectItem value="professional">Professional</SelectItem>
+                <SelectItem value="enterprise">Enterprise</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={billingFilter} onValueChange={setBillingFilter}>
+              <SelectTrigger className="w-full sm:w-[140px] border-slate-200">
+                <SelectValue placeholder="Billing" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="monthly">Monthly</SelectItem>
+                <SelectItem value="yearly">Yearly</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
+        </div>
 
-          {/* Business Table */}
+        {/* Bulk actions */}
+        {selectedIds.size > 0 && (
+          <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+            <span className="text-sm text-slate-600">{selectedIds.size} selected</span>
+            <Button variant="outline" size="sm" onClick={handleBulkSuspend} className="border-slate-200">
+              Suspend selected
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+          </div>
+        )}
+
+        <CardContent className="p-0">
           {businesses.length === 0 ? (
-            <div className="text-center py-8">
-              <Building2 className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No businesses found</h3>
-              <p className="text-gray-500 mb-4">
-                {searchTerm || statusFilter !== 'all'
-                  ? 'Try adjusting your filters'
-                  : 'Create your first business to get started'
-                }
+            <div className="py-16 text-center">
+              <Building2 className="h-14 w-14 text-slate-300 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-slate-900 mb-2">No businesses registered yet</h3>
+              <p className="text-sm text-slate-500 mb-6 max-w-sm mx-auto">
+                {searchTerm || statusFilter !== "all" || planFilter !== "all"
+                  ? "Try adjusting your filters."
+                  : "Create your first business to get started."}
               </p>
-              <Button onClick={() => router.push('/admin/businesses/new')}>
+              <Button onClick={() => router.push("/admin/businesses/new")}>
                 <Plus className="h-4 w-4 mr-2" />
                 Create Business
               </Button>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Business</TableHead>
-                  <TableHead>Owner</TableHead>
-                  <TableHead>Plan</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {businesses.map((business) => (
-                  <TableRow key={business._id}>
-                    <TableCell>
-                      <div>
-                        <div className="font-medium">{business.name}</div>
-                        <div className="text-sm text-gray-500">
-                          #{business.code} • {business.businessType}
-                        </div>
-                        <div className="text-xs text-gray-400">
-                          {business.address.city}, {business.address.state}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div>
-                        {business.owner ? (
-                          <>
-                            <div className="font-medium">{business.owner.name || 'N/A'}</div>
-                            <div className="text-sm text-gray-500">{business.owner.email || 'N/A'}</div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="font-medium text-gray-400">Owner Deleted</div>
-                            <div className="text-sm text-gray-400">N/A</div>
-                          </>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {business.plan ? (
-                        <div className="space-y-1">
-                          <Badge className={
-                            business.plan.planId === 'starter' ? 'bg-blue-100 text-blue-800' :
-                            business.plan.planId === 'professional' ? 'bg-purple-100 text-purple-800' :
-                            'bg-amber-100 text-amber-800'
-                          }>
-                            {business.plan.planName}
+            <>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-slate-100 hover:bg-transparent">
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={businesses.length > 0 && selectedIds.size === businesses.length}
+                          onCheckedChange={toggleSelectAll}
+                          aria-label="Select all"
+                        />
+                      </TableHead>
+                      <TableHead className="text-slate-500 font-medium">Business</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Owner</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Plan</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Users</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Revenue</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Invoices</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Status</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Last Active</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Next Billing</TableHead>
+                      <TableHead className="text-slate-500 font-medium">Created</TableHead>
+                      <TableHead className="text-slate-500 font-medium text-right w-[72px] sticky right-0 bg-white shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {businesses.map((b) => (
+                      <TableRow key={b._id} className="border-slate-100">
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedIds.has(b._id)}
+                            onCheckedChange={() => toggleSelect(b._id)}
+                            aria-label={`Select ${b.name}`}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <div>
+                            <p className="font-medium text-slate-900">{b.name}</p>
+                            <p className="text-xs text-slate-500">#{b.code}</p>
+                            <p className="text-xs text-slate-400">{location(b)}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div>
+                            <p className="text-sm font-medium text-slate-800">{ownerName(b)}</p>
+                            <p className="text-xs text-slate-500 truncate max-w-[180px]">{ownerEmail(b)}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {b.plan ? (
+                            <div className="space-y-0.5">
+                              <Badge variant="secondary" className="font-medium">
+                                {b.plan.planName}
+                              </Badge>
+                              <p className="text-xs text-slate-500 capitalize">{b.plan.billingPeriod}{b.plan.isTrial ? " · Trial" : ""}</p>
+                            </div>
+                          ) : (
+                            <span className="text-sm text-slate-400">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary" className="font-mono font-medium tabular-nums">
+                            {b.usersCount != null ? b.usersCount : "—"}
                           </Badge>
-                          <div className="text-xs text-gray-500 capitalize">
-                            {business.plan.billingPeriod}
-                            {business.plan.isTrial && ' • Trial'}
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="text-sm text-gray-400">No plan</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <Badge className={getStatusColor(business.status)}>
-                          {business.status}
-                        </Badge>
-                        {business.status === 'deleted' && business.deletedAt && (
-                          <div className="text-xs text-gray-500 mt-1">
-                            {formatDate(business.deletedAt)}
-                            {business.deletedBy && (
-                              <span className="ml-1">by {business.deletedBy.name}</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center text-sm text-gray-500">
-                        <Calendar className="h-4 w-4 mr-1" />
-                        {formatDate(business.createdAt)}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem 
-                            onClick={() => router.push(`/admin/businesses/${business._id}`)}
-                          >
-                            <Eye className="h-4 w-4 mr-2" />
-                            View Details
-                          </DropdownMenuItem>
-                          <DropdownMenuItem 
-                            onClick={() => router.push(`/admin/businesses/${business._id}/edit`)}
-                          >
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Business
-                          </DropdownMenuItem>
-                          <DropdownMenuItem 
-                            onClick={() => handleManagePlan(business)}
-                          >
-                            <CreditCard className="h-4 w-4 mr-2" />
-                            Manage Plan
-                          </DropdownMenuItem>
-                          {business.status === 'active' ? (
-                            <DropdownMenuItem 
-                              onClick={() => handleStatusChange(business._id, 'suspended')}
-                              className="text-orange-600"
-                            >
-                              <Ban className="h-4 w-4 mr-2" />
-                              Suspend Business
-                            </DropdownMenuItem>
-                          ) : business.status === 'suspended' ? (
-                            <DropdownMenuItem 
-                              onClick={() => handleStatusChange(business._id, 'active')}
-                              className="text-green-600"
-                            >
-                              <Users className="h-4 w-4 mr-2" />
-                              Activate Business
-                            </DropdownMenuItem>
-                          ) : business.status === 'inactive' ? (
-                            <DropdownMenuItem disabled className="text-gray-400">
-                              <Calendar className="h-4 w-4 mr-2" />
-                              Inactive (Auto-reactivates on login)
-                            </DropdownMenuItem>
-                          ) : null}
-                          <DropdownMenuItem 
-                            onClick={() => handleDeleteBusiness(business._id, business.name, business.status)}
-                            className="text-red-600 focus:text-red-600"
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            {business.status === 'deleted' ? 'Permanently Delete' : 'Delete Business'}
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                        </TableCell>
+                        <TableCell className="text-sm font-medium text-emerald-700 tabular-nums whitespace-nowrap">
+                          {b.revenue != null ? formatCurrency(b.revenue) : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm text-slate-500 text-muted-foreground tabular-nums">
+                          {b.invoicesCount != null ? `${b.invoicesCount} invoices` : "—"}
+                        </TableCell>
+                        <TableCell>{getStatusBadge(b.status)}</TableCell>
+                        <TableCell className="text-sm text-slate-500 whitespace-nowrap">
+                          {formatRelative((b.owner as any)?.lastLoginAt)}
+                        </TableCell>
+                        <TableCell className="text-sm text-slate-500 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5">
+                            <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                            {formatNextBilling(b.nextBillingDate ?? b.plan?.renewalDate ?? null)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-sm text-slate-500">{formatDate(b.createdAt)}</TableCell>
+                        <TableCell className="sticky right-0 bg-white text-right w-[72px] shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-56">
+                              <DropdownMenuItem onClick={() => router.push(`/admin/businesses/${b._id}`)}>
+                                <Eye className="h-4 w-4 mr-2" />
+                                View Business
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleImpersonate(b)}>
+                                <LogIn className="h-4 w-4 mr-2" />
+                                Impersonate Login
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => router.push(`/admin/businesses/${b._id}/edit`)}>
+                                <Edit className="h-4 w-4 mr-2" />
+                                Edit Business
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => { setSelectedBusinessForPlan(b); setIsPlanDialogOpen(true); }}>
+                                <CreditCard className="h-4 w-4 mr-2" />
+                                Manage Plan
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              {b.status === "active" && (
+                                <DropdownMenuItem onClick={() => handleStatusChange(b._id, "suspended")} className="text-amber-600">
+                                  <Ban className="h-4 w-4 mr-2" />
+                                  Suspend Business
+                                </DropdownMenuItem>
+                              )}
+                              {b.status === "suspended" && (
+                                <DropdownMenuItem onClick={() => handleStatusChange(b._id, "active")} className="text-emerald-600">
+                                  <Users className="h-4 w-4 mr-2" />
+                                  Activate Business
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem onClick={() => handleResetOwnerPassword(b)}>
+                                <Key className="h-4 w-4 mr-2" />
+                                Reset Owner Password
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => viewActivityLogs(b)}>
+                                <FileText className="h-4 w-4 mr-2" />
+                                View Activity Logs
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => handleDeleteBusiness(b._id, b.name, b.status)}
+                                className="text-red-600 focus:text-red-600"
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                {b.status === "deleted" ? "Permanently Delete" : "Delete Business"}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex justify-center items-center space-x-2 mt-6">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-              >
-                Previous
-              </Button>
-              <span className="text-sm text-gray-500">
-                Page {currentPage} of {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-              >
-                Next
-              </Button>
-            </div>
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100">
+                  <p className="text-sm text-slate-500">
+                    Showing page {currentPage} of {totalPages} · {totalCount} total
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="border-slate-200"
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                      className="border-slate-200"
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
 
-      {/* Plan Edit Dialog */}
       {selectedBusinessForPlan && (
         <PlanEditDialog
           businessId={selectedBusinessForPlan._id}
@@ -577,8 +731,21 @@ export function BusinessManagement() {
           open={isPlanDialogOpen}
           onOpenChange={setIsPlanDialogOpen}
           onSuccess={() => {
+            fetchStats()
             fetchBusinesses()
             setSelectedBusinessForPlan(null)
+          }}
+        />
+      )}
+
+      {activityLogsBusiness && (
+        <BusinessActivityLogsDialog
+          businessId={activityLogsBusiness._id}
+          businessName={activityLogsBusiness.name}
+          open={isActivityLogsOpen}
+          onOpenChange={(open) => {
+            setIsActivityLogsOpen(open)
+            if (!open) setActivityLogsBusiness(null)
           }}
         />
       )}

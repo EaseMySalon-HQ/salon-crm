@@ -148,6 +148,13 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
         const next = { ...prev, ...propSettings }
         if (!next.api || typeof next.api !== 'object') next.api = { version: 'v1', baseUrl: 'https://api.easemysalon.com', timeout: 30000, maxRequestsPerMinute: 100, enableCORS: true, allowedOrigins: [], enableRateLimiting: true, enableLogging: true, enableMetrics: true, ...(prev?.api || {}), ...(propSettings?.api || {}) }
         if (!next.rateLimiting || typeof next.rateLimiting !== 'object') next.rateLimiting = prev?.rateLimiting || {}
+        const defaultAuth = { jwtSecret: '', jwtExpiration: '24h', refreshTokenExpiration: '7d', enableRefreshTokens: true, enableApiKeys: true, apiKeyLength: 32, enableOAuth: false, oauthProviders: [] }
+        if (!next.authentication || typeof next.authentication !== 'object') next.authentication = { ...defaultAuth, ...(prev?.authentication || {}), ...(propSettings?.authentication || {}) }
+        if (!Array.isArray(next.webhooks)) next.webhooks = prev?.webhooks ?? []
+        const defaultIntegrations = { paymentGateway: { enabled: false, provider: 'stripe' }, emailService: { enabled: true, provider: 'smtp' }, smsService: { enabled: false }, analytics: {} }
+        if (!next.integrations || typeof next.integrations !== 'object') next.integrations = { ...defaultIntegrations, ...(prev?.integrations || {}), ...(propSettings?.integrations || {}) }
+        const defaultSecurity = { enableHTTPS: true, enableHSTS: true, enableCSRF: true, enableXSSProtection: true, enableContentSecurityPolicy: true, allowedMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'], maxRequestSize: '10mb', enableRequestValidation: true, enableResponseValidation: true }
+        if (!next.security || typeof next.security !== 'object') next.security = { ...defaultSecurity, ...(prev?.security || {}), ...(propSettings?.security || {}) }
         return next
       })
     }
@@ -172,7 +179,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
   const handleWebhookChange = (id: number, field: string, value: any) => {
     setSettings(prev => ({
       ...prev,
-      webhooks: prev.webhooks.map(webhook => 
+      webhooks: (prev.webhooks ?? []).map(webhook => 
         webhook.id === id ? { ...webhook, [field]: value } : webhook
       )
     }))
@@ -192,7 +199,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
     }
     setSettings(prev => ({
       ...prev,
-      webhooks: [...prev.webhooks, newWebhook]
+      webhooks: [...(prev.webhooks ?? []), newWebhook]
     }))
     onSettingsChange()
   }
@@ -200,7 +207,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
   const handleDeleteWebhook = (id: number) => {
     setSettings(prev => ({
       ...prev,
-      webhooks: prev.webhooks.filter(webhook => webhook.id !== id)
+      webhooks: (prev.webhooks ?? []).filter(webhook => webhook.id !== id)
     }))
     onSettingsChange()
   }
@@ -235,7 +242,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
               <Label htmlFor="apiVersion">API Version</Label>
               <Input
                 id="apiVersion"
-                value={settings.api.version}
+                value={settings.api?.version ?? 'v1'}
                 onChange={(e) => handleSettingChange('api.version', e.target.value)}
                 className="w-full"
                 placeholder="v1"
@@ -511,7 +518,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
               <Input
                 id="jwtSecret"
                 type="password"
-                value={settings.authentication.jwtSecret}
+                value={settings.authentication?.jwtSecret ?? ''}
                 onChange={(e) => handleSettingChange('authentication.jwtSecret', e.target.value)}
                 className="w-full"
                 placeholder="your-super-secret-jwt-key"
@@ -522,7 +529,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
               <Label htmlFor="jwtExpiration">JWT Expiration</Label>
               <Input
                 id="jwtExpiration"
-                value={settings.authentication.jwtExpiration}
+                value={settings.authentication?.jwtExpiration ?? '24h'}
                 onChange={(e) => handleSettingChange('authentication.jwtExpiration', e.target.value)}
                 className="w-full"
                 placeholder="24h"
@@ -533,7 +540,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
               <Label htmlFor="refreshTokenExpiration">Refresh Token Expiration</Label>
               <Input
                 id="refreshTokenExpiration"
-                value={settings.authentication.refreshTokenExpiration}
+                value={settings.authentication?.refreshTokenExpiration ?? '7d'}
                 onChange={(e) => handleSettingChange('authentication.refreshTokenExpiration', e.target.value)}
                 className="w-full"
                 placeholder="7d"
@@ -547,7 +554,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 type="number"
                 min="16"
                 max="64"
-                value={settings.authentication.apiKeyLength}
+                value={settings.authentication?.apiKeyLength ?? 32}
                 onChange={(e) => handleSettingChange('authentication.apiKeyLength', parseInt(e.target.value))}
                 className="w-full"
               />
@@ -563,7 +570,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.authentication.enableRefreshTokens}
+                checked={settings.authentication?.enableRefreshTokens ?? true}
                 onCheckedChange={(checked) => handleSettingChange('authentication.enableRefreshTokens', checked)}
               />
             </div>
@@ -576,7 +583,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.authentication.enableApiKeys}
+                checked={settings.authentication?.enableApiKeys ?? true}
                 onCheckedChange={(checked) => handleSettingChange('authentication.enableApiKeys', checked)}
               />
             </div>
@@ -589,13 +596,13 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.authentication.enableOAuth}
+                checked={settings.authentication?.enableOAuth ?? false}
                 onCheckedChange={(checked) => handleSettingChange('authentication.enableOAuth', checked)}
               />
             </div>
           </div>
 
-          {settings.authentication.enableApiKeys && (
+          {settings.authentication?.enableApiKeys && (
             <div className="flex space-x-2">
               <Button onClick={handleGenerateApiKey} variant="outline">
                 <Key className="h-4 w-4 mr-2" />
@@ -627,7 +634,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
           </div>
 
           <div className="space-y-4">
-            {settings.webhooks.map(webhook => (
+            {(settings.webhooks ?? []).map(webhook => (
               <div key={webhook.id} className="p-4 border rounded-lg space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
@@ -753,17 +760,17 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
             <div className="flex items-center justify-between">
               <h4 className="font-medium">Payment Gateway</h4>
               <Switch
-                checked={settings.integrations.paymentGateway.enabled}
+                checked={settings.integrations?.paymentGateway?.enabled ?? false}
                 onCheckedChange={(checked) => handleSettingChange('integrations.paymentGateway.enabled', checked)}
               />
             </div>
 
-            {settings.integrations.paymentGateway.enabled && (
+            {settings.integrations?.paymentGateway?.enabled && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="paymentProvider">Provider</Label>
                   <Select
-                    value={settings.integrations.paymentGateway.provider}
+                    value={settings.integrations?.paymentGateway?.provider ?? 'stripe'}
                     onValueChange={(value) => handleSettingChange('integrations.paymentGateway.provider', value)}
                   >
                     <SelectTrigger>
@@ -778,13 +785,13 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                   </Select>
                 </div>
 
-                {settings.integrations.paymentGateway.provider === "stripe" && (
+                {settings.integrations?.paymentGateway?.provider === "stripe" && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="stripePublishableKey">Stripe Publishable Key</Label>
                       <Input
                         id="stripePublishableKey"
-                        value={settings.integrations.paymentGateway.stripePublishableKey}
+                        value={settings.integrations?.paymentGateway?.stripePublishableKey ?? ''}
                         onChange={(e) => handleSettingChange('integrations.paymentGateway.stripePublishableKey', e.target.value)}
                         className="w-full"
                         placeholder="pk_test_..."
@@ -796,7 +803,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                       <Input
                         id="stripeSecretKey"
                         type="password"
-                        value={settings.integrations.paymentGateway.stripeSecretKey}
+                        value={settings.integrations?.paymentGateway?.stripeSecretKey ?? ''}
                         onChange={(e) => handleSettingChange('integrations.paymentGateway.stripeSecretKey', e.target.value)}
                         className="w-full"
                         placeholder="sk_test_..."
@@ -808,7 +815,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                       <Input
                         id="stripeWebhookSecret"
                         type="password"
-                        value={settings.integrations.paymentGateway.stripeWebhookSecret}
+                        value={settings.integrations?.paymentGateway?.stripeWebhookSecret ?? ''}
                         onChange={(e) => handleSettingChange('integrations.paymentGateway.stripeWebhookSecret', e.target.value)}
                         className="w-full"
                         placeholder="whsec_..."
@@ -817,13 +824,13 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                   </div>
                 )}
 
-                {settings.integrations.paymentGateway.provider === "razorpay" && (
+                {settings.integrations?.paymentGateway?.provider === "razorpay" && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="razorpayKeyId">Razorpay Key ID</Label>
                       <Input
                         id="razorpayKeyId"
-                        value={settings.integrations.paymentGateway.razorpayKeyId}
+                        value={settings.integrations?.paymentGateway?.razorpayKeyId ?? ''}
                         onChange={(e) => handleSettingChange('integrations.paymentGateway.razorpayKeyId', e.target.value)}
                         className="w-full"
                         placeholder="rzp_test_..."
@@ -835,7 +842,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                       <Input
                         id="razorpayKeySecret"
                         type="password"
-                        value={settings.integrations.paymentGateway.razorpayKeySecret}
+                        value={settings.integrations?.paymentGateway?.razorpayKeySecret ?? ''}
                         onChange={(e) => handleSettingChange('integrations.paymentGateway.razorpayKeySecret', e.target.value)}
                         className="w-full"
                         placeholder="Your key secret"
@@ -847,7 +854,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                       <Input
                         id="razorpayWebhookSecret"
                         type="password"
-                        value={settings.integrations.paymentGateway.razorpayWebhookSecret}
+                        value={settings.integrations?.paymentGateway?.razorpayWebhookSecret ?? ''}
                         onChange={(e) => handleSettingChange('integrations.paymentGateway.razorpayWebhookSecret', e.target.value)}
                         className="w-full"
                         placeholder="Your webhook secret"
@@ -864,17 +871,17 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
             <div className="flex items-center justify-between">
               <h4 className="font-medium">Email Service</h4>
               <Switch
-                checked={settings.integrations.emailService.enabled}
+                checked={settings.integrations?.emailService?.enabled ?? true}
                 onCheckedChange={(checked) => handleSettingChange('integrations.emailService.enabled', checked)}
               />
             </div>
 
-            {settings.integrations.emailService.enabled && (
+            {settings.integrations?.emailService?.enabled && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="emailProvider">Provider</Label>
                   <Select
-                    value={settings.integrations.emailService.provider}
+                    value={settings.integrations?.emailService?.provider ?? 'smtp'}
                     onValueChange={(value) => handleSettingChange('integrations.emailService.provider', value)}
                   >
                     <SelectTrigger>
@@ -889,13 +896,13 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                   </Select>
                 </div>
 
-                {settings.integrations.emailService.provider === "sendgrid" && (
+                {settings.integrations?.emailService?.provider === "sendgrid" && (
                   <div className="space-y-2">
                     <Label htmlFor="sendgridApiKey">SendGrid API Key</Label>
                     <Input
                       id="sendgridApiKey"
                       type="password"
-                      value={settings.integrations.emailService.sendgridApiKey}
+                      value={settings.integrations?.emailService?.sendgridApiKey ?? ''}
                       onChange={(e) => handleSettingChange('integrations.emailService.sendgridApiKey', e.target.value)}
                       className="w-full"
                       placeholder="SG.xxx..."
@@ -903,13 +910,13 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                   </div>
                 )}
 
-                {settings.integrations.emailService.provider === "ses" && (
+                {settings.integrations?.emailService?.provider === "ses" && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="sesAccessKey">AWS Access Key ID</Label>
                       <Input
                         id="sesAccessKey"
-                        value={settings.integrations.emailService.awsSesAccessKey}
+                        value={settings.integrations?.emailService?.awsSesAccessKey ?? ''}
                         onChange={(e) => handleSettingChange('integrations.emailService.awsSesAccessKey', e.target.value)}
                         className="w-full"
                         placeholder="AKIAIOSFODNN7EXAMPLE"
@@ -921,7 +928,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                       <Input
                         id="sesSecretKey"
                         type="password"
-                        value={settings.integrations.emailService.awsSesSecretKey}
+                        value={settings.integrations?.emailService?.awsSesSecretKey ?? ''}
                         onChange={(e) => handleSettingChange('integrations.emailService.awsSesSecretKey', e.target.value)}
                         className="w-full"
                         placeholder="Your secret key"
@@ -932,7 +939,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                       <Label htmlFor="sesRegion">AWS Region</Label>
                       <Input
                         id="sesRegion"
-                        value={settings.integrations.emailService.awsSesRegion}
+                        value={settings.integrations?.emailService?.awsSesRegion ?? 'us-east-1'}
                         onChange={(e) => handleSettingChange('integrations.emailService.awsSesRegion', e.target.value)}
                         className="w-full"
                         placeholder="us-east-1"
@@ -967,7 +974,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.security.enableHTTPS}
+                checked={settings.security?.enableHTTPS ?? true}
                 onCheckedChange={(checked) => handleSettingChange('security.enableHTTPS', checked)}
               />
             </div>
@@ -980,7 +987,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.security.enableHSTS}
+                checked={settings.security?.enableHSTS ?? true}
                 onCheckedChange={(checked) => handleSettingChange('security.enableHSTS', checked)}
               />
             </div>
@@ -993,7 +1000,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.security.enableCSRF}
+                checked={settings.security?.enableCSRF ?? true}
                 onCheckedChange={(checked) => handleSettingChange('security.enableCSRF', checked)}
               />
             </div>
@@ -1006,7 +1013,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.security.enableXSSProtection}
+                checked={settings.security?.enableXSSProtection ?? true}
                 onCheckedChange={(checked) => handleSettingChange('security.enableXSSProtection', checked)}
               />
             </div>
@@ -1019,7 +1026,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.security.enableContentSecurityPolicy}
+                checked={settings.security?.enableContentSecurityPolicy ?? true}
                 onCheckedChange={(checked) => handleSettingChange('security.enableContentSecurityPolicy', checked)}
               />
             </div>
@@ -1032,7 +1039,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.security.enableRequestValidation}
+                checked={settings.security?.enableRequestValidation ?? true}
                 onCheckedChange={(checked) => handleSettingChange('security.enableRequestValidation', checked)}
               />
             </div>
@@ -1045,7 +1052,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                 </p>
               </div>
               <Switch
-                checked={settings.security.enableResponseValidation}
+                checked={settings.security?.enableResponseValidation ?? true}
                 onCheckedChange={(checked) => handleSettingChange('security.enableResponseValidation', checked)}
               />
             </div>
@@ -1056,7 +1063,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
               <Label htmlFor="maxRequestSize">Max Request Size</Label>
               <Input
                 id="maxRequestSize"
-                value={settings.security.maxRequestSize}
+                value={settings.security?.maxRequestSize ?? '10mb'}
                 onChange={(e) => handleSettingChange('security.maxRequestSize', e.target.value)}
                 className="w-full"
                 placeholder="10mb"
@@ -1067,7 +1074,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
               <Label htmlFor="allowedMethods">Allowed Methods</Label>
               <Input
                 id="allowedMethods"
-                value={settings.security.allowedMethods.join(', ')}
+                value={(settings.security?.allowedMethods ?? []).join(', ')}
                 onChange={(e) => handleSettingChange('security.allowedMethods', e.target.value.split(',').map(method => method.trim()))}
                 className="w-full"
                 placeholder="GET, POST, PUT, PATCH, DELETE"
@@ -1079,7 +1086,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
             <Label htmlFor="allowedHeaders">Allowed Headers</Label>
             <Textarea
               id="allowedHeaders"
-              value={settings.security.allowedHeaders.join('\n')}
+              value={(settings.security?.allowedHeaders ?? []).join('\n')}
               onChange={(e) => handleSettingChange('security.allowedHeaders', e.target.value.split('\n').filter(header => header.trim()))}
               className="w-full"
               rows={3}

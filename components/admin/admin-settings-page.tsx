@@ -4,19 +4,16 @@ import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { 
   Settings, 
   Building2, 
   Users, 
-  Shield, 
   Database, 
   Bell, 
   Zap, 
-  ChevronRight,
   Save,
-  RotateCcw,
-  Download,
-  Upload
+  RotateCcw
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { getAdminAuthToken } from "@/lib/admin-auth-storage"
@@ -221,200 +218,118 @@ export function AdminSettingsPage() {
     }
   }
 
-  const handleExport = () => {
-    // Export settings functionality
-    toast({
-      title: "Settings exported",
-      description: "Your settings have been exported successfully.",
-    })
-  }
-
-  const handleImport = () => {
-    // Import settings functionality
-    toast({
-      title: "Settings imported",
-      description: "Your settings have been imported successfully.",
-    })
-  }
-
   // Memoize the settings change handler to prevent unnecessary re-renders
   const handleCategorySettingsChange = useCallback((newSettings: any) => {
     setSettings(prev => ({ ...prev, [activeCategory]: newSettings }))
     setHasUnsavedChanges(true)
   }, [activeCategory])
 
-  const renderSettingsContent = () => {
-    const categorySettings = settings[activeCategory] || {}
-    
-    switch (activeCategory) {
+  const renderSettingsContent = (categoryId: string) => {
+    const categorySettings = settings[categoryId] || {}
+
+    switch (categoryId) {
       case "system":
-        return <SystemSettings 
-          settings={categorySettings} 
-          onSettingsChange={handleCategorySettingsChange}
-        />
+        return <SystemSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       case "business":
-        return <BusinessSettings 
-          settings={categorySettings} 
-          onSettingsChange={handleCategorySettingsChange}
-        />
+        return <BusinessSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       case "users":
-        return <UserSettings 
-          settings={categorySettings} 
-          onSettingsChange={handleCategorySettingsChange}
-        />
+        return <UserSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       case "database":
-        return <DatabaseSettings 
-          settings={categorySettings} 
-          onSettingsChange={handleCategorySettingsChange}
-        />
+        return <DatabaseSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       case "notifications":
-        return <NotificationSettings 
-          settings={categorySettings} 
-          onSettingsChange={handleCategorySettingsChange}
-        />
+        return <NotificationSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       case "api":
-        return <APISettings 
-          settings={categorySettings} 
-          onSettingsChange={handleCategorySettingsChange}
-        />
+        return <APISettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       default:
-        return <SystemSettings 
-          settings={categorySettings} 
-          onSettingsChange={handleCategorySettingsChange}
-        />
+        return <SystemSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
     }
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Admin Settings</h1>
-          <p className="mt-2 text-gray-600">
-            Configure system-wide settings and manage the CRM platform
+    <div className="space-y-8 pb-24">
+      {/* Page header */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Platform Settings</h1>
+          <p className="text-sm text-slate-500 mt-1.5 max-w-xl">
+            Manage global platform configuration, integrations, and notifications
           </p>
         </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-          {/* Settings Navigation */}
-          <div className="lg:col-span-1">
-            <Card className="sticky top-8">
-              <CardHeader>
-                <CardTitle className="text-lg">Settings Categories</CardTitle>
-                <CardDescription>
-                  Choose a category to configure
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="p-0">
-                <nav className="space-y-1">
-                  {settingsCategories.map((category) => {
-                    const Icon = category.icon
-                    const isActive = activeCategory === category.id
-                    
-                    return (
-                      <button
-                        key={category.id}
-                        onClick={() => handleCategoryChange(category.id)}
-                        className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
-                          isActive
-                            ? 'bg-blue-50 border-r-2 border-blue-500 text-blue-700'
-                            : 'hover:bg-gray-50 text-gray-700'
-                        }`}
-                      >
-                        <div className="flex items-center space-x-3">
-                          <div className={`p-2 rounded-lg ${category.color} text-white`}>
-                            <Icon className="h-4 w-4" />
-                          </div>
-                          <div>
-                            <div className="font-medium">{category.title}</div>
-                            <div className="text-xs text-gray-500">{category.description}</div>
-                          </div>
-                        </div>
-                        <ChevronRight className="h-4 w-4" />
-                      </button>
-                    )
-                  })}
-                </nav>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Settings Content */}
-          <div className="lg:col-span-3">
-            <Card>
-              <CardHeader className="border-b">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center space-x-2">
-                      {(() => {
-                        const category = settingsCategories.find(c => c.id === activeCategory)
-                        const Icon = category?.icon || Settings
-                        return (
-                          <>
-                            <div className={`p-2 rounded-lg ${category?.color} text-white`}>
-                              <Icon className="h-5 w-5" />
-                            </div>
-                            <span>{category?.title}</span>
-                          </>
-                        )
-                      })()}
-                    </CardTitle>
-                    <CardDescription className="mt-1">
-                      {settingsCategories.find(c => c.id === activeCategory)?.description}
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    {hasUnsavedChanges && (
-                      <Badge variant="outline" className="text-orange-600 border-orange-200">
-                        Unsaved Changes
-                      </Badge>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleReset}
-                      disabled={isLoading}
-                    >
-                      <RotateCcw className="h-4 w-4 mr-2" />
-                      Reset
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleExport}
-                      disabled={isLoading}
-                    >
-                      <Download className="h-4 w-4 mr-2" />
-                      Export
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleImport}
-                      disabled={isLoading}
-                    >
-                      <Upload className="h-4 w-4 mr-2" />
-                      Import
-                    </Button>
-                    <Button
-                      onClick={handleSave}
-                      disabled={!hasUnsavedChanges || isLoading}
-                      className="bg-blue-600 hover:bg-blue-700"
-                    >
-                      <Save className="h-4 w-4 mr-2" />
-                      {isLoading ? "Saving..." : "Save Changes"}
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="p-6">
-                {renderSettingsContent()}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
+        <Badge variant="secondary" className="shrink-0 w-fit px-3 py-1.5 text-xs font-medium bg-slate-100 text-slate-600 border-0">
+          Platform Control Center
+        </Badge>
       </div>
+
+      {/* Tabbed navigation - pill style */}
+      <Tabs value={activeCategory} onValueChange={(v) => handleCategoryChange(v)} className="w-full">
+        <div className="overflow-x-auto -mx-1">
+          <TabsList className="inline-flex h-auto p-1 rounded-lg bg-slate-100 border-0 w-full sm:w-auto min-w-max">
+            {settingsCategories.map((category) => {
+              const Icon = category.icon
+              return (
+                <TabsTrigger
+                  key={category.id}
+                  value={category.id}
+                  className="rounded-md px-4 py-2.5 text-sm font-medium text-slate-600 data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-sm transition-colors"
+                >
+                  <Icon className="h-4 w-4 mr-2 shrink-0" />
+                  {category.title}
+                </TabsTrigger>
+              )
+            })}
+          </TabsList>
+        </div>
+
+        {settingsCategories.map((category) => (
+          <TabsContent key={category.id} value={category.id} className="mt-6 focus-visible:outline-none">
+            <div className="space-y-6">
+              <Card className="rounded-xl border-slate-200/80 shadow-sm bg-white overflow-hidden">
+                <CardHeader className="border-b border-slate-100 bg-slate-50/30 px-6 py-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div>
+                      <CardTitle className="text-lg font-semibold text-slate-900">{category.title}</CardTitle>
+                      <CardDescription className="text-sm text-slate-500 mt-1">{category.description}</CardDescription>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {hasUnsavedChanges && activeCategory === category.id && (
+                        <Badge variant="outline" className="text-amber-600 border-amber-200 bg-amber-50">
+                          Unsaved changes
+                        </Badge>
+                      )}
+                      <Button variant="outline" size="sm" onClick={handleReset} disabled={isLoading} className="border-slate-200">
+                        <RotateCcw className="h-4 w-4 mr-2" />
+                        Reset
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-6">
+                  {renderSettingsContent(category.id)}
+                </CardContent>
+                {/* Per-section action bar */}
+                <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/30 flex flex-wrap items-center justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => { loadSettings().then(() => setHasUnsavedChanges(false)); }}
+                    disabled={isLoading}
+                    className="border-slate-200"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleSave}
+                    disabled={!hasUnsavedChanges || isLoading}
+                    className="bg-slate-900 hover:bg-slate-800 text-white"
+                  >
+                    <Save className="h-4 w-4 mr-2" />
+                    {isLoading ? "Saving…" : "Save changes"}
+                  </Button>
+                </div>
+              </Card>
+            </div>
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   )
 }

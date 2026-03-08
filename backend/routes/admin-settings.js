@@ -597,10 +597,23 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
         }
         
       case 'sms':
-        // Test SMS configuration
-        res.json({
-          success: true,
-          message: 'SMS test sent successfully'
+        // Test SMS (MSG91) configuration
+        if (!phone) {
+          return res.status(400).json({
+            success: false,
+            error: 'Phone number is required'
+          });
+        }
+        const smsService = require('../services/sms-service');
+        if (!smsService.initialized) await smsService.initialize();
+        const message = req.body.message || 'Test message from EaseMySalon';
+        const result = await smsService.sendTestSms({ to: phone, message });
+        if (result.success) {
+          return res.json({ success: true, message: 'Test SMS sent successfully' });
+        }
+        return res.status(500).json({
+          success: false,
+          error: formatErrorMessage(result.error)
         });
         break;
         
@@ -710,6 +723,62 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
   }
 });
 
+// GET /api/admin/settings/sms/status - Get SMS service status (admin)
+router.get('/sms/status', authenticateAdmin, setupMainDatabase, async (req, res) => {
+  try {
+    const smsService = require('../services/sms-service');
+    if (!smsService.initialized) await smsService.initialize();
+    res.json({
+      success: true,
+      data: {
+        initialized: smsService.initialized,
+        enabled: smsService.enabled,
+        provider: smsService.config?.provider || 'msg91'
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching SMS status:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST /api/admin/settings/sms/template-details - Fetch template variables from MSG91 or parse from pasted body
+router.post('/sms/template-details', authenticateAdmin, setupMainDatabase, async (req, res) => {
+  try {
+    const { templateId, templateBody } = req.body;
+    const { AdminSettings } = req.mainModels;
+    const settings = await AdminSettings.getSettings();
+    const smsConfig = settings.notifications?.sms;
+    const authKey = smsConfig?.msg91AuthKey || process.env.MSG91_SMS_AUTH_KEY;
+    if (!authKey && !templateBody) {
+      return res.status(400).json({ success: false, error: 'MSG91 auth key not configured. Save auth key in SMS settings, or paste template body below.' });
+    }
+    const smsService = require('../services/sms-service');
+    const result = await smsService.fetchTemplateDetails(
+      templateId && String(templateId).trim() ? String(templateId).trim() : null,
+      authKey && String(authKey).trim() ? String(authKey).trim() : '',
+      templateBody && String(templateBody).trim() ? String(templateBody).trim() : undefined
+    );
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error,
+        hint: 'You can paste your template body (e.g. "Hi {{VAR1}}, amount {{VAR2}}") in the "Paste template body" field and click Fetch again to extract variables.'
+      });
+    }
+    res.json({
+      success: true,
+      data: {
+        variables: result.variables || [],
+        templateBody: result.templateBody
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching SMS template details:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // GET /api/admin/settings/:category - Get specific category settings
 router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) => {
   try {
@@ -810,6 +879,11 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     if (category === 'notifications' && updates.whatsapp) {
       const whatsappService = require('../services/whatsapp-service');
       await whatsappService.reloadConfiguration();
+    }
+    // Reload SMS service if SMS settings changed
+    if (category === 'notifications' && updates.sms) {
+      const smsService = require('../services/sms-service');
+      await smsService.reloadConfiguration();
     }
     
     res.json({
