@@ -75,7 +75,7 @@ export function ClientsListPage() {
         const results = await Promise.allSettled(
           batch.map(async ({ client, originalIndex }) => {
             try {
-              const response = await SalesAPI.getByClient(client.name)
+              const response = await SalesAPI.getByClient(client.phone || '')
               if (response.success && response.data && response.data.length > 0) {
                 const sales = response.data
                 const lastVisit = sales.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.date

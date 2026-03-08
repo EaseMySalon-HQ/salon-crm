@@ -62,7 +62,7 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
       setLoading(true)
       try {
         const [salesRes, appointmentsRes, clientRes, membershipRes] = await Promise.all([
-          client.name ? SalesAPI.getByClient(client.name) : Promise.resolve({ success: false, data: [] as any[] }),
+          client.phone ? SalesAPI.getByClient(client.phone) : Promise.resolve({ success: false, data: [] as any[] }),
           AppointmentsAPI.getAll({ clientId, limit: 200 }).catch(() => ({ success: false, data: [] as any[] })),
           ClientsAPI.getById(clientId).catch(() => ({ success: false, data: null })),
           MembershipAPI.getByCustomer(clientId).catch(() => ({ success: false, data: null })),
