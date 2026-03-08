@@ -118,7 +118,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
       const results = await Promise.allSettled(
         batch.map(async (client) => {
           try {
-            const response = await SalesAPI.getByClient(client.name)
+            const response = await SalesAPI.getByClient(client.phone || '')
             if (response.success && response.data && response.data.length > 0) {
               const sales = response.data
               const totalVisits = sales.length
@@ -232,7 +232,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
     
     try {
       // Use SalesAPI instead of direct fetch
-      const response = await SalesAPI.getByClient(client.name)
+      const response = await SalesAPI.getByClient(client.phone || '')
       
       if (response.success && response.data && response.data.length > 0) {
         setSelectedClientBills(response.data)
