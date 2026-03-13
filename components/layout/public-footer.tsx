@@ -115,7 +115,13 @@ export function PublicFooter() {
         </div>
         <div className="mt-12 border-t border-white/10 pt-6 flex flex-col md:flex-row gap-4 justify-between text-xs text-slate-500">
           <p>© {new Date().getFullYear()} EaseMySalon. All rights reserved.</p>
-          <div className="flex gap-6">
+          <div className="flex gap-6 flex-wrap">
+            <Link href="/terms-and-conditions" className="hover:text-white transition">
+              Terms & Conditions
+            </Link>
+            <Link href="/refund-policy" className="hover:text-white transition">
+              Refund Policy
+            </Link>
             <Link href="/privacy-policy" className="hover:text-white transition">
               Privacy
             </Link>
