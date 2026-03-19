@@ -1,4 +1,5 @@
 const PDFDocument = require('pdfkit');
+const { formatReceiptItemStaffNames } = require('./receipt-staff-format');
 
 /**
  * Generate PDF receipt buffer from receipt data
@@ -102,6 +103,15 @@ async function generateReceiptPDF(receiptData, businessSettings = {}) {
           doc.fontSize(9)
              .font('Helvetica')
              .text(`${index + 1}. ${itemName}`, { align: 'left' });
+
+          const staffLine = formatReceiptItemStaffNames(item);
+          if (staffLine) {
+            doc.fontSize(8)
+               .font('Helvetica')
+               .fillColor('#444444')
+               .text(`   Staff: ${staffLine}`, { align: 'left' });
+            doc.fillColor('#000000');
+          }
           
           if (quantity > 1) {
             doc.fontSize(8)
@@ -158,6 +168,28 @@ async function generateReceiptPDF(receiptData, businessSettings = {}) {
          .text(`TOTAL:`, { align: 'left', continued: true })
          .text(`₹${(receiptData.total || 0).toFixed(2)}`, { align: 'right' });
 
+      // Total Paid and Outstanding
+      const total = receiptData.total || 0;
+      const totalPaid = (receiptData.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0);
+      const outstanding = total - totalPaid;
+      doc.moveDown(0.3);
+      doc.fontSize(9)
+         .font('Helvetica')
+         .text('Total Paid:', { align: 'left', continued: true })
+         .text(`₹${totalPaid.toFixed(2)}`, { align: 'right' });
+      doc.moveDown(0.2);
+      if (outstanding > 0) {
+        doc.font('Helvetica')
+           .fillColor('#dc2626')
+           .text('Outstanding:', { align: 'left', continued: true })
+           .text(`₹${outstanding.toFixed(2)}`, { align: 'right' })
+           .fillColor('#000000');
+      } else {
+        doc.font('Helvetica')
+           .text('Outstanding:', { align: 'left', continued: true })
+           .text(`₹${outstanding.toFixed(2)}`, { align: 'right' });
+      }
+
       // Always show payment method
       doc.moveDown(0.5);
       doc.fontSize(9)
@@ -183,6 +215,23 @@ async function generateReceiptPDF(receiptData, businessSettings = {}) {
         doc.moveDown(0.3);
         doc.text(`Visit us again at ${businessSettings.name}`, { align: 'center' });
       }
+
+      // Payment status stamp (bottom-right, rotated)
+      const status = outstanding === 0 ? 'FULL PAID' : totalPaid > 0 ? 'PART PAID' : 'UNPAID';
+      const stampColor = status === 'FULL PAID' ? '#16a34a' : status === 'PART PAID' ? '#f97316' : '#dc2626';
+      const stampText = (status === 'FULL PAID' ? '✓ ' : '') + status;
+      const stampWidth = 70;
+      const stampHeight = 22;
+      const stampX = (doc.page.width - stampWidth) / 2;
+      const stampY = (doc.page.height - stampHeight) / 2;
+      const cx = stampX + stampWidth / 2;
+      const cy = stampY + stampHeight / 2;
+      doc.save();
+      doc.translate(cx, cy).rotate(-12).translate(-stampWidth / 2, -stampHeight / 2);
+      doc.rect(0, 0, stampWidth, stampHeight).strokeColor(stampColor).lineWidth(2).stroke();
+      doc.fillColor(stampColor).opacity(0.85).fontSize(11).font('Helvetica-Bold').text(stampText, 4, 5, { width: stampWidth - 8, align: 'center' });
+      doc.opacity(1).fillColor('#000000');
+      doc.restore();
 
       doc.end();
     } catch (error) {

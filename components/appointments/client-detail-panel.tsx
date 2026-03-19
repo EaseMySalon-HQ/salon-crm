@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
-import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare } from "lucide-react"
+import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -27,9 +27,27 @@ interface CustomerNote {
 
 interface ClientDetailPanelProps {
   client: Client
+  /** When set, shows "View Profile" on the right side of the panel header (e.g. clients drawer). */
+  onViewProfile?: () => void
 }
 
-export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
+/** Active = status ACTIVE and not past expiry; otherwise show NA. */
+function getActiveMembershipPlanName(data: { subscription?: any; plan?: any } | null): string {
+  if (!data?.subscription) return "NA"
+  const sub = data.subscription
+  const plan = data.plan ?? sub.planId
+  const isActive = sub.status === "ACTIVE"
+  const isExpired =
+    sub.status === "EXPIRED" || (sub.expiryDate && new Date(sub.expiryDate) < new Date())
+  if (!isActive || isExpired) return "NA"
+  if (plan && typeof plan === "object") {
+    const name = (plan.planName || plan.name || "").trim()
+    if (name) return name
+  }
+  return "NA"
+}
+
+export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelProps) {
   const { formatAmount } = useCurrency()
   const [loading, setLoading] = useState(true)
   const [totalVisits, setTotalVisits] = useState(0)
@@ -152,14 +170,39 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
   const displayName = clientDetails?.name ?? client.name
   const displayPhone = clientDetails?.phone ?? client.phone
   const initial = (displayName?.charAt(0) || "?").toUpperCase()
+  const activeMembershipPlanName = getActiveMembershipPlanName(membershipData)
 
   const panelClass =
     "w-full max-w-full border-slate-200 shadow-lg bg-white/90 backdrop-blur-sm flex flex-col overflow-hidden " +
     "min-h-[min(32rem,70vh)] lg:min-h-[min(32rem,75vh)] relative z-10"
 
+  const panelHeader = (
+    <CardHeader className="bg-gradient-to-r from-indigo-50 to-purple-50 border-b border-slate-100 py-3 px-4 sm:py-4 sm:px-5 lg:py-5 lg:px-6 shrink-0 space-y-0">
+      <div className="flex items-center justify-between gap-3 w-full min-w-0">
+        <CardTitle className="text-base sm:text-lg font-semibold text-slate-800 flex items-center gap-2 min-w-0">
+          <User className="h-4 w-4 sm:h-5 sm:w-5 text-indigo-600 shrink-0" />
+          <span className="truncate">Client Details</span>
+        </CardTitle>
+        {onViewProfile ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0 h-8"
+            onClick={onViewProfile}
+          >
+            <User className="h-3.5 w-3.5 mr-1.5" />
+            View Profile
+          </Button>
+        ) : null}
+      </div>
+    </CardHeader>
+  )
+
   if (loading) {
     return (
       <Card className={panelClass}>
+        {panelHeader}
         <CardContent className="p-4 sm:p-6 lg:p-8 flex flex-col items-center justify-center flex-1 min-h-[min(24rem,60vh)]">
           <Loader2 className="h-7 w-7 sm:h-8 sm:w-8 animate-spin text-indigo-600 mb-3 sm:mb-4" />
           <p className="text-xs sm:text-sm text-slate-500">Loading client details...</p>
@@ -170,12 +213,7 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
 
   return (
     <Card className={panelClass}>
-      <CardHeader className="bg-gradient-to-r from-indigo-50 to-purple-50 border-b border-slate-100 py-3 px-4 sm:py-4 sm:px-5 lg:py-5 lg:px-6 shrink-0">
-        <CardTitle className="text-base sm:text-lg font-semibold text-slate-800 flex items-center gap-2">
-          <User className="h-4 w-4 sm:h-5 sm:w-5 text-indigo-600" />
-          Client Details
-        </CardTitle>
-      </CardHeader>
+      {panelHeader}
       <CardContent className="relative p-4 sm:p-5 lg:p-6 space-y-3 sm:space-y-4 lg:space-y-5 flex-1 flex flex-col min-h-0">
         {membershipData?.subscription?.expiryDate && (
           <span className="absolute top-4 right-4 sm:top-5 sm:right-5 lg:top-6 lg:right-6 text-xs text-slate-500">
@@ -254,6 +292,20 @@ export function ClientDetailPanel({ client }: ClientDetailPanelProps) {
             </span>
             <span className={`font-semibold ${duesUnpaid > 0 ? "text-amber-600" : "text-slate-700"}`}>
               {formatAmount(duesUnpaid)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-sm sm:text-base gap-2">
+            <span className="text-slate-600 flex items-center gap-2 shrink-0">
+              <CreditCard className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" />
+              Memberships
+            </span>
+            <span
+              className={`font-semibold truncate text-right min-w-0 ${
+                activeMembershipPlanName === "NA" ? "text-slate-500" : "text-slate-900"
+              }`}
+              title={activeMembershipPlanName}
+            >
+              {activeMembershipPlanName}
             </span>
           </div>
         </div>

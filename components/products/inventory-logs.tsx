@@ -113,9 +113,7 @@ export function InventoryLogs() {
         }
       }
 
-      console.log('🔍 Inventory Logs - Fetching with params:', params)
       const response = await InventoryAPI.getTransactions(params)
-      console.log('🔍 Inventory Logs - Response:', response)
       setTransactions(response.data || [])
       
       // Also fetch all transactions (without date filter) to count unique imported products and calculate total units
@@ -130,10 +128,9 @@ export function InventoryLogs() {
         let allTrans = allResponse.data || []
         
         // If there are more pages, fetch them
-        if (allResponse.pagination && allResponse.pagination.pages > 1) {
+        if (allResponse.pagination && allResponse.pagination.totalPages > 1) {
           const additionalPages = []
-          const totalPages = allResponse.pagination.pages
-          console.log(`🔍 Fetching ${totalPages} pages of transactions for accurate totals...`)
+          const totalPages = allResponse.pagination.totalPages
           for (let page = 2; page <= totalPages; page++) {
             try {
               const pageParams = { ...allParams, page }
@@ -154,10 +151,6 @@ export function InventoryLogs() {
         const totalUnitsFromImports = importTrans.reduce((sum, t) => sum + t.quantity, 0)
         const uniqueProducts = new Set(importTrans.map(t => t.productId)).size
         
-        console.log('🔍 Total transactions fetched:', allTrans.length)
-        console.log('🔍 Import transactions (IMPORT-):', importTrans.length)
-        console.log('🔍 Unique products imported:', uniqueProducts)
-        console.log('🔍 Total units added from imports only:', totalUnitsFromImports)
       } catch (error) {
         console.error('Error fetching all transactions for product count:', error)
         // If this fails, just use the filtered transactions
@@ -212,9 +205,9 @@ export function InventoryLogs() {
 
   // Filter transactions based on search term
   const filteredTransactions = transactions.filter(transaction =>
-    transaction.productName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    transaction.referenceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    transaction.processedBy.toLowerCase().includes(searchTerm.toLowerCase())
+    (transaction.productName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (transaction.referenceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (transaction.processedBy || '').toLowerCase().includes(searchTerm.toLowerCase())
   )
 
   // Get transaction type badge

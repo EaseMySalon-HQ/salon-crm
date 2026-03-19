@@ -45,14 +45,15 @@ export function MultiStaffSelector({
   const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>(
     initialContributions.map(c => c.staffId)
   )
-  // Convert selected staff IDs to contributions
+  // Equal split: (line total after line discount) / N → each staff’s revenue share (backend persists amount from %).
   const contributions: StaffContribution[] = selectedStaffIds.map(staffId => {
     const staff = staffList.find(s => (s._id || s.id) === staffId)
+    const n = selectedStaffIds.length
     return {
       staffId,
       staffName: staff?.name || 'Unknown Staff',
-      percentage: selectedStaffIds.length > 0 ? 100 / selectedStaffIds.length : 0,
-      amount: selectedStaffIds.length > 0 ? serviceTotal / selectedStaffIds.length : 0
+      percentage: n > 0 ? 100 / n : 0,
+      amount: n > 0 ? serviceTotal / n : 0,
     }
   })
 

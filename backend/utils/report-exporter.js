@@ -1036,40 +1036,60 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
         });
         
         // Get sales and expenses for each date
+        // Cash Register uses PAYMENT DATE: new bills (sale date) + due collections (paymentHistory date)
         for (const [dateKey, summary] of dateMap.entries()) {
           const dateStart = new Date(dateKey);
           dateStart.setHours(0, 0, 0, 0);
           const dateEnd = new Date(dateKey);
           dateEnd.setHours(23, 59, 59, 999);
           
-          const sales = await Sale.find({
+          const salesToday = await Sale.find({
+            branchId,
             date: { $gte: dateStart, $lte: dateEnd },
-            status: { $ne: 'cancelled' }
+            status: { $nin: ['cancelled', 'Cancelled'] }
           }).lean();
-          
-          summary.cashCollected = sales
-            .filter(s => s.paymentMode?.toLowerCase().includes('cash') || 
-                       s.payments?.some(p => p.mode?.toLowerCase() === 'cash'))
-            .reduce((sum, s) => {
-              let cashAmt = 0;
-              let isAllCash = false;
-              if (s.payments && s.payments.length > 0) {
-                cashAmt = s.payments.filter(p => p.mode?.toLowerCase() === 'cash')
-                  .reduce((pSum, p) => pSum + (p.amount || 0), 0);
-                const hasNonCash = s.payments.some(p => {
-                  const m = (p.mode || '').toLowerCase();
-                  return m === 'card' || m === 'online';
-                });
-                isAllCash = cashAmt > 0 && !hasNonCash;
-              } else {
-                cashAmt = (s.netTotal || 0);
-                isAllCash = (s.paymentMode || '').toLowerCase().includes('cash') && 
-                  !(s.paymentMode || '').toLowerCase().includes('card') && 
-                  !(s.paymentMode || '').toLowerCase().includes('online');
+          const salesWithDuesToday = await Sale.find({
+            branchId,
+            paymentHistory: {
+              $elemMatch: {
+                date: { $gte: dateStart, $lte: dateEnd },
+                method: 'Cash'
               }
-              const tip = s.tip || 0;
-              return sum + cashAmt - (isAllCash ? tip : 0);
-            }, 0);
+            },
+            status: { $nin: ['cancelled', 'Cancelled'] }
+          }).lean();
+          let cashFromNewBills = 0;
+          salesToday.forEach(s => {
+            let cashAmt = 0;
+            let isAllCash = false;
+            if (s.payments && s.payments.length > 0) {
+              cashAmt = s.payments.filter(p => (p.mode || '').toLowerCase() === 'cash')
+                .reduce((pSum, p) => pSum + (p.amount || 0), 0);
+              const hasNonCash = s.payments.some(p => {
+                const m = (p.mode || '').toLowerCase();
+                return m === 'card' || m === 'online';
+              });
+              isAllCash = cashAmt > 0 && !hasNonCash;
+            } else {
+              cashAmt = (s.netTotal || 0);
+              isAllCash = (s.paymentMode || '').toLowerCase().includes('cash') &&
+                !(s.paymentMode || '').toLowerCase().includes('card') &&
+                !(s.paymentMode || '').toLowerCase().includes('online');
+            }
+            const tip = s.tip || 0;
+            cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
+          });
+          let cashFromDueCollected = 0;
+          salesWithDuesToday.forEach(s => {
+            (s.paymentHistory || []).forEach(ph => {
+              if (!ph || (ph.method || '').toLowerCase() !== 'cash') return;
+              const phDate = ph.date ? new Date(ph.date) : null;
+              if (phDate && phDate >= dateStart && phDate <= dateEnd) {
+                cashFromDueCollected += ph.amount || 0;
+              }
+            });
+          });
+          summary.cashCollected = cashFromNewBills + cashFromDueCollected;
           
           summary.onlineSales = sales
             .filter(s => s.paymentMode?.toLowerCase().includes('online') || 
@@ -1376,6 +1396,21 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
     // Use closingBalance (actual counted) when available, else cashBalance (calculated) - matches API & UI
     const cashBalance = closingRegistry?.closingBalance ?? closingRegistry?.cashBalance ?? 0;
 
+    // Outstanding: invoices in date range with due_amount > 0
+    let totalDue = 0;
+    const customersWithDueSet = new Set();
+    sales.forEach(s => {
+      const totalBillAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? s.netTotal ?? 0;
+      const amountPaid = s.paymentStatus?.paidAmount ?? (s.payments?.reduce((sum, p) => sum + (p.amount || 0), 0) ?? 0);
+      const dueAmount = totalBillAmount - amountPaid;
+      if (dueAmount > 0) {
+        totalDue += dueAmount;
+        const customerKey = (s.customerName || '').trim() || s._id.toString();
+        if (customerKey) customersWithDueSet.add(customerKey);
+      }
+    });
+    const customersWithDue = customersWithDueSet.size;
+
     const summaryData = {
       totalBillCount,
       totalCustomerCount,
@@ -1387,7 +1422,9 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
       cashExpense,
       pettyCashExpense,
       tipCollected,
-      cashBalance
+      cashBalance,
+      totalDue,
+      customersWithDue
     };
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
@@ -1420,7 +1457,9 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
         ['Cash Expense', summaryData.cashExpense],
         ['Petty Cash Expense', summaryData.pettyCashExpense],
         ['Tip Collected', summaryData.tipCollected],
-        ['Cash Balance', summaryData.cashBalance]
+        ['Cash Balance', summaryData.cashBalance],
+        ['Total Due (Outstanding)', summaryData.totalDue],
+        ['Customers with Due', summaryData.customersWithDue]
       ];
       const ws = XLSX.utils.aoa_to_sheet(rows);
       const wb = XLSX.utils.book_new();
@@ -1447,7 +1486,9 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
         ['Cash Expense', `₹${fmt(summaryData.cashExpense)}`],
         ['Petty Cash Expense', `₹${fmt(summaryData.pettyCashExpense)}`],
         ['Tip Collected', `₹${fmt(summaryData.tipCollected)}`],
-        ['Cash Balance', `₹${fmt(summaryData.cashBalance)}`]
+        ['Cash Balance', `₹${fmt(summaryData.cashBalance)}`],
+        ['Total Due (Outstanding)', `₹${fmt(summaryData.totalDue)}`],
+        ['Customers with Due', String(summaryData.customersWithDue)]
       ];
       const headers = ['Metric', 'Value'];
       const tableRows = metrics;

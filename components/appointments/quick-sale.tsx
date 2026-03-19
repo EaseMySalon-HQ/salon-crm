@@ -64,6 +64,7 @@ import {
 import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI, BlockTimeAPI, MembershipAPI } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
+import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
 import { useRouter } from "next/navigation"
 
@@ -2641,12 +2642,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           // Handle staff contributions
           let staffContributions = item.staffContributions
           if (!staffContributions && item.staffId) {
-            // Legacy support - create single staff contribution
+            const preTax = getLinePreTaxTotal({
+              price: item.price,
+              quantity: item.quantity,
+              discount: item.discount ?? 0,
+              total: item.total,
+              taxRate: isServiceTaxable(item) ? (taxSettings?.serviceTaxRate || 5) : 0,
+            })
             staffContributions = [{
               staffId: item.staffId,
               staffName: staffMember?.name || "Unassigned Staff",
               percentage: 100,
-              amount: item.total
+              amount: preTax,
             }]
           }
           
@@ -3039,6 +3046,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 title: `Bill ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
                 description: `Bill ${receiptNumber} has been ${actionText} successfully.`,
               })
+              // Calendar columns are staff-scoped; refresh when a linked completed bill’s staff changes
+              if (
+                typeof window !== "undefined" &&
+                linkedAppointmentId &&
+                String(result.data?.status || "").toLowerCase() === "completed"
+              ) {
+                window.dispatchEvent(new CustomEvent("appointments-refresh"))
+              }
               // Redirect to reports after a short delay
               setTimeout(() => {
                 router.push("/reports")
@@ -4256,21 +4271,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         ])],
                         serviceIndex
                       )}
-                      serviceTotal={item.total}
+                      serviceTotal={getLinePreTaxTotal({
+                        price: item.price,
+                        quantity: item.quantity,
+                        discount: item.discount ?? 0,
+                        total: item.total,
+                        taxRate: isServiceTaxable(item) ? (taxSettings?.serviceTaxRate || 5) : 0,
+                      })}
                       compact
                       selectStaffFlex={1.5}
                       addStaffFlex={0.5}
                       onStaffContributionsChange={(contributions) => {
-                        console.log('=== MULTI STAFF SELECTOR CALLBACK (SERVICE) ===')
-                        console.log('Item ID:', item.id)
-                        console.log('Contributions:', contributions)
                         updateServiceItem(item.id, "staffContributions", contributions)
-                        // Also update staffId for backward compatibility (use first staff member)
                         if (contributions.length > 0) {
-                          console.log('Setting staffId to:', contributions[0].staffId)
                           updateServiceItem(item.id, "staffId", contributions[0].staffId)
                         } else {
-                          console.log('Clearing staffId')
                           updateServiceItem(item.id, "staffId", "")
                         }
                       }}

@@ -302,6 +302,7 @@ export function BusinessManagement() {
       const data = await res.json()
       if (data.success && data.data?.token) {
         if (typeof window !== "undefined") {
+          sessionStorage.setItem("admin-impersonation-origin", window.location.pathname + window.location.search)
           localStorage.setItem("salon-auth-token", data.data.token)
           localStorage.setItem("salon-auth-user", JSON.stringify({ _id: "pending", email: "", role: "admin" }))
           window.location.href = "/dashboard"

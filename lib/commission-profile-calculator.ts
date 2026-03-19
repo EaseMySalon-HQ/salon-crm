@@ -1,4 +1,8 @@
 import { CommissionProfile } from './commission-profile-types'
+import {
+  getAttributedRevenueForStaff,
+  staffIsAttributedToLineItem,
+} from './staff-line-revenue'
 
 export interface SaleItem {
   id: string
@@ -11,6 +15,15 @@ export interface SaleItem {
   staffName?: string
   discount?: number
   discountType?: 'percentage' | 'fixed'
+  priceExcludingGST?: number
+  taxRate?: number
+  taxAmount?: number
+  staffContributions?: Array<{
+    staffId?: string
+    staffName?: string
+    percentage?: number
+    amount?: number
+  }>
 }
 
 export interface Sale {
@@ -69,13 +82,16 @@ export class CommissionProfileCalculator {
     staffId: string,
     staffName?: string
   ): StaffCommissionResult | null {
-    // Filter items for this staff member (match by id or name so both old and new data work)
-    const staffItems = sale.items.filter(item => {
-      const idMatch = item.staffId != null && String(item.staffId) === String(staffId)
-      const nameMatchAsId = item.staffName != null && item.staffName === staffId
-      const nameMatch = staffName != null && item.staffName != null && item.staffName === staffName
-      return idMatch || nameMatchAsId || nameMatch
-    })
+    const saleFallback = { staffId: sale.staffId, staffName: sale.staffName }
+    // Attribute line totals by staffContributions (split) or legacy single staff on the line
+    const staffItems = sale.items
+      .filter((item) =>
+        staffIsAttributedToLineItem(item, staffId, staffName, saleFallback)
+      )
+      .map((item) => ({
+        ...item,
+        total: getAttributedRevenueForStaff(item, staffId, staffName, saleFallback),
+      }))
 
     if (staffItems.length === 0) {
       return null
@@ -162,7 +178,7 @@ export class CommissionProfileCalculator {
 
     return {
       staffId,
-      staffName: staffItems[0]?.staffName || staffId,
+      staffName: staffName || staffItems[0]?.staffName || staffId,
       totalCommission,
       totalRevenue,
       serviceCommission: profileBreakdown

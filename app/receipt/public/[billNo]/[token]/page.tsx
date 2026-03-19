@@ -20,11 +20,19 @@ interface ReceiptData {
     quantity: number
     price: number
     total: number
+    discount?: number
+    discountType?: string
     staffName?: string
+    staffContributions?: Array<{ staffId?: string; staffName?: string; percentage?: number; amount?: number }>
+    hsnSacCode?: string
+    taxAmount?: number
+    priceExcludingGST?: number
+    taxRate?: number
   }>
   netTotal: number
   taxAmount: number
   grossTotal: number
+  subtotalExcludingTax?: number
   paymentMode: string
   payments: Array<{
     type: string
@@ -90,6 +98,7 @@ export default function PublicReceiptPage() {
                 discount: item.discount ?? 0,
                 discountType: item.discountType || 'percentage',
                 staffName: item.staffName || saleData.staffName,
+                staffContributions: item.staffContributions,
                 hsnSacCode: item.hsnSacCode || '',
                 taxAmount: item.taxAmount,
                 priceExcludingGST: item.priceExcludingGST,
@@ -215,9 +224,10 @@ export default function PublicReceiptPage() {
                 price: item.price,
                 quantity: item.quantity,
                 discount: (item as any).discount ?? 0,
-                discountType: ((item as any).discountType || 'percentage') as const,
+                discountType: ((item as any).discountType || 'percentage') as "percentage" | "fixed",
                 staffId: receipt.id,
                 staffName: item.staffName || receipt.staffName,
+                staffContributions: item.staffContributions,
                 total: item.total,
                 hsnSacCode: (item as any).hsnSacCode || '',
                 taxAmount: (item as any).taxAmount,

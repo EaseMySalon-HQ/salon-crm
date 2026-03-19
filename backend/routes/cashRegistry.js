@@ -171,16 +171,60 @@ router.post('/', auth, async (req, res) => {
     let onlinePosDifference = 0;
     
     if (shiftType === 'closing') {
-      // Get cash collected from sales for the date
-      const sales = await Sale.find({
-        date: {
-          $gte: startOfDay,
-          $lt: endOfDay
+      // Cash Register uses PAYMENT DATE (when cash was collected), not invoice date
+      // Total Cash = New payments (checkout) + Due collections on this date
+      const branchId = req.user.branchId;
+      // Fetch sales: (a) created today for new payments, (b) any sale with paymentHistory today
+      const salesToday = await Sale.find({
+        branchId,
+        date: { $gte: startOfDay, $lt: endOfDay },
+        status: { $nin: ['cancelled', 'Cancelled'] }
+      }).lean();
+      const salesWithDuesToday = await Sale.find({
+        branchId,
+        paymentHistory: {
+          $elemMatch: {
+            date: { $gte: startOfDay, $lt: endOfDay },
+            method: 'Cash'
+          }
         },
-        paymentMode: 'Cash'
+        status: { $nin: ['cancelled', 'Cancelled'] }
+      }).lean();
+      let cashFromNewBills = 0;
+      salesToday.forEach((sale) => {
+        let cashAmt = 0;
+        let isAllCash = false;
+        if (sale.payments && sale.payments.length > 0) {
+          sale.payments.forEach((p) => {
+            const m = (p.mode || p.type || '').toLowerCase();
+            if (m.includes('cash')) cashAmt += p.amount || 0;
+          });
+          const hasNonCash = (sale.payments || []).some((p) => {
+            const m = (p.mode || p.type || '').toLowerCase();
+            return m.includes('card') || m.includes('online') || m.includes('upi');
+          });
+          isAllCash = cashAmt > 0 && !hasNonCash;
+        } else {
+          const pm = (sale.paymentMode || '').toLowerCase();
+          if (pm.includes('cash') && !pm.includes('card') && !pm.includes('online')) {
+            cashAmt = sale.netTotal || sale.grossTotal || 0;
+            isAllCash = true;
+          }
+        }
+        const tip = sale.tip || 0;
+        cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
       });
-      
-      cashCollected = sales.reduce((sum, sale) => sum + sale.netTotal, 0);
+      let cashFromDueCollected = 0;
+      salesWithDuesToday.forEach((sale) => {
+        (sale.paymentHistory || []).forEach((ph) => {
+          if (!ph || (ph.method || '').toLowerCase() !== 'cash') return;
+          const phDate = ph.date ? new Date(ph.date) : null;
+          if (phDate && phDate >= startOfDay && phDate < endOfDay) {
+            cashFromDueCollected += ph.amount || 0;
+          }
+        });
+      });
+      cashCollected = cashFromNewBills + cashFromDueCollected;
       
       // Get expenses for the date
       const expenses = await Expense.find({

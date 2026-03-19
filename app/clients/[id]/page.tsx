@@ -1,4 +1,5 @@
 import { ProtectedRoute } from "@/components/auth/protected-route"
+import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ClientDetailsPage } from "@/components/clients/client-details"
 
 interface ClientDetailsPageProps {
@@ -11,7 +12,9 @@ export default async function ClientDetailsRoute({ params }: ClientDetailsPagePr
   const { id } = await params
   return (
     <ProtectedRoute requiredModule="clients">
-      <ClientDetailsPage clientId={id} />
+      <ProtectedLayout>
+        <ClientDetailsPage clientId={id} />
+      </ProtectedLayout>
     </ProtectedRoute>
   )
 } 

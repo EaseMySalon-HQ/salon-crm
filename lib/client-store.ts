@@ -36,7 +36,6 @@ class ClientStore {
     this.isLoading = true
     try {
       // Fetch ALL clients from paginated API
-      console.log('🔍 ClientStore: Loading all clients from API (paginated)...')
       const pageSize = 1000
       let page = 1
       let all: any[] = []
@@ -70,12 +69,9 @@ class ClientStore {
           total = all.length
         }
         
-        console.log(`📥 ClientStore: fetched page ${page}, ${batch.length} items (total so far ${all.length}/${total})`)
-        console.log(`   API pagination:`, resp.pagination)
         
         // Stop if no more data or if we've fetched all available
         if (!batch.length || (apiTotal !== undefined && all.length >= apiTotal)) {
-          console.log(`✅ ClientStore: Finished fetching. Total clients: ${all.length}`)
           break
         }
         page += 1
@@ -178,8 +174,6 @@ class ClientStore {
   }
 
   async deleteClient(id: string): Promise<boolean> {
-    console.log('ClientStore: Deleting client with ID:', id)
-    console.log('ClientStore: Current clients before deletion:', this.clients.length)
     
     try {
       // Try API first
@@ -189,7 +183,6 @@ class ClientStore {
         const beforeCount = this.clients.length
         this.clients = this.clients.filter(c => c.id !== id && c._id !== id)
         const afterCount = this.clients.length
-        console.log('ClientStore: Clients before deletion:', beforeCount, 'after deletion:', afterCount)
         this.notifyListeners()
         return true
       }
@@ -231,7 +224,6 @@ class ClientStore {
       const beforeCount = this.clients.length
       this.clients = this.clients.filter(c => c.id !== id && c._id !== id)
       const afterCount = this.clients.length
-      console.log('ClientStore: Clients before deletion (fallback):', beforeCount, 'after deletion:', afterCount)
       
       this.notifyListeners()
       return true

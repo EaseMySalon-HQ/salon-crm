@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { Search, Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Banknote, Calendar, Clock, CreditCard, Receipt, RefreshCw, CheckCircle, Clock as ClockIcon, FileText, FileSpreadsheet, ChevronDown } from "lucide-react"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { Search, Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Banknote, Calendar, Clock, CreditCard, Receipt, RefreshCw, CheckCircle, Clock as ClockIcon, FileText, FileSpreadsheet, ChevronDown, Info, Smartphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -22,6 +22,14 @@ import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
 import { CashRegistryModal } from "./cash-registry-modal"
 import { VerificationModal } from "./verification-modal"
+import { CashDifferenceBreakdownDrawer } from "./cash-difference-breakdown-drawer"
+import { AddEditReasonModal } from "./add-edit-reason-modal"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
@@ -47,7 +55,12 @@ interface CashRegistryEntry {
   onlineCash: number
   posCash: number
   balanceDifference: number
+  balanceDifferenceReason?: string
+  balanceDifferenceNote?: string
   onlinePosDifference: number
+  onlineCashDifferenceReason?: string
+  onlineCashDifferenceNote?: string
+  cashBalance?: number
   status: "active" | "closed" | "verified"
   isVerified: boolean
   createdAt: string
@@ -84,13 +97,14 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   const [selectedDenominationsType, setSelectedDenominationsType] = useState<"opening" | "closing">("opening")
   const [isDeletingDailySummary, setIsDeletingDailySummary] = useState(false)
   const [selectedSummaryDate, setSelectedSummaryDate] = useState<string | null>(null)
-  const [isReasonModalOpen, setIsReasonModalOpen] = useState(false)
-  const [selectedReason, setSelectedReason] = useState<{
-    type: 'cash' | 'online'
-    reason: string
-    difference: number
-  } | null>(null)
+  const [breakdownDrawerOpen, setBreakdownDrawerOpen] = useState(false)
+  const [breakdownEntry, setBreakdownEntry] = useState<import("./cash-difference-breakdown-drawer").DifferenceBreakdownEntry | null>(null)
+  const [addEditReasonModalOpen, setAddEditReasonModalOpen] = useState(false)
   const [selectedClosingEntry, setSelectedClosingEntry] = useState<CashRegistryEntry | null>(null)
+  const [cashSalesCardExpanded, setCashSalesCardExpanded] = useState(false)
+  const cashSalesCardRef = useRef<HTMLDivElement>(null)
+  const [onlineSalesCardExpanded, setOnlineSalesCardExpanded] = useState(false)
+  const onlineSalesCardRef = useRef<HTMLDivElement>(null)
 
   // State for daily summaries (populated when "Verified and Close" is clicked)
   const [dailySummaries, setDailySummaries] = useState<Array<{
@@ -102,10 +116,13 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     closingBalance: number
     cashDifference: number
     cashDifferenceReason?: string
+    cashDifferenceNote?: string
+    closingEntryId?: string
     totalOnlineSales: number
     cashInPos: number
     onlineCashDifference: number
     onlineCashDifferenceReason?: string
+    onlineCashDifferenceNote?: string
     isVerified: boolean
     verifiedAt: string
     verifiedBy: string
@@ -222,12 +239,14 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         cashBalance,
         closingBalance,
         cashDifference,
-        // Preserve existing reasons if they exist, otherwise use from closingEntry
         cashDifferenceReason: existingSummary?.cashDifferenceReason || closingEntry?.balanceDifferenceReason || '',
+        cashDifferenceNote: existingSummary?.cashDifferenceNote || (closingEntry as any)?.balanceDifferenceNote || '',
+        closingEntryId: closingEntry?.id || '',
         totalOnlineSales: onlineSales,
         cashInPos,
         onlineCashDifference,
         onlineCashDifferenceReason: existingSummary?.onlineCashDifferenceReason || closingEntry?.onlineCashDifferenceReason || '',
+        onlineCashDifferenceNote: existingSummary?.onlineCashDifferenceNote || (closingEntry as any)?.onlineCashDifferenceNote || '',
         isVerified: closingEntry?.isVerified || false,
         verifiedAt: closingEntry?.verifiedAt || '',
         verifiedBy: closingEntry?.verifiedBy || ''
@@ -282,14 +301,19 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   })
 
   // Handle verification
-  const handleVerification = async (data: { entryId: string; balanceDifferenceReason?: string; onlinePosDifferenceReason?: string }) => {
+  const handleVerification = async (data: { 
+    entryId: string
+    balanceDifferenceReason?: string
+    balanceDifferenceNote?: string
+    onlinePosDifferenceReason?: string
+    onlineCashDifferenceNote?: string
+  }) => {
     try {
       const response = await CashRegistryAPI.verify(data.entryId, {
-        verificationNotes: data.balanceDifferenceReason || data.onlinePosDifferenceReason ? 
-          `Cash Difference: ${data.balanceDifferenceReason || 'None'}, Online Difference: ${data.onlinePosDifferenceReason || 'None'}` : 
-          'Registry verified with no differences',
         balanceDifferenceReason: data.balanceDifferenceReason,
+        balanceDifferenceNote: data.balanceDifferenceNote,
         onlineCashDifferenceReason: data.onlinePosDifferenceReason,
+        onlineCashDifferenceNote: data.onlineCashDifferenceNote,
       })
 
       if (response.success) {
@@ -353,10 +377,13 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             closingBalance,
             cashDifference,
             cashDifferenceReason: data.balanceDifferenceReason || '',
+            cashDifferenceNote: data.balanceDifferenceNote || '',
+            closingEntryId: data.entryId,
             totalOnlineSales: onlineSales,
             cashInPos,
             onlineCashDifference,
             onlineCashDifferenceReason: data.onlinePosDifferenceReason || '',
+            onlineCashDifferenceNote: data.onlineCashDifferenceNote || '',
             isVerified: true,
             verifiedAt: verifiedEntryFromAPI?.verifiedAt || new Date().toISOString(),
             verifiedBy: verifiedByName
@@ -451,6 +478,14 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     }
   }, [])
 
+  // Refetch sales when date range changes (e.g. custom date picker)
+  useEffect(() => {
+    if (dateRange?.from && dateRange?.to) {
+      const effectiveRange = getEffectiveDateRange(dateRange.from, dateRange.to)
+      fetchSalesData(effectiveRange)
+    }
+  }, [dateRange?.from?.getTime(), dateRange?.to?.getTime()])
+
   // Generate daily summaries when data changes
   useEffect(() => {
     console.log("🔄 useEffect triggered for daily summaries generation:", {
@@ -468,7 +503,20 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     }
   }, [cashRegistryData, salesData, expensesData, generateDailySummaries])
 
-
+  // Click outside to collapse expandable cards
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (cashSalesCardExpanded && cashSalesCardRef.current && !cashSalesCardRef.current.contains(target)) {
+        setCashSalesCardExpanded(false)
+      }
+      if (onlineSalesCardExpanded && onlineSalesCardRef.current && !onlineSalesCardRef.current.contains(target)) {
+        setOnlineSalesCardExpanded(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [cashSalesCardExpanded, onlineSalesCardExpanded])
 
   const fetchCashRegistryData = async (silent = false) => {
     if (!silent) setLoading(true)
@@ -501,7 +549,10 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           balanceDifference: entry.balanceDifference || 0,
           onlinePosDifference: entry.onlinePosDifference || 0,
           balanceDifferenceReason: entry.balanceDifferenceReason || '',
+          balanceDifferenceNote: entry.balanceDifferenceNote || '',
           onlineCashDifferenceReason: entry.onlineCashDifferenceReason || '',
+          onlineCashDifferenceNote: entry.onlineCashDifferenceNote || '',
+          cashBalance: entry.cashBalance,
           status: entry.status || "active",
           isVerified: entry.isVerified || false,
           createdAt: entry.createdAt
@@ -588,10 +639,18 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     }
   }
 
-  const fetchSalesData = async () => {
+  const fetchSalesData = async (overrideRange?: { from: Date; to: Date } | null) => {
     try {
       console.log("Fetching real-time sales data...")
-      const response = await SalesAPI.getAll()
+      // Fetch wider range to include sales with due payments collected in our date range
+      const range = overrideRange ?? (dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null)
+      const params: { dateFrom?: string; dateTo?: string } = {}
+      if (range) {
+        const fromExtended = new Date(range.from.getTime() - 90 * 24 * 60 * 60 * 1000)
+        params.dateFrom = toDateStringIST(fromExtended)
+        params.dateTo = toDateStringIST(range.to)
+      }
+      const response = await SalesAPI.getAll(params)
       console.log("Sales API Response:", response)
       
       if (response.success && response.data) {
@@ -682,9 +741,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     const range = getDateRangeFromPeriod(period)
     setDateRange(range)
     
-    // Fetch expenses for the new date range
+    // Fetch expenses and sales for the new date range
+    const effectiveRange = range?.from && range?.to ? getEffectiveDateRange(range.from, range.to) : null
     setTimeout(() => {
       fetchExpensesData()
+      fetchSalesData(effectiveRange)
     }, 100)
   }
 
@@ -730,11 +791,14 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   })
 
   // Calculate real-time stats from sales and expenses data
+  // Cash Register uses PAYMENT DATE (when cash was collected), not invoice date
+  // Total Cash Sales = New payments today (checkout) + Due collections today
   const getRealTimeCashSales = () => {
     if (!activeDateRange) return 0
-    
-    return salesData.reduce((sum: number, sale: any) => {
+    let total = 0
+    salesData.forEach((sale: any) => {
       const saleDate = new Date(sale.date)
+      // 1. Cash from new bills (checkout payments) - use sale date (payment at checkout = same day as invoice)
       if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
         let cashAmt = 0
         let isAllCash = false
@@ -752,10 +816,18 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           isAllCash = cashAmt > 0
         }
         const tip = sale.tip || 0
-        return sum + cashAmt - (isAllCash ? tip : 0)
+        total += cashAmt - (isAllCash ? tip : 0)
       }
-      return sum
-    }, 0)
+      // 2. Cash from due collections - use paymentHistory date (when payment was actually collected)
+      ;(sale.paymentHistory || []).forEach((ph: any) => {
+        if (!ph || (ph.method || "").toLowerCase() !== "cash") return
+        const phDate = ph.date ? new Date(ph.date) : null
+        if (phDate && phDate >= activeDateRange.from && phDate <= activeDateRange.to) {
+          total += ph.amount || 0
+        }
+      })
+    })
+    return total
   }
 
   const getRealTimeOnlineSales = () => {
@@ -826,26 +898,14 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   const totalOnlineSales = getRealTimeOnlineSales()
   const totalExpenses = getRealTimeExpenses()
 
-  // Log real-time stats for debugging
-  console.log("🔄 Real-time stats calculated:", {
-    dateRange: dateRange,
-    totalCashSales,
-    totalOnlineSales,
-    totalExpenses,
-    salesDataCount: salesData.length,
-    expensesDataCount: Object.keys(expensesData).length
-  })
-
-  // Helper functions to get real-time data for each entry
-  const getEntryCashSales = (entryDate: string) => {
-    // Normalize entry date to YYYY-MM-DD format
-    const normalizedEntryDate = toDateStringIST(entryDate)
-    
-    const result = salesData.reduce((sum: number, sale: any) => {
-      // Normalize sale date to YYYY-MM-DD format
-      const saleDate = toDateStringIST(sale.date)
-      
-      if (saleDate === normalizedEntryDate) {
+  // Cash breakdown for UI (From New Bills + From Due Collected)
+  const getCashSalesBreakdown = () => {
+    if (!activeDateRange) return { fromNewBills: 0, fromDueCollected: 0 }
+    let fromNewBills = 0
+    let fromDueCollected = 0
+    salesData.forEach((sale: any) => {
+      const saleDate = new Date(sale.date)
+      if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
         let cashAmt = 0
         let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
@@ -862,23 +922,92 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           isAllCash = cashAmt > 0
         }
         const tip = sale.tip || 0
-        return sum + cashAmt - (isAllCash ? tip : 0)
+        fromNewBills += cashAmt - (isAllCash ? tip : 0)
       }
-      return sum
-    }, 0)
-    
-    console.log(`💰 Cash sales for ${entryDate} (normalized: ${normalizedEntryDate}):`, {
-      totalSales: salesData.length,
-      availableSaleDates: salesData.map(sale => toDateStringIST(sale.date)),
-      normalizedEntryDate,
-      matchingSales: salesData.filter(sale => {
-        const saleDate = toDateStringIST(sale.date)
-        return saleDate === normalizedEntryDate
-      }),
-      result
+      ;(sale.paymentHistory || []).forEach((ph: any) => {
+        if (!ph || (ph.method || "").toLowerCase() !== "cash") return
+        const phDate = ph.date ? new Date(ph.date) : null
+        if (phDate && phDate >= activeDateRange.from && phDate <= activeDateRange.to) {
+          fromDueCollected += ph.amount || 0
+        }
+      })
     })
-    
-    return result
+    return { fromNewBills, fromDueCollected }
+  }
+  const cashSalesBreakdown = getCashSalesBreakdown()
+
+  // Online sales breakdown (Card vs Online/UPI)
+  const getOnlineSalesBreakdown = () => {
+    if (!activeDateRange) return { fromCard: 0, fromOnline: 0 }
+    let fromCard = 0
+    let fromOnline = 0
+    salesData.forEach((sale: any) => {
+      const saleDate = new Date(sale.date)
+      if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
+        if (sale.payments && sale.payments.length > 0) {
+          sale.payments.forEach((p: any) => {
+            const mode = (p.mode || p.type || "").toLowerCase()
+            const amt = p.amount || 0
+            if (mode.includes("card")) fromCard += amt
+            else if (mode.includes("online") || mode.includes("upi")) fromOnline += amt
+          })
+        } else {
+          const pm = (sale.paymentMode || "").toLowerCase()
+          if (pm.includes("card")) fromCard += sale.netTotal || 0
+          else if (pm.includes("online") || pm.includes("upi")) fromOnline += sale.netTotal || 0
+        }
+      }
+    })
+    return { fromCard, fromOnline }
+  }
+  const onlineSalesBreakdown = getOnlineSalesBreakdown()
+
+  // Log real-time stats for debugging
+  console.log("🔄 Real-time stats calculated:", {
+    dateRange: dateRange,
+    totalCashSales,
+    totalOnlineSales,
+    totalExpenses,
+    salesDataCount: salesData.length,
+    expensesDataCount: Object.keys(expensesData).length
+  })
+
+  // Helper functions to get real-time data for each entry
+  const getEntryCashSales = (entryDate: string) => {
+    const normalizedEntryDate = toDateStringIST(entryDate)
+    let total = 0
+    salesData.forEach((sale: any) => {
+      const saleDateStr = toDateStringIST(sale.date)
+      // 1. Cash from new bills (checkout) - sale date = entry date
+      if (saleDateStr === normalizedEntryDate) {
+        let cashAmt = 0
+        let isAllCash = false
+        if (sale.payments && sale.payments.length > 0) {
+          const cashPayments = sale.payments.filter((p: any) => (p.mode || p.type || "").toLowerCase().includes("cash"))
+          const hasNonCash = sale.payments.some((p: any) => {
+            const m = (p.mode || p.type || "").toLowerCase()
+            return m.includes("card") || m.includes("online") || m.includes("upi")
+          })
+          cashAmt = cashPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
+          isAllCash = cashAmt > 0 && !hasNonCash
+        } else {
+          const pm = (sale.paymentMode || "").toLowerCase()
+          cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
+          isAllCash = cashAmt > 0
+        }
+        const tip = sale.tip || 0
+        total += cashAmt - (isAllCash ? tip : 0)
+      }
+      // 2. Cash from due collections - paymentHistory date = entry date
+      ;(sale.paymentHistory || []).forEach((ph: any) => {
+        if (!ph || (ph.method || "").toLowerCase() !== "cash") return
+        const phDateStr = ph.date ? toDateStringIST(ph.date) : ""
+        if (phDateStr === normalizedEntryDate) {
+          total += ph.amount || 0
+        }
+      })
+    })
+    return total
   }
 
 
@@ -1355,48 +1484,189 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     <div className="space-y-8 w-full">
       {/* Enhanced Stats Cards - Full Width Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+        <Card
+          ref={cashSalesCardRef}
+          role="button"
+          tabIndex={0}
+          onClick={() => setCashSalesCardExpanded((prev) => !prev)}
+          onKeyDown={(e) => e.key === "Enter" && setCashSalesCardExpanded((prev) => !prev)}
+          className={`bg-white border border-gray-200 rounded-lg shadow-sm transition-all duration-300 ease-in-out cursor-pointer select-none overflow-hidden ${
+            cashSalesCardExpanded ? "shadow-md ring-2 ring-blue-200" : "hover:shadow-md hover:ring-1 hover:ring-gray-200"
+          }`}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Total Cash Sales</CardTitle>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-gray-900">Total Cash Sales</CardTitle>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help" onClick={(e) => e.stopPropagation()}>
+                      <Info className="h-3 w-3 text-gray-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>New payments + due collections (by payment date)</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <div className="p-2 bg-gray-100 rounded-lg">
               <DollarSign className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">₹{totalCashSales.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">Real-time cash transactions</p>
+          <CardContent className="space-y-3 min-h-[88px]">
+            {!cashSalesCardExpanded ? (
+              <>
+                <div className="text-2xl font-bold text-gray-900">₹{totalCashSales.toFixed(2)}</div>
+                <p className="text-xs text-gray-500">New Bills + Due Collected</p>
+                {(cashSalesBreakdown.fromNewBills > 0 || cashSalesBreakdown.fromDueCollected > 0) && (
+                  <p className="text-xs text-gray-400 italic">Tap to view breakdown</p>
+                )}
+              </>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 animate-in fade-in-0 zoom-in-95 duration-300">
+                <div className="rounded-lg bg-slate-50/80 border border-slate-100 p-3">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-600 mb-1">
+                    <Receipt className="h-3 w-3" />
+                    New Bills
+                  </div>
+                  <div className="text-lg font-bold text-gray-900">₹{cashSalesBreakdown.fromNewBills.toFixed(2)}</div>
+                  {totalCashSales > 0 && (
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {Math.round((cashSalesBreakdown.fromNewBills / totalCashSales) * 100)}%
+                    </div>
+                  )}
+                </div>
+                <div className="rounded-lg bg-emerald-50/80 border border-emerald-100 p-3">
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-700 mb-1">
+                    <Banknote className="h-3 w-3" />
+                    Due Collected
+                  </div>
+                  <div className="text-lg font-bold text-gray-900">₹{cashSalesBreakdown.fromDueCollected.toFixed(2)}</div>
+                  {totalCashSales > 0 && (
+                    <div className="text-xs text-emerald-600 mt-0.5">
+                      {Math.round((cashSalesBreakdown.fromDueCollected / totalCashSales) * 100)}%
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
         
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+        <Card
+          ref={onlineSalesCardRef}
+          role="button"
+          tabIndex={0}
+          onClick={() => setOnlineSalesCardExpanded((prev) => !prev)}
+          onKeyDown={(e) => e.key === "Enter" && setOnlineSalesCardExpanded((prev) => !prev)}
+          className={`bg-white border border-gray-200 rounded-lg shadow-sm transition-all duration-300 ease-in-out cursor-pointer select-none overflow-hidden ${
+            onlineSalesCardExpanded ? "shadow-md ring-2 ring-blue-200" : "hover:shadow-md hover:ring-1 hover:ring-gray-200"
+          }`}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Total Online Sales</CardTitle>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-gray-900">Total Online Sales</CardTitle>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help" onClick={(e) => e.stopPropagation()}>
+                      <Info className="h-3 w-3 text-gray-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Real-time online payments</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <div className="p-2 bg-gray-100 rounded-lg">
               <CreditCard className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">₹{totalOnlineSales.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">Real-time online payments</p>
+          <CardContent className="space-y-3 min-h-[88px]">
+            {!onlineSalesCardExpanded ? (
+              <>
+                <div className="text-2xl font-bold text-gray-900">₹{totalOnlineSales.toFixed(2)}</div>
+                <p className="text-xs text-gray-500">Card + Online (UPI)</p>
+                {(onlineSalesBreakdown.fromCard > 0 || onlineSalesBreakdown.fromOnline > 0) && (
+                  <p className="text-xs text-gray-400 italic">Tap to view breakdown</p>
+                )}
+              </>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 animate-in fade-in-0 zoom-in-95 duration-300">
+                <div className="rounded-lg bg-slate-50/80 border border-slate-100 p-3">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-600 mb-1">
+                    <CreditCard className="h-3 w-3" />
+                    Card
+                  </div>
+                  <div className="text-lg font-bold text-gray-900">₹{onlineSalesBreakdown.fromCard.toFixed(2)}</div>
+                  {totalOnlineSales > 0 && (
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {Math.round((onlineSalesBreakdown.fromCard / totalOnlineSales) * 100)}%
+                    </div>
+                  )}
+                </div>
+                <div className="rounded-lg bg-violet-50/80 border border-violet-100 p-3">
+                  <div className="flex items-center gap-1.5 text-xs text-violet-700 mb-1">
+                    <Smartphone className="h-3 w-3" />
+                    Online (UPI)
+                  </div>
+                  <div className="text-lg font-bold text-gray-900">₹{onlineSalesBreakdown.fromOnline.toFixed(2)}</div>
+                  {totalOnlineSales > 0 && (
+                    <div className="text-xs text-violet-600 mt-0.5">
+                      {Math.round((onlineSalesBreakdown.fromOnline / totalOnlineSales) * 100)}%
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
         
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Total Expenses</CardTitle>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-gray-900">Total Expenses</CardTitle>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help">
+                      <Info className="h-3 w-3 text-gray-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Real-time business expenses</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <div className="p-2 bg-gray-100 rounded-lg">
               <Receipt className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="text-2xl font-bold text-gray-900">₹{totalExpenses.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">Real-time business expenses</p>
           </CardContent>
         </Card>
 
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Cash Difference</CardTitle>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-gray-900">Cash Difference</CardTitle>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help">
+                      <Info className="h-3 w-3 text-gray-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Closing - (Opening + Sales - Expenses)</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <div className="p-2 bg-gray-100 rounded-lg">
               <TrendingUp className="h-4 w-4 text-gray-600" />
             </div>
@@ -1409,9 +1679,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             }`}>
               ₹{cashDifference.toFixed(2)}
             </div>
-            <p className="text-sm text-gray-500">
-              Closing - (Opening + Sales - Expenses)
-            </p>
             {cashDifference !== 0 && (
               <div className={`px-2 py-1 rounded text-xs font-medium ${
                 cashDifference > 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
@@ -1424,7 +1691,21 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Online Cash Diff.</CardTitle>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-gray-900">Online Cash Diff.</CardTitle>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help">
+                      <Info className="h-3 w-3 text-gray-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Online Cash - Online Sales</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <div className="p-2 bg-gray-100 rounded-lg">
               <CreditCard className="h-4 w-4 text-gray-600" />
             </div>
@@ -1437,9 +1718,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             }`}>
               ₹{onlineCashDifference.toFixed(2)}
             </div>
-            <p className="text-sm text-gray-500">
-              Online Cash - Online Sales
-            </p>
             {onlineCashDifference !== 0 && (
               <div className={`px-2 py-1 rounded text-xs font-medium ${
                 onlineCashDifference > 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
@@ -1455,52 +1733,79 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Total Opening Balance</CardTitle>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-gray-900">Total Opening Balance</CardTitle>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help">
+                      <Info className="h-3 w-3 text-gray-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>From all opening shifts</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <div className="p-2 bg-gray-100 rounded-lg">
               <DollarSign className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="text-2xl font-bold text-gray-900">₹{totalOpeningBalance.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">From all opening shifts</p>
-            <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
-              <span className="text-xs text-gray-500">Active tracking</span>
-            </div>
           </CardContent>
         </Card>
         
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Total Closing Balance</CardTitle>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-gray-900">Total Closing Balance</CardTitle>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help">
+                      <Info className="h-3 w-3 text-gray-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>From all closing shifts</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <div className="p-2 bg-gray-100 rounded-lg">
               <DollarSign className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="text-2xl font-bold text-gray-900">₹{totalClosingBalance.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">From all closing shifts</p>
-            <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
-              <span className="text-xs text-gray-500">End of day totals</span>
-            </div>
           </CardContent>
         </Card>
 
         <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Online Cash Collected</CardTitle>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-gray-900">Online Cash Collected</CardTitle>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help">
+                      <Info className="h-3 w-3 text-gray-400" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>From Cash in POS Machine during closing shifts</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <div className="p-2 bg-gray-100 rounded-lg">
               <CreditCard className="h-4 w-4 text-gray-600" />
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="text-2xl font-bold text-gray-900">₹{totalOnlineCashCollected.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">From Cash in POS Machine during closing shifts</p>
-            <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
-              <span className="text-xs text-gray-500">Digital payments</span>
-            </div>
           </CardContent>
         </Card>
       </div>
@@ -1697,14 +2002,12 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Opening Balance</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Cash Collected</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Expense</TableHead>
-                        <TableHead className="text-right font-semibold text-slate-700 py-4">Cash Balance</TableHead>
-                        <TableHead className="text-right font-semibold text-slate-700 py-4">Closing Balance</TableHead>
+                        <TableHead className="text-right font-semibold text-slate-700 py-4">Expected Cash</TableHead>
+                        <TableHead className="text-right font-semibold text-slate-700 py-4">Actual Cash (Closing)</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Cash Difference</TableHead>
-                        <TableHead className="text-center font-semibold text-slate-700 py-4">Reason for Cash Diff.</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Total Online Sales</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Cash in POS</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Online Cash Difference</TableHead>
-                        <TableHead className="text-center font-semibold text-slate-700 py-4">Reason for Online Diff.</TableHead>
                         <TableHead className="text-center font-semibold text-slate-700 py-4">Status</TableHead>
                         <TableHead className="text-center font-semibold text-slate-700 py-4">Actions</TableHead>
                       </>
@@ -1723,7 +2026,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                 <TableBody>
                   {(reportType === "summary" ? filteredDailySummaries.length === 0 : filteredData.length === 0) ? (
                     <TableRow className="border-0">
-                      <TableCell colSpan={reportType === "summary" ? 14 : 6} className="text-center py-16 border-0">
+                      <TableCell colSpan={reportType === "summary" ? 12 : 6} className="text-center py-16 border-0">
                         <div className="flex flex-col items-center space-y-5">
                           <div className="w-20 h-20 bg-gradient-to-br from-slate-100 to-blue-100 rounded-full flex items-center justify-center">
                             <Receipt className="h-10 w-10 text-slate-400" />
@@ -1768,10 +2071,39 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                           const closingBalance = entry.closingBalance
                           const cashDifference = entry.cashDifference
                           const cashDifferenceReason = entry.cashDifferenceReason
+                          const cashDifferenceNote = entry.cashDifferenceNote
                           const totalOnlineSales = entry.totalOnlineSales
                           const cashInPos = entry.cashInPos
                           const onlineCashDifference = entry.onlineCashDifference
                           const onlineCashDifferenceReason = entry.onlineCashDifferenceReason
+                          const onlineCashDifferenceNote = entry.onlineCashDifferenceNote
+                          const closingEntryId = entry.closingEntryId || ''
+                          const openCashBreakdown = () => {
+                            setBreakdownEntry({
+                              date,
+                              type: 'cash',
+                              expectedCash: cashBalance,
+                              actualCash: closingBalance,
+                              difference: cashDifference,
+                              reason: cashDifferenceReason,
+                              note: cashDifferenceNote,
+                              closingEntryId,
+                            })
+                            setBreakdownDrawerOpen(true)
+                          }
+                          const openOnlineBreakdown = () => {
+                            setBreakdownEntry({
+                              date,
+                              type: 'online',
+                              expectedCash: totalOnlineSales,
+                              actualCash: cashInPos,
+                              difference: onlineCashDifference,
+                              reason: onlineCashDifferenceReason,
+                              note: onlineCashDifferenceNote,
+                              closingEntryId,
+                            })
+                            setBreakdownDrawerOpen(true)
+                          }
                           
                           return (
                             <TableRow key={entry.date} className="hover:bg-gray-50">
@@ -1783,107 +2115,53 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                               <TableCell className="text-right min-w-[100px]">₹{expense.toFixed(2)}</TableCell>
                               <TableCell className="text-right min-w-[120px]">₹{cashBalance.toFixed(2)}</TableCell>
                               <TableCell className="text-right min-w-[120px]">₹{closingBalance.toFixed(2)}</TableCell>
-                              <TableCell className={`text-right font-medium min-w-[120px] ${
-                                cashDifference > 0 ? 'text-green-600' : 
-                                cashDifference < 0 ? 'text-red-600' : 
-                                'text-gray-900'
-                              }`}>
-                                ₹{cashDifference.toFixed(2)}
-                              </TableCell>
-                              <TableCell className="text-center min-w-[140px]">
-                                {cashDifference !== 0 ? (
-                                  <div className="space-y-1">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => {
-                                        console.log('🔍 DEBUG Cash View clicked:', {
-                                          cashDifferenceReason,
-                                          cashDifference,
-                                          entry: entry,
-                                          allEntryKeys: Object.keys(entry)
-                                        })
-                                        setSelectedReason({
-                                          type: 'cash',
-                                          reason: cashDifferenceReason || 'No reason provided',
-                                          difference: cashDifference
-                                        })
-                                        setIsReasonModalOpen(true)
-                                      }}
-                                      className="h-8 px-3 text-xs font-medium"
-                                    >
-                                      View
-                                    </Button>
-                                  </div>
-                                ) : (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => {
-                                      setSelectedReason({
-                                        type: 'cash',
-                                        reason: 'No difference - balanced',
-                                        difference: 0
-                                      })
-                                      setIsReasonModalOpen(true)
-                                    }}
-                                    className="h-8 px-3 text-xs font-medium"
-                                  >
-                                    View
-                                  </Button>
-                                )}
+                              <TableCell className="text-right min-w-[120px]">
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        onClick={openCashBreakdown}
+                                        className={`inline-flex items-center gap-1 font-medium cursor-pointer hover:underline focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-slate-300 rounded px-1.5 py-0.5 hover:bg-slate-100 transition-colors ${
+                                          cashDifference > 0 ? 'text-green-600' : 
+                                          cashDifference < 0 ? 'text-red-600' : 
+                                          'text-gray-900'
+                                        }`}
+                                      >
+                                        ₹{cashDifference.toFixed(2)}
+                                        <Eye className="h-3 w-3 opacity-60" />
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Click to view details</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               </TableCell>
                               <TableCell className="text-right min-w-[140px]">₹{totalOnlineSales.toFixed(2)}</TableCell>
                               <TableCell className="text-right min-w-[120px]">₹{cashInPos.toFixed(2)}</TableCell>
-                              <TableCell className={`text-right font-medium min-w-[120px] ${
-                                onlineCashDifference > 0 ? 'text-green-600' : 
-                                onlineCashDifference < 0 ? 'text-red-600' : 
-                                'text-gray-900'
-                              }`}>
-                                ₹{onlineCashDifference.toFixed(2)}
-                              </TableCell>
-                              <TableCell className="text-center min-w-[140px]">
-                                {onlineCashDifference !== 0 ? (
-                                  <div className="space-y-1">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => {
-                                        console.log('🔍 DEBUG Online View clicked:', {
-                                          onlineCashDifferenceReason,
-                                          onlineCashDifference,
-                                          entry: entry,
-                                          allEntryKeys: Object.keys(entry)
-                                        })
-                                        setSelectedReason({
-                                          type: 'online',
-                                          reason: onlineCashDifferenceReason || 'No reason provided',
-                                          difference: onlineCashDifference
-                                        })
-                                        setIsReasonModalOpen(true)
-                                      }}
-                                      className="h-8 px-3 text-xs font-medium"
-                                    >
-                                      View
-                                    </Button>
-                                  </div>
-                                ) : (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => {
-                                      setSelectedReason({
-                                        type: 'online',
-                                        reason: 'No difference - balanced',
-                                        difference: 0
-                                      })
-                                      setIsReasonModalOpen(true)
-                                    }}
-                                    className="h-8 px-3 text-xs font-medium"
-                                  >
-                                    View
-                                  </Button>
-                                )}
+                              <TableCell className="text-right min-w-[120px]">
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        onClick={openOnlineBreakdown}
+                                        className={`inline-flex items-center gap-1 font-medium cursor-pointer hover:underline focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-slate-300 rounded px-1.5 py-0.5 hover:bg-slate-100 transition-colors ${
+                                          onlineCashDifference > 0 ? 'text-green-600' : 
+                                          onlineCashDifference < 0 ? 'text-red-600' : 
+                                          'text-gray-900'
+                                        }`}
+                                      >
+                                        ₹{onlineCashDifference.toFixed(2)}
+                                        <Eye className="h-3 w-3 opacity-60" />
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Click to view details</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               </TableCell>
                               <TableCell className="text-center min-w-[100px]">
                                 <Popover>
@@ -2426,56 +2704,32 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         onlineCashDifference={onlineCashDifference}
       />
 
-      {/* Reason Details Modal */}
-      <Dialog open={isReasonModalOpen} onOpenChange={setIsReasonModalOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {selectedReason?.type === 'cash' ? 'Cash Difference Details' : 'Online Cash Difference Details'}
-            </DialogTitle>
-            <DialogDescription>
-              View the detailed reason for the difference
-            </DialogDescription>
-          </DialogHeader>
-          
-          {selectedReason && (
-            <div className="space-y-4">
-              <div className="p-4 bg-muted/30 rounded-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium">Difference Amount:</span>
-                  <span className={`text-lg font-bold ${
-                    selectedReason.difference > 0 ? 'text-green-600' : 
-                    selectedReason.difference < 0 ? 'text-red-600' : 
-                    'text-gray-900'
-                  }`}>
-                    ₹{selectedReason.difference.toFixed(2)}
-                  </span>
-                </div>
-                <div className="text-sm text-muted-foreground">
-                  {selectedReason.difference > 0 ? 'Surplus' : 
-                   selectedReason.difference < 0 ? 'Shortage' : 
-                   'Balanced'}
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Reason:</Label>
-                <div className="p-3 bg-background border rounded-lg">
-                  <p className="text-sm text-foreground font-medium">
-                    {selectedReason.reason}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsReasonModalOpen(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Cash Difference Breakdown Drawer */}
+      <CashDifferenceBreakdownDrawer
+        open={breakdownDrawerOpen}
+        onOpenChange={setBreakdownDrawerOpen}
+        entry={breakdownEntry}
+        onAddEditReason={() => {
+          setBreakdownDrawerOpen(false)
+          setAddEditReasonModalOpen(true)
+        }}
+      />
+
+      {/* Add/Edit Reason Modal */}
+      {breakdownEntry && (
+        <AddEditReasonModal
+          open={addEditReasonModalOpen}
+          onOpenChange={setAddEditReasonModalOpen}
+          type={breakdownEntry.type}
+          difference={breakdownEntry.difference}
+          closingEntryId={breakdownEntry.closingEntryId}
+          existingReason={breakdownEntry.reason}
+          existingNote={breakdownEntry.note}
+          onSuccess={() => {
+            fetchCashRegistryData(true)
+          }}
+        />
+      )}
     </div>
   )
 }

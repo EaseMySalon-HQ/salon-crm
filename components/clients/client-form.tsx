@@ -12,7 +12,7 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { toast } from "@/components/ui/use-toast"
 
 interface ClientFormProps {
@@ -166,18 +166,6 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
 
   return (
     <Card className="bg-white/70 backdrop-blur-sm shadow-xl border-0 rounded-2xl overflow-hidden">
-      <CardHeader className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-8">
-        <CardTitle className="text-2xl font-bold flex items-center gap-3">
-          <div className="p-2 bg-white/20 rounded-lg">
-            <User className="h-6 w-6" />
-          </div>
-          {client ? 'Edit Client Information' : 'Client Information'}
-        </CardTitle>
-        <p className="text-indigo-100 mt-2">
-          {client ? 'Update client details and preferences' : 'Enter client details to add them to your system'}
-        </p>
-      </CardHeader>
-      
       <CardContent className="p-8">
         <Form {...form}>
           <form id="client-form" onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
@@ -432,8 +420,8 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
               />
             </div>
 
-            {/* Action Buttons */}
-            {!isViewMode && (
+            {/* Action buttons: only for "new client" — existing clients use Save/Cancel in ClientDetailsPage toolbar (form id="client-form") */}
+            {!isViewMode && !client && (
               <div className="flex justify-end gap-4 pt-6 border-t border-slate-200">
                 <Button 
                   variant="outline" 
