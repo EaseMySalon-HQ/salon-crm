@@ -268,13 +268,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [router])
 
   const exitImpersonation = useCallback(() => {
+    let returnUrl = '/admin/businesses'
+    if (typeof window !== 'undefined') {
+      const savedOrigin = sessionStorage.getItem('admin-impersonation-origin')
+      if (savedOrigin) {
+        returnUrl = savedOrigin
+        sessionStorage.removeItem('admin-impersonation-origin')
+      }
+    }
     setUser(null)
     clearAuthStorage()
-    AuthAPI.logout().catch(() => {})
+    // Don't call AuthAPI.logout() - it would trigger an auth-less request, get 401,
+    // and the API interceptor would redirect to /login, overriding our admin redirect.
+    // Admin token is in sessionStorage and remains intact.
     if (typeof window !== 'undefined') {
-      window.location.href = '/admin/businesses'
+      window.location.href = returnUrl
     } else {
-      router.push('/admin/businesses')
+      router.push(returnUrl)
     }
   }, [router])
 

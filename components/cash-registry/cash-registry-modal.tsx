@@ -56,18 +56,9 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
   const totalBalance = denominations.reduce((sum, denom) => sum + denom.total, 0)
   const displayTotal = totalBalance
 
-  // Use the online sales amount from props (stats card) instead of fetching separately
   useEffect(() => {
-    console.log("🔄 CashRegistryModal useEffect:", {
-      shift,
-      open,
-      onlineSalesAmount,
-      currentCashCollectedOnline: cashCollectedOnline
-    })
-    
     if (shift === "closing" && open) {
       setCashCollectedOnline(onlineSalesAmount)
-      console.log("✅ Set Cash Collected Online to:", onlineSalesAmount)
     }
   }, [shift, open, onlineSalesAmount])
 
@@ -280,12 +271,7 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
           title: "Success",
           description: `${action} saved successfully`,
         })
-        
-        // Call the success callback to refresh data in the parent component
-        if (onSaveSuccess) {
-          onSaveSuccess()
-        }
-        
+        if (onSaveSuccess) onSaveSuccess()
         onOpenChange(false)
       } else {
         console.error("Backend error response:", response)

@@ -5,10 +5,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { CashRegistryAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
-import { AlertCircle, CheckCircle, XCircle, CreditCard } from "lucide-react"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AlertCircle, CheckCircle, CreditCard } from "lucide-react"
+import { CASH_DIFFERENCE_REASONS } from "./cash-difference-breakdown-drawer"
 
 interface CashRegistryEntry {
   id: string
@@ -40,7 +41,9 @@ interface CashRegistryEntry {
 interface VerificationData {
   entryId: string
   balanceDifferenceReason?: string
+  balanceDifferenceNote?: string
   onlinePosDifferenceReason?: string
+  onlineCashDifferenceNote?: string
 }
 
 interface VerificationModalProps {
@@ -61,7 +64,9 @@ export function VerificationModal({
   onlineCashDifference 
 }: VerificationModalProps) {
   const [balanceDifferenceReason, setBalanceDifferenceReason] = useState("")
+  const [balanceDifferenceNote, setBalanceDifferenceNote] = useState("")
   const [onlinePosDifferenceReason, setOnlinePosDifferenceReason] = useState("")
+  const [onlineCashDifferenceNote, setOnlineCashDifferenceNote] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const { toast } = useToast()
 
@@ -74,7 +79,9 @@ export function VerificationModal({
   useEffect(() => {
     if (isOpen) {
       setBalanceDifferenceReason("")
+      setBalanceDifferenceNote("")
       setOnlinePosDifferenceReason("")
+      setOnlineCashDifferenceNote("")
     }
   }, [isOpen])
 
@@ -94,7 +101,7 @@ export function VerificationModal({
     if (hasBalanceDifference && !balanceDifferenceReason.trim()) {
       toast({
         title: "Reason Required",
-        description: "Please provide a reason for the Cash Difference.",
+        description: "Please select a reason for the Cash Difference.",
         variant: "destructive"
       })
       return
@@ -103,7 +110,7 @@ export function VerificationModal({
     if (hasOnlinePosDifference && !onlinePosDifferenceReason.trim()) {
       toast({
         title: "Reason Required",
-        description: "Please provide a reason for the Online Cash Difference.",
+        description: "Please select a reason for the Online Cash Difference.",
         variant: "destructive"
       })
       return
@@ -114,7 +121,9 @@ export function VerificationModal({
       await onVerify({
         entryId: closingEntry.id,
         balanceDifferenceReason: hasBalanceDifference ? balanceDifferenceReason.trim() : undefined,
+        balanceDifferenceNote: hasBalanceDifference ? balanceDifferenceNote.trim() : undefined,
         onlinePosDifferenceReason: hasOnlinePosDifference ? onlinePosDifferenceReason.trim() : undefined,
+        onlineCashDifferenceNote: hasOnlinePosDifference ? onlineCashDifferenceNote.trim() : undefined,
       })
       
       // Reset form and close modal
@@ -165,11 +174,13 @@ export function VerificationModal({
                 
                 setIsSubmitting(true)
                 try {
-                  await onVerify({
-                    entryId: closingEntry.id,
-                    balanceDifferenceReason: undefined,
-                    onlinePosDifferenceReason: undefined,
-                  })
+                await onVerify({
+                  entryId: closingEntry.id,
+                  balanceDifferenceReason: undefined,
+                  balanceDifferenceNote: undefined,
+                  onlinePosDifferenceReason: undefined,
+                  onlineCashDifferenceNote: undefined,
+                })
                   
                   onClose()
                 } catch (error) {
@@ -223,7 +234,7 @@ export function VerificationModal({
               <div className="flex items-center gap-2">
                 <AlertCircle className="h-4 w-4 text-orange-600" />
                 <span className="font-medium text-orange-800">
-                  Cash Difference: ₹{cashDifference.toFixed(2)}
+                  Cash Difference Detected: ₹{cashDifference.toFixed(2)}
                 </span>
               </div>
               
@@ -231,13 +242,27 @@ export function VerificationModal({
                 <Label htmlFor="balanceDifferenceReason" className="text-sm">
                   Reason for Cash Difference *
                 </Label>
+                <Select value={balanceDifferenceReason} onValueChange={setBalanceDifferenceReason} required>
+                  <SelectTrigger id="balanceDifferenceReason">
+                    <SelectValue placeholder="Select a reason" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CASH_DIFFERENCE_REASONS.map((r) => (
+                      <SelectItem key={r} value={r}>{r}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="balanceDifferenceNote" className="text-sm">
+                  Add note (optional)
+                </Label>
                 <Textarea
-                  id="balanceDifferenceReason"
-                  value={balanceDifferenceReason}
-                  onChange={(e) => setBalanceDifferenceReason(e.target.value)}
-                  placeholder="Please explain the reason for the cash difference..."
-                  className="min-h-[80px]"
-                  required
+                  id="balanceDifferenceNote"
+                  value={balanceDifferenceNote}
+                  onChange={(e) => setBalanceDifferenceNote(e.target.value)}
+                  placeholder="Add any additional details..."
+                  className="min-h-[60px]"
                 />
               </div>
             </div>
@@ -257,13 +282,27 @@ export function VerificationModal({
                 <Label htmlFor="onlinePosDifferenceReason" className="text-sm">
                   Reason for Online Cash Difference *
                 </Label>
+                <Select value={onlinePosDifferenceReason} onValueChange={setOnlinePosDifferenceReason} required>
+                  <SelectTrigger id="onlinePosDifferenceReason">
+                    <SelectValue placeholder="Select a reason" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CASH_DIFFERENCE_REASONS.map((r) => (
+                      <SelectItem key={r} value={r}>{r}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="onlineCashDifferenceNote" className="text-sm">
+                  Add note (optional)
+                </Label>
                 <Textarea
-                  id="onlinePosDifferenceReason"
-                  value={onlinePosDifferenceReason}
-                  onChange={(e) => setOnlinePosDifferenceReason(e.target.value)}
-                  placeholder="Please explain the reason for the online cash difference..."
-                  className="min-h-[80px]"
-                  required
+                  id="onlineCashDifferenceNote"
+                  value={onlineCashDifferenceNote}
+                  onChange={(e) => setOnlineCashDifferenceNote(e.target.value)}
+                  placeholder="Add any additional details..."
+                  className="min-h-[60px]"
                 />
               </div>
             </div>

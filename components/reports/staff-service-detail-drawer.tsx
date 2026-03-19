@@ -17,6 +17,10 @@ import { SalesAPI, CommissionProfileAPI, StaffDirectoryAPI } from "@/lib/api"
 import { CommissionProfileCalculator } from "@/lib/commission-profile-calculator"
 import type { CommissionProfile } from "@/lib/commission-profile-types"
 import type { Sale } from "@/lib/commission-profile-calculator"
+import {
+  getAttributedRevenueForStaff,
+  getLinePreTaxTotal,
+} from "@/lib/staff-line-revenue"
 
 interface StaffServiceDetailDrawerProps {
   open: boolean
@@ -55,7 +59,11 @@ function toSale(sale: any): Sale {
       staffId: item.staffId,
       staffName: item.staffName,
       discount: item.discount,
-      discountType: item.discountType
+      discountType: item.discountType,
+      staffContributions: item.staffContributions,
+      priceExcludingGST: item.priceExcludingGST,
+      taxRate: item.taxRate,
+      taxAmount: item.taxAmount,
     })),
     subtotal: sale.subtotal ?? 0,
     tip: sale.tip ?? 0,
@@ -135,12 +143,20 @@ export function StaffServiceDetailDrawer({
     })
     .filter((sale: any) => {
       const saleStaffMatch = sale.staffId === staffId || sale.staffName === staffName
-      const itemMatch = sale.items?.some(
-        (item: any) =>
+      const itemMatch = sale.items?.some((item: any) => {
+        const contribMatch = item.staffContributions?.some(
+          (c: any) =>
+            (c.staffId != null && String(c.staffId) === String(staffId)) ||
+            c.staffName === staffName ||
+            c.staffName === staffId
+        )
+        return (
+          contribMatch ||
           (item.staffId != null && String(item.staffId) === String(staffId)) ||
           item.staffName === staffId ||
           item.staffName === staffName
-      )
+        )
+      })
       return saleStaffMatch || itemMatch
     })
 
@@ -195,24 +211,25 @@ export function StaffServiceDetailDrawer({
         const match =
           (type === "service" && isService) || (type === "product" && isProduct) || (type === "membership" && isMembership)
         if (!match) return
-        const staffMatch =
-          (item.staffId != null && String(item.staffId) === String(staffId)) ||
-          item.staffName === staffId ||
-          item.staffName === staffName
-        if (!staffMatch) return
-        const gross = item.total ?? (item.price ?? 0) * (item.quantity ?? 1)
+        const saleFallback = { staffId: sale.staffId, staffName: sale.staffName }
+        const gross = getAttributedRevenueForStaff(item, staffId, staffName, saleFallback)
+        if (gross <= 0) return
+        const lineGross = getLineNetTotal(item)
+        const qty = item.quantity ?? 1
+        const share =
+          lineGross > 0 ? gross / lineGross : 1 / Math.max(1, item.staffContributions?.length ?? 1)
+        const qtySold = qty * share
         const tax = saleTotal > 0 ? (saleTax / saleTotal) * gross : 0
         const net = gross - tax
-        const qty = item.quantity ?? 1
         const name = item.name || "—"
         const existing = map.get(name)
         if (existing) {
-          existing.quantitySold += qty
+          existing.quantitySold += qtySold
           existing.netTotal += net
           existing.taxAmount += tax
           existing.grossTotal += gross
         } else {
-          map.set(name, { name, quantitySold: qty, netTotal: net, taxAmount: tax, grossTotal: gross })
+          map.set(name, { name, quantitySold: qtySold, netTotal: net, taxAmount: tax, grossTotal: gross })
         }
       })
     })

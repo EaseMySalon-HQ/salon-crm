@@ -674,14 +674,6 @@ app.post('/api/auth/logout', authenticateToken, (req, res) => {
 
 app.get('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
-    console.log('🔍 Profile endpoint - req.user:', {
-      id: req.user.id,
-      _id: req.user._id,
-      email: req.user.email,
-      branchId: req.user.branchId,
-      role: req.user.role
-    });
-
     // Check if user is staff (has branchId) or regular user
     if (req.user.branchId) {
       // Staff user - req.user is already populated by authenticateToken middleware
@@ -1629,20 +1621,11 @@ app.get('/api/clients', authenticateToken, requireStaff, setupBusinessDatabase, 
       };
     }
 
-    console.log('🔍 Clients API Debug:', {
-      businessId: req.user.branchId,
-      userEmail: req.user.email,
-      query: query,
-      database: req.businessConnection.name
-    });
-
     const totalClients = await Client.countDocuments(query);
-    console.log('📊 Total clients found:', totalClients);
     const clients = await Client.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
       .sort({ createdAt: -1 });
-    console.log('📋 Clients returned:', clients.length);
 
     res.json({
       success: true,
@@ -2012,7 +1995,6 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
 // Import clients from Excel/CSV
 app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
-    console.log('🔍 Client import request received');
     const { Client } = req.businessModels;
     const { clients, mapping, updateExisting } = req.body;
 
@@ -3043,7 +3025,6 @@ app.delete('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPerm
 // Services routes
 app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    console.log('🔍 Services request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
     const { Service } = req.businessModels;
     const { page = 1, limit = 10, search = '' } = req.query;
@@ -3270,7 +3251,6 @@ app.delete('/api/services', authenticateToken, setupBusinessDatabase, requireAdm
 // Import services from Excel/CSV
 app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
-    console.log('🔍 Service import request received');
     const { Service } = req.businessModels;
     const { services, mapping } = req.body;
 
@@ -3881,7 +3861,6 @@ app.post('/api/membership/redeem', authenticateToken, setupBusinessDatabase, req
 // Products routes
 app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    console.log('🔍 Products request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
     const { Product } = req.businessModels;
     const { page = 1, limit = 10, search = '' } = req.query;
@@ -3929,23 +3908,11 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
     const { Product, InventoryTransaction } = req.businessModels;
     const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
 
-    console.log('🔍 Product creation request body:', req.body);
-    console.log('🔍 Extracted fields:', { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType });
-
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
     const priceRequired = !isServiceProduct;
     
     if (!name || !category || !stock || (priceRequired && (price === undefined || price === null || price === ''))) {
-      console.log('❌ Validation failed - missing required fields:', { 
-        name: !!name, 
-        category: !!category, 
-        price: price, 
-        stock: !!stock,
-        productType: productType,
-        isServiceProduct: isServiceProduct,
-        priceRequired: priceRequired
-      });
       return res.status(400).json({
         success: false,
         error: isServiceProduct 
@@ -4016,9 +3983,6 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
 
 app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
-    console.log('🔍 PUT /api/products/:id - Product update request received');
-    console.log('🔍 Product ID:', req.params.id);
-    console.log('🔍 Request body:', req.body);
     
     const { Product, InventoryTransaction } = req.businessModels;
     const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, isActive, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
@@ -4085,9 +4049,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
     );
 
     // Create inventory transaction if stock changed
-    console.log('🔍 Stock difference:', stockDifference);
     if (stockDifference !== 0) {
-      console.log('🔍 Creating inventory transaction...');
       try {
         const inventoryTransaction = new InventoryTransaction({
           productId: req.params.id,
@@ -4108,21 +4070,9 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
         });
         
         await inventoryTransaction.save();
-        console.log(`✅ Inventory transaction created for product ${updatedProduct.name}: ${stockDifference > 0 ? '+' : ''}${stockDifference} units`);
-        console.log('🔍 Inventory transaction details:', {
-          productId: req.params.id,
-          productName: updatedProduct.name,
-          transactionType: transactionType || (stockDifference > 0 ? 'purchase' : 'adjustment'),
-          quantity: stockDifference,
-          previousStock: previousStock,
-          newStock: newStock
-        });
       } catch (inventoryError) {
         console.error('❌ Error creating inventory transaction:', inventoryError);
-        // Don't fail the product update if inventory tracking fails
       }
-    } else {
-      console.log('🔍 No stock change detected, skipping inventory transaction');
     }
 
     // Check for low inventory after stock update
@@ -4204,7 +4154,6 @@ app.delete('/api/products/:id', authenticateToken, setupBusinessDatabase, requir
 // Import products from Excel/CSV data
 app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
-    console.log('🔍 Product import request received');
     const { Product, InventoryTransaction } = req.businessModels;
     const { products, mapping } = req.body;
 
@@ -5484,26 +5433,16 @@ app.get('/api/inventory/transactions', authenticateToken, setupBusinessDatabase,
       query.transactionDate = {};
       if (dateFrom) {
         query.transactionDate.$gte = new Date(dateFrom);
-        console.log('🔍 Date filter - From:', dateFrom, 'Parsed:', new Date(dateFrom));
       }
       if (dateTo) {
         query.transactionDate.$lte = new Date(dateTo);
-        console.log('🔍 Date filter - To:', dateTo, 'Parsed:', new Date(dateTo));
       }
-      console.log('🔍 Final date query:', query.transactionDate);
     }
-
-    console.log('🔍 Final query being executed:', JSON.stringify(query, null, 2));
     
     const transactions = await InventoryTransaction.find(query)
       .sort({ transactionDate: -1 })
       .limit(parseInt(limit))
       .skip((parseInt(page) - 1) * parseInt(limit));
-
-    console.log('🔍 Found transactions:', transactions.length);
-    if (transactions.length > 0) {
-      console.log('🔍 First transaction date:', transactions[0].transactionDate);
-    }
 
     const total = await InventoryTransaction.countDocuments(query);
 
@@ -6621,10 +6560,13 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
         });
 
         if (linkedServices.length > 0) {
-          const serviceIds = linkedServices.map((i) => i.serviceId._id || i.serviceId);
+          const serviceIds = linkedServices.map((i) => i.serviceId?._id || i.serviceId).filter(Boolean);
+          if (serviceIds.length === 0) {
+            console.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
+          }
           const firstServiceId = serviceIds[0];
           const firstItem = linkedServices[0];
-          const firstService = await Service.findById(firstServiceId).lean();
+          const firstService = firstServiceId ? await Service.findById(firstServiceId).lean() : null;
           if (firstService) {
             appointment.serviceId = firstServiceId;
             appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
@@ -6658,20 +6600,20 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
             const contrib = (item.staffContributions || [])[0];
             const staffId = contrib?.staffId || item.staffId;
             if (!staffId || existingGroupStaffIds.has(String(staffId))) continue;
-            const idx = allOrdered.findIndex((o) => (o.serviceId._id || o.serviceId) === (item.serviceId._id || item.serviceId));
+            const idx = allOrdered.findIndex((o) => (o.serviceId?._id || o.serviceId) === (item.serviceId?._id || item.serviceId));
             let cumulativeM = 0;
             for (let i = 0; i < idx; i++) {
-              const s = await Service.findById(allOrdered[i].serviceId._id || allOrdered[i].serviceId).select('duration').lean();
+              const s = await Service.findById(allOrdered[i].serviceId?._id || allOrdered[i].serviceId).select('duration').lean();
               cumulativeM += s?.duration ?? 60;
             }
             const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
-            const service = await Service.findById(item.serviceId._id || item.serviceId).lean();
+            const service = await Service.findById(item.serviceId?._id || item.serviceId).lean();
             if (!service) continue;
 
             existingGroupStaffIds.add(String(staffId));
             const newApt = new AppointmentModel({
               clientId: appointment.clientId,
-              serviceId: item.serviceId._id || item.serviceId,
+              serviceId: item.serviceId?._id || item.serviceId,
               date: appointment.date,
               time: serviceTime,
               duration: service.duration ?? 60,
@@ -6704,6 +6646,73 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
     }
   } catch (error) {
     console.error('❌ Failed to mark appointment as completed:', error);
+  }
+};
+
+/** Primary staff on the first service line (same precedence as markAppointmentCompleted). */
+const getPrimaryStaffFromSaleServiceItems = (items) => {
+  if (!items || !Array.isArray(items)) return null;
+  for (const item of items) {
+    if (item.type !== 'service') continue;
+    const contribs = item.staffContributions;
+    if (Array.isArray(contribs) && contribs.length > 0) {
+      const c = contribs[0];
+      const sid = c && c.staffId != null ? String(c.staffId) : '';
+      if (sid && mongoose.Types.ObjectId.isValid(sid)) {
+        return { staffId: sid, staffName: c.staffName || '' };
+      }
+    }
+    const legacyId = item.staffId != null ? String(item.staffId) : '';
+    if (legacyId && mongoose.Types.ObjectId.isValid(legacyId)) {
+      return { staffId: legacyId, staffName: item.staffName || '' };
+    }
+  }
+  return null;
+};
+
+/**
+ * When a completed sale linked to an appointment is edited, move the completed card to the
+ * staff shown on the invoice (first service line). markAppointmentCompleted no-ops if already completed.
+ */
+const syncCompletedLinkedAppointmentStaffFromSale = async (AppointmentModel, sale) => {
+  if (!AppointmentModel || !sale || !sale.appointmentId) return;
+  if (String(sale.status || '').toLowerCase() !== 'completed') return;
+  try {
+    const appointment = await AppointmentModel.findById(sale.appointmentId);
+    if (!appointment) return;
+    if (String(appointment.status || '').toLowerCase() !== 'completed') return;
+
+    const primary = getPrimaryStaffFromSaleServiceItems(sale.items);
+    if (!primary || !mongoose.Types.ObjectId.isValid(primary.staffId)) {
+      return;
+    }
+    const newStaffIdStr = String(primary.staffId);
+    const currentStr = appointment.staffId
+      ? String(appointment.staffId)
+      : (appointment.staffAssignments &&
+          appointment.staffAssignments[0] &&
+          appointment.staffAssignments[0].staffId
+        ? String(appointment.staffAssignments[0].staffId)
+        : null);
+    if (currentStr === newStaffIdStr) {
+      return;
+    }
+
+    appointment.staffId = new mongoose.Types.ObjectId(newStaffIdStr);
+    appointment.staffAssignments = [
+      {
+        staffId: new mongoose.Types.ObjectId(newStaffIdStr),
+        percentage: 100,
+        role: 'primary',
+      },
+    ];
+    appointment.markModified('staffAssignments');
+    await appointment.save();
+    console.log(
+      `✅ Linked completed appointment ${appointment._id} staff moved to ${newStaffIdStr} (bill ${sale.billNo})`,
+    );
+  } catch (err) {
+    console.error('❌ syncCompletedLinkedAppointmentStaffFromSale failed:', err);
   }
 };
 
@@ -7665,23 +7674,23 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
       });
     }
 
-    // Process items to handle staff contributions
+    const { getItemPreTaxTotal } = require('./lib/sale-item-pretax');
+    // Process items to handle staff contributions (amounts are tax-exclusive)
     const processedItems = items.map(item => {
-      // If staffContributions is provided, calculate amounts
+      const linePreTax = getItemPreTaxTotal(item);
       if (item.staffContributions && Array.isArray(item.staffContributions)) {
         item.staffContributions = item.staffContributions.map(contribution => ({
           ...contribution,
-          amount: (item.total * contribution.percentage) / 100
+          amount: (linePreTax * contribution.percentage) / 100
         }));
       }
-      
-      // Maintain backward compatibility - if no staffContributions but has staffId/staffName
+
       if (!item.staffContributions && item.staffId && item.staffName) {
         item.staffContributions = [{
           staffId: item.staffId,
           staffName: item.staffName,
           percentage: 100,
-          amount: item.total
+          amount: linePreTax
         }];
       }
       
@@ -8496,7 +8505,6 @@ app.get('/api/receipts/client/:clientId', authenticateToken, setupBusinessDataba
 // Reports routes
 app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    console.log('🔍 Dashboard stats request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
     const { Service, Product, Staff, Client, Appointment, Receipt, Sale, MembershipSubscription, MembershipPlan } = req.businessModels;
     
@@ -8666,6 +8674,21 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     const openingBalance = openingRegistry?.openingBalance ?? 0;
     const closingBalance = closingRegistry?.closingBalance ?? cashBalance;
 
+    // Outstanding: invoices in date range with due_amount > 0
+    let totalDue = 0;
+    const customersWithDueSet = new Set();
+    sales.forEach(s => {
+      const totalBillAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? s.netTotal ?? 0;
+      const amountPaid = s.paymentStatus?.paidAmount ?? (s.payments?.reduce((sum, p) => sum + (p.amount || 0), 0) ?? 0);
+      const dueAmount = totalBillAmount - amountPaid;
+      if (dueAmount > 0) {
+        totalDue += dueAmount;
+        const customerKey = (s.customerName || '').trim() || s._id.toString();
+        if (customerKey) customersWithDueSet.add(customerKey);
+      }
+    });
+    const customersWithDue = customersWithDueSet.size;
+
     res.json({
       success: true,
       data: {
@@ -8682,7 +8705,9 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         tipCollected,
         cashBalance,
         openingBalance,
-        closingBalance
+        closingBalance,
+        totalDue,
+        customersWithDue
       }
     });
   } catch (error) {
@@ -8697,7 +8722,6 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
 // --- SALES API ---
 app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    console.log('🔍 Sales request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
     const { Sale, BillEditHistory } = req.businessModels;
     const { dateFrom, dateTo } = req.query;
@@ -8720,7 +8744,6 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
       });
     }
     
-    console.log('✅ Sales found:', sales.length);
     res.json({ success: true, data: sales });
   } catch (err) {
     console.error('Error fetching sales:', err);
@@ -8730,18 +8753,18 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
 
 app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    console.log('🔍 Sales POST request received');
-    console.log('📋 Request body:', JSON.stringify(req.body, null, 2));
-    console.log('👤 User:', req.user);
-    console.log('🌐 Request headers:', req.headers);
-    console.log('🌐 Request method:', req.method);
-    console.log('🌐 Request url:', req.url);
+    if (process.env.DEBUG_SALES) {
+      console.log('🔍 Sales POST request received');
+      console.log('📋 Request body:', JSON.stringify(req.body, null, 2));
+      console.log('👤 User:', req.user?.email);
+    }
     
     const { Sale, Product, InventoryTransaction, Appointment } = req.businessModels;
     const saleData = req.body;
     
     // Process items to handle staff contributions and preserve productId/serviceId
     const mongoose = require('mongoose');
+    const { getItemPreTaxTotal } = require('./lib/sale-item-pretax');
     if (saleData.items && Array.isArray(saleData.items)) {
       saleData.items = saleData.items.map(item => {
         // Ensure productId is preserved and converted to ObjectId if it's a string
@@ -8758,21 +8781,20 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         }
         if (item.variantKey !== undefined) item.variantKey = item.variantKey || '';
         
-        // If staffContributions is provided, calculate amounts
+        const linePreTax = getItemPreTaxTotal(item);
         if (item.staffContributions && Array.isArray(item.staffContributions)) {
           item.staffContributions = item.staffContributions.map(contribution => ({
             ...contribution,
-            amount: (item.total * contribution.percentage) / 100
+            amount: (linePreTax * contribution.percentage) / 100
           }));
         }
-        
-        // Maintain backward compatibility - if no staffContributions but has staffId/staffName
+
         if (!item.staffContributions && item.staffId && item.staffName) {
           item.staffContributions = [{
             staffId: item.staffId,
             staffName: item.staffName,
             percentage: 100,
-            amount: item.total
+            amount: linePreTax
           }];
         }
         
@@ -8782,6 +8804,14 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     
     // Add branchId to sale data
     saleData.branchId = req.user.branchId;
+
+    // Validate customerId is a valid ObjectId if present
+    if (saleData.customerId && !mongoose.Types.ObjectId.isValid(saleData.customerId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid customer ID format'
+      });
+    }
 
     // Assign membership on checkout: convert planToAssignId to ObjectId if present
     if (saleData.planToAssignId && mongoose.Types.ObjectId.isValid(saleData.planToAssignId)) {
@@ -9509,8 +9539,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
 
     const originalItems = existingSale.items || [];
     let updatedItems = Array.isArray(updateData.items) ? updateData.items : originalItems;
-    // Preserve serviceId and variantKey on service items when updating
+    // Preserve serviceId and variantKey; recalc staff contribution amounts (tax-exclusive)
     const mongooseSales = require('mongoose');
+    const { getItemPreTaxTotal: getItemPreTaxForEdit } = require('./lib/sale-item-pretax');
     if (Array.isArray(updatedItems)) {
       updatedItems = updatedItems.map((item) => {
         const plain = item && typeof item.toObject === 'function' ? item.toObject() : { ...item };
@@ -9518,6 +9549,20 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           plain.serviceId = new mongooseSales.Types.ObjectId(plain.serviceId);
         }
         if (plain.variantKey !== undefined) plain.variantKey = plain.variantKey || '';
+        const linePreTax = getItemPreTaxForEdit(plain);
+        if (plain.staffContributions && Array.isArray(plain.staffContributions)) {
+          plain.staffContributions = plain.staffContributions.map((contribution) => ({
+            ...contribution,
+            amount: (linePreTax * (Number(contribution.percentage) || 0)) / 100,
+          }));
+        } else if (plain.staffId && plain.staffName) {
+          plain.staffContributions = [{
+            staffId: plain.staffId,
+            staffName: plain.staffName,
+            percentage: 100,
+            amount: linePreTax,
+          }];
+        }
         return plain;
       });
     }
@@ -9640,6 +9685,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'tip',
       'tipStaffId',
       'tipStaffName',
+      'staffName', // Header staff on bill; keeps sale in sync when invoice staff changes
     ];
 
     editableRootFields.forEach((field) => {
@@ -9791,6 +9837,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       const { Appointment } = req.businessModels;
       await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
+      await syncCompletedLinkedAppointmentStaffFromSale(Appointment, savedSale);
     }
 
     const newStatus = String(savedSale.status || '').toLowerCase();
@@ -10030,6 +10077,63 @@ app.get('/api/consumption-logs', authenticateToken, setupBusinessDatabase, requi
   } catch (err) {
     console.error('Error listing consumption logs:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Bulk client stats - aggregates totalVisits, totalSpent, lastVisit for multiple clients in one query
+app.post('/api/clients/bulk-stats', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { clientIds } = req.body;
+    if (!clientIds || !Array.isArray(clientIds) || clientIds.length === 0) {
+      return res.json({ success: true, data: {} });
+    }
+
+    const { Sale, Client } = req.businessModels;
+
+    const clients = await Client.find({ _id: { $in: clientIds } }).select('phone').lean();
+    const phoneToClientId = {};
+    const phones = [];
+    for (const c of clients) {
+      if (c.phone) {
+        phoneToClientId[c.phone] = String(c._id);
+        phones.push(c.phone);
+      }
+    }
+
+    if (phones.length === 0) {
+      return res.json({ success: true, data: {} });
+    }
+
+    const pipeline = [
+      { $match: { customerPhone: { $in: phones } } },
+      {
+        $group: {
+          _id: '$customerPhone',
+          totalVisits: { $sum: 1 },
+          totalSpent: { $sum: { $ifNull: ['$grossTotal', 0] } },
+          lastVisit: { $max: '$date' }
+        }
+      }
+    ];
+
+    const stats = await Sale.aggregate(pipeline);
+
+    const result = {};
+    for (const s of stats) {
+      const clientId = phoneToClientId[s._id];
+      if (clientId) {
+        result[clientId] = {
+          totalVisits: s.totalVisits,
+          totalSpent: s.totalSpent,
+          lastVisit: s.lastVisit
+        };
+      }
+    }
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error fetching bulk client stats:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch client stats' });
   }
 });
 
@@ -10460,6 +10564,15 @@ app.post('/api/sales/:id/exchange', authenticateToken, setupBusinessDatabase, re
     await session.commitTransaction();
     session.endSession();
 
+    try {
+      const { Appointment } = req.businessModels;
+      if (savedSale.appointmentId && String(savedSale.status || '').toLowerCase() === 'completed') {
+        await syncCompletedLinkedAppointmentStaffFromSale(Appointment, savedSale);
+      }
+    } catch (syncErr) {
+      console.error('⚠️ Appointment staff sync after exchange failed:', syncErr);
+    }
+
     res.json({ success: true, data: savedSale });
   } catch (err) {
     console.error('❌ Error exchanging products in sale:', err);
@@ -10625,7 +10738,6 @@ app.delete('/api/expenses/:id', authenticateToken, setupBusinessDatabase, requir
 // --- BUSINESS SETTINGS API ---
 app.get("/api/settings/business", authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    console.log('🔍 Business settings request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
     const { BusinessSettings } = req.businessModels;
     let settings = await BusinessSettings.findOne();
@@ -10786,24 +10898,16 @@ app.post("/api/test-increment", authenticateToken, async (req, res) => {
 // API to increment receipt number atomically
 app.post("/api/settings/business/increment-receipt", authenticateToken, async (req, res) => {
   try {
-    console.log('🔢 ===== INCREMENT RECEIPT ENDPOINT CALLED =====');
-    console.log('🔢 Increment receipt number request received');
-    console.log('👤 User:', req.user?.email, 'Branch:', req.user?.branchId);
-
-    // Set up business database manually to avoid middleware issues
     const businessId = req.user?.branchId;
     if (!businessId) {
-      console.error('❌ Business ID not found in user data');
       return res.status(400).json({
         success: false,
         error: 'Business ID not found in user data'
       });
     }
 
-    console.log('🔍 Getting business connection for ID:', businessId);
     let businessConnection;
     try {
-      // Get main connection to look up business code
       const mainConnection = await databaseManager.getMainConnection();
       businessConnection = await databaseManager.getConnection(businessId, mainConnection);
     } catch (connectionError) {
@@ -10814,7 +10918,6 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
         details: connectionError.message
       });
     }
-    console.log('🔍 Business connection obtained:', !!businessConnection);
 
     let businessModels;
     try {
@@ -10827,26 +10930,18 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
         details: modelsError.message
       });
     }
-    console.log('🔍 Business models created:', Object.keys(businessModels));
 
     const { BusinessSettings, Sale } = businessModels;
     
     if (!BusinessSettings) {
-      console.error('❌ BusinessSettings model not found in businessModels');
       return res.status(500).json({
         success: false,
         error: 'BusinessSettings model not available'
       });
     }
     
-    // Atomically increment receipt number to prevent race conditions
-    console.log('🔍 Atomically incrementing receipt number...');
-    
-    // First, ensure settings exist
     let settings = await BusinessSettings.findOne();
     if (!settings) {
-      console.log('❌ Business settings not found, creating new one');
-      console.log('📝 Creating with branchId:', businessId);
       settings = new BusinessSettings({
         branchId: businessId,
         receiptNumber: 0
@@ -10862,8 +10957,6 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
         });
       }
     } else if (!settings.branchId) {
-      // Ensure existing settings have branchId (for backward compatibility)
-      console.log('⚠️ Existing settings missing branchId, adding it now');
       settings.branchId = businessId;
       await settings.save();
     }
@@ -10884,18 +10977,13 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
     }
 
     const newReceiptNumber = updatedSettings.receiptNumber;
-    console.log('📊 Atomically incremented to:', newReceiptNumber);
 
-    // Check if receipt number already exists (duplicate prevention)
     const prefix = updatedSettings.invoicePrefix || updatedSettings.receiptPrefix || "INV";
     let formattedReceiptNumber = `${prefix}-${newReceiptNumber.toString().padStart(6, '0')}`;
-
-    console.log('🔍 Checking for duplicate receipt number:', formattedReceiptNumber);
 
     let existingSale = await Sale.findOne({ billNo: formattedReceiptNumber });
 
     if (existingSale) {
-      console.log('⚠️ Duplicate receipt number found, finding next available');
       // If duplicate exists, find the next available number
       let nextNumber = newReceiptNumber + 1;
       let nextFormattedNumber = `${prefix}-${nextNumber.toString().padStart(6, '0')}`;
@@ -10925,9 +11013,6 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
       );
 
       formattedReceiptNumber = nextFormattedNumber;
-      console.log('✅ Using next available receipt number:', nextNumber);
-    } else {
-      console.log('✅ Using incremented receipt number:', newReceiptNumber);
     }
 
     // Extract the final number from the formatted receipt number
@@ -11619,7 +11704,6 @@ app.get('/api/petty-cash/logs', authenticateToken, setupBusinessDatabase, async 
 
 app.get('/api/cash-registry/summary/dashboard', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    console.log('🔍 Cash Registry Summary request for user:', req.user?.email, 'branchId:', req.user?.branchId);
     
     const { CashRegistry, Sale, Expense } = req.businessModels;
     const today = new Date();
@@ -11771,25 +11855,67 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
     if (shiftType === 'closing') {
       const startOfDay = getStartOfDayIST(date);
       const endOfDay = getEndOfDayIST(date);
-      
-      // Get cash collected from sales for the date
-      const sales = await Sale.find({
-        date: {
-          $gte: startOfDay,
-          $lt: endOfDay
+      const branchId = req.user.branchId;
+
+      // Cash Register uses PAYMENT DATE (when cash was collected), not invoice date
+      // Total Cash = New payments (checkout) + Due collections on this date
+      const salesToday = await Sale.find({
+        branchId,
+        date: { $gte: startOfDay, $lt: endOfDay },
+        status: { $nin: ['cancelled', 'Cancelled'] }
+      }).lean();
+      const salesWithDuesToday = await Sale.find({
+        branchId,
+        paymentHistory: {
+          $elemMatch: {
+            date: { $gte: startOfDay, $lt: endOfDay },
+            method: 'Cash'
+          }
         },
-        paymentMode: 'Cash'
+        status: { $nin: ['cancelled', 'Cancelled'] }
+      }).lean();
+      let cashFromNewBills = 0;
+      salesToday.forEach((sale) => {
+        let cashAmt = 0;
+        let isAllCash = false;
+        if (sale.payments && sale.payments.length > 0) {
+          sale.payments.forEach((p) => {
+            const m = (p.mode || p.type || '').toLowerCase();
+            if (m.includes('cash')) cashAmt += p.amount || 0;
+          });
+          const hasNonCash = (sale.payments || []).some((p) => {
+            const m = (p.mode || p.type || '').toLowerCase();
+            return m.includes('card') || m.includes('online') || m.includes('upi');
+          });
+          isAllCash = cashAmt > 0 && !hasNonCash;
+        } else {
+          const pm = (sale.paymentMode || '').toLowerCase();
+          if (pm.includes('cash') && !pm.includes('card') && !pm.includes('online')) {
+            cashAmt = sale.netTotal || sale.grossTotal || 0;
+            isAllCash = true;
+          }
+        }
+        const tip = sale.tip || 0;
+        cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
       });
-      
-      cashCollected = sales.reduce((sum, sale) => sum + sale.netTotal, 0);
+      let cashFromDueCollected = 0;
+      salesWithDuesToday.forEach((sale) => {
+        (sale.paymentHistory || []).forEach((ph) => {
+          if (!ph || (ph.method || '').toLowerCase() !== 'cash') return;
+          const phDate = ph.date ? new Date(ph.date) : null;
+          if (phDate && phDate >= startOfDay && phDate < endOfDay) {
+            cashFromDueCollected += ph.amount || 0;
+          }
+        });
+      });
+      cashCollected = cashFromNewBills + cashFromDueCollected;
       
       // Get expenses for the date
       const expenses = await Expense.find({
-        date: {
-          $gte: startOfDay,
-          $lt: endOfDay
-        },
-        paymentMode: 'Cash'
+        ...(branchId && { branchId }),
+        date: { $gte: startOfDay, $lt: endOfDay },
+        paymentMode: 'Cash',
+        status: { $in: ['approved', 'pending'] }
       });
       
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -11891,43 +12017,99 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
   }
 });
 
-app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { CashRegistry } = req.businessModels;
-    const { verificationNotes, balanceDifferenceReason, onlineCashDifferenceReason } = req.body;
-    
+    const { type, reason, note } = req.body;
+    const updatedBy = req.user.firstName && req.user.lastName ?
+      `${req.user.firstName} ${req.user.lastName}`.trim() : req.user.email || 'Unknown User';
+
     const cashRegistry = await CashRegistry.findById(req.params.id);
     if (!cashRegistry) {
       return res.status(404).json({ message: 'Cash registry entry not found' });
     }
-    
+
+    const updates = {};
+    if (type === 'cash') {
+      updates.balanceDifferenceReason = reason || '';
+      updates.balanceDifferenceNote = note || '';
+      updates.balanceDifferenceUpdatedAt = new Date();
+      updates.balanceDifferenceUpdatedBy = updatedBy;
+    } else if (type === 'online') {
+      updates.onlineCashDifferenceReason = reason || '';
+      updates.onlineCashDifferenceNote = note || '';
+      updates.onlineCashDifferenceUpdatedAt = new Date();
+      updates.onlineCashDifferenceUpdatedBy = updatedBy;
+    } else {
+      return res.status(400).json({ message: 'Invalid type. Use "cash" or "online"' });
+    }
+
+    const updated = await CashRegistry.findByIdAndUpdate(
+      req.params.id,
+      updates,
+      { new: true, runValidators: true }
+    );
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating difference reason:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { CashRegistry } = req.businessModels;
+    const { verificationNotes, balanceDifferenceReason, balanceDifferenceNote, onlineCashDifferenceReason, onlineCashDifferenceNote } = req.body;
+    const updatedBy = req.user.firstName && req.user.lastName ?
+      `${req.user.firstName} ${req.user.lastName}`.trim() : req.user.email || 'Unknown User';
+
+    const cashRegistry = await CashRegistry.findById(req.params.id);
+    if (!cashRegistry) {
+      return res.status(404).json({ message: 'Cash registry entry not found' });
+    }
+
     // Check if verification is required
     const hasBalanceDifference = cashRegistry.balanceDifference !== 0;
     const hasOnlinePosDifference = cashRegistry.onlinePosDifference !== 0;
-    
-    if ((hasBalanceDifference || hasOnlinePosDifference) && !verificationNotes) {
-      return res.status(400).json({ 
-        message: 'Verification notes are required when there are balance differences' 
+
+    if (hasBalanceDifference && !balanceDifferenceReason?.trim()) {
+      return res.status(400).json({
+        message: 'Reason for Cash Difference is required when there is a cash difference'
       });
     }
-    
+    if (hasOnlinePosDifference && !onlineCashDifferenceReason?.trim()) {
+      return res.status(400).json({
+        message: 'Reason for Online Cash Difference is required when there is an online difference'
+      });
+    }
+
+    // Build verification notes from reasons if not provided
+    const builtNotes = verificationNotes || [
+      hasBalanceDifference && balanceDifferenceReason && `Cash: ${balanceDifferenceReason}`,
+      hasOnlinePosDifference && onlineCashDifferenceReason && `Online: ${onlineCashDifferenceReason}`
+    ].filter(Boolean).join('; ') || 'Verified';
+
     // Update verification fields
     const updates = {
       isVerified: true,
-      verifiedBy: req.user.firstName && req.user.lastName ? 
-        `${req.user.firstName} ${req.user.lastName}`.trim() : 
-        req.user.email || 'Unknown User',
+      verifiedBy: updatedBy,
       verifiedAt: new Date(),
-      verificationNotes,
+      verificationNotes: builtNotes,
       status: 'verified'
     };
-    
+
     // Update difference reasons if provided
-    if (balanceDifferenceReason) {
+    if (balanceDifferenceReason !== undefined) {
       updates.balanceDifferenceReason = balanceDifferenceReason;
+      updates.balanceDifferenceNote = balanceDifferenceNote || '';
+      updates.balanceDifferenceUpdatedAt = new Date();
+      updates.balanceDifferenceUpdatedBy = updatedBy;
     }
-    if (onlineCashDifferenceReason) {
+    if (onlineCashDifferenceReason !== undefined) {
       updates.onlineCashDifferenceReason = onlineCashDifferenceReason;
+      updates.onlineCashDifferenceNote = onlineCashDifferenceNote || '';
+      updates.onlineCashDifferenceUpdatedAt = new Date();
+      updates.onlineCashDifferenceUpdatedBy = updatedBy;
     }
     
     const verifiedCashRegistry = await CashRegistry.findByIdAndUpdate(
@@ -13090,8 +13272,8 @@ app.listen(PORT, '0.0.0.0', async () => {
   // await initializeDefaultUsers();
   // await initializeBusinessSettings();
   
-  // Setup cron job for inactivity checking
-  setupInactivityChecker();
+  // Setup cron job for inactivity checking (disabled - module not yet created)
+  // setupInactivityChecker();
   
   // Setup email scheduler jobs
   const { setupEmailScheduler } = require('./jobs/email-scheduler');

@@ -70,6 +70,12 @@ const cashRegistrySchema = new mongoose.Schema({
     type: String, 
     default: '' 
   },
+  balanceDifferenceNote: { 
+    type: String, 
+    default: '' 
+  },
+  balanceDifferenceUpdatedAt: { type: Date },
+  balanceDifferenceUpdatedBy: { type: String, default: '' },
   
   // Online vs POS Cash
   onlineCash: { 
@@ -88,6 +94,9 @@ const cashRegistrySchema = new mongoose.Schema({
     type: String, 
     default: '' 
   },
+  onlineCashDifferenceNote: { type: String, default: '' },
+  onlineCashDifferenceUpdatedAt: { type: Date },
+  onlineCashDifferenceUpdatedBy: { type: String, default: '' },
   
   // Verification
   isVerified: { 
