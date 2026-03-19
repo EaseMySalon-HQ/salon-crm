@@ -11,6 +11,7 @@ import { Calendar } from "@/components/ui/calendar"
 import { format } from "date-fns"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
+import { splitLineRevenueByStaff } from "@/lib/staff-line-revenue"
 
 interface ServiceRow {
   id: string
@@ -151,12 +152,6 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
 
       ;(sale.items || []).forEach((item: any, idx: number) => {
         if (item.type !== "service") return
-        const staffName = item.staffContributions?.[0]?.staffName || item.staffName || sale.staffName || "—"
-        const staffId = item.staffContributions?.[0]?.staffId || item.staffId
-        if (staffF !== "all") {
-          const selectedStaffName = staffList.find((s) => s._id === staffF)?.name
-          if (staffId !== staffF && staffName !== selectedStaffName) return
-        }
         if (serviceF !== "all") {
           const sid = item.serviceId?.toString?.() ?? item.serviceId
           const matchById = sid === serviceF
@@ -165,7 +160,8 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
         }
 
         const perUnitDuration = item.serviceId ? (serviceDurationMap[item.serviceId] ?? 0) : 0
-        const totalDurationMinutes = perUnitDuration * (item.quantity || 1)
+        const lineQty = item.quantity ?? 1
+        const totalDurationMinutes = perUnitDuration * lineQty
         let startEndTime = saleTimeStr
         if (totalDurationMinutes > 0 && saleTimeStr) {
           try {
@@ -182,26 +178,47 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
           }
         }
 
-        rows.push({
-          id: `${sale._id}-${idx}`,
-          saleId: sale._id,
-          billNo: sale.billNo || "—",
-          service: item.name || "—",
-          serviceId: item.serviceId?.toString?.() ?? item.serviceId,
-          price: item.price ?? 0,
-          total: item.total ?? 0,
-          quantity: item.quantity ?? 1,
-          staff: staffName,
-          durationMinutes: perUnitDuration,
-          totalDurationMinutes,
-          customer: sale.customerName || "—",
-          saleDate,
-          saleTime: saleTimeStr,
-          startEndTime: startEndTime || `${saleDateStr} ${saleTimeStr}`.trim() || "—",
-          status: status || "—",
-          paidStatus,
-          paymentMode: paymentModes.join(", ") || "—"
-        })
+        const saleFallback = { staffId: sale.staffId, staffName: sale.staffName }
+        const splits = splitLineRevenueByStaff(item, saleFallback)
+        const nStaff = Math.max(1, splits.length)
+        const qtyPerRow = lineQty / nStaff
+
+        const pushRow = (staffName: string, staffId: string | undefined, attributedTotal: number, rowSuffix: string) => {
+          if (staffF !== "all") {
+            const selectedStaffName = staffList.find((s) => s._id === staffF)?.name
+            if (staffId !== staffF && staffName !== selectedStaffName) return
+          }
+          rows.push({
+            id: `${sale._id}-${idx}-${rowSuffix}`,
+            saleId: sale._id,
+            billNo: sale.billNo || "—",
+            service: item.name || "—",
+            serviceId: item.serviceId?.toString?.() ?? item.serviceId,
+            price: item.price ?? 0,
+            total: attributedTotal,
+            quantity: qtyPerRow,
+            staff: staffName,
+            durationMinutes: perUnitDuration,
+            totalDurationMinutes: perUnitDuration * qtyPerRow,
+            customer: sale.customerName || "—",
+            saleDate,
+            saleTime: saleTimeStr,
+            startEndTime: startEndTime || `${saleDateStr} ${saleTimeStr}`.trim() || "—",
+            status: status || "—",
+            paidStatus,
+            paymentMode: paymentModes.join(", ") || "—",
+          })
+        }
+
+        if (splits.length === 0) {
+          const staffName = item.staffName || sale.staffName || "—"
+          const staffId = item.staffId
+          pushRow(staffName, staffId, item.total ?? 0, "0")
+        } else {
+          splits.forEach((s, j) => {
+            pushRow(s.staffName || "—", s.staffId, s.revenue, String(j))
+          })
+        }
       })
     })
     return rows.sort((a, b) => b.saleDate.getTime() - a.saleDate.getTime())

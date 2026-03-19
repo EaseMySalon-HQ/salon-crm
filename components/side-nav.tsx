@@ -11,7 +11,7 @@ import { useAuth } from "@/lib/auth-context"
 import { useSidebar } from "@/lib/sidebar-context"
 import { SETTINGS_MODULES } from "@/lib/permission-mappings"
 
-export function SideNav() {
+export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean } = {}) {
   const pathname = usePathname()
   const { user } = useAuth()
   const { isCollapsed, toggleCollapsed } = useSidebar() ?? {
@@ -65,7 +65,8 @@ export function SideNav() {
 
   return (
     <aside className={cn(
-      "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 relative fixed inset-y-0 left-0 z-40 h-screen shrink-0",
+      "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 fixed left-0 z-40 shrink-0",
+      isImpersonation ? "top-10 h-[calc(100vh-2.5rem)]" : "top-0 h-screen",
       isCollapsed ? "w-24" : "w-56"
     )}>
       <div className="flex h-full flex-col gap-4 p-5">

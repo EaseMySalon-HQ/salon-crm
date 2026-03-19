@@ -1,6 +1,7 @@
 "use client"
 
 import { Receipt } from "@/lib/data"
+import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 
 interface ThermalReceiptGeneratorProps {
   receipt: Receipt
@@ -118,7 +119,20 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             }
             .round-off {
               font-size: 18px;
-              font-weight: bold;
+            }
+            body { position: relative; }
+            .payment-stamp {
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%) rotate(-12deg);
+              padding: 4px 8px;
+              font-size: 14px;
+              font-weight: 700;
+              letter-spacing: 0.03em;
+              opacity: 0.85;
+              border-radius: 3px;
+              box-shadow: 0 1px 2px rgba(0,0,0,0.2);
             }
           </style>
         </head>
@@ -142,16 +156,18 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           <div class="items">
             <table style="width: 100%; border-collapse: collapse; font-size: 17px;">
               <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
-              ${receipt.items.map(item => `
+              ${receipt.items.map(item => {
+                const staffLabel = formatReceiptItemStaffNames(item)
+                return `
                 <tr style="border-bottom: 1px dashed #999;">
                   <td>${(item as any).hsnSacCode || "-"}</td>
-                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}</td>
+                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}</td>
                   <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                   <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                   <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
                   <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
                 </tr>
-              `).join('')}
+              `}).join('')}
             </table>
           </div>
 
@@ -233,6 +249,21 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               <span>TOTAL:</span>
               <span>₹${receipt.total.toFixed(2)}</span>
             </div>
+            ${(() => {
+              const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
+              const outstanding = receipt.total - totalPaid
+              const outstandingStyle = outstanding > 0 ? ' style="color: #dc2626; font-weight: 500;"' : ''
+              return `
+            <div class="total-line" style="margin-top: 6px;">
+              <span>Total Paid:</span>
+              <span>₹${totalPaid.toFixed(2)}</span>
+            </div>
+            <div class="total-line" style="margin-top: 4px;"${outstandingStyle}>
+              <span>Outstanding:</span>
+              <span>₹${outstanding.toFixed(2)}</span>
+            </div>
+            `
+            })()}
           </div>
 
           <div class="payments">
@@ -253,6 +284,14 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               @glamoursalon
             </div>
           </div>
+          ${(() => {
+            const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
+            const outstanding = receipt.total - totalPaid
+            const status = outstanding === 0 ? "FULL PAID" : totalPaid > 0 ? "PART PAID" : "UNPAID"
+            const color = status === "FULL PAID" ? "#16a34a" : status === "PART PAID" ? "#f97316" : "#dc2626"
+            const check = status === "FULL PAID" ? "✓ " : ""
+            return `<div class="payment-stamp" style="border: 2px solid ${color}; color: ${color};">${check}${status}</div>`
+          })()}
         </body>
         </html>
       `
@@ -379,6 +418,20 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             font-size: 18px;
             font-weight: bold;
           }
+          body { position: relative; }
+          .payment-stamp {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-12deg);
+            padding: 4px 8px;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            opacity: 0.85;
+            border-radius: 3px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+          }
         </style>
       </head>
       <body>
@@ -401,16 +454,18 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
         <div class="items">
           <table style="width: 100%; border-collapse: collapse; font-size: 17px;">
             <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
-            ${receipt.items.map(item => `
+            ${receipt.items.map(item => {
+              const staffLabel = formatReceiptItemStaffNames(item)
+              return `
               <tr style="border-bottom: 1px dashed #999;">
                 <td>${(item as any).hsnSacCode || "-"}</td>
-                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}</td>
+                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}</td>
                 <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                 <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                 <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
                 <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
               </tr>
-            `).join('')}
+            `}).join('')}
           </table>
         </div>
 
@@ -492,6 +547,21 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             <span>TOTAL:</span>
             <span>₹${receipt.total.toFixed(2)}</span>
           </div>
+          ${(() => {
+            const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
+            const outstanding = receipt.total - totalPaid
+            const outstandingStyle = outstanding > 0 ? ' style="color: #dc2626; font-weight: 500;"' : ''
+            return `
+          <div class="total-line" style="margin-top: 6px;">
+            <span>Total Paid:</span>
+            <span>₹${totalPaid.toFixed(2)}</span>
+          </div>
+          <div class="total-line" style="margin-top: 4px;"${outstandingStyle}>
+            <span>Outstanding:</span>
+            <span>₹${outstanding.toFixed(2)}</span>
+          </div>
+          `
+          })()}
         </div>
 
         <div class="payments">
@@ -512,6 +582,14 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             ${businessSettings.socialMedia || "@glamoursalon"}
           </div>
         </div>
+        ${(() => {
+          const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
+          const outstanding = receipt.total - totalPaid
+          const status = outstanding === 0 ? "FULL PAID" : totalPaid > 0 ? "PART PAID" : "UNPAID"
+          const color = status === "FULL PAID" ? "#16a34a" : status === "PART PAID" ? "#f97316" : "#dc2626"
+          const check = status === "FULL PAID" ? "✓ " : ""
+          return `<div class="payment-stamp" style="border: 2px solid ${color}; color: ${color};">${check}${status}</div>`
+        })()}
       </body>
       </html>
     `

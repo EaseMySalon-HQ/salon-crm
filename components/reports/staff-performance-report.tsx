@@ -18,6 +18,7 @@ import { StaffServiceDetailDrawer } from "@/components/reports/staff-service-det
 import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI, ReportsAPI } from "@/lib/api"
 import { CommissionProfileCalculator, StaffCommissionResult } from "@/lib/commission-profile-calculator"
 import { CommissionProfile } from "@/lib/commission-profile-types"
+import { splitLineRevenueByStaff } from "@/lib/staff-line-revenue"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
 
@@ -103,6 +104,61 @@ const getPerformanceTrend = (currentScore: number, previousScore: number) => {
   if (change > 5) return 'up'      // More than 5% improvement
   if (change < -5) return 'down'   // More than 5% decline
   return 'neutral'                 // Less than 5% change
+}
+
+/** Split each line by staffContributions (or single staff); attribute revenue & share of qty per staff. */
+function applySaleToStaffPerformanceMaps(
+  sale: any,
+  performanceMap: Map<string, StaffPerformanceData>,
+  staffServiceRevenue: Map<string, number>,
+  staffProductRevenue: Map<string, number>,
+  staffCustomers: Map<string, Set<string>>,
+  customerStaffMap: Map<string, Set<string>>
+) {
+  const staffSeenInSale = new Set<string>()
+  const saleFallback = { staffId: sale.staffId, staffName: sale.staffName }
+  const items = sale.items
+  if (!items || !Array.isArray(items)) return
+
+  for (const item of items) {
+    const splits = splitLineRevenueByStaff(item, saleFallback)
+    if (splits.length === 0) continue
+
+    const qty = Number(item.quantity) || 1
+    const n = Math.max(1, splits.length)
+    const customerId = sale.customerId || sale.customerName
+
+    for (const { staffId, revenue } of splits) {
+      if (!staffId || revenue <= 0) continue
+      const staffData = performanceMap.get(staffId)
+      if (!staffData) continue
+
+      if (!staffSeenInSale.has(staffId)) {
+        staffSeenInSale.add(staffId)
+        staffData.totalTransactions += 1
+        if (!staffData.lastActivity || String(sale.date) > String(staffData.lastActivity)) {
+          staffData.lastActivity = sale.date
+        }
+      }
+
+      if (item.type === "service") {
+        staffData.serviceCount += qty / n
+        staffData.totalRevenue += revenue
+        staffServiceRevenue.set(staffId, (staffServiceRevenue.get(staffId) || 0) + revenue)
+      } else if (item.type === "product") {
+        staffData.productCount += qty / n
+        staffData.totalRevenue += revenue
+        staffProductRevenue.set(staffId, (staffProductRevenue.get(staffId) || 0) + revenue)
+      }
+
+      if (customerId) {
+        if (!staffCustomers.has(staffId)) staffCustomers.set(staffId, new Set())
+        staffCustomers.get(staffId)!.add(customerId)
+        if (!customerStaffMap.has(customerId)) customerStaffMap.set(customerId, new Set())
+        customerStaffMap.get(customerId)!.add(staffId)
+      }
+    }
+  }
 }
 
 export function StaffPerformanceReport() {
@@ -311,54 +367,14 @@ export function StaffPerformanceReport() {
           const staffProductRevenue = new Map<string, number>() // staff -> product revenue
 
           filteredSales.forEach((sale: any) => {
-            // Process each item in the sale to get accurate staff attribution
-            if (sale.items && Array.isArray(sale.items)) {
-              sale.items.forEach((item: any) => {
-                const itemStaffId = item.staffId || item.staffName || sale.staffId || sale.staffName
-                const staffData = performanceMap.get(itemStaffId)
-                
-                if (staffData) {
-                  // Update transaction count (only once per sale)
-                  if (sale.items.indexOf(item) === 0) {
-                    staffData.totalTransactions += 1
-                    staffData.lastActivity = sale.date
-                  }
-
-                  // Update revenue and counts based on item type
-                  if (item.type === "service") {
-                    staffData.serviceCount += item.quantity || 1
-                    const itemRevenue = item.total || (item.price * (item.quantity || 1))
-                    staffData.totalRevenue += itemRevenue
-                    
-                    // Track service revenue separately
-                    const currentServiceRevenue = staffServiceRevenue.get(itemStaffId) || 0
-                    staffServiceRevenue.set(itemStaffId, currentServiceRevenue + itemRevenue)
-                  } else if (item.type === "product") {
-                    staffData.productCount += item.quantity || 1
-                    const itemRevenue = item.total || (item.price * (item.quantity || 1))
-                    staffData.totalRevenue += itemRevenue
-                    
-                    // Track product revenue separately
-                    const currentProductRevenue = staffProductRevenue.get(itemStaffId) || 0
-                    staffProductRevenue.set(itemStaffId, currentProductRevenue + itemRevenue)
-                  }
-
-                  // Track customers
-                  const customerId = sale.customerId || sale.customerName
-                  if (customerId) {
-                    if (!staffCustomers.has(itemStaffId)) {
-                      staffCustomers.set(itemStaffId, new Set())
-                    }
-                    staffCustomers.get(itemStaffId)!.add(customerId)
-
-                    if (!customerStaffMap.has(customerId)) {
-                      customerStaffMap.set(customerId, new Set())
-                    }
-                    customerStaffMap.get(customerId)!.add(itemStaffId)
-                  }
-                }
-              })
-            }
+            applySaleToStaffPerformanceMaps(
+              sale,
+              performanceMap,
+              staffServiceRevenue,
+              staffProductRevenue,
+              staffCustomers,
+              customerStaffMap
+            )
           })
 
           // Calculate additional metrics and commission
@@ -484,48 +500,14 @@ export function StaffPerformanceReport() {
             const prevStaffProductRevenue = new Map<string, number>()
 
             previousMonthSales.forEach((sale: any) => {
-              if (sale.items && Array.isArray(sale.items)) {
-                sale.items.forEach((item: any) => {
-                  const itemStaffId = item.staffId || item.staffName || sale.staffId || sale.staffName
-                  const staffData = prevPerformanceMap.get(itemStaffId)
-                  
-                  if (staffData) {
-                    if (sale.items.indexOf(item) === 0) {
-                      staffData.totalTransactions += 1
-                      staffData.lastActivity = sale.date
-                    }
-
-                    if (item.type === "service") {
-                      staffData.serviceCount += item.quantity || 1
-                      const itemRevenue = item.total || (item.price * (item.quantity || 1))
-                      staffData.totalRevenue += itemRevenue
-                      
-                      const currentServiceRevenue = prevStaffServiceRevenue.get(itemStaffId) || 0
-                      prevStaffServiceRevenue.set(itemStaffId, currentServiceRevenue + itemRevenue)
-                    } else if (item.type === "product") {
-                      staffData.productCount += item.quantity || 1
-                      const itemRevenue = item.total || (item.price * (item.quantity || 1))
-                      staffData.totalRevenue += itemRevenue
-                      
-                      const currentProductRevenue = prevStaffProductRevenue.get(itemStaffId) || 0
-                      prevStaffProductRevenue.set(itemStaffId, currentProductRevenue + itemRevenue)
-                    }
-
-                    const customerId = sale.customerId || sale.customerName
-                    if (customerId) {
-                      if (!prevStaffCustomers.has(itemStaffId)) {
-                        prevStaffCustomers.set(itemStaffId, new Set())
-                      }
-                      prevStaffCustomers.get(itemStaffId)!.add(customerId)
-
-                      if (!prevCustomerStaffMap.has(customerId)) {
-                        prevCustomerStaffMap.set(customerId, new Set())
-                      }
-                      prevCustomerStaffMap.get(customerId)!.add(itemStaffId)
-                    }
-                  }
-                })
-              }
+              applySaleToStaffPerformanceMaps(
+                sale,
+                prevPerformanceMap,
+                prevStaffServiceRevenue,
+                prevStaffProductRevenue,
+                prevStaffCustomers,
+                prevCustomerStaffMap
+              )
             })
 
             // Calculate previous month metrics

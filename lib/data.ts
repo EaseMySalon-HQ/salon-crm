@@ -77,6 +77,8 @@ export interface Receipt {
   time: string
   items: ReceiptItem[]
   subtotal: number
+  /** Pre-tax subtotal when tracked separately from `subtotal` (incl. tax base totals). */
+  subtotalExcludingTax?: number
   tip: number
   tipStaffName?: string
   discount: number
@@ -94,6 +96,13 @@ export interface Receipt {
   }
 }
 
+export interface ReceiptStaffContribution {
+  staffId?: string
+  staffName?: string
+  percentage?: number
+  amount?: number
+}
+
 export interface ReceiptItem {
   id: string
   name: string
@@ -104,6 +113,8 @@ export interface ReceiptItem {
   discountType: "percentage" | "fixed"
   staffId?: string
   staffName?: string
+  /** When set (multi-staff service), receipt UIs join all names for display. */
+  staffContributions?: ReceiptStaffContribution[]
   total: number
   hsnSacCode?: string
 }

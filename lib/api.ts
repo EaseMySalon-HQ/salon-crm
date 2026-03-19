@@ -34,10 +34,6 @@ apiClient.interceptors.request.use(
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
   (response: AxiosResponse) => {
-    // Log success without full response data to reduce console noise (data can be large)
-    if (process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_LOG_API_SUCCESS !== 'false') {
-      console.log('✅ API:', response.config.method?.toUpperCase(), response.config.url, response.status)
-    }
     return response
   },
   (error: AxiosError | any) => {
@@ -273,6 +269,11 @@ export class ClientsAPI {
 
   static async search(query: string): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/clients/search', { params: { q: query } })
+    return response.data
+  }
+
+  static async getBulkStats(clientIds: string[]): Promise<ApiResponse<Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }>>> {
+    const response = await apiClient.post('/clients/bulk-stats', { clientIds })
     return response.data
   }
 
@@ -1140,6 +1141,8 @@ export class ReportsAPI {
     cashExpense: number
     tipCollected: number
     cashBalance: number
+    totalDue?: number
+    customersWithDue?: number
   }>> {
     const response = await apiClient.get('/reports/summary', { params })
     return response.data
@@ -1261,9 +1264,20 @@ export class CashRegistryAPI {
   static async verify(id: string, data: { 
     verificationNotes?: string; 
     balanceDifferenceReason?: string; 
-    onlineCashDifferenceReason?: string 
+    balanceDifferenceNote?: string;
+    onlineCashDifferenceReason?: string;
+    onlineCashDifferenceNote?: string;
   }): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`/cash-registry/${id}/verify`, data)
+    return response.data
+  }
+
+  static async updateDifferenceReason(id: string, data: { 
+    type: 'cash' | 'online'; 
+    reason: string; 
+    note?: string 
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/cash-registry/${id}/difference-reason`, data)
     return response.data
   }
 

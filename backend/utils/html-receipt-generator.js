@@ -1,4 +1,5 @@
 const puppeteer = require('puppeteer');
+const { formatReceiptItemStaffNames } = require('./receipt-staff-format');
 
 /**
  * Format currency (backend version of frontend formatCurrency)
@@ -167,6 +168,21 @@ function generateReceiptHTML(receipt, businessSettings) {
         }
         @media print {
           body { margin: 0; padding: 10px; }
+          .payment-stamp { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+        body { position: relative; }
+        .payment-stamp {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%) rotate(-12deg);
+          padding: 6px 12px;
+          font-size: 14px;
+          font-weight: 700;
+          letter-spacing: 0.05em;
+          opacity: 0.85;
+          border-radius: 4px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.15);
         }
       </style>
     </head>
@@ -205,7 +221,7 @@ function generateReceiptHTML(receipt, businessSettings) {
               return `
                 <tr style="border-bottom: 1px dashed #999;">
                   <td style="padding: 3px 2px;">${item.hsnSacCode || "-"}</td>
-                  <td style="padding: 3px 2px;">${item.name || "Item"}${(item.quantity || 1) > 1 ? " (x" + (item.quantity || 1) + ")" : ""}${item.staffName ? "<br><span style=\"font-size: 10px; color: #666;\">" + item.staffName + "</span>" : ""}</td>
+                  <td style="padding: 3px 2px;">${item.name || "Item"}${(item.quantity || 1) > 1 ? " (x" + (item.quantity || 1) + ")" : ""}${(() => { const s = formatReceiptItemStaffNames(item); return s ? "<br><span style=\"font-size: 10px; color: #666;\">" + s + "</span>" : ""; })()}</td>
                   <td style="text-align: right; padding: 3px 2px;">${formatCurrency(item.price ?? 0, businessSettings)}</td>
                   <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : formatCurrency(item.discount, businessSettings)) : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px;">${(item.taxRate || 0) > 0 ? item.taxRate + "%" : "-"}</td>
@@ -309,6 +325,21 @@ function generateReceiptHTML(receipt, businessSettings) {
           <span>TOTAL:</span>
           <span>${formatCurrency(correctTotal, businessSettings)}</span>
         </div>
+        ${(() => {
+          const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0);
+          const outstanding = correctTotal - totalPaid;
+          const outstandingStyle = outstanding > 0 ? ' style="color: #dc2626; font-weight: 500;"' : '';
+          return `
+        <div class="total-line" style="margin-top: 6px;">
+          <span>Total Paid:</span>
+          <span>${formatCurrency(totalPaid, businessSettings)}</span>
+        </div>
+        <div class="total-line" style="margin-top: 4px;"${outstandingStyle}>
+          <span>Outstanding:</span>
+          <span>${formatCurrency(outstanding, businessSettings)}</span>
+        </div>
+        `;
+        })()}
       </div>
 
       <div class="payments">
@@ -348,6 +379,14 @@ function generateReceiptHTML(receipt, businessSettings) {
           </div>
         ` : ''}
       </div>
+      ${(() => {
+        const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0);
+        const outstanding = correctTotal - totalPaid;
+        const status = outstanding === 0 ? 'FULL PAID' : totalPaid > 0 ? 'PART PAID' : 'UNPAID';
+        const color = status === 'FULL PAID' ? '#16a34a' : status === 'PART PAID' ? '#f97316' : '#dc2626';
+        const check = status === 'FULL PAID' ? '✓ ' : '';
+        return `<div class="payment-stamp" style="border: 2px solid ${color}; color: ${color};">${check}${status}</div>`;
+      })()}
     </body>
     </html>
   `;

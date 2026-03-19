@@ -1,5 +1,4 @@
 "use client"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState, useEffect, useRef, useMemo } from "react"
 import {
@@ -33,9 +32,10 @@ import {
 } from "@/components/ui/dialog"
 import { useToast } from "@/hooks/use-toast"
 import { clientStore } from "@/lib/client-store"
-import { SalesAPI } from "@/lib/api"
+import { SalesAPI, ClientsAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { ClientImportModal } from "./client-import-modal"
+import { ClientDetailsDrawer } from "./client-details-drawer"
 
 interface Client {
   id?: string
@@ -74,6 +74,9 @@ export function ClientsTable({ clients }: ClientsTableProps) {
     pageIndex: 0,
     pageSize: 10,
   })
+  const [detailsDrawerOpen, setDetailsDrawerOpen] = useState(false)
+  const [detailsClient, setDetailsClient] = useState<Client | null>(null)
+  const [detailsDrawerForEdit, setDetailsDrawerForEdit] = useState(false)
   const prevClientsLengthRef = useRef<number>(0)
   const prevClientsIdsRef = useRef<string>('')
 
@@ -96,68 +99,76 @@ export function ClientsTable({ clients }: ClientsTableProps) {
     }
   }, [clients])
 
-  // Fetch real-time statistics for only the currently visible page (avoid thousands of requests)
-  // This function will be called from useEffect after table is created, so pageIndex/pageSize will be available
+  // Fetch real-time statistics for only the currently visible page using a single bulk request
   const fetchClientStats = async (currentPageIndex: number, currentPageSize: number) => {
     if (!user || clients.length === 0) return
 
     setIsLoadingStats(true)
-    // Always use the clients prop (filtered clients from parent)
     const start = currentPageIndex * currentPageSize
     const end = Math.min(start + currentPageSize, clients.length)
     const visible = clients.slice(start, end)
 
-    const concurrency = 10
-    const batches: typeof visible[] = []
-    for (let i = 0; i < visible.length; i += concurrency) {
-      batches.push(visible.slice(i, i + concurrency))
-    }
+    try {
+      const clientIds = visible.map(c => c._id || c.id).filter(Boolean) as string[]
+      const response = await ClientsAPI.getBulkStats(clientIds)
 
-    const enriched: any[] = []
-    for (const batch of batches) {
-      const results = await Promise.allSettled(
-        batch.map(async (client) => {
-          try {
-            const response = await SalesAPI.getByClient(client.phone || '')
-            if (response.success && response.data && response.data.length > 0) {
-              const sales = response.data
-              const totalVisits = sales.length
-              const totalSpent = sales.reduce((sum: number, sale: any) => sum + (sale.grossTotal || 0), 0)
-              const lastVisit = sales.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.date
-              return { ...client, realTotalVisits: totalVisits, realTotalSpent: totalSpent, realLastVisit: lastVisit }
+      if (response.success && response.data) {
+        const statsMap = response.data
+        const merged = clients.map((c, idx) => {
+          if (idx >= start && idx < end) {
+            const cId = c._id || c.id || ''
+            const stats = statsMap[cId]
+            if (stats) {
+              return {
+                ...c,
+                realTotalVisits: stats.totalVisits,
+                realTotalSpent: stats.totalSpent,
+                realLastVisit: stats.lastVisit
+              }
             }
-            return { ...client, realTotalVisits: undefined, realTotalSpent: undefined, realLastVisit: undefined }
-          } catch (error) {
-            return { ...client, realTotalVisits: undefined, realTotalSpent: undefined, realLastVisit: undefined }
           }
+          return c
         })
-      )
-      results.forEach((r, idx) => {
-        enriched.push(r.status === 'fulfilled' ? r.value : batch[idx])
-      })
-    }
-
-    // Merge enriched stats back into the full clients list
-    const merged = clients.map((c, idx) => {
-      if (idx >= start && idx < end) {
-        const enrichedIdx = idx - start
-        return enriched[enrichedIdx] || c
+        setClientsWithStats(merged)
       }
-      return c
-    })
-    setClientsWithStats(merged)
-    setIsLoadingStats(false)
+    } catch (error) {
+      console.error('Error fetching bulk client stats:', error)
+    } finally {
+      setIsLoadingStats(false)
+    }
   }
 
   // NOTE: This effect is declared later in the file after pageIndex/pageSize are defined
 
-  const handleEditClient = (client: Client) => {
-    // Ensure we have a valid client ID - use _id first, then id
+  const openClientDetailsDrawer = (client: Client) => {
     const clientId = client._id || client.id
-    if (clientId) {
-      router.push(`/clients/${clientId}`)
-    } else {
-      console.error('Client missing ID:', client)
+    if (!clientId) {
+      console.error("Client missing ID:", client)
+      return
+    }
+    setDetailsDrawerForEdit(false)
+    setDetailsClient(client)
+    setDetailsDrawerOpen(true)
+  }
+
+  const openClientDetailsDrawerForEdit = (client: Client) => {
+    const clientId = client._id || client.id
+    if (!clientId) {
+      console.error("Client missing ID:", client)
+      return
+    }
+    setDetailsDrawerForEdit(true)
+    setDetailsClient(client)
+    setDetailsDrawerOpen(true)
+  }
+
+  const onDetailsDrawerOpenChange = (open: boolean) => {
+    setDetailsDrawerOpen(open)
+    if (!open) {
+      window.setTimeout(() => {
+        setDetailsClient(null)
+        setDetailsDrawerForEdit(false)
+      }, 350)
     }
   }
 
@@ -288,12 +299,13 @@ export function ClientsTable({ clients }: ClientsTableProps) {
               <User className="h-5 w-5 text-white" />
             </div>
             <div className="flex flex-col">
-              <Link 
-                href={`/clients/${clientId}`} 
-                className="font-semibold text-gray-900 hover:text-indigo-600 transition-colors duration-200"
+              <button
+                type="button"
+                onClick={() => openClientDetailsDrawer(client)}
+                className="font-semibold text-gray-900 hover:text-indigo-600 transition-colors duration-200 text-left"
               >
                 {client.name}
-              </Link>
+              </button>
               <div className="flex items-center space-x-4 text-xs text-gray-500 mt-1">
                 <span className="flex items-center space-x-1">
                   <Phone className="h-3 w-3" />
@@ -438,14 +450,9 @@ export function ClientsTable({ clients }: ClientsTableProps) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
-                if (clientId) {
-                  router.push(`/clients/${clientId}`)
-                } else {
-                  console.error('Client missing ID:', client)
-                }
-              }}
+              onClick={() => openClientDetailsDrawer(client)}
               className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
+              title="View client details"
             >
               <Eye className="h-4 w-4" />
             </Button>
@@ -459,7 +466,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
               <DropdownMenuContent align="end" className="w-48">
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => handleEditClient(client)}>
+                <DropdownMenuItem onClick={() => openClientDetailsDrawerForEdit(client)}>
                   <Pencil className="mr-2 h-4 w-4" />
                   Edit Client
                 </DropdownMenuItem>
@@ -855,6 +862,14 @@ export function ClientsTable({ clients }: ClientsTableProps) {
           // Page likely receives clients via props; trigger a soft refresh by dispatching event
           window.dispatchEvent(new Event('client-added'))
         }}
+      />
+
+      <ClientDetailsDrawer
+        open={detailsDrawerOpen}
+        onOpenChange={onDetailsDrawerOpenChange}
+        client={detailsClient}
+        initialExpandProfile={detailsDrawerForEdit}
+        initialEditMode={detailsDrawerForEdit}
       />
 
     </div>

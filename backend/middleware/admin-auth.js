@@ -54,11 +54,13 @@ const authenticateAdmin = async (req, res, next) => {
     req.admin = admin;
     next();
   } catch (error) {
-    console.error('Admin authentication error:', error);
-    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ success: false, error: 'Token expired' });
+    }
+    if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ success: false, error: 'Invalid token' });
     }
-
+    console.error('Admin authentication error:', error.message);
     return res.status(500).json({ success: false, error: 'Authentication service error' });
   }
 };

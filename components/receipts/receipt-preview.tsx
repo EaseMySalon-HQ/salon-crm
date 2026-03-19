@@ -2,6 +2,7 @@
 
 import { useEffect } from "react"
 import type { Receipt } from "@/lib/data"
+import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { Card, CardContent } from "@/components/ui/card"
 import { useCurrency } from "@/hooks/use-currency"
 
@@ -19,8 +20,17 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
     console.log('🔍 ReceiptPreview - payments:', receipt.payments)
   }, [receipt])
   
+  const total = (() => {
+    const preRoundTotal = receipt.subtotal - receipt.discount + receipt.tip
+    return Math.round(preRoundTotal)
+  })()
+  const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
+  const outstanding = total - totalPaid
+  const paymentStatus = outstanding === 0 ? "FULL PAID" : totalPaid > 0 ? "PART PAID" : "UNPAID"
+  const stampColor = paymentStatus === "FULL PAID" ? "#16a34a" : paymentStatus === "PART PAID" ? "#f97316" : "#dc2626"
+
   return (
-    <Card className="max-w-2xl w-full mx-auto bg-white">
+    <Card className="max-w-2xl w-full mx-auto bg-white relative">
       <CardContent className="p-6 font-mono text-sm">
         {/* Header */}
         <div className="text-center border-b-2 border-black pb-3 mb-4">
@@ -102,9 +112,12 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
                     {item.quantity > 1 && (
                       <span className="text-xs text-gray-600 ml-1">(x{item.quantity})</span>
                     )}
-                    {item.staffName && (
-                      <span className="block text-xs text-gray-600">{item.staffName}</span>
-                    )}
+                    {(() => {
+                      const staffLabel = formatReceiptItemStaffNames(item)
+                      return staffLabel ? (
+                        <span className="block text-xs text-gray-600">{staffLabel}</span>
+                      ) : null
+                    })()}
                   </td>
                   <td className="py-1.5 text-right">{formatAmount(item.price)}</td>
                   <td className="py-1.5 text-right">
@@ -233,6 +246,26 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
               return Math.round(preRoundTotal)
             })())}</span>
           </div>
+          {(() => {
+            const total = (() => {
+              const preRoundTotal = receipt.subtotal - receipt.discount + receipt.tip
+              return Math.round(preRoundTotal)
+            })()
+            const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
+            const outstanding = total - totalPaid
+            return (
+              <>
+                <div className="flex justify-between text-sm mt-2">
+                  <span>Total Paid:</span>
+                  <span>{formatAmount(totalPaid)}</span>
+                </div>
+                <div className={`flex justify-between text-sm mt-1 ${outstanding > 0 ? "text-red-600 font-medium" : ""}`}>
+                  <span>Outstanding:</span>
+                  <span>{formatAmount(outstanding)}</span>
+                </div>
+              </>
+            )
+          })()}
         </div>
 
         {/* Payments */}
@@ -275,6 +308,27 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
             <br />
             {businessSettings?.socialMedia || "@glamoursalon"}
           </div>
+        </div>
+
+        {/* Payment Status Stamp */}
+        <div
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-12 select-none print:opacity-100"
+          style={{
+            border: `2px solid ${stampColor}`,
+            color: stampColor,
+            padding: "6px 12px",
+            fontSize: "14px",
+            fontWeight: 700,
+            letterSpacing: "0.05em",
+            opacity: 0.85,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+            borderRadius: "4px",
+            printColorAdjust: "exact",
+            WebkitPrintColorAdjust: "exact",
+          }}
+        >
+          {paymentStatus === "FULL PAID" && "✓ "}
+          {paymentStatus}
         </div>
       </CardContent>
     </Card>

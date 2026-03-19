@@ -10,10 +10,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
-import { getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST } from "@/lib/date-utils"
+import { getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST, formatDateIST } from "@/lib/date-utils"
 import { Calendar } from "@/components/ui/calendar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { CursorTooltip } from "@/components/ui/cursor-tooltip"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI } from "@/lib/api"
@@ -22,11 +23,54 @@ import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
 
+/** Sale.time is typically "HH:mm" (24h). Returns "hh:mm AM/PM" with zero-padded hour. */
+function formatBillTimeStringTo12h(time24: string | undefined | null): string | null {
+  if (time24 == null || !String(time24).trim()) return null
+  const m = String(time24).trim().match(/^(\d{1,2}):(\d{2})/)
+  if (!m) return null
+  let h = parseInt(m[1], 10)
+  const min = m[2].padStart(2, "0")
+  const ampm = h >= 12 ? "PM" : "AM"
+  let h12 = h % 12
+  if (h12 === 0) h12 = 12
+  const hh = String(h12).padStart(2, "0")
+  return `${hh}:${min} ${ampm}`
+}
+
+/** Time from full ISO datetime, displayed in IST as "hh:mm AM/PM". */
+function formatInstantToTime12hIST(isoDate: Date): string {
+  const s = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(isoDate)
+  const match = s.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i)
+  if (!match) return s
+  let h = parseInt(match[1], 10)
+  const min = match[2].padStart(2, "0")
+  const ap = match[3].toUpperCase()
+  let h12 = h % 12
+  if (h12 === 0) h12 = 12
+  return `${String(h12).padStart(2, "0")}:${min} ${ap}`
+}
+
+function formatSalesRecordDateTimeParts(sale: { date: string; time?: string }): { dateLine: string; timeLine: string } | null {
+  const d = new Date(sale.date)
+  if (isNaN(d.getTime())) return null
+  const dateLine = formatDateIST(sale.date)
+  const fromField = formatBillTimeStringTo12h(sale.time)
+  const timeLine = fromField ?? formatInstantToTime12hIST(d)
+  return { dateLine, timeLine }
+}
+
 interface SalesRecord {
   id: string
   billNo: string
   customerName: string
   date: string
+  /** Bill time of day from API (e.g. "14:30"); optional if only `date` ISO is present */
+  time?: string
   paymentMode: string // Legacy support
   payments?: Array<{
     mode: string
@@ -68,6 +112,10 @@ export function SalesReport() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [deleteSaleReason, setDeleteSaleReason] = useState("")
   const [selectedSale, setSelectedSale] = useState<SalesRecord | null>(null)
+  const [salesPageIndex, setSalesPageIndex] = useState(0)
+  const [salesPageSize, setSalesPageSize] = useState(10)
+  /** Sales stat card: combined count by default; click for partial vs unpaid breakdown */
+  const [showPartialUnpaidBreakdown, setShowPartialUnpaidBreakdown] = useState(false)
 
   // Service List filters (when report type is service-list; shown in same bar)
   const [serviceListDatePeriod, setServiceListDatePeriod] = useState<ServiceListDatePeriod>("today")
@@ -124,6 +172,8 @@ export function SalesReport() {
     cashBalance: number
     openingBalance?: number
     closingBalance?: number
+    totalDue?: number
+    customersWithDue?: number
   } | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
 
@@ -152,38 +202,27 @@ export function SalesReport() {
       try {
         const res = await SalesAPI.getAll()
         const apiData = res.data || []
-        console.log('🔍 Raw API data received:', apiData)
-        const mapped = apiData.map((sale: any) => {
-          const mappedSale = {
-            id: sale._id,
-            billNo: sale.billNo,
-            customerName: sale.customerName,
-            date: sale.date,
-            paymentMode: sale.paymentMode, // Legacy support
-            payments: sale.payments || [], // New split payment structure
-            tip: sale.tip || 0,
-            tipStaffId: sale.tipStaffId,
-            tipStaffName: sale.tipStaffName,
-            netTotal: sale.netTotal,
-            taxAmount: sale.taxAmount,
-            grossTotal: sale.grossTotal,
-            paymentStatus: sale.paymentStatus,
-            status: sale.status,
-            staffName: sale.staffName,
-            items: sale.items || [],
-            isEdited: sale.isEdited === true || !!sale.editedAt, // Track if bill has been edited
-            editedAt: sale.editedAt, // Include editedAt for fallback check
-          }
-          console.log(`📋 Mapped sale ${sale.billNo}:`, {
-            paymentMode: mappedSale.paymentMode,
-            payments: mappedSale.payments,
-            hasPayments: !!mappedSale.payments.length,
-            isEdited: mappedSale.isEdited,
-            rawIsEdited: sale.isEdited,
-            allSaleFields: Object.keys(sale)
-          })
-          return mappedSale
-        })
+        const mapped = apiData.map((sale: any) => ({
+          id: sale._id,
+          billNo: sale.billNo,
+          customerName: sale.customerName,
+          date: sale.date,
+          time: sale.time,
+          paymentMode: sale.paymentMode,
+          payments: sale.payments || [],
+          tip: sale.tip || 0,
+          tipStaffId: sale.tipStaffId,
+          tipStaffName: sale.tipStaffName,
+          netTotal: sale.netTotal,
+          taxAmount: sale.taxAmount,
+          grossTotal: sale.grossTotal,
+          paymentStatus: sale.paymentStatus,
+          status: sale.status,
+          staffName: sale.staffName,
+          items: sale.items || [],
+          isEdited: sale.isEdited === true || !!sale.editedAt,
+          editedAt: sale.editedAt,
+        }))
         setSalesData(mapped)
       } catch (err) {
         setSalesData([])
@@ -661,20 +700,9 @@ export function SalesReport() {
     let matchesPayment = true
     if (paymentFilter !== "all") {
       if (sale.payments && sale.payments.length > 0) {
-        // Check if any payment matches the filter
-        matchesPayment = sale.payments.some(payment => payment.mode === paymentFilter)
-        if (matchesPayment) {
-          console.log(`✅ Bill ${sale.billNo} matches ${paymentFilter} filter:`, {
-            payments: sale.payments,
-            matchingPayment: sale.payments.find(p => p.mode === paymentFilter)
-          })
-        }
+        matchesPayment = sale.payments.some((payment) => payment.mode === paymentFilter)
       } else {
-        // Legacy single payment mode
         matchesPayment = sale.paymentMode === paymentFilter
-        if (matchesPayment) {
-          console.log(`✅ Bill ${sale.billNo} matches ${paymentFilter} filter (legacy):`, sale.paymentMode)
-        }
       }
     }
     
@@ -703,16 +731,38 @@ export function SalesReport() {
     (a, b) => extractBillNum(b.billNo) - extractBillNum(a.billNo)
   )
 
-  console.log(`🔍 Payment filter "${paymentFilter}" applied:`, {
-    totalSales: salesData.length,
-    filteredSales: filteredSales.length,
-    filterType: paymentFilter
-  })
+  // Reset pagination and partial/unpaid card when filters change
+  useEffect(() => {
+    setSalesPageIndex(0)
+    setShowPartialUnpaidBreakdown(false)
+  }, [searchTerm, paymentFilter, statusFilter, staffTipFilter, datePeriod, dateRange])
+
+  // Pagination for the sales table
+  const totalSalesRows = sortedFilteredSales.length
+  const totalSalesPages = Math.max(1, Math.ceil(totalSalesRows / salesPageSize))
+  const safeSalesPageIndex = Math.min(salesPageIndex, totalSalesPages - 1)
+  const paginatedSales = sortedFilteredSales.slice(
+    safeSalesPageIndex * salesPageSize,
+    (safeSalesPageIndex + 1) * salesPageSize
+  )
+  const salesStartRow = totalSalesRows === 0 ? 0 : safeSalesPageIndex * salesPageSize + 1
+  const salesEndRow = Math.min(salesStartRow + salesPageSize - 1, totalSalesRows)
 
   const totalRevenue = filteredSales.reduce((sum, sale) => sum + sale.grossTotal, 0)
   const completedSales = filteredSales.filter(sale => sale.status === "completed").length
   const partialSales = filteredSales.filter(sale => sale.status === "partial").length
   const unpaidSales = filteredSales.filter(sale => sale.status === "unpaid").length
+  const getFullPaidAmount = (sale: SalesRecord) =>
+    sale.paymentStatus?.paidAmount ?? sale.payments?.reduce((s, p) => s + (p.amount || 0), 0) ?? 0
+  const getOutstandingBalance = (sale: SalesRecord) => {
+    const rem = sale.paymentStatus?.remainingAmount
+    if (typeof rem === "number" && !Number.isNaN(rem)) return Math.max(0, rem)
+    const total = sale.grossTotal || 0
+    return Math.max(0, total - getFullPaidAmount(sale))
+  }
+  const unpaidValue = filteredSales
+    .filter((s) => s.status === "unpaid" || s.status === "partial")
+    .reduce((sum, s) => sum + getOutstandingBalance(s), 0)
   const tipsCollected = filteredSales.reduce((sum, sale) => sum + (sale.tip || 0), 0)
   
   // Calculate cash and online collections (supporting both legacy and split payments)
@@ -748,6 +798,21 @@ export function SalesReport() {
       return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
     }
   }, 0)
+
+  const cashCollectedTooltip =
+    paymentFilter === "all"
+      ? "Cash payments only"
+      : paymentFilter === "Cash"
+        ? "Filtered: Cash only"
+        : "All cash payments"
+  const onlineCashCollectedTooltip =
+    paymentFilter === "all"
+      ? "Card + Online/Paytm"
+      : paymentFilter === "Card"
+        ? "Filtered: Card only"
+        : paymentFilter === "Online"
+          ? "Filtered: Online only"
+          : "All online payments"
 
   const handleExportPDF = async () => {
     toast({ title: "Export requested", description: "Generating sales report PDF...", duration: 3000 })
@@ -1143,8 +1208,6 @@ export function SalesReport() {
     if (!selectedSale || !deleteSaleReason.trim()) return
     
     try {
-      console.log("Deleting sale:", selectedSale.billNo)
-      
       // Call the API to delete the sale from the database
       const response = await SalesAPI.delete(selectedSale.id, deleteSaleReason.trim())
       
@@ -1159,8 +1222,6 @@ export function SalesReport() {
           title: "Sale Deleted",
           description: `Sale record for ${selectedSale.customerName} has been successfully deleted.`,
         })
-        
-        console.log("Sale deleted successfully")
       } else {
         console.error("Failed to delete sale:", response.error)
         toast({
@@ -1195,25 +1256,15 @@ export function SalesReport() {
   }
 
   const getPaymentModeDisplay = (sale: SalesRecord) => {
-    console.log(`🔍 Processing payment display for ${sale.billNo}:`, {
-      paymentMode: sale.paymentMode,
-      payments: sale.payments,
-      hasPayments: !!sale.payments?.length,
-      status: sale.status
-    })
-    
     // First priority: Check if there are payments (new split payment structure)
     if (sale.payments && sale.payments.length > 0) {
       const paymentModes = sale.payments.map(payment => payment.mode)
       const uniqueModes = [...new Set(paymentModes)]
-      const display = uniqueModes.join(", ")
-      console.log(`✅ Split payment for ${sale.billNo}:`, { payments: sale.payments, display })
-      return display
+      return uniqueModes.join(", ")
     }
     
     // Second priority: Check legacy paymentMode field
     if (sale.paymentMode) {
-      console.log(`✅ Legacy payment mode for ${sale.billNo}:`, sale.paymentMode)
       return sale.paymentMode
     }
     
@@ -2094,7 +2145,8 @@ export function SalesReport() {
                             quantity: item.quantity,
                             price: item.price,
                             total: item.total,
-                            staffName: item.staffName || bill.staffName
+                            staffName: item.staffName || bill.staffName,
+                            staffContributions: item.staffContributions
                           })),
                           subtotal: bill.netTotal,
                           tax: bill.taxAmount,
@@ -2321,6 +2373,50 @@ export function SalesReport() {
                   </div>
                 </div>
 
+                {/* Section: Outstanding */}
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 text-amber-500" />
+                    Outstanding
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs p-3">
+                        <p className="text-sm">Outstanding = revenue generated but not yet collected. Bills with unpaid or partially paid amounts in the selected period.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </h3>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600">Total Due</span>
+                      <span className={`font-semibold ${(summaryData.totalDue ?? 0) > 0 ? "text-amber-600" : "text-slate-900"}`}>
+                        ₹{(summaryData.totalDue ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600">Customers with Due</span>
+                      <span className={`font-semibold ${(summaryData.customersWithDue ?? 0) > 0 ? "text-amber-600" : "text-slate-900"}`}>
+                        {summaryData.customersWithDue ?? 0}
+                      </span>
+                    </div>
+                    {(summaryData.totalDue ?? 0) === 0 && (summaryData.customersWithDue ?? 0) === 0 && (
+                      <p className="text-xs text-slate-400 pt-1">No outstanding payments</p>
+                    )}
+                    {(summaryData.totalDue ?? 0) > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full mt-2 border-amber-200 text-amber-700 hover:bg-amber-50"
+                        onClick={() => router.push("/reports/unpaid-bills")}
+                      >
+                        <Eye className="h-4 w-4 mr-2" />
+                        View unpaid invoices
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
                 {/* Section B: Payment Mode Breakdown */}
                 <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
                   <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
@@ -2540,114 +2636,194 @@ export function SalesReport() {
         <>
       {/* Enhanced Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Total Revenue</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <DollarSign className="h-4 w-4 text-gray-600" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">₹{totalRevenue.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">From {filteredSales.length} sales</p>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Completed Sales</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <TrendingUp className="h-4 w-4 text-gray-600" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">{completedSales}</div>
-            <p className="text-sm text-gray-500">Successfully completed</p>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Partial Payments</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <Users className="h-4 w-4 text-gray-600" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">{partialSales}</div>
-            <p className="text-sm text-gray-500">Partially paid bills</p>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Unpaid Bills</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <Users className="h-4 w-4 text-gray-600" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">{unpaidSales}</div>
-            <p className="text-sm text-gray-500">Awaiting payment</p>
-          </CardContent>
-        </Card>
+        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content="Successfully completed">
+          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm font-medium text-gray-900">Completed Sales</CardTitle>
+              <div className="p-2 bg-gray-100 rounded-lg">
+                <TrendingUp className="h-4 w-4 text-gray-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-gray-900">{completedSales}</div>
+            </CardContent>
+          </Card>
+        </CursorTooltip>
 
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Tips Collected</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <DollarSign className="h-4 w-4 text-gray-600" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">₹{tipsCollected.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">Tips from selected sales</p>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Cash Collected</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <DollarSign className="h-4 w-4 text-gray-600" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">₹{cashCollected.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">
-              {paymentFilter === "all" ? "Cash payments only" : 
-               paymentFilter === "Cash" ? "Filtered: Cash only" : "All cash payments"}
-            </p>
-          </CardContent>
-        </Card>
-        
-        <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-sm font-medium text-gray-900">Online Cash Collected</CardTitle>
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <TrendingUp className="h-4 w-4 text-gray-600" />
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-2xl font-bold text-gray-900">₹{onlineCashCollected.toFixed(2)}</div>
-            <p className="text-sm text-gray-500">
-              {paymentFilter === "all" ? "Card + Online/Paytm" : 
-               paymentFilter === "Card" ? "Filtered: Card only" : 
-               paymentFilter === "Online" ? "Filtered: Online only" : "All online payments"}
-            </p>
-          </CardContent>
-        </Card>
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          wrapperTabIndex={-1}
+          className="text-center"
+          content={
+            showPartialUnpaidBreakdown
+              ? "Click the card to show combined partial + unpaid count."
+              : "Partial + unpaid bill count for current filters. Click the card to see partial vs unpaid."
+          }
+        >
+          <Card
+            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+            role="button"
+            tabIndex={0}
+            aria-expanded={showPartialUnpaidBreakdown}
+            aria-label={
+              showPartialUnpaidBreakdown
+                ? "Partial and unpaid breakdown. Activate to show combined count."
+                : "Partial and unpaid combined count. Activate to show breakdown."
+            }
+            onClick={() => setShowPartialUnpaidBreakdown((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                setShowPartialUnpaidBreakdown((v) => !v)
+              }
+            }}
+          >
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm font-medium text-gray-900">Partial/Unpaid Payments</CardTitle>
+              <div className="p-2 bg-gray-100 rounded-lg">
+                <Users className="h-4 w-4 text-gray-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              {!showPartialUnpaidBreakdown ? (
+                <div className="space-y-1">
+                  <div className="text-2xl font-bold text-gray-900">{partialSales + unpaidSales}</div>
+                  <p className="text-xs font-medium text-gray-500">Partial + Unpaid</p>
+                  <p className="text-xs text-gray-400">Click for breakdown</p>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-6">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Partial</p>
+                    <p className="text-2xl font-bold text-gray-900">{partialSales}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Unpaid</p>
+                    <p className="text-2xl font-bold text-gray-900">{unpaidSales}</p>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </CursorTooltip>
+
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          className="text-center"
+          content={<>From {filteredSales.length} sales</>}
+        >
+          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm font-medium text-gray-900">Total Revenue</CardTitle>
+              <div className="p-2 bg-gray-100 rounded-lg">
+                <DollarSign className="h-4 w-4 text-gray-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-gray-900">₹{totalRevenue.toFixed(2)}</div>
+            </CardContent>
+          </Card>
+        </CursorTooltip>
+
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          className="text-center"
+          content={
+            <>
+              Total outstanding · {partialSales + unpaidSales} bill{partialSales + unpaidSales === 1 ? "" : "s"}
+            </>
+          }
+        >
+          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm font-medium text-gray-900">Unpaid Value</CardTitle>
+              <div className="p-2 bg-gray-100 rounded-lg">
+                <Wallet className="h-4 w-4 text-gray-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-gray-900">₹{unpaidValue.toFixed(2)}</div>
+            </CardContent>
+          </Card>
+        </CursorTooltip>
+
+        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content={cashCollectedTooltip}>
+          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm font-medium text-gray-900">Cash Collected</CardTitle>
+              <div className="p-2 bg-gray-100 rounded-lg">
+                <DollarSign className="h-4 w-4 text-gray-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-gray-900">₹{cashCollected.toFixed(2)}</div>
+            </CardContent>
+          </Card>
+        </CursorTooltip>
+
+        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content={onlineCashCollectedTooltip}>
+          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm font-medium text-gray-900">Online Cash Collected</CardTitle>
+              <div className="p-2 bg-gray-100 rounded-lg">
+                <TrendingUp className="h-4 w-4 text-gray-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-gray-900">₹{onlineCashCollected.toFixed(2)}</div>
+            </CardContent>
+          </Card>
+        </CursorTooltip>
+
+        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content="Tips from selected sales">
+          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-sm font-medium text-gray-900">Tips Collected</CardTitle>
+              <div className="p-2 bg-gray-100 rounded-lg">
+                <DollarSign className="h-4 w-4 text-gray-600" />
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-gray-900">₹{tipsCollected.toFixed(2)}</div>
+            </CardContent>
+          </Card>
+        </CursorTooltip>
       </div>
 
       {/* Sales Table – same layout as Service List / reports */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        {/* Table Header with pagination controls */}
+        <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-slate-50 border-b border-gray-200">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-gray-800">Sales Records</h3>
+            <div className="flex items-center gap-4">
+              <div className="text-sm text-gray-600">
+                {totalSalesRows > 0 ? `Showing ${salesStartRow}-${salesEndRow} of ${totalSalesRows} sales` : 'No sales'}
+              </div>
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <span>Rows per page:</span>
+                <Select value={String(salesPageSize)} onValueChange={(v) => { setSalesPageSize(parseInt(v)); setSalesPageIndex(0) }}>
+                  <SelectTrigger className="h-8 w-[90px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10</SelectItem>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+        </div>
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow className="bg-slate-50 border-b border-slate-200">
                 <TableHead className="font-semibold text-slate-800">Bill No.</TableHead>
                 <TableHead className="font-semibold text-slate-800">Customer Name</TableHead>
-                <TableHead className="font-semibold text-slate-800">Date</TableHead>
+                <TableHead className="font-semibold text-slate-800">Date & Time</TableHead>
                 <TableHead className="font-semibold text-slate-800">Status</TableHead>
                 <TableHead className="font-semibold text-slate-800">Payment Mode</TableHead>
                 <TableHead className="font-semibold text-slate-800">Taxable Amount</TableHead>
@@ -2666,14 +2842,14 @@ export function SalesReport() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredSales.length === 0 ? (
+              {paginatedSales.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center py-12 text-slate-500">
                     No sales records found for the selected filters.
                   </TableCell>
                 </TableRow>
               ) : (
-                sortedFilteredSales.map((sale) => (
+                paginatedSales.map((sale) => (
                   <TableRow key={sale.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                     <TableCell className="font-medium text-slate-900">
                       <Button
@@ -2686,7 +2862,18 @@ export function SalesReport() {
                         </Button>
                     </TableCell>
                     <TableCell className="font-medium text-slate-800">{sale.customerName}</TableCell>
-                    <TableCell className="text-slate-600">{new Date(sale.date).toLocaleDateString()}</TableCell>
+                    <TableCell className="text-slate-600">
+                      {(() => {
+                        const parts = formatSalesRecordDateTimeParts(sale)
+                        if (!parts) return "—"
+                        return (
+                          <div className="flex flex-col gap-0.5 tabular-nums">
+                            <span>{parts.dateLine}</span>
+                            <span className="text-xs text-slate-500">{parts.timeLine}</span>
+                          </div>
+                        )
+                      })()}
+                    </TableCell>
                     <TableCell>{getStatusBadge(sale.status)}</TableCell>
                     <TableCell>
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
@@ -2741,6 +2928,37 @@ export function SalesReport() {
             </TableBody>
           </Table>
         </div>
+
+        {/* Pagination Footer */}
+        {totalSalesPages > 1 && (
+          <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-200">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">
+                Page {safeSalesPageIndex + 1} of {totalSalesPages}
+              </div>
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSalesPageIndex(prev => Math.max(0, prev - 1))}
+                  disabled={safeSalesPageIndex === 0}
+                  className="h-9 px-4 border-gray-200 hover:border-gray-300"
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSalesPageIndex(prev => Math.min(totalSalesPages - 1, prev + 1))}
+                  disabled={safeSalesPageIndex >= totalSalesPages - 1}
+                  className="h-9 px-4 border-gray-200 hover:border-gray-300"
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bill View Dialog */}
@@ -2760,8 +2978,19 @@ export function SalesReport() {
                   <p className="text-lg font-semibold">{selectedBill.billNo}</p>
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-muted-foreground">Date</label>
-                  <p className="text-lg">{new Date(selectedBill.date).toLocaleDateString()}</p>
+                  <label className="text-sm font-medium text-muted-foreground">Date &amp; time</label>
+                  <p className="text-lg">
+                    {(() => {
+                      const parts = formatSalesRecordDateTimeParts(selectedBill)
+                      if (!parts) return "—"
+                      return (
+                        <>
+                          {parts.dateLine}
+                          <span className="text-base font-normal text-muted-foreground"> · {parts.timeLine}</span>
+                        </>
+                      )
+                    })()}
+                  </p>
                 </div>
                 <div>
                   <label className="text-sm font-medium text-muted-foreground">Customer Name</label>
@@ -2810,7 +3039,6 @@ export function SalesReport() {
             <Button onClick={() => {
               setIsBillDialogOpen(false)
               // Here you could add print functionality
-              console.log("Printing bill:", selectedBill?.billNo)
             }}>
               Print Bill
             </Button>

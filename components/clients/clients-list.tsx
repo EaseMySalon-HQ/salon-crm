@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { ClientsTable } from "@/components/clients/clients-table"
 import { ClientStatsCards } from "@/components/clients/client-stats-cards"
 import { clientStore, type Client } from "@/lib/client-store"
-import { SalesAPI } from "@/lib/api"
+import { ClientsAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -39,71 +39,36 @@ export function ClientsListPage() {
     return unsubscribe
   }, [])
 
-  // Enrich clients with realLastVisit for stats cards (optimized for speed)
+  // Enrich clients with lastVisit from bulk stats (single API call for all clients)
   useEffect(() => {
     if (clients.length === 0) return
 
-    const enrichClientsForStats = async () => {
-      // Start with clients that already have lastVisit - no need to fetch for them
-      const enriched: Client[] = clients.map(client => ({ ...client }))
-      
-      // Only enrich clients that don't have a lastVisit field
-      // This significantly reduces API calls
-      const clientsNeedingEnrichment = clients
-        .map((client, originalIndex) => ({ client, originalIndex }))
-        .filter(({ client }) => !client.lastVisit)
-      
-      if (clientsNeedingEnrichment.length === 0) {
-        // All clients already have lastVisit, use them as-is
-        setEnrichedClientsForStats(enriched)
-        return
-      }
+    // Immediately show clients with whatever lastVisit they already have
+    setEnrichedClientsForStats(clients)
 
-      // Show stats immediately with clients that have lastVisit
-      setEnrichedClientsForStats(enriched)
+    const fetchBulkStats = async () => {
+      try {
+        const clientIds = clients.map(c => (c as any)._id || (c as any).id).filter(Boolean)
+        if (clientIds.length === 0) return
 
-      // Use higher concurrency for faster processing (but not too high to avoid overwhelming server)
-      const concurrency = 30 // Process 30 clients in parallel
-      const batches: typeof clientsNeedingEnrichment[] = []
-      
-      for (let i = 0; i < clientsNeedingEnrichment.length; i += concurrency) {
-        batches.push(clientsNeedingEnrichment.slice(i, i + concurrency))
-      }
-
-      // Process batches sequentially but clients within each batch in parallel
-      for (const batch of batches) {
-        const results = await Promise.allSettled(
-          batch.map(async ({ client, originalIndex }) => {
-            try {
-              const response = await SalesAPI.getByClient(client.phone || '')
-              if (response.success && response.data && response.data.length > 0) {
-                const sales = response.data
-                const lastVisit = sales.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.date
-                return { originalIndex, realLastVisit: lastVisit }
-              }
-              return { originalIndex, realLastVisit: undefined }
-            } catch (error) {
-              return { originalIndex, realLastVisit: undefined }
+        const response = await ClientsAPI.getBulkStats(clientIds)
+        if (response.success && response.data) {
+          const statsMap = response.data
+          setEnrichedClientsForStats(clients.map(client => {
+            const cId = (client as any)._id || (client as any).id || ''
+            const stats = statsMap[cId]
+            return {
+              ...client,
+              realLastVisit: stats?.lastVisit || client.lastVisit
             }
-          })
-        )
-
-        // Apply enrichment results as we go
-        results.forEach((result) => {
-          if (result.status === 'fulfilled') {
-            const { originalIndex, realLastVisit } = result.value
-            if (originalIndex !== undefined && realLastVisit) {
-              enriched[originalIndex] = { ...enriched[originalIndex], realLastVisit }
-            }
-          }
-        })
-
-        // Update stats cards incrementally as batches complete
-        setEnrichedClientsForStats([...enriched])
+          }))
+        }
+      } catch (error) {
+        console.error('Error fetching bulk stats for cards:', error)
       }
     }
 
-    enrichClientsForStats()
+    fetchBulkStats()
   }, [clients])
 
   // Stats are calculated by ClientStatsCards component from the clients array

@@ -1,8 +1,7 @@
 import Link from "next/link"
-import { ArrowLeft, User } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { ClientForm } from "@/components/clients/client-form"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
@@ -19,11 +18,13 @@ export default function NewClientPage() {
                   <ArrowLeft className="h-4 w-4" />
                 </Link>
               </Button>
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900">Add new client</h1>
+                <p className="text-sm text-slate-600 mt-1">Enter client details to add them to your directory.</p>
+              </div>
             </div>
-      
-              <CardContent className="p-8">
-                <ClientForm />
-              </CardContent>
+
+            <ClientForm />
           </div>
         </div>
       </ProtectedLayout>

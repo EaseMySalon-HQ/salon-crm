@@ -190,17 +190,17 @@ saleSchema.methods.getPaymentSummary = function() {
   };
 };
 
-// Method to calculate staff contributions for a service item
+// Method to calculate staff contributions for a service item (tax-exclusive amounts)
 saleSchema.methods.calculateStaffContributions = function(itemIndex) {
   const item = this.items[itemIndex];
   if (!item || !item.staffContributions || item.staffContributions.length === 0) {
     return [];
   }
-  
-  // Calculate amounts based on percentages
+  const { getItemPreTaxTotal } = require('../lib/sale-item-pretax');
+  const linePreTax = getItemPreTaxTotal(item);
   return item.staffContributions.map(contribution => ({
     ...contribution,
-    amount: (item.total * contribution.percentage) / 100
+    amount: (linePreTax * contribution.percentage) / 100
   }));
 };
 
