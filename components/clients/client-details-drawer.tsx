@@ -1,6 +1,6 @@
 "use client"
 
-import { useLayoutEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { ArrowLeft } from "lucide-react"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
@@ -25,7 +25,13 @@ function normalizeClientForPanel(c: Client): Client {
   return { ...c, id, _id: id }
 }
 
-export function ClientDetailsDrawer({ open, onOpenChange, client }: ClientDetailsDrawerProps) {
+export function ClientDetailsDrawer({
+  open,
+  onOpenChange,
+  client,
+  initialExpandProfile = false,
+  initialEditMode = false,
+}: ClientDetailsDrawerProps) {
   const [profileExpanded, setProfileExpanded] = useState(false)
   const [profileEditing, setProfileEditing] = useState(false)
   const [panelRefreshKey, setPanelRefreshKey] = useState(0)
@@ -37,8 +43,15 @@ export function ClientDetailsDrawer({ open, onOpenChange, client }: ClientDetail
     if (!open) {
       setProfileExpanded(false)
       setProfileEditing(false)
+      return
     }
-  }, [open])
+    if (initialExpandProfile) {
+      setProfileExpanded(true)
+    }
+    if (initialEditMode) {
+      setProfileEditing(true)
+    }
+  }, [open, initialExpandProfile, initialEditMode])
 
   const closeProfileLayout = () => {
     setProfileExpanded(false)
@@ -96,7 +109,7 @@ export function ClientDetailsDrawer({ open, onOpenChange, client }: ClientDetail
                   key={`drawer-profile-${clientId}`}
                   clientId={clientId}
                   embedded
-                  initialEditMode={sessionStartInEditMode}
+                  initialEditMode={initialEditMode}
                   onClose={() => onOpenChange(false)}
                   onEditModeChange={setProfileEditing}
                   onProfileSaved={() => setPanelRefreshKey((k) => k + 1)}
