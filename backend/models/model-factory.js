@@ -32,6 +32,17 @@ class ModelFactory {
    * @param {mongoose.Connection} connection - Database connection
    * @returns {Object} - Object containing all models
    */
+  /**
+   * Reuse the same model bundle per connection (avoids re-wiring models every request).
+   * @param {mongoose.Connection} connection
+   */
+  getCachedBusinessModels(connection) {
+    if (!connection.modelsCache) {
+      connection.modelsCache = this.createBusinessModels(connection);
+    }
+    return connection.modelsCache;
+  }
+
   createBusinessModels(connection) {
     return {
       // Client model

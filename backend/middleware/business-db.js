@@ -51,7 +51,7 @@ const setupBusinessDatabase = async (req, res, next) => {
     
     // Create business-specific models
     logger.debug('🔍 Creating business models...');
-    const businessModels = modelFactory.createBusinessModels(businessConnection);
+    const businessModels = modelFactory.getCachedBusinessModels(businessConnection);
     logger.debug('🔍 Business models created:', Object.keys(businessModels));
     
     // Attach models to request object

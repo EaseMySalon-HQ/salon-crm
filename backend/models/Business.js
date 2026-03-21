@@ -217,6 +217,9 @@ const businessSchema = new mongoose.Schema({
 
 businessSchema.index({ status: 1, createdAt: -1 });
 businessSchema.index({ createdAt: -1 });
+businessSchema.index({ branchId: 1, createdAt: -1 });
+businessSchema.index({ 'subscription.plan': 1 });
+businessSchema.index({ name: 'text', code: 'text', 'contact.email': 'text' });
 
 // Generate unique business code
 businessSchema.pre('save', async function(next) {
