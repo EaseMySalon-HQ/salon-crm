@@ -133,16 +133,27 @@ router.get('/profile', setupMainDatabase, authenticateAdmin, async (req, res) =>
 router.get('/businesses/stats', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
   try {
     const { Business } = req.mainModels;
-    const [total, active, suspended, inactive, deleted] = await Promise.all([
-      Business.countDocuments({}),
-      Business.countDocuments({ status: 'active' }),
-      Business.countDocuments({ status: 'suspended' }),
-      Business.countDocuments({ status: 'inactive' }),
-      Business.countDocuments({ status: 'deleted' }),
+    const [row] = await Business.aggregate([
+      {
+        $facet: {
+          total: [{ $count: 'c' }],
+          active: [{ $match: { status: 'active' } }, { $count: 'c' }],
+          suspended: [{ $match: { status: 'suspended' } }, { $count: 'c' }],
+          inactive: [{ $match: { status: 'inactive' } }, { $count: 'c' }],
+          deleted: [{ $match: { status: 'deleted' } }, { $count: 'c' }],
+        },
+      },
     ]);
+    const pick = (name) => row?.[name]?.[0]?.c ?? 0;
     res.json({
       success: true,
-      data: { total, active, suspended, inactive, deleted },
+      data: {
+        total: pick('total'),
+        active: pick('active'),
+        suspended: pick('suspended'),
+        inactive: pick('inactive'),
+        deleted: pick('deleted'),
+      },
     });
   } catch (error) {
     logger.error('Businesses stats error:', error);
@@ -155,74 +166,61 @@ router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermis
   try {
     const { page = 1, limit = 10, search, status, plan, includeDeleted = true } = req.query;
     const { Business } = req.mainModels;
-    
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+    const skip = (pageNum - 1) * limitNum;
+
     let query = {};
-    
+
     // By default, include deleted businesses for accountability/audit trail
-    // Only exclude if explicitly requested
     if (includeDeleted === 'false' || includeDeleted === false) {
       query.status = { $ne: 'deleted' };
     }
-    
-    // Search filter
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { code: { $regex: search, $options: 'i' } },
-        { 'contact.email': { $regex: search, $options: 'i' } }
-      ];
+
+    const searchTrim = typeof search === 'string' ? search.trim() : '';
+    if (searchTrim.length >= 3) {
+      query.$text = { $search: searchTrim };
     }
-    
-    // Status filter (if provided, override the default)
+
     if (status && status !== 'all') {
-      if (status === 'deleted') {
-        query.status = 'deleted';
-      } else {
-        query.status = status;
-        // When filtering by specific status, still include deleted unless explicitly excluded
-        if (includeDeleted === 'false' || includeDeleted === false) {
-          query.status = { $in: [status, { $ne: 'deleted' }] };
-        }
-      }
+      query.status = status;
     }
-    
-    // Plan filter
+
     if (plan && plan !== 'all') {
       query['subscription.plan'] = plan;
     }
-    
-    const skip = (page - 1) * limit;
-    const businesses = await Business.find(query)
-      .populate('owner', 'firstName lastName email mobile lastLoginAt')
-      .populate('deletedBy', 'firstName lastName email') // Show who deleted it
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-    
-    const total = await Business.countDocuments(query);
+
+    const [businesses, total] = await Promise.all([
+      Business.find(query)
+        .populate('owner', 'firstName lastName email mobile lastLoginAt')
+        .populate('deletedBy', 'firstName lastName email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Business.countDocuments(query),
+    ]);
 
     await attachMetricsToBusinesses(businesses, req.mainConnection);
 
-    const data = businesses.map((b) => {
-      const plain = b.toObject ? b.toObject() : b;
-      return {
-        ...plain,
-        usersCount: b.usersCount,
-        invoicesCount: b.invoicesCount,
-        revenue: b.revenue,
-        nextBillingDate: b.nextBillingDate,
-      };
-    });
+    const data = businesses.map((b) => ({
+      ...b,
+      usersCount: b.usersCount,
+      invoicesCount: b.invoicesCount,
+      revenue: b.revenue,
+      nextBillingDate: b.nextBillingDate,
+    }));
 
     res.json({
       success: true,
       data,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNum,
+        limit: limitNum,
         total,
-        totalPages: Math.ceil(total / limit)
-      }
+        totalPages: Math.ceil(total / limitNum) || 0,
+      },
     });
   } catch (error) {
     logger.error('Get businesses error:', error);
@@ -394,7 +392,7 @@ router.get('/businesses/:id/logs', setupMainDatabase, authenticateAdmin, require
     });
 
     const conn = await databaseManager.getConnection(business.code || businessId, req.mainConnection);
-    const models = modelFactory.createBusinessModels(conn);
+    const models = modelFactory.getCachedBusinessModels(conn);
     const Sale = models.Sale;
     const Staff = models.Staff;
     const Appointment = models.Appointment;
@@ -617,7 +615,7 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       }
       logger.debug(`🔧 Creating business database for new business: ${business.name} (Code: ${business.code})`);
       const businessConnection = await databaseManager.getConnection(business.code, req.mainConnection);
-      const businessModels = modelFactory.createBusinessModels(businessConnection);
+      const businessModels = modelFactory.getCachedBusinessModels(businessConnection);
       
       // Create default business settings from creation form data so Business Settings reflect the same info
       const defaultSettings = new businessModels.BusinessSettings({
