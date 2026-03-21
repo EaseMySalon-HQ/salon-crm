@@ -1,5 +1,6 @@
 const emailService = require('../services/email-service');
 const databaseManager = require('../config/database-manager');
+const { logger } = require('./logger');
 const modelFactory = require('../models/model-factory');
 
 /**
@@ -15,7 +16,7 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
     
     const business = await Business.findById(businessId);
     if (!business) {
-      console.log(`⚠️  Business not found: ${businessId}`);
+      logger.debug(`⚠️  Business not found: ${businessId}`);
       return;
     }
     
@@ -26,7 +27,7 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
                                  emailSettings?.systemAlerts?.lowInventory === true;
     
     if (!lowInventoryEnabled) {
-      console.log(`⏭️  Low inventory alerts disabled for ${business.name}`);
+      logger.debug(`⏭️  Low inventory alerts disabled for ${business.name}`);
       return;
     }
     
@@ -53,7 +54,7 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
       return; // No low stock products
     }
     
-    console.log(`⚠️  Found ${lowStockProducts.length} low stock product(s) for ${business.name}`);
+    logger.debug(`⚠️  Found ${lowStockProducts.length} low stock product(s) for ${business.name}`);
     
     // Get recipient staff
     const recipientStaffIds = emailSettings?.systemAlerts?.recipientStaffIds || [];
@@ -99,7 +100,7 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
     }
     
     if (recipients.length === 0) {
-      console.log(`⚠️  No recipients found for low inventory alerts for ${business.name}`);
+      logger.debug(`⚠️  No recipients found for low inventory alerts for ${business.name}`);
       return;
     }
     
@@ -119,13 +120,13 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
           products: productsForEmail,
           businessName: business.name
         });
-        console.log(`✅ Low inventory alert sent to ${recipient.email} (${recipient.name || recipient.role}) for business ${business.name}`);
+        logger.debug(`✅ Low inventory alert sent to ${recipient.email} (${recipient.name || recipient.role}) for business ${business.name}`);
       } catch (error) {
-        console.error(`❌ Error sending low inventory alert to ${recipient.email}:`, error);
+        logger.error(`❌ Error sending low inventory alert to ${recipient.email}:`, error);
       }
     }
   } catch (error) {
-    console.error(`❌ Error checking low inventory for business ${businessId}:`, error);
+    logger.error(`❌ Error checking low inventory for business ${businessId}:`, error);
   }
 }
 

@@ -1,4 +1,5 @@
 const express = require('express');
+const { logger } = require('../utils/logger');
 const router = express.Router();
 const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateAdmin } = require('../middleware/admin-auth');
@@ -499,7 +500,7 @@ router.get('/', authenticateAdmin, setupMainDatabase, async (req, res) => {
       data: settings.toObject()
     });
   } catch (error) {
-    console.error('Error fetching admin settings:', error);
+    logger.error('Error fetching admin settings:', error);
     // Fallback to in-memory settings
     res.json({
       success: true,
@@ -524,10 +525,10 @@ const formatErrorMessage = (error) => {
 
 router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res) => {
   try {
-    console.log(`🔔 Test endpoint hit: /test/${req.params.type}`, req.method, req.url);
+    logger.debug(`🔔 Test endpoint hit: /test/${req.params.type}`, req.method, req.url);
     const { type } = req.params;
     const { email, phone, templateType, settings: testSettings } = req.body;
-    console.log(`📱 Test endpoint called with type: ${type}, phone: ${phone}, templateType: ${templateType}, hasSettings: ${!!testSettings}`);
+    logger.debug(`📱 Test endpoint called with type: ${type}, phone: ${phone}, templateType: ${templateType}, hasSettings: ${!!testSettings}`);
     
     switch (type) {
       case 'email':
@@ -565,7 +566,7 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
                 message: 'Test email sent successfully'
               });
             } else {
-              console.error('Test email failed:', result.error);
+              logger.error('Test email failed:', result.error);
               return res.status(500).json({
                 success: false,
                 error: formatErrorMessage(result.error)
@@ -588,7 +589,7 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
               message: 'Test email sent successfully'
             });
           } else {
-            console.error('Test email failed:', result.error);
+            logger.error('Test email failed:', result.error);
             return res.status(500).json({
               success: false,
               error: formatErrorMessage(result.error)
@@ -715,7 +716,7 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
         });
     }
   } catch (error) {
-    console.error(`Error testing ${req.params.type}:`, error);
+    logger.error(`Error testing ${req.params.type}:`, error);
     res.status(500).json({
       success: false,
       error: formatErrorMessage(error)
@@ -737,7 +738,7 @@ router.get('/sms/status', authenticateAdmin, setupMainDatabase, async (req, res)
       }
     });
   } catch (error) {
-    console.error('Error fetching SMS status:', error);
+    logger.error('Error fetching SMS status:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -774,7 +775,7 @@ router.post('/sms/template-details', authenticateAdmin, setupMainDatabase, async
       }
     });
   } catch (error) {
-    console.error('Error fetching SMS template details:', error);
+    logger.error('Error fetching SMS template details:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -789,7 +790,7 @@ router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     
     // Log WhatsApp settings if category is notifications
     if (category === 'notifications' && settingsObj.notifications?.whatsapp) {
-      console.log('📥 [Backend GET] Returning WhatsApp settings:', {
+      logger.debug('📥 [Backend GET] Returning WhatsApp settings:', {
         enabled: settingsObj.notifications.whatsapp.enabled,
         enabledType: typeof settingsObj.notifications.whatsapp.enabled,
         hasWhatsapp: !!settingsObj.notifications.whatsapp
@@ -808,10 +809,10 @@ router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
       data: settingsObj[category]
     });
   } catch (error) {
-    console.error('Error fetching admin settings category:', error);
+    logger.error('Error fetching admin settings category:', error);
     // Fallback to in-memory settings
     if (adminSettingsFallback[req.params.category]) {
-      console.log('⚠️ [Backend GET] Using fallback settings for category:', req.params.category);
+      logger.debug('⚠️ [Backend GET] Using fallback settings for category:', req.params.category);
       return res.json({
         success: true,
         data: adminSettingsFallback[req.params.category]
@@ -833,7 +834,7 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     
     // Log what we're receiving for debugging
     if (category === 'notifications' && updates.whatsapp) {
-      console.log('📤 [Backend PUT] Received WhatsApp settings:', {
+      logger.debug('📤 [Backend PUT] Received WhatsApp settings:', {
         enabled: updates.whatsapp.enabled,
         hasTemplateJavaScriptCodes: !!updates.whatsapp.templateJavaScriptCodes,
         hasTemplateVariables: !!updates.whatsapp.templateVariables,
@@ -848,7 +849,7 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     
     // Log what we're returning for debugging
     if (category === 'notifications' && settingsObj.notifications?.whatsapp) {
-      console.log('📥 [Backend PUT] Returning WhatsApp settings:', {
+      logger.debug('📥 [Backend PUT] Returning WhatsApp settings:', {
         enabled: settingsObj.notifications.whatsapp.enabled,
         hasTemplateJavaScriptCodes: !!settingsObj.notifications.whatsapp.templateJavaScriptCodes,
         hasTemplateVariables: !!settingsObj.notifications.whatsapp.templateVariables,
@@ -892,7 +893,7 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
       message: 'Settings updated successfully'
     });
   } catch (error) {
-    console.error('Error updating admin settings:', error);
+    logger.error('Error updating admin settings:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update admin settings'
@@ -930,7 +931,7 @@ router.put('/', authenticateAdmin, (req, res) => {
       message: 'All settings updated successfully'
     });
   } catch (error) {
-    console.error('Error updating admin settings:', error);
+    logger.error('Error updating admin settings:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update admin settings'
@@ -966,7 +967,7 @@ router.post('/reset', authenticateAdmin, (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error resetting admin settings:', error);
+    logger.error('Error resetting admin settings:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to reset admin settings'
@@ -987,7 +988,7 @@ router.post('/export', authenticateAdmin, (req, res) => {
       message: 'Settings exported successfully'
     });
   } catch (error) {
-    console.error('Error exporting admin settings:', error);
+    logger.error('Error exporting admin settings:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to export admin settings'
@@ -1030,7 +1031,7 @@ router.post('/import', authenticateAdmin, (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error importing admin settings:', error);
+    logger.error('Error importing admin settings:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to import admin settings'
@@ -1047,30 +1048,30 @@ function applySystemSettings(systemSettings) {
     // Update inactivity checker settings
     if (systemSettings.inactiveBusiness) {
       // Update the inactivity checker with new settings
-      console.log('Updating inactivity checker settings:', systemSettings.inactiveBusiness);
+      logger.debug('Updating inactivity checker settings:', systemSettings.inactiveBusiness);
     }
     
     // Update session settings
     if (systemSettings.session) {
       // Update session configuration
-      console.log('Updating session settings:', systemSettings.session);
+      logger.debug('Updating session settings:', systemSettings.session);
     }
     
     // Update security settings
     if (systemSettings.security) {
       // Update security configuration
-      console.log('Updating security settings:', systemSettings.security);
+      logger.debug('Updating security settings:', systemSettings.security);
     }
     
     // Update system health monitoring
     if (systemSettings.systemHealth) {
       // Update health monitoring configuration
-      console.log('Updating system health settings:', systemSettings.systemHealth);
+      logger.debug('Updating system health settings:', systemSettings.systemHealth);
     }
     
-    console.log('System settings applied successfully');
+    logger.debug('System settings applied successfully');
   } catch (error) {
-    console.error('Error applying system settings:', error);
+    logger.error('Error applying system settings:', error);
   }
 }
 

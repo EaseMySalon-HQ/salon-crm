@@ -1,4 +1,5 @@
 const databaseManager = require('../config/database-manager');
+const { logger } = require('./logger');
 const modelFactory = require('../models/model-factory');
 const emailService = require('../services/email-service');
 
@@ -139,14 +140,14 @@ async function sendDailySummaryForDate(businessId, branchId, targetDate) {
         });
         sentCount++;
       } catch (err) {
-        console.error(`Error sending daily summary to ${staff.email}:`, err);
+        logger.error(`Error sending daily summary to ${staff.email}:`, err);
       }
     }
 
-    console.log(`📧 Daily summary sent to ${sentCount} recipients for ${business.name} (date: ${dateString})`);
+    logger.debug(`📧 Daily summary sent to ${sentCount} recipients for ${business.name} (date: ${dateString})`);
     return { sent: sentCount, skipped: false };
   } catch (error) {
-    console.error('Error sending daily summary for date:', error);
+    logger.error('Error sending daily summary for date:', error);
     return { sent: 0, skipped: false, error: error.message };
   }
 }

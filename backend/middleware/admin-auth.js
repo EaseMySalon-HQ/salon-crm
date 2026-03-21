@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const databaseManager = require('../config/database-manager');
+const { logger } = require('../utils/logger');
 const {
   applyPermissionOverrides,
   normalizePermissionOverrides
@@ -47,7 +48,7 @@ const authenticateAdmin = async (req, res, next) => {
     }
 
     const basePermissions = role?.permissions || admin.permissions || [];
-    const overrides = admin.permissionOverrides || { add: [], remove: [] };
+    const overrides = normalizePermissionOverrides(admin.permissionOverrides || {});
     const effectivePermissions = applyPermissionOverrides(basePermissions, overrides);
     admin.permissions = effectivePermissions;
 
@@ -60,7 +61,7 @@ const authenticateAdmin = async (req, res, next) => {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ success: false, error: 'Invalid token' });
     }
-    console.error('Admin authentication error:', error.message);
+    logger.error('Admin authentication error:', error.message);
     return res.status(500).json({ success: false, error: 'Authentication service error' });
   }
 };

@@ -1,4 +1,5 @@
 const express = require('express');
+const { logger } = require('../utils/logger');
 const router = express.Router();
 const { setupMainDatabase } = require('../middleware/business-db');
 const { getPlanConfig, getAllPlans, getAllFeatures, getAllAddons } = require('../config/plans');
@@ -51,7 +52,7 @@ router.get('/config', authenticateAdmin, setupMainDatabase, checkAdminPermission
       },
     });
   } catch (error) {
-    console.error('Error fetching plan config:', error);
+    logger.error('Error fetching plan config:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch plan configuration',
@@ -72,7 +73,7 @@ router.get('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermiss
       },
     });
   } catch (error) {
-    console.error('Error fetching plan templates:', error);
+    logger.error('Error fetching plan templates:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch plan templates',
@@ -149,7 +150,7 @@ router.post('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermis
       },
     });
   } catch (error) {
-    console.error('Error creating plan template:', error);
+    logger.error('Error creating plan template:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to create plan template',
@@ -205,7 +206,7 @@ router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, checkAdmi
       },
     });
   } catch (error) {
-    console.error('Error updating plan template:', error);
+    logger.error('Error updating plan template:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update plan template',
@@ -252,7 +253,7 @@ router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, checkA
       message: 'Plan template deleted successfully',
     });
   } catch (error) {
-    console.error('Error deleting plan template:', error);
+    logger.error('Error deleting plan template:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to delete plan template',
@@ -327,7 +328,7 @@ router.get('/businesses', authenticateAdmin, setupMainDatabase, checkAdminPermis
       },
     });
   } catch (error) {
-    console.error('Error fetching businesses:', error);
+    logger.error('Error fetching businesses:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch businesses',
@@ -379,7 +380,7 @@ router.get('/business/:businessId', authenticateAdmin, setupMainDatabase, checkA
       },
     });
   } catch (error) {
-    console.error('Error fetching business plan:', error);
+    logger.error('Error fetching business plan:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch business plan details',
@@ -527,7 +528,7 @@ router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, checkA
       },
     });
   } catch (error) {
-    console.error('Error updating business plan:', error);
+    logger.error('Error updating business plan:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update business plan',
@@ -554,7 +555,7 @@ router.get('/business/:businessId/history', authenticateAdmin, setupMainDatabase
       },
     });
   } catch (error) {
-    console.error('Error fetching plan history:', error);
+    logger.error('Error fetching plan history:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch plan change history',

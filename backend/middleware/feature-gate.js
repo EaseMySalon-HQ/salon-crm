@@ -5,6 +5,7 @@
 
 const { hasFeature, getEffectiveLimit, hasReachedLimit, canUseAddon } = require('../lib/entitlements');
 const databaseManager = require('../config/database-manager');
+const { logger } = require('../utils/logger');
 
 /**
  * Middleware to check if business has access to a specific feature
@@ -66,7 +67,7 @@ function requireFeature(featureId, options = {}) {
       req.business = business;
       next();
     } catch (error) {
-      console.error('Error in feature gate middleware:', error);
+      logger.error('Error in feature gate middleware:', error);
       res.status(500).json({
         success: false,
         error: 'Failed to verify feature access',
@@ -136,7 +137,7 @@ function requireLimit(limitName, getCurrentUsage) {
       req.limit = getEffectiveLimit(business, limitName);
       next();
     } catch (error) {
-      console.error('Error in limit check middleware:', error);
+      logger.error('Error in limit check middleware:', error);
       res.status(500).json({
         success: false,
         error: 'Failed to verify usage limit',
@@ -197,7 +198,7 @@ function requireAddon(addonId) {
       req.business = business;
       next();
     } catch (error) {
-      console.error('Error in addon check middleware:', error);
+      logger.error('Error in addon check middleware:', error);
       res.status(500).json({
         success: false,
         error: 'Failed to verify addon access',
@@ -223,7 +224,7 @@ async function getBusinessFromRequest(req) {
 
     return await Business.findById(businessId).select('plan status name code');
   } catch (error) {
-    console.error('Error getting business from request:', error);
+    logger.error('Error getting business from request:', error);
     return null;
   }
 }

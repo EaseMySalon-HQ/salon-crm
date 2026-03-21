@@ -1,4 +1,5 @@
 const express = require('express');
+const { logger } = require('../utils/logger');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/business-db');
@@ -181,7 +182,7 @@ router.post('/', authenticateToken, setupMainDatabase, setupBusinessDatabase, as
       }
     });
   } catch (error) {
-    console.error('Error creating campaign:', error);
+    logger.error('Error creating campaign:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to create campaign'
@@ -235,7 +236,7 @@ router.get('/', authenticateToken, setupMainDatabase, setupBusinessDatabase, asy
       }
     });
   } catch (error) {
-    console.error('Error fetching campaigns:', error);
+    logger.error('Error fetching campaigns:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch campaigns'
@@ -286,7 +287,7 @@ router.get('/:campaignId', authenticateToken, setupMainDatabase, setupBusinessDa
       }
     });
   } catch (error) {
-    console.error('Error fetching campaign:', error);
+    logger.error('Error fetching campaign:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch campaign'
@@ -339,7 +340,7 @@ router.get('/:campaignId/recipients', authenticateToken, setupMainDatabase, setu
       }
     });
   } catch (error) {
-    console.error('Error fetching campaign recipients:', error);
+    logger.error('Error fetching campaign recipients:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch recipients'
@@ -460,7 +461,7 @@ router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusi
             failedCount++;
           }
         } catch (error) {
-          console.error(`Error sending to ${recipient.phone}:`, error);
+          logger.error(`Error sending to ${recipient.phone}:`, error);
           failedCount++;
           
           await WhatsAppMessageLog.create({
@@ -505,7 +506,7 @@ router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusi
       }
     });
   } catch (error) {
-    console.error('Error sending campaign:', error);
+    logger.error('Error sending campaign:', error);
     
     // Update campaign status to failed if it was in sending state
     try {
@@ -516,7 +517,7 @@ router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusi
         { status: 'draft' } // Revert to draft on error
       );
     } catch (updateError) {
-      console.error('Error updating campaign status:', updateError);
+      logger.error('Error updating campaign status:', updateError);
     }
 
     res.status(500).json({
@@ -587,7 +588,7 @@ router.get('/:campaignId/stats', authenticateToken, setupMainDatabase, setupBusi
       }
     });
   } catch (error) {
-    console.error('Error fetching campaign stats:', error);
+    logger.error('Error fetching campaign stats:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch campaign stats'
@@ -643,7 +644,7 @@ router.put('/:campaignId/cancel', authenticateToken, setupMainDatabase, setupBus
       data: campaign
     });
   } catch (error) {
-    console.error('Error cancelling campaign:', error);
+    logger.error('Error cancelling campaign:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to cancel campaign'

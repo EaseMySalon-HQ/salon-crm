@@ -117,6 +117,14 @@ appointmentSchema.methods.getAllStaff = function() {
   return this.staffAssignments.map(assignment => assignment.staffId);
 };
 
+// Indexes: calendar lists, client/staff filters, booking groups
+appointmentSchema.index({ branchId: 1, date: 1, time: 1 });
+appointmentSchema.index({ branchId: 1, status: 1, date: 1 });
+appointmentSchema.index({ branchId: 1, createdAt: -1 });
+appointmentSchema.index({ clientId: 1, branchId: 1 });
+appointmentSchema.index({ 'staffAssignments.staffId': 1, branchId: 1 });
+appointmentSchema.index({ bookingGroupId: 1 }, { sparse: true });
+
 // Export both schema and model for flexibility
 module.exports = {
   schema: appointmentSchema,
