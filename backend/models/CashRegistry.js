@@ -135,6 +135,9 @@ const cashRegistrySchema = new mongoose.Schema({
 });
 
 // Index for efficient queries
+cashRegistrySchema.index({ branchId: 1, date: -1 });
+cashRegistrySchema.index({ branchId: 1, status: 1, date: -1 });
+cashRegistrySchema.index({ branchId: 1, shiftType: 1, date: -1 });
 cashRegistrySchema.index({ date: 1, shiftType: 1 });
 cashRegistrySchema.index({ createdBy: 1 });
 cashRegistrySchema.index({ status: 1 });

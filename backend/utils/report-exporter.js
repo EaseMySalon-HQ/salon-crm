@@ -1,5 +1,6 @@
 const XLSX = require('xlsx');
 const PDFDocument = require('pdfkit');
+const { logger } = require('./logger');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { toDateStringIST } = require('./date-utils');
@@ -288,15 +289,15 @@ async function exportProductsReport({ branchId, format = 'xlsx', filters = {} })
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        console.log(`✅ Products report sent to ${admin.email}`);
+        logger.debug(`✅ Products report sent to ${admin.email}`);
       } catch (emailError) {
-        console.error(`❌ Error sending products report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending products report to ${admin.email}:`, emailError);
       }
     }
     
     return { success: true, message: `Products report sent to admin email(s)` };
   } catch (error) {
-    console.error('Error exporting products report:', error);
+    logger.error('Error exporting products report:', error);
     throw error;
   }
 }
@@ -479,15 +480,15 @@ async function exportSalesReport({ branchId, format = 'xlsx', filters = {} }) {
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        console.log(`✅ Sales report sent to ${admin.email}`);
+        logger.debug(`✅ Sales report sent to ${admin.email}`);
       } catch (emailError) {
-        console.error(`❌ Error sending sales report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending sales report to ${admin.email}:`, emailError);
       }
     }
     
     return { success: true, message: `Sales report sent to admin email(s)` };
   } catch (error) {
-    console.error('Error exporting sales report:', error);
+    logger.error('Error exporting sales report:', error);
     throw error;
   }
 }
@@ -633,15 +634,15 @@ async function exportServicesReport({ branchId, format = 'xlsx', filters = {} })
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        console.log(`✅ Services report sent to ${admin.email}`);
+        logger.debug(`✅ Services report sent to ${admin.email}`);
       } catch (emailError) {
-        console.error(`❌ Error sending services report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending services report to ${admin.email}:`, emailError);
       }
     }
     
     return { success: true, message: `Services report sent to admin email(s)` };
   } catch (error) {
-    console.error('Error exporting services report:', error);
+    logger.error('Error exporting services report:', error);
     throw error;
   }
 }
@@ -788,15 +789,15 @@ async function exportClientsReport({ branchId, format = 'xlsx', filters = {} }) 
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        console.log(`✅ Clients report sent to ${admin.email}`);
+        logger.debug(`✅ Clients report sent to ${admin.email}`);
       } catch (emailError) {
-        console.error(`❌ Error sending clients report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending clients report to ${admin.email}:`, emailError);
       }
     }
     
     return { success: true, message: `Clients report sent to admin email(s)` };
   } catch (error) {
-    console.error('Error exporting clients report:', error);
+    logger.error('Error exporting clients report:', error);
     throw error;
   }
 }
@@ -952,15 +953,15 @@ async function exportExpenseReport({ branchId, format = 'xlsx', filters = {} }) 
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        console.log(`✅ Expense report sent to ${admin.email}`);
+        logger.debug(`✅ Expense report sent to ${admin.email}`);
       } catch (emailError) {
-        console.error(`❌ Error sending expense report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending expense report to ${admin.email}:`, emailError);
       }
     }
     
     return { success: true, message: `Expense report sent to admin email(s)` };
   } catch (error) {
-    console.error('Error exporting expense report:', error);
+    logger.error('Error exporting expense report:', error);
     throw error;
   }
 }
@@ -1281,15 +1282,15 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        console.log(`✅ Cash registry report sent to ${admin.email}`);
+        logger.debug(`✅ Cash registry report sent to ${admin.email}`);
       } catch (emailError) {
-        console.error(`❌ Error sending cash registry report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending cash registry report to ${admin.email}:`, emailError);
       }
     }
     
     return { success: true, message: `Cash registry report sent to admin email(s)` };
   } catch (error) {
-    console.error('Error exporting cash registry report:', error);
+    logger.error('Error exporting cash registry report:', error);
     throw error;
   }
 }
@@ -1512,12 +1513,12 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
           attachments: [attachment]
         });
       } catch (emailError) {
-        console.error('Error sending summary export to', admin.email, emailError);
+        logger.error('Error sending summary export to', admin.email, emailError);
       }
     }
     return { success: true, message: 'Summary report sent to admin email(s)' };
   } catch (error) {
-    console.error('Error exporting summary report:', error);
+    logger.error('Error exporting summary report:', error);
     throw error;
   }
 }
@@ -1643,12 +1644,12 @@ async function exportStaffPerformanceReport({ branchId, format = 'xlsx', filters
           attachments: [attachment]
         });
       } catch (emailError) {
-        console.error('Error sending staff performance export to', admin.email, emailError);
+        logger.error('Error sending staff performance export to', admin.email, emailError);
       }
     }
     return { success: true, message: 'Staff performance report sent to admin email(s)' };
   } catch (error) {
-    console.error('Error exporting staff performance report:', error);
+    logger.error('Error exporting staff performance report:', error);
     throw error;
   }
 }
@@ -1826,12 +1827,12 @@ async function exportServiceListReport({ branchId, format = 'xlsx', filters = {}
           attachments: [attachment]
         });
       } catch (emailError) {
-        console.error('Error sending service list export to', admin.email, emailError);
+        logger.error('Error sending service list export to', admin.email, emailError);
       }
     }
     return { success: true, message: 'Service list report sent to admin email(s)' };
   } catch (error) {
-    console.error('Error exporting service list report:', error);
+    logger.error('Error exporting service list report:', error);
     throw error;
   }
 }
@@ -2014,12 +2015,12 @@ async function exportAppointmentListReport({ branchId, format = 'xlsx', filters 
           attachments: [attachment]
         });
       } catch (emailError) {
-        console.error('Error sending appointment list export to', admin.email, emailError);
+        logger.error('Error sending appointment list export to', admin.email, emailError);
       }
     }
     return { success: true, message: 'Appointment list report sent to admin email(s)' };
   } catch (error) {
-    console.error('Error exporting appointment list report:', error);
+    logger.error('Error exporting appointment list report:', error);
     throw error;
   }
 }
@@ -2164,12 +2165,12 @@ async function exportUnpaidPartPaidReport({ branchId, format = 'xlsx', filters =
           attachments: [attachment]
         });
       } catch (emailError) {
-        console.error('Error sending unpaid/part-paid export to', admin.email, emailError);
+        logger.error('Error sending unpaid/part-paid export to', admin.email, emailError);
       }
     }
     return { success: true, message: 'Unpaid/Part-Paid report sent to admin email(s)' };
   } catch (error) {
-    console.error('Error exporting unpaid/part-paid report:', error);
+    logger.error('Error exporting unpaid/part-paid report:', error);
     throw error;
   }
 }
@@ -2280,12 +2281,12 @@ async function exportDeletedInvoicesReport({ branchId, format = 'xlsx', filters 
           attachments: [attachment]
         });
       } catch (emailError) {
-        console.error('Error sending deleted invoice export to', admin.email, emailError);
+        logger.error('Error sending deleted invoice export to', admin.email, emailError);
       }
     }
     return { success: true, message: 'Deleted invoice report sent to admin email(s)' };
   } catch (error) {
-    console.error('Error exporting deleted invoice report:', error);
+    logger.error('Error exporting deleted invoice report:', error);
     throw error;
   }
 }

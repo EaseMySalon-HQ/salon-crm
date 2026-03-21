@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const { logger } = require('../utils/logger');
+const { registerSlowQueryMonitoring } = require('../utils/mongoose-slow-query');
 
 /**
  * Build MongoDB URI for main database (same logic as database-manager)
@@ -35,19 +37,21 @@ const connectDB = async () => {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`🔄 MongoDB connection attempt ${attempt}/${maxRetries}...`);
+      logger.info(`🔄 MongoDB connection attempt ${attempt}/${maxRetries}...`);
       const conn = await mongoose.connect(uri, {
         serverSelectionTimeoutMS: serverSelectionTimeoutMs,
+        monitorCommands: true,
       });
-      console.log(`MongoDB Connected: ${conn.connection.host}`);
+      registerSlowQueryMonitoring(mongoose.connection);
+      logger.info(`MongoDB Connected: ${conn.connection.host}`);
       return conn;
     } catch (error) {
-      console.error(`MongoDB connection attempt ${attempt} failed:`, error.message);
+      logger.error(`MongoDB connection attempt ${attempt} failed:`, error.message);
       if (attempt < maxRetries) {
-        console.log(`⏳ Retrying in ${retryDelayMs / 1000}s...`);
+        logger.info(`⏳ Retrying in ${retryDelayMs / 1000}s...`);
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
       } else {
-        console.error('MongoDB connection error:', error);
+        logger.error('MongoDB connection error:', error);
         process.exit(1);
       }
     }

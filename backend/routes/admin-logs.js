@@ -1,4 +1,5 @@
 const express = require('express');
+const { logger } = require('../utils/logger');
 const router = express.Router();
 const databaseManager = require('../config/database-manager');
 const { setupMainDatabase } = require('../middleware/business-db');
@@ -21,7 +22,7 @@ router.get('/', authenticateAdmin, checkAdminPermission('logs', 'view'), async (
     const { AdminActivityLog } = req.mainModels;
 
     if (!AdminActivityLog) {
-      console.error('AdminActivityLog model not found in req.mainModels:', Object.keys(req.mainModels || {}));
+      logger.error('AdminActivityLog model not found in req.mainModels:', Object.keys(req.mainModels || {}));
       return res.status(500).json({ 
         success: false, 
         error: 'Database model not available' 
@@ -126,8 +127,8 @@ router.get('/', authenticateAdmin, checkAdminPermission('logs', 'view'), async (
       }
     });
   } catch (error) {
-    console.error('Failed to fetch activity logs:', error);
-    console.error('Error stack:', error.stack);
+    logger.error('Failed to fetch activity logs:', error);
+    logger.error('Error stack:', error.stack);
     res.status(500).json({ 
       success: false, 
       error: 'Failed to fetch activity logs',
@@ -207,7 +208,7 @@ router.get('/stats', authenticateAdmin, checkAdminPermission('logs', 'view'), as
       }
     });
   } catch (error) {
-    console.error('Failed to fetch log statistics:', error);
+    logger.error('Failed to fetch log statistics:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch log statistics' });
   }
 });
@@ -221,7 +222,7 @@ router.get('/filters', authenticateAdmin, checkAdminPermission('logs', 'view'), 
     const { AdminActivityLog, Admin } = req.mainModels;
 
     if (!AdminActivityLog || !Admin) {
-      console.error('Models not found in req.mainModels:', Object.keys(req.mainModels || {}));
+      logger.error('Models not found in req.mainModels:', Object.keys(req.mainModels || {}));
       return res.status(500).json({ 
         success: false, 
         error: 'Database models not available' 
@@ -247,8 +248,8 @@ router.get('/filters', authenticateAdmin, checkAdminPermission('logs', 'view'), 
       }
     });
   } catch (error) {
-    console.error('Failed to fetch filter options:', error);
-    console.error('Error stack:', error.stack);
+    logger.error('Failed to fetch filter options:', error);
+    logger.error('Error stack:', error.stack);
     res.status(500).json({ 
       success: false, 
       error: 'Failed to fetch filter options',

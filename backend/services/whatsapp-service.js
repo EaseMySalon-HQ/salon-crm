@@ -1,5 +1,6 @@
 const axios = require('axios');
 const databaseManager = require('../config/database-manager');
+const { logger } = require('../utils/logger');
 
 class WhatsAppService {
   constructor() {
@@ -25,7 +26,7 @@ class WhatsAppService {
       const settings = await AdminSettings.getSettings();
       const whatsappConfig = settings.notifications?.whatsapp;
 
-      console.log('📱 [WhatsApp Service] Loading config from admin settings:', {
+      logger.debug('📱 [WhatsApp Service] Loading config from admin settings:', {
         hasWhatsappConfig: !!whatsappConfig,
         enabled: whatsappConfig?.enabled,
         hasApiKey: !!whatsappConfig?.msg91ApiKey,
@@ -41,21 +42,21 @@ class WhatsAppService {
           this.config = whatsappConfig;
           this.enabled = true;
           this.initialized = true;
-          console.log(`✅ WhatsApp service initialized with provider: ${whatsappConfig.provider}`);
+          logger.debug(`✅ WhatsApp service initialized with provider: ${whatsappConfig.provider}`);
           return;
         } else {
-          console.warn('⚠️  WhatsApp service enabled but no templates configured');
+          logger.warn('⚠️  WhatsApp service enabled but no templates configured');
           this.enabled = false;
           this.initialized = true;
           return;
         }
       } else {
-        console.warn('⚠️  WhatsApp service not enabled or missing API key in admin settings');
+        logger.warn('⚠️  WhatsApp service not enabled or missing API key in admin settings');
         this.enabled = false;
         this.initialized = true;
       }
     } catch (error) {
-      console.warn('⚠️  Could not load WhatsApp config from admin settings, falling back to environment variables:', error.message);
+      logger.warn('⚠️  Could not load WhatsApp config from admin settings, falling back to environment variables:', error.message);
     }
 
     // Fallback to environment variables
@@ -76,9 +77,9 @@ class WhatsAppService {
       };
       this.enabled = true;
       this.initialized = true;
-      console.log('✅ WhatsApp service initialized from environment variables');
+      logger.debug('✅ WhatsApp service initialized from environment variables');
     } else {
-      console.warn('⚠️  WhatsApp service not configured. No API key found.');
+      logger.warn('⚠️  WhatsApp service not configured. No API key found.');
       this.enabled = false;
       this.initialized = true;
     }
@@ -153,7 +154,7 @@ class WhatsAppService {
     }
 
     if (!this.enabled) {
-      console.warn('WhatsApp service not enabled');
+      logger.warn('WhatsApp service not enabled');
       return { success: false, error: 'WhatsApp service not configured' };
     }
 
@@ -176,7 +177,7 @@ class WhatsAppService {
         return { success: false, error: 'Template ID is required' };
       }
     } catch (error) {
-      console.error('Error sending WhatsApp message:', error);
+      logger.error('Error sending WhatsApp message:', error);
       return { success: false, error: error.message };
     }
   }
@@ -251,7 +252,7 @@ class WhatsAppService {
                 type: 'text',
                 value: buttonValue
               };
-              console.log(`📱 [MSG91] Button ${key} formatted as URL button with full URL: ${buttonValue.substring(0, 50)}...`);
+              logger.debug(`📱 [MSG91] Button ${key} formatted as URL button with full URL: ${buttonValue.substring(0, 50)}...`);
             } else {
               // Path only (e.g., INV-000056/abc123) - template includes base URL
               // Still format as URL button type since template button type is "Visit website"
@@ -260,11 +261,11 @@ class WhatsAppService {
                 type: 'text',
                 value: buttonValue
               };
-              console.log(`📱 [MSG91] Button ${key} formatted as URL button with path (template includes base URL): ${buttonValue}`);
+              logger.debug(`📱 [MSG91] Button ${key} formatted as URL button with path (template includes base URL): ${buttonValue}`);
             }
           } else {
             // Empty button value - skip it
-            console.warn(`⚠️ [MSG91] Button ${key} has empty value, skipping`);
+            logger.warn(`⚠️ [MSG91] Button ${key} has empty value, skipping`);
           }
         }
       });
@@ -272,7 +273,7 @@ class WhatsAppService {
       // Log for debugging
       const bodyVars = Object.keys(components).filter(k => k.startsWith('body_'));
       const buttonVars = Object.keys(components).filter(k => k.startsWith('button_'));
-      console.log(`[WhatsApp Send] Template: ${templateName}, Body vars: ${bodyVars.length} (${bodyVars.join(', ')}), Button vars: ${buttonVars.length} (${buttonVars.join(', ')})`);
+      logger.debug(`[WhatsApp Send] Template: ${templateName}, Body vars: ${bodyVars.length} (${bodyVars.join(', ')}), Button vars: ${buttonVars.length} (${buttonVars.join(', ')})`);
     } else {
       // Variables in numeric format (1, 2, 3), convert to body_1, body_2, etc.
       const sortedKeys = Object.keys(variables).sort((a, b) => {
@@ -314,7 +315,7 @@ class WhatsAppService {
     };
 
     try {
-      console.log('📱 [MSG91] Sending WhatsApp message:', {
+      logger.debug('📱 [MSG91] Sending WhatsApp message:', {
         to,
         templateName,
         integratedNumber,
@@ -330,8 +331,8 @@ class WhatsAppService {
         timeout: 10000
       });
 
-      console.log('📱 [MSG91] API Response Status:', response.status);
-      console.log('📱 [MSG91] API Response Data:', JSON.stringify(response.data, null, 2));
+      logger.debug('📱 [MSG91] API Response Status:', response.status);
+      logger.debug('📱 [MSG91] API Response Data:', JSON.stringify(response.data, null, 2));
 
       // MSG91 API can return 200 with error details in response.data
       // Check for actual success indicators in the response
@@ -354,17 +355,17 @@ class WhatsAppService {
 
       if (isSuccess) {
         const requestId = responseData.request_id || 'N/A';
-        console.log('✅ [MSG91] WhatsApp message accepted by MSG91');
-        console.log('📱 [MSG91] Request ID:', requestId);
-        console.log('📱 [MSG91] Note: Message is queued for delivery. Check MSG91 dashboard for delivery status.');
+        logger.debug('✅ [MSG91] WhatsApp message accepted by MSG91');
+        logger.debug('📱 [MSG91] Request ID:', requestId);
+        logger.debug('📱 [MSG91] Note: Message is queued for delivery. Check MSG91 dashboard for delivery status.');
         
         // Log warning if message is just queued (not immediately delivered)
         if (responseData.data && responseData.data.includes('in process')) {
-          console.warn('⚠️ [MSG91] Message queued for delivery. Possible reasons:');
-          console.warn('   - Template may not be approved/active in MSG91');
-          console.warn('   - Phone number may not be registered/verified');
-          console.warn('   - Template variables may not match approved template');
-          console.warn('   - Check MSG91 dashboard for delivery status using request_id:', requestId);
+          logger.warn('⚠️ [MSG91] Message queued for delivery. Possible reasons:');
+          logger.warn('   - Template may not be approved/active in MSG91');
+          logger.warn('   - Phone number may not be registered/verified');
+          logger.warn('   - Template variables may not match approved template');
+          logger.warn('   - Check MSG91 dashboard for delivery status using request_id:', requestId);
         }
         
         return { 
@@ -378,8 +379,8 @@ class WhatsAppService {
                         responseData.error || 
                         (responseData.errors && responseData.errors.length > 0 ? JSON.stringify(responseData.errors) : null) ||
                         'Failed to send message';
-        console.error('❌ [MSG91] WhatsApp message failed:', errorMsg);
-        console.error('❌ [MSG91] Full response:', JSON.stringify(responseData, null, 2));
+        logger.error('❌ [MSG91] WhatsApp message failed:', errorMsg);
+        logger.error('❌ [MSG91] Full response:', JSON.stringify(responseData, null, 2));
         return { success: false, error: errorMsg, responseData };
       }
     } catch (error) {
@@ -387,14 +388,14 @@ class WhatsAppService {
         const errorMessage = error.response.data?.message || 
                             error.response.data?.error || 
                             error.message;
-        console.error('❌ [MSG91] API Error Response:', {
+        logger.error('❌ [MSG91] API Error Response:', {
           status: error.response.status,
           statusText: error.response.statusText,
           data: JSON.stringify(error.response.data, null, 2)
         });
         return { success: false, error: errorMessage, responseData: error.response.data };
       }
-      console.error('❌ [MSG91] Network/Request Error:', error.message);
+      logger.error('❌ [MSG91] Network/Request Error:', error.message);
       return { success: false, error: error.message };
     }
   }
@@ -427,13 +428,13 @@ class WhatsAppService {
     };
 
     try {
-      console.log('📱 [MSG91] Creating template:', {
+      logger.debug('📱 [MSG91] Creating template:', {
         templateName: payload.template_name,
         language: payload.language,
         category: payload.category,
         componentsCount: payload.components.length
       });
-      console.log('📱 [MSG91] Components payload:', JSON.stringify(payload.components, null, 2));
+      logger.debug('📱 [MSG91] Components payload:', JSON.stringify(payload.components, null, 2));
 
       const response = await axios.post(url, payload, {
         headers: {
@@ -443,7 +444,7 @@ class WhatsAppService {
         timeout: 30000 // 30 seconds for template creation
       });
 
-      console.log('📱 [MSG91] Template creation response:', response.status, response.data);
+      logger.debug('📱 [MSG91] Template creation response:', response.status, response.data);
 
       // MSG91 typically returns success status in response
       if (response.status === 200 || response.status === 201) {
@@ -455,7 +456,7 @@ class WhatsAppService {
                           responseData.data ||
                           (responseData.errors ? (typeof responseData.errors === 'string' ? responseData.errors : JSON.stringify(responseData.errors)) : null) ||
                           'Template creation failed';
-          console.error('❌ [MSG91] Template creation failed:', {
+          logger.error('❌ [MSG91] Template creation failed:', {
             hasError: responseData.hasError,
             status: responseData.status,
             message: responseData.message,
@@ -483,7 +484,7 @@ class WhatsAppService {
         const errorMessage = error.response.data?.message || 
                             error.response.data?.error || 
                             error.message;
-        console.error('❌ [MSG91] Template creation failed:', {
+        logger.error('❌ [MSG91] Template creation failed:', {
           status: error.response.status,
           data: error.response.data
         });
@@ -493,7 +494,7 @@ class WhatsAppService {
           responseData: error.response.data 
         };
       }
-      console.error('❌ [MSG91] Network error creating template:', error.message);
+      logger.error('❌ [MSG91] Network error creating template:', error.message);
       return { success: false, error: error.message };
     }
   }
@@ -601,7 +602,7 @@ class WhatsAppService {
   }
 
   async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink }) {
-    console.log('📱 [sendReceipt] Starting receipt send:', {
+    logger.debug('📱 [sendReceipt] Starting receipt send:', {
       to,
       clientName,
       receiptNumber,
@@ -627,8 +628,8 @@ class WhatsAppService {
     if (templateIncludesBaseUrl && receiptLink) {
       processedReceiptLinkForBody = this.extractReceiptPath(receiptLink);
       processedReceiptLinkForButton = this.extractReceiptPath(receiptLink); // Use path for button too
-      console.log(`📱 [sendReceipt] Template includes base URL, extracted path: ${processedReceiptLinkForButton}`);
-      console.log(`📱 [sendReceipt] Template will combine base URL + path: https://www.easemysalon.in/receipt/public/${processedReceiptLinkForButton}`);
+      logger.debug(`📱 [sendReceipt] Template includes base URL, extracted path: ${processedReceiptLinkForButton}`);
+      logger.debug(`📱 [sendReceipt] Template will combine base URL + path: https://www.easemysalon.in/receipt/public/${processedReceiptLinkForButton}`);
     }
     
     const data = {
@@ -637,16 +638,16 @@ class WhatsAppService {
       receiptLink: processedReceiptLinkForBody // Use extracted path for body variables
     };
     
-    console.log('📱 [sendReceipt] Data object:', data);
+    logger.debug('📱 [sendReceipt] Data object:', data);
     
     const variables = this.mapDataToTemplateVariables('receipt', data);
     
-    console.log('📱 [sendReceipt] Mapped variables:', variables);
-    console.log('📱 [sendReceipt] Variable mapping config:', this.getTemplateVariableMapping('receipt'));
+    logger.debug('📱 [sendReceipt] Mapped variables:', variables);
+    logger.debug('📱 [sendReceipt] Variable mapping config:', this.getTemplateVariableMapping('receipt'));
     
     // If no mapping configured, use default mapping
     if (Object.keys(variables).length === 0) {
-      console.log('📱 [sendReceipt] No variable mapping found, using defaults');
+      logger.debug('📱 [sendReceipt] No variable mapping found, using defaults');
       variables.body_1 = data.clientName;
       variables.body_2 = data.businessName;
       variables.body_3 = processedReceiptLinkForBody; // Use extracted path for body
@@ -664,7 +665,7 @@ class WhatsAppService {
           // Template URL: https://www.easemysalon.in/receipt/public/{{1}}
           // button_1 value: INV-000056/abc123 (just the path)
           variables[varName] = processedReceiptLinkForButton;
-          console.log(`📱 [sendReceipt] Setting ${varName} to path (template includes base URL): ${processedReceiptLinkForButton}`);
+          logger.debug(`📱 [sendReceipt] Setting ${varName} to path (template includes base URL): ${processedReceiptLinkForButton}`);
         } else if (varName.startsWith('body_') && variableMapping[varName] === 'receiptLink') {
           // Use extracted path for body variables if template includes base URL
           variables[varName] = processedReceiptLinkForBody;
@@ -672,8 +673,8 @@ class WhatsAppService {
       });
     }
 
-    console.log('📱 [sendReceipt] Final variables before send:', variables);
-    console.log('📱 [sendReceipt] Template ID:', this.getTemplateId('receipt'));
+    logger.debug('📱 [sendReceipt] Final variables before send:', variables);
+    logger.debug('📱 [sendReceipt] Template ID:', this.getTemplateId('receipt'));
 
     const result = await this.sendMessage({
       to,
@@ -681,7 +682,7 @@ class WhatsAppService {
       variables
     });
     
-    console.log('📱 [sendReceipt] Send result:', result);
+    logger.debug('📱 [sendReceipt] Send result:', result);
     
     return result;
   }
@@ -922,17 +923,16 @@ class WhatsAppService {
           testVariables[varName] = testValue;
         });
         
-        // Log for debugging
-        console.log(`[WhatsApp Test] Template: ${templateId}, Type: ${templateType}`);
-        console.log(`[WhatsApp Test] Variable Mapping:`, variableMapping);
-        console.log(`[WhatsApp Test] Test Variables:`, testVariables);
-        console.log(`[WhatsApp Test] Body variables count:`, Object.keys(testVariables).filter(k => k.startsWith('body_')).length);
-        console.log(`[WhatsApp Test] Button variables count:`, Object.keys(testVariables).filter(k => k.startsWith('button_')).length);
+        logger.debug(`[WhatsApp Test] Template: ${templateId}, Type: ${templateType}`);
+        logger.debug(`[WhatsApp Test] Variable Mapping:`, variableMapping);
+        logger.debug(`[WhatsApp Test] Test Variables:`, testVariables);
+        logger.debug(`[WhatsApp Test] Body variables count:`, Object.keys(testVariables).filter(k => k.startsWith('body_')).length);
+        logger.debug(`[WhatsApp Test] Button variables count:`, Object.keys(testVariables).filter(k => k.startsWith('button_')).length);
       } else {
         // Fallback: if no mapping configured, send minimal test with body_1
         // This handles templates that haven't been configured with JavaScript code yet
         testVariables.body_1 = 'Test Message from EaseMySalon';
-        console.log(`[WhatsApp Test] No variable mapping found for ${templateType}, using default body_1`);
+        logger.debug(`[WhatsApp Test] No variable mapping found for ${templateType}, using default body_1`);
       }
 
       const result = await this.sendMessage({
@@ -949,4 +949,3 @@ class WhatsAppService {
 
 // Export singleton instance
 module.exports = new WhatsAppService();
-

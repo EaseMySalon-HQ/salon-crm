@@ -115,6 +115,11 @@ const staffSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Indexes: branch directory and login lookup (email unique globally)
+staffSchema.index({ branchId: 1, isActive: 1 });
+staffSchema.index({ branchId: 1, role: 1 });
+staffSchema.index({ branchId: 1, createdAt: -1 });
+
 // Export both schema and model for flexibility
 module.exports = {
   schema: staffSchema,

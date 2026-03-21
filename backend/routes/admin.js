@@ -1,4 +1,5 @@
 const express = require('express');
+const { logger } = require('../utils/logger');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
@@ -19,37 +20,37 @@ router.post('/login', setupMainDatabase, async (req, res) => {
     const { email, password } = req.body;
     const { Admin } = req.mainModels;
 
-    console.log('🔍 Admin login attempt:', { email: email ? email.toLowerCase() : 'missing' });
+    logger.debug('🔍 Admin login attempt:', { email: email ? email.toLowerCase() : 'missing' });
 
     if (!email || !password) {
-      console.log('❌ Admin login failed: Missing email or password');
+      logger.debug('❌ Admin login failed: Missing email or password');
       return res.status(400).json({ success: false, error: 'Email and password are required' });
     }
 
     // Find admin by email (case-insensitive)
     const emailLower = email.toLowerCase();
-    console.log('🔍 Looking for admin with email:', emailLower);
+    logger.debug('🔍 Looking for admin with email:', emailLower);
     
     const admin = await Admin.findOne({ email: emailLower, isActive: true });
     if (!admin) {
-      console.log(`❌ Admin login failed: No admin found with email ${emailLower}`);
+      logger.debug(`❌ Admin login failed: No admin found with email ${emailLower}`);
       // Check if admin exists but is inactive
       const inactiveAdmin = await Admin.findOne({ email: emailLower });
       if (inactiveAdmin) {
-        console.log('⚠️ Admin exists but is inactive');
+        logger.debug('⚠️ Admin exists but is inactive');
       }
       return res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
 
-    console.log('✅ Admin found:', { id: admin._id, email: admin.email, role: admin.role });
+    logger.debug('✅ Admin found:', { id: admin._id, email: admin.email, role: admin.role });
     
     const isPasswordValid = await bcrypt.compare(password, admin.password);
     if (!isPasswordValid) {
-      console.log('❌ Admin login failed: Invalid password');
+      logger.debug('❌ Admin login failed: Invalid password');
       return res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
 
-    console.log('✅ Password validated successfully');
+    logger.debug('✅ Password validated successfully');
 
     const token = jwt.sign(
       { id: admin._id, role: 'admin' },
@@ -69,7 +70,7 @@ router.post('/login', setupMainDatabase, async (req, res) => {
       details: { email: admin.email, role: admin.role },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log login activity:', err));
+    }).catch(err => logger.error('Failed to log login activity:', err));
 
     // Get admin name (virtual or constructed)
     const adminName = admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || 'Admin User';
@@ -88,7 +89,7 @@ router.post('/login', setupMainDatabase, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Admin login error:', error);
+    logger.error('Admin login error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -122,8 +123,8 @@ router.get('/profile', setupMainDatabase, authenticateAdmin, async (req, res) =>
       }
     });
   } catch (error) {
-    console.error('Get admin profile error:', error);
-    console.error('Error stack:', error.stack);
+    logger.error('Get admin profile error:', error);
+    logger.error('Error stack:', error.stack);
     res.status(500).json({ success: false, error: 'Internal server error', details: error.message });
   }
 });
@@ -144,7 +145,7 @@ router.get('/businesses/stats', setupMainDatabase, authenticateAdmin, checkAdmin
       data: { total, active, suspended, inactive, deleted },
     });
   } catch (error) {
-    console.error('Businesses stats error:', error);
+    logger.error('Businesses stats error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -224,7 +225,7 @@ router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermis
       }
     });
   } catch (error) {
-    console.error('Get businesses error:', error);
+    logger.error('Get businesses error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -284,7 +285,7 @@ router.get('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPe
     
     res.json({ success: true, data: businessData });
   } catch (error) {
-    console.error('Get business error:', error);
+    logger.error('Get business error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -327,7 +328,7 @@ router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin,
 
     res.json({ success: true, data: { token, businessId: business._id.toString(), businessCode: business.code } });
   } catch (error) {
-    console.error('Impersonate error:', error);
+    logger.error('Impersonate error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -366,7 +367,7 @@ router.post('/businesses/:id/reset-owner-password', setupMainDatabase, authentic
       },
     });
   } catch (error) {
-    console.error('Reset owner password error:', error);
+    logger.error('Reset owner password error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -436,7 +437,7 @@ router.get('/businesses/:id/logs', setupMainDatabase, authenticateAdmin, require
       pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error) {
-    console.error('Get business logs error:', error);
+    logger.error('Get business logs error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -614,7 +615,7 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       if (!business.code) {
         throw new Error('Business code is required but not set. Cannot create business database.');
       }
-      console.log(`🔧 Creating business database for new business: ${business.name} (Code: ${business.code})`);
+      logger.debug(`🔧 Creating business database for new business: ${business.name} (Code: ${business.code})`);
       const businessConnection = await databaseManager.getConnection(business.code, req.mainConnection);
       const businessModels = modelFactory.createBusinessModels(businessConnection);
       
@@ -645,9 +646,9 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       });
       
       await defaultSettings.save();
-      console.log(`✅ Default business settings created for ${business.name}`);
+      logger.debug(`✅ Default business settings created for ${business.name}`);
     } catch (settingsError) {
-      console.error('Error creating default business settings:', settingsError);
+      logger.error('Error creating default business settings:', settingsError);
       // Don't fail the business creation if settings creation fails
     }
 
@@ -665,8 +666,8 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       message: 'Business created successfully'
     });
   } catch (error) {
-    console.error('Create business error:', error);
-    console.error('Error stack:', error.stack);
+    logger.error('Create business error:', error);
+    logger.error('Error stack:', error.stack);
     res.status(500).json({ success: false, error: 'Internal server error', details: error.message });
   }
 });
@@ -674,7 +675,7 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
 // Update Business
 router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'update'), async (req, res) => {
   try {
-    console.log('Update business request:', req.params.id, req.body);
+    logger.debug('Update business request:', req.params.id, req.body);
     const { Business } = req.mainModels;
     const { businessInfo, ownerInfo, subscriptionInfo } = req.body;
     
@@ -749,7 +750,7 @@ router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPe
       message: 'Business updated successfully'
     });
   } catch (error) {
-    console.error('Update business error:', error);
+    logger.error('Update business error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -774,7 +775,7 @@ router.patch('/businesses/:id/status', setupMainDatabase, authenticateAdmin, che
       message: `Business ${status} successfully`
     });
   } catch (error) {
-    console.error('Toggle business status error:', error);
+    logger.error('Toggle business status error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -830,7 +831,7 @@ router.get('/businesses/:id/stats', authenticateAdmin, checkAdminPermission('bus
       }
     });
   } catch (error) {
-    console.error('Get business stats error:', error);
+    logger.error('Get business stats error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -887,7 +888,7 @@ router.get('/dashboard/stats', setupMainDatabase, authenticateAdmin, checkAdminP
       }
     });
   } catch (error) {
-    console.error('Get dashboard stats error:', error);
+    logger.error('Get dashboard stats error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -895,12 +896,12 @@ router.get('/dashboard/stats', setupMainDatabase, authenticateAdmin, checkAdminP
 // Get All Users with Business Associations
 router.get('/users', setupMainDatabase, authenticateAdmin, checkAdminPermission('users', 'view'), async (req, res) => {
   try {
-    console.log('🔍🔍🔍 ADMIN USERS ENDPOINT CALLED - NEW VERSION 🔍🔍🔍');
+    logger.debug('🔍🔍🔍 ADMIN USERS ENDPOINT CALLED - NEW VERSION 🔍🔍🔍');
     const { User, Business } = req.mainModels;
     
     // Get all businesses first
     const businesses = await Business.find({}).lean();
-    console.log('📊 Found businesses:', businesses.length);
+    logger.debug('📊 Found businesses:', businesses.length);
     
     // Get all users from main database (business owners)
     const mainUsers = await User.find({ branchId: { $exists: true, $ne: null } })
@@ -924,25 +925,25 @@ router.get('/users', setupMainDatabase, authenticateAdmin, checkAdminPermission(
         source: 'main'
       }));
     
-    console.log('👥 Main users found:', mainUsersWithBusiness.length);
+    logger.debug('👥 Main users found:', mainUsersWithBusiness.length);
 
     // Get staff from each business database
     const allStaff = [];
     for (const business of businesses) {
       try {
-        console.log(`🔍 Processing business: ${business.name} (${business.code})`);
+        logger.debug(`🔍 Processing business: ${business.name} (${business.code})`);
         // Connect to business database using business code
         const databaseManager = require('../config/database-manager');
         const mainConnection = await databaseManager.getMainConnection();
         const businessDb = await databaseManager.getConnection(business.code || business._id, mainConnection);
-        console.log(`📡 Connected to database for business: ${business.name} (${business.code})`);
+        logger.debug(`📡 Connected to database for business: ${business.name} (${business.code})`);
         
         const Staff = businessDb.model('Staff', require('../models/Staff').schema);
-        console.log(`📋 Staff model created for ${business.name}`);
+        logger.debug(`📋 Staff model created for ${business.name}`);
         
         // Get staff from this business
         const staff = await Staff.find({}).lean();
-        console.log(`👥 Raw staff count for ${business.name}:`, staff.length);
+        logger.debug(`👥 Raw staff count for ${business.name}:`, staff.length);
         
         // Transform staff data
         const staffWithBusiness = staff.map(staffMember => ({
@@ -959,14 +960,14 @@ router.get('/users', setupMainDatabase, authenticateAdmin, checkAdminPermission(
         }));
         
         allStaff.push(...staffWithBusiness);
-        console.log(`👷 Staff from ${business.name}:`, staffWithBusiness.length);
+        logger.debug(`👷 Staff from ${business.name}:`, staffWithBusiness.length);
       } catch (error) {
-        console.error(`Error fetching staff for business ${business.name}:`, error);
+        logger.error(`Error fetching staff for business ${business.name}:`, error);
         // Continue with other businesses even if one fails
       }
     }
     
-    console.log('👷 Total staff found:', allStaff.length);
+    logger.debug('👷 Total staff found:', allStaff.length);
 
     // Combine main users and staff
     const allUsers = [...mainUsersWithBusiness, ...allStaff];
@@ -974,14 +975,14 @@ router.get('/users', setupMainDatabase, authenticateAdmin, checkAdminPermission(
     // Sort by creation date
     allUsers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     
-    console.log('📋 Total users to return:', allUsers.length);
+    logger.debug('📋 Total users to return:', allUsers.length);
 
     res.json({
       success: true,
       data: allUsers
     });
   } catch (error) {
-    console.error('Get all users error:', error);
+    logger.error('Get all users error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -1005,7 +1006,7 @@ router.delete('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdmi
         const databaseManager = require('../config/database-manager');
         await databaseManager.deleteDatabase(businessCode);
       } catch (dbError) {
-        console.error('⚠️  Error deleting business database during permanent delete:', dbError.message);
+        logger.error('⚠️  Error deleting business database during permanent delete:', dbError.message);
       }
 
       await req.mainModels.Business.findByIdAndDelete(id);
@@ -1039,9 +1040,9 @@ router.delete('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdmi
     try {
       const databaseManager = require('../config/database-manager');
       await databaseManager.deleteDatabase(businessCode);
-      console.log(`✅ Business database deleted: ease_my_salon_${businessCode}`);
+      logger.debug(`✅ Business database deleted: ease_my_salon_${businessCode}`);
     } catch (dbError) {
-      console.error('⚠️  Error deleting business database:', dbError);
+      logger.error('⚠️  Error deleting business database:', dbError);
       // Log but don't fail - business is already marked as deleted
     }
 
@@ -1059,7 +1060,7 @@ router.delete('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdmi
       }
     });
   } catch (error) {
-    console.error('Delete business error:', error);
+    logger.error('Delete business error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });

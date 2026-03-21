@@ -1,5 +1,6 @@
 const { Resend } = require('resend');
 const nodemailer = require('nodemailer');
+const { logger } = require('../utils/logger');
 const emailTemplates = require('../utils/email-templates');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
@@ -35,11 +36,11 @@ class EmailService {
         this.enabled = true;
         await this.setupProvider();
         this.initialized = true;
-        console.log(`✅ Email service initialized with provider: ${this.provider}`);
+        logger.debug(`✅ Email service initialized with provider: ${this.provider}`);
         return;
       }
     } catch (error) {
-      console.warn('⚠️  Could not load email config from admin settings, falling back to environment variables:', error.message);
+      logger.warn('⚠️  Could not load email config from admin settings, falling back to environment variables:', error.message);
     }
 
     // Fallback to environment variables
@@ -55,9 +56,9 @@ class EmailService {
       this.enabled = true;
       await this.setupProvider();
       this.initialized = true;
-      console.log('✅ Email service initialized from environment variables');
+      logger.debug('✅ Email service initialized from environment variables');
     } else {
-      console.warn('⚠️  Email service not configured. No API key found.');
+      logger.warn('⚠️  Email service not configured. No API key found.');
       this.enabled = false;
       this.initialized = true;
     }
@@ -89,11 +90,11 @@ class EmailService {
           await this.setupMailgun();
           break;
         default:
-          console.warn(`⚠️  Unknown email provider: ${this.provider}`);
+          logger.warn(`⚠️  Unknown email provider: ${this.provider}`);
           this.enabled = false;
       }
     } catch (error) {
-      console.error(`❌ Error setting up email provider ${this.provider}:`, error);
+      logger.error(`❌ Error setting up email provider ${this.provider}:`, error);
       this.enabled = false;
     }
   }
@@ -132,9 +133,9 @@ class EmailService {
     // Verify connection
     try {
       await this.transporter.verify();
-      console.log('✅ SMTP connection verified');
+      logger.debug('✅ SMTP connection verified');
     } catch (error) {
-      console.error('❌ SMTP verification failed:', error);
+      logger.error('❌ SMTP verification failed:', error);
       throw error;
     }
   }
@@ -225,7 +226,7 @@ class EmailService {
     }
 
     if (!this.enabled) {
-      console.warn('Email service not enabled');
+      logger.warn('Email service not enabled');
       return { success: false, error: 'Email service not configured' };
     }
 
@@ -247,7 +248,7 @@ class EmailService {
           return { success: false, error: 'Email provider not configured' };
       }
     } catch (error) {
-      console.error('Error sending email:', error);
+      logger.error('Error sending email:', error);
       return { success: false, error: error.message };
     }
   }
@@ -551,7 +552,7 @@ class EmailService {
         };
       }
     } catch (error) {
-      console.warn(`Could not load custom template ${templateName}, using default:`, error.message);
+      logger.warn(`Could not load custom template ${templateName}, using default:`, error.message);
     }
 
     // Fall back to default template

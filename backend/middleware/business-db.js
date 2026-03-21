@@ -1,5 +1,6 @@
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
+const { logger } = require('../utils/logger');
 
 /**
  * Middleware to set up business-specific database models
@@ -19,11 +20,11 @@ const setupBusinessDatabase = async (req, res, next) => {
         businessId = firstBusiness._id;
         if (!req.user) req.user = {};
         req.user.branchId = businessId;
-        console.log('🔍 Business DB Middleware: Admin using first business as context:', businessId);
+        logger.debug('🔍 Business DB Middleware: Admin using first business as context:', businessId);
       }
     }
 
-    console.log('🔍 Business DB Middleware Debug:', {
+    logger.debug('🔍 Business DB Middleware Debug:', {
       user: req.user ? {
         id: req.user._id,
         email: req.user.email,
@@ -44,24 +45,24 @@ const setupBusinessDatabase = async (req, res, next) => {
     const mainConnection = await databaseManager.getMainConnection();
     
     // Get business-specific database connection (will use business code if available)
-    console.log('🔍 Getting business connection for ID:', businessId);
+    logger.debug('🔍 Getting business connection for ID:', businessId);
     const businessConnection = await databaseManager.getConnection(businessId, mainConnection);
-    console.log('🔍 Business connection obtained:', !!businessConnection);
+    logger.debug('🔍 Business connection obtained:', !!businessConnection);
     
     // Create business-specific models
-    console.log('🔍 Creating business models...');
+    logger.debug('🔍 Creating business models...');
     const businessModels = modelFactory.createBusinessModels(businessConnection);
-    console.log('🔍 Business models created:', Object.keys(businessModels));
+    logger.debug('🔍 Business models created:', Object.keys(businessModels));
     
     // Attach models to request object
     req.businessModels = businessModels;
     req.businessConnection = businessConnection;
     
-    console.log('✅ Business database setup complete');
+    logger.debug('✅ Business database setup complete');
     next();
   } catch (error) {
-    console.error('❌ Error setting up business database:', error);
-    console.error('❌ Error stack:', error.stack);
+    logger.error('❌ Error setting up business database:', error);
+    logger.error('❌ Error stack:', error.stack);
     res.status(500).json({
       success: false,
       error: 'Failed to connect to business database',
@@ -88,9 +89,9 @@ const setupMainDatabase = async (req, res, next) => {
     
     next();
   } catch (error) {
-    console.error('❌ Error setting up main database:', error);
-    console.error('❌ Error stack:', error.stack);
-    console.error('❌ Error details:', {
+    logger.error('❌ Error setting up main database:', error);
+    logger.error('❌ Error stack:', error.stack);
+    logger.error('❌ Error details:', {
       message: error.message,
       name: error.name,
       code: error.code

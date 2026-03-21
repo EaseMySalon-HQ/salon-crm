@@ -70,7 +70,8 @@ export function VerificationModal({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const { toast } = useToast()
 
-  // Check if there are any differences that need reasons
+  // Parent must pass per-day summary amounts (table row), not report-wide totals.
+  // Server re-syncs ledger on verify so stale DB balanceDifference does not block a balanced day.
   const hasBalanceDifference = cashDifference !== 0
   const hasOnlinePosDifference = onlineCashDifference !== 0
   const hasAnyDifference = hasBalanceDifference || hasOnlinePosDifference
@@ -119,7 +120,7 @@ export function VerificationModal({
     setIsSubmitting(true)
     try {
       await onVerify({
-        entryId: closingEntry.id,
+        entryId: closingEntry.id || (closingEntry as { _id?: string })._id!,
         balanceDifferenceReason: hasBalanceDifference ? balanceDifferenceReason.trim() : undefined,
         balanceDifferenceNote: hasBalanceDifference ? balanceDifferenceNote.trim() : undefined,
         onlinePosDifferenceReason: hasOnlinePosDifference ? onlinePosDifferenceReason.trim() : undefined,
@@ -175,7 +176,7 @@ export function VerificationModal({
                 setIsSubmitting(true)
                 try {
                 await onVerify({
-                  entryId: closingEntry.id,
+                  entryId: closingEntry.id || (closingEntry as { _id?: string })._id!,
                   balanceDifferenceReason: undefined,
                   balanceDifferenceNote: undefined,
                   onlinePosDifferenceReason: undefined,

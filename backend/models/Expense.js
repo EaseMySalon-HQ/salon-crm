@@ -89,6 +89,9 @@ const expenseSchema = new mongoose.Schema({
 });
 
 // Index for better query performance
+expenseSchema.index({ branchId: 1, date: -1 });
+expenseSchema.index({ branchId: 1, status: 1, date: -1 });
+expenseSchema.index({ branchId: 1, category: 1 });
 expenseSchema.index({ date: -1 });
 expenseSchema.index({ category: 1 });
 expenseSchema.index({ paymentMode: 1 });

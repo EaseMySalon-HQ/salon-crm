@@ -1,4 +1,5 @@
-console.log('🚀 Starting EaseMySalon Backend Server...');
+const { logger } = require('./utils/logger');
+logger.info('Starting EaseMySalon Backend Server...');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -51,9 +52,9 @@ const PORT = process.env.PORT || 3001;
 const dbPromise = connectDB();
 dbPromise
   .then(() => ensureAdminAccessDefaults())
-  .then(() => console.log('✅ Admin access defaults ensured'))
+  .then(() => logger.info('Admin access defaults ensured'))
   .catch((error) => {
-    console.error('Failed to initialize admin access defaults:', error);
+    logger.error('Failed to initialize admin access defaults:', error);
   });
 
 // Middleware
@@ -64,10 +65,9 @@ const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
   : ['http://localhost:3000', 'http://127.0.0.1:3000'];
 
-console.log('🌍 Environment:', process.env.NODE_ENV || 'development');
-console.log('🔗 CORS Origins:', allowedOrigins);
-console.log('🗄️ MongoDB URI:', process.env.MONGODB_URI ? 'Set' : 'Not set');
-console.log('🔑 JWT Secret:', process.env.JWT_SECRET ? 'Set' : 'Not set');
+logger.info('Environment: %s, CORS Origins: %s, MongoDB URI: %s, JWT Secret: %s',
+  process.env.NODE_ENV || 'development', allowedOrigins,
+  process.env.MONGODB_URI ? 'Set' : 'Not set', process.env.JWT_SECRET ? 'Set' : 'Not set');
 
 // Dynamic CORS configuration
 app.use(cors({
@@ -78,8 +78,7 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.log('❌ CORS blocked origin:', origin);
-      console.log('✅ Allowed origins:', allowedOrigins);
+      logger.warn('CORS blocked origin: %s (allowed: %s)', origin, allowedOrigins);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -90,12 +89,9 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
-app.use((req, res, next) => {
-  console.log(`📥 Incoming ${req.method} ${req.path}`);
-  next();
-});
-
-app.use(morgan('combined'));
+if (process.env.NODE_ENV !== 'production') {
+  app.use(morgan('short'));
+}
 app.use(express.json({ limit: '10mb' }));
 
 // Handle CORS preflight for all routes
@@ -276,7 +272,7 @@ function getEmailSettingsWithDefaults(emailSettings) {
     } : defaults.systemAlerts
   };
   
-  console.log('📧 [getEmailSettingsWithDefaults] Merged settings:', {
+  logger.debug('[getEmailSettingsWithDefaults] Merged settings: %o', {
     rawEnabled: emailSettings?.enabled,
     mergedEnabled: merged.enabled,
     rawReceiptEnabled: emailSettings?.receiptNotifications?.enabled,
@@ -352,10 +348,10 @@ const initializeDefaultUsers = async () => {
       ];
 
       await User.insertMany(defaultUsers);
-      console.log('Default admin user created');
+      logger.info('Default admin user created');
     }
   } catch (error) {
-    console.error('Error initializing default users:', error);
+    logger.error('Error initializing default users:', error);
   }
 };
 
@@ -381,10 +377,10 @@ const initializeBusinessSettings = async () => {
         socialMedia: "@glamoursalon"
       });
       await defaultSettings.save();
-      console.log("Default business settings created");
+      logger.info('Default business settings created');
     }
   } catch (error) {
-    console.error("Error initializing business settings:", error);
+    logger.error('Error initializing business settings:', error);
   }
 };
 // Import authentication middleware
@@ -539,7 +535,7 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -657,7 +653,7 @@ app.post('/api/auth/staff-login', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Staff login error:', error);
+    logger.error('Staff login error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -729,7 +725,7 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Profile error:', error);
+    logger.error('Profile error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -779,7 +775,7 @@ app.get('/api/business/plan', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching business plan:', error);
+    logger.error('Error fetching business plan:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -824,7 +820,7 @@ app.get('/api/business/info', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching business info:', error);
+    logger.error('Error fetching business info:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -878,7 +874,7 @@ app.get('/api/business/plans', authenticateToken, setupMainDatabase, async (req,
       data: plans,
     });
   } catch (error) {
-    console.error('Error fetching available plans:', error);
+    logger.error('Error fetching available plans:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch available plans',
@@ -934,7 +930,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     // For now, we'll return the token in development
     const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${token}`;
     
-    console.log(`Password reset link for ${user.email}: ${resetUrl}`);
+    logger.debug('Password reset link generated for %s', user.email);
 
     res.json({
       success: true,
@@ -943,7 +939,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       resetUrl: resetUrl
     });
   } catch (error) {
-    console.error('Forgot password error:', error);
+    logger.error('Forgot password error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1007,7 +1003,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
       message: 'Password has been reset successfully'
     });
   } catch (error) {
-    console.error('Reset password error:', error);
+    logger.error('Reset password error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1045,7 +1041,7 @@ app.get('/api/auth/verify-reset-token/:token', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Verify reset token error:', error);
+    logger.error('Verify reset token error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1093,7 +1089,7 @@ app.get('/api/users', authenticateToken, setupMainDatabase, requireAdmin, async 
       }
     });
   } catch (error) {
-    console.error('Get users error:', error);
+    logger.error('Get users error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1231,12 +1227,7 @@ app.post('/api/users', authenticateToken, setupMainDatabase, requireAdmin, async
       data: userWithoutPassword
     });
   } catch (error) {
-    console.error('Create user error:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      name: error.name
-    });
+    logger.error('Create user error: %s', error.message, { stack: error.stack, name: error.name });
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1260,7 +1251,7 @@ app.get('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res)
       data: user
     });
   } catch (error) {
-    console.error('Get user error:', error);
+    logger.error('Get user error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1400,7 +1391,7 @@ app.put('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res)
       data: user
     });
   } catch (error) {
-    console.error('Update user error:', error);
+    logger.error('Update user error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1436,7 +1427,7 @@ app.delete('/api/users/:id', authenticateToken, setupMainDatabase, requireAdmin,
       message: 'User deleted successfully'
     });
   } catch (error) {
-    console.error('Delete user error:', error);
+    logger.error('Delete user error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1462,7 +1453,7 @@ app.get('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requ
       data: user.permissions
     });
   } catch (error) {
-    console.error('Get user permissions error:', error);
+    logger.error('Get user permissions error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1494,7 +1485,7 @@ app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requ
       data: user
     });
   } catch (error) {
-    console.error('Update user permissions error:', error);
+    logger.error('Update user permissions error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1539,7 +1530,7 @@ app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase,
       message: 'Password changed successfully'
     });
   } catch (error) {
-    console.error('Change password error:', error);
+    logger.error('Change password error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1591,7 +1582,7 @@ app.post('/api/users/:id/verify-admin-password', authenticateToken, setupMainDat
       message: 'Password verified successfully'
     });
   } catch (error) {
-    console.error('Admin password verification error:', error);
+    logger.error('Admin password verification error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -1638,7 +1629,7 @@ app.get('/api/clients', authenticateToken, requireStaff, setupBusinessDatabase, 
       }
     });
   } catch (error) {
-    console.error('Error fetching clients:', error);
+    logger.error('Error fetching clients:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -1669,7 +1660,7 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
       data: searchResults
     });
   } catch (error) {
-    console.error('Error searching clients:', error);
+    logger.error('Error searching clients:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -1690,7 +1681,7 @@ app.get('/api/clients/:id', authenticateToken, setupBusinessDatabase, async (req
       data: client
     });
   } catch (error) {
-    console.error('Error fetching client:', error);
+    logger.error('Error fetching client:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -1737,7 +1728,7 @@ app.post('/api/clients', authenticateToken, requireManager, setupBusinessDatabas
       data: savedClient
     });
   } catch (error) {
-    console.error('Error creating client:', error);
+    logger.error('Error creating client:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -1779,7 +1770,7 @@ app.put('/api/clients/:id', authenticateToken, setupBusinessDatabase, requireMan
       data: updatedClient
     });
   } catch (error) {
-    console.error('Error updating client:', error);
+    logger.error('Error updating client:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -1801,7 +1792,7 @@ app.delete('/api/clients/:id', authenticateToken, setupBusinessDatabase, require
       message: 'Client deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting client:', error);
+    logger.error('Error deleting client:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -1809,11 +1800,10 @@ app.delete('/api/clients/:id', authenticateToken, setupBusinessDatabase, require
 // Get client statistics (O(1) database queries)
 app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessDatabase, async (req, res) => {
   try {
-    console.log('📊 /api/clients/stats endpoint called');
-    console.log('📊 User:', req.user?.email, 'BranchId:', req.user?.branchId);
+    logger.debug('Client stats endpoint called by user=%s branchId=%s', req.user?.email, req.user?.branchId);
     
     if (!req.businessModels) {
-      console.error('❌ req.businessModels not found');
+      logger.error('req.businessModels not found');
       return res.status(500).json({
         success: false,
         error: 'Business models not initialized'
@@ -1823,41 +1813,40 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
     const { Client } = req.businessModels;
     
     if (!Client) {
-      console.error('❌ Client model not found in req.businessModels');
-      console.error('Available models:', Object.keys(req.businessModels || {}));
+      logger.error('Client model not found in req.businessModels. Available models: %s', Object.keys(req.businessModels || {}));
       return res.status(500).json({
         success: false,
         error: 'Client model not available'
       });
     }
     
-    console.log('✅ Client model found');
+    logger.debug('Client model found');
     
     // Calculate date 3 months ago from current date
     const now = new Date();
     const threeMonthsAgo = new Date(now);
     threeMonthsAgo.setMonth(now.getMonth() - 3);
     
-    console.log(`📅 Date threshold (3 months ago): ${threeMonthsAgo.toISOString()}`);
+    logger.debug('Date threshold (3 months ago): %s', threeMonthsAgo.toISOString());
     
     // Total Customers: Count all clients (simple O(1) query)
-    console.log('📊 Counting total customers...');
+    logger.debug('Counting total customers...');
     let totalCustomers = 0;
     try {
       totalCustomers = await Client.countDocuments({}) || 0;
-      console.log(`✅ Total customers: ${totalCustomers}`);
+      logger.debug('Total customers: %d', totalCustomers);
     } catch (countError) {
-      console.error('❌ Error counting customers:', countError);
+      logger.error('Error counting customers:', countError);
       throw countError;
     }
     
     // Fetch all clients with just lastVisit field for accurate calculation
-    console.log('📊 Fetching all clients with lastVisit field...');
+    logger.debug('Fetching all clients with lastVisit field...');
     let allClients = [];
     try {
       // Use lean() for performance but handle dates carefully
       allClients = await Client.find({}).select('lastVisit').lean();
-      console.log(`✅ Fetched ${allClients.length} clients`);
+      logger.debug('Fetched %d clients', allClients.length);
       
       // Convert dates from MongoDB format to JavaScript Date objects
       // When using lean(), dates come as strings or ISODate objects
@@ -1879,17 +1868,12 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
         return client;
       });
     } catch (fetchError) {
-      console.error('❌ Error fetching clients:', fetchError);
-      console.error('❌ Fetch error details:', {
-        message: fetchError.message,
-        stack: fetchError.stack,
-        name: fetchError.name
-      });
+      logger.error('Error fetching clients for stats: %s', fetchError.message, { stack: fetchError.stack, name: fetchError.name });
       throw fetchError;
     }
     
     if (allClients.length === 0) {
-      console.log('📊 No clients found, returning zero stats');
+      logger.debug('No clients found, returning zero stats');
       return res.json({
         success: true,
         data: {
@@ -1902,14 +1886,14 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
     
     // Sample first 3 clients for debugging
     try {
-      console.log('📊 Sample clients:', JSON.stringify(allClients.slice(0, 3).map(c => ({
+      logger.debug('Sample clients: %o', allClients.slice(0, 3).map(c => ({
         hasLastVisit: !!c.lastVisit,
         lastVisitType: c.lastVisit ? typeof c.lastVisit : 'null',
         lastVisitValue: c.lastVisit ? c.lastVisit.toString() : null,
         isDate: c.lastVisit instanceof Date
-      })), null, 2));
+      })));
     } catch (logError) {
-      console.warn('⚠️ Error logging sample clients:', logError);
+      logger.warn('Error logging sample clients:', logError);
     }
     
     // Count active: lastVisit exists, is a Date, AND >= threeMonthsAgo
@@ -1949,21 +1933,20 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
           }
         }
       } catch (clientError) {
-        console.warn('⚠️ Error processing client:', clientError);
+        logger.warn('Error processing client:', clientError);
         inactiveCount++; // Default to inactive on error
       }
     }
     
-    console.log(`📊 Breakdown - Active: ${activeCount}, Inactive: ${inactiveCount}`);
-    console.log(`📊 Details - null: ${nullCount}, invalid dates: ${invalidDateCount}, old visits: ${oldVisitCount}`);
-    console.log(`📊 Verification - Calculated total: ${activeCount + inactiveCount}, DB total: ${totalCustomers}`);
+    logger.debug('Client stats breakdown - Active: %d, Inactive: %d (null: %d, invalidDates: %d, oldVisits: %d), calculated: %d, dbTotal: %d',
+      activeCount, inactiveCount, nullCount, invalidDateCount, oldVisitCount, activeCount + inactiveCount, totalCustomers);
     
     let activeCustomers = activeCount;
     let inactiveCustomers = inactiveCount;
     
     // Ensure they add up correctly (safety check)
     if (activeCustomers + inactiveCustomers !== totalCustomers) {
-      console.warn(`⚠️ Count mismatch! Adjusting inactive: ${activeCustomers + inactiveCustomers} vs ${totalCustomers}`);
+      logger.warn('Count mismatch! Adjusting inactive: %d vs %d', activeCustomers + inactiveCustomers, totalCustomers);
       inactiveCustomers = Math.max(0, totalCustomers - activeCustomers);
     }
     
@@ -1973,17 +1956,14 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
       inactiveCustomers: Number(inactiveCustomers) || 0
     };
     
-    console.log(`✅ Final stats:`, result);
+    logger.debug('Final client stats: %o', result);
     
     res.json({
       success: true,
       data: result
     });
   } catch (error) {
-    console.error('❌ Error fetching client stats:', error);
-    console.error('❌ Error message:', error.message);
-    console.error('❌ Error stack:', error.stack);
-    console.error('❌ Error name:', error.name);
+    logger.error('Error fetching client stats: %s', error.message, { stack: error.stack, name: error.name });
     res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -2012,18 +1992,17 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
       });
     }
 
-    console.log(`📊 Processing ${clients.length} clients for import`);
-    console.log(`⚙️  Update existing clients: ${updateExisting ? 'YES' : 'NO'}`);
+    logger.debug('Processing %d clients for import (updateExisting=%s)', clients.length, updateExisting ? 'YES' : 'NO');
     
     // Count existing clients in database for reference
     const existingCount = await Client.countDocuments({});
-    console.log(`📋 Current clients in database: ${existingCount}`);
+    logger.debug('Current clients in database: %d', existingCount);
     
     // Build a phone number lookup map for efficient duplicate detection
     // This avoids querying the database for every row
     const phoneLookupMap = new Map(); // last10 -> client _id
     if (existingCount > 0) {
-      console.log(`🔍 Building phone number lookup map...`);
+      logger.debug('Building phone number lookup map...');
       const allClients = await Client.find({ 
         phone: { $exists: true, $ne: null, $ne: '' } 
       }).select('phone _id').lean();
@@ -2039,7 +2018,7 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
           phoneLookupMap.set(String(client.phone), client._id);
         }
       }
-      console.log(`✅ Built lookup map with ${phoneLookupMap.size} phone number entries`);
+      logger.debug('Built lookup map with %d phone number entries', phoneLookupMap.size);
     }
 
     // Robust Excel date parser: supports numbers (Excel serial), and common string formats
@@ -2164,7 +2143,7 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
         
         // Log for debugging (only log first few to avoid spam)
         if (existingClient && (results.success.length + results.skipped.length) < 5) {
-          console.log(`📞 Found existing client for phone ${normalizedPhone} (last10: ${last10}): ${existingClient.name} (ID: ${existingClient._id})`)
+          logger.debug('Found existing client for phone %s (last10: %s): %s (ID: %s)', normalizedPhone, last10, existingClient.name, existingClient._id)
         }
 
         if (existingClient) {
@@ -2257,7 +2236,7 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
         results.created++;
 
       } catch (error) {
-        console.error(`Error processing client row ${rowNumber}:`, error);
+        logger.error('Error processing client row %d:', rowNumber, error);
         results.errors.push({
           row: rowNumber,
           error: error.message || 'Failed to create client',
@@ -2266,11 +2245,9 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
       }
     }
 
-    console.log(`📊 Import completed:`);
-    console.log(`   ✅ Success: ${results.success.length} (${results.created} created, ${results.updated} updated)`);
-    console.log(`   ❌ Errors: ${results.errors.length}`);
-    console.log(`   ⏭️  Skipped: ${results.skipped.length}`);
-    console.log(`   📋 Final database count: ${await Client.countDocuments({})}`);
+    const finalCount = await Client.countDocuments({});
+    logger.info('Import completed - Success: %d (%d created, %d updated), Errors: %d, Skipped: %d, Final DB count: %d',
+      results.success.length, results.created, results.updated, results.errors.length, results.skipped.length, finalCount);
 
     res.json({
       success: true,
@@ -2290,7 +2267,7 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
     });
 
   } catch (error) {
-    console.error('Error importing clients:', error);
+    logger.error('Error importing clients:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error during import'
@@ -2378,7 +2355,7 @@ app.get('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission(
       }
     });
   } catch (error) {
-    console.error('Error fetching leads:', error);
+    logger.error('Error fetching leads:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -2408,7 +2385,7 @@ app.get('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
       data: lead
     });
   } catch (error) {
-    console.error('Error fetching lead:', error);
+    logger.error('Error fetching lead:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -2448,7 +2425,7 @@ app.get('/api/leads/:id/activities', authenticateToken, setupBusinessDatabase, c
       data: activities
     });
   } catch (error) {
-    console.error('Error fetching lead activities:', error);
+    logger.error('Error fetching lead activities:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -2586,7 +2563,7 @@ app.post('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission
         await LeadActivity.insertMany(activities);
       }
     } catch (activityError) {
-      console.error('Error logging lead creation activities:', activityError);
+      logger.error('Error logging lead creation activities:', activityError);
       // Don't fail the request if activity logging fails
     }
 
@@ -2595,7 +2572,7 @@ app.post('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission
       data: populatedLead
     });
   } catch (error) {
-    console.error('Error creating lead:', error);
+    logger.error('Error creating lead:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -2767,7 +2744,7 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
       try {
         await LeadActivity.insertMany(activities);
       } catch (activityError) {
-        console.error('Error logging lead activities:', activityError);
+        logger.error('Error logging lead activities:', activityError);
         // Don't fail the request if activity logging fails
       }
     }
@@ -2780,7 +2757,7 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
       data: populatedLead
     });
   } catch (error) {
-    console.error('Error updating lead:', error);
+    logger.error('Error updating lead:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -2829,7 +2806,7 @@ app.patch('/api/leads/:id/status', authenticateToken, setupBusinessDatabase, che
         branchId: req.user.branchId
       });
     } catch (activityError) {
-      console.error('Error logging lead status change activity:', activityError);
+      logger.error('Error logging lead status change activity:', activityError);
       // Don't fail the request if activity logging fails
     }
 
@@ -2838,7 +2815,7 @@ app.patch('/api/leads/:id/status', authenticateToken, setupBusinessDatabase, che
       data: updatedLead
     });
   } catch (error) {
-    console.error('Error updating lead status:', error);
+    logger.error('Error updating lead status:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -2898,14 +2875,14 @@ app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusine
       
       // Skip custom services (those without a serviceId)
       if (!serviceId) {
-        console.log(`Skipping custom service "${interestedService.serviceName}" - no serviceId available`);
+        logger.debug('Skipping custom service "%s" - no serviceId available', interestedService.serviceName);
         continue;
       }
       
       const service = await Service.findById(serviceId);
       
       if (!service) {
-        console.log(`Service with ID ${serviceId} not found, skipping`);
+        logger.debug('Service with ID %s not found, skipping', serviceId);
         continue;
       }
 
@@ -2977,7 +2954,7 @@ app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusine
         branchId: req.user.branchId
       });
     } catch (activityError) {
-      console.error('Error logging lead conversion activity:', activityError);
+      logger.error('Error logging lead conversion activity:', activityError);
       // Don't fail the request if activity logging fails
     }
 
@@ -2991,7 +2968,7 @@ app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusine
       message: 'Lead converted to appointment successfully'
     });
   } catch (error) {
-    console.error('Error converting lead to appointment:', error);
+    logger.error('Error converting lead to appointment:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3017,7 +2994,7 @@ app.delete('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPerm
       message: 'Lead deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting lead:', error);
+    logger.error('Error deleting lead:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3047,7 +3024,7 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
       .limit(limitNum)
       .sort({ category: 1, name: 1 }); // Sort by category alphabetically, then by name
 
-    console.log('✅ Services found:', services.length);
+    logger.debug('Services found: %d', services.length);
     res.json({
       success: true,
       data: services,
@@ -3059,7 +3036,7 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
       }
     });
   } catch (error) {
-    console.error('Error fetching services:', error);
+    logger.error('Error fetching services:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -3105,7 +3082,7 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
       data: savedService
     });
   } catch (error) {
-    console.error('Error creating service:', error);
+    logger.error('Error creating service:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -3161,7 +3138,7 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireMa
       data: updatedService
     });
   } catch (error) {
-    console.error('Error updating service:', error);
+    logger.error('Error updating service:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -3186,7 +3163,7 @@ app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requir
       message: 'Service deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting service:', error);
+    logger.error('Error deleting service:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -3216,7 +3193,7 @@ app.patch('/api/services/tax-applicable', authenticateToken, setupBusinessDataba
       modifiedCount: result.modifiedCount
     });
   } catch (error) {
-    console.error('Error bulk updating service tax applicable:', error);
+    logger.error('Error bulk updating service tax applicable:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -3232,7 +3209,7 @@ app.delete('/api/services', authenticateToken, setupBusinessDatabase, requireAdm
     // Delete all services for this branch
     const result = await Service.deleteMany({ branchId: req.user.branchId });
     
-    console.log(`✅ Deleted ${result.deletedCount} services for branch ${req.user.branchId}`);
+    logger.info('Deleted %d services for branch %s', result.deletedCount, req.user.branchId);
     
     res.json({
       success: true,
@@ -3240,7 +3217,7 @@ app.delete('/api/services', authenticateToken, setupBusinessDatabase, requireAdm
       deletedCount: result.deletedCount
     });
   } catch (error) {
-    console.error('Error deleting all services:', error);
+    logger.error('Error deleting all services:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -3268,7 +3245,7 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
       });
     }
 
-    console.log(`📊 Processing ${services.length} services for import`);
+    logger.debug('Processing %d services for import', services.length);
 
     const results = {
       success: [],
@@ -3394,10 +3371,10 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
           service: savedService
         });
 
-        console.log(`✅ Service imported successfully: ${savedService.name}`);
+        logger.debug('Service imported successfully: %s', savedService.name);
 
       } catch (error) {
-        console.error(`❌ Error importing service at row ${rowNumber}:`, error);
+        logger.error('Error importing service at row %d:', rowNumber, error);
         results.errors.push({
           row: rowNumber,
           error: error.message || 'Unknown error occurred',
@@ -3406,7 +3383,7 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
       }
     }
 
-    console.log(`📊 Import completed: ${results.success.length} success, ${results.errors.length} errors, ${results.skipped.length} skipped`);
+    logger.info('Service import completed - Success: %d, Errors: %d, Skipped: %d', results.success.length, results.errors.length, results.skipped.length);
 
     res.json({
       success: true,
@@ -3424,7 +3401,7 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
     });
 
   } catch (error) {
-    console.error('Error importing services:', error);
+    logger.error('Error importing services:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error during import'
@@ -3443,7 +3420,7 @@ app.get('/api/membership/plans', authenticateToken, setupBusinessDatabase, requi
     const plans = await MembershipPlan.find(query).sort({ createdAt: -1 }).lean();
     res.json({ success: true, data: plans });
   } catch (error) {
-    console.error('Error fetching membership plans:', error);
+    logger.error('Error fetching membership plans:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3478,7 +3455,7 @@ app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabas
 
     res.json({ success: true, data: subs });
   } catch (error) {
-    console.error('Error fetching membership subscriptions:', error);
+    logger.error('Error fetching membership subscriptions:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3540,7 +3517,7 @@ app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requ
     const savedPlan = await plan.save();
     res.status(201).json({ success: true, data: savedPlan });
   } catch (error) {
-    console.error('Error creating membership plan:', error);
+    logger.error('Error creating membership plan:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3605,7 +3582,7 @@ app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, r
     const updatedPlan = await MembershipPlan.findByIdAndUpdate(planId, updatePayload, { new: true });
     res.json({ success: true, data: updatedPlan });
   } catch (error) {
-    console.error('Error updating membership plan:', error);
+    logger.error('Error updating membership plan:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3629,7 +3606,7 @@ app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDa
     await plan.save();
     res.json({ success: true, data: plan });
   } catch (error) {
-    console.error('Error toggling membership plan:', error);
+    logger.error('Error toggling membership plan:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3696,7 +3673,7 @@ app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, 
       .lean();
     res.status(201).json({ success: true, data: populated });
   } catch (error) {
-    console.error('Error subscribing customer:', error);
+    logger.error('Error subscribing customer:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3766,7 +3743,7 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
       }
     });
   } catch (error) {
-    console.error('Error fetching customer membership:', error);
+    logger.error('Error fetching customer membership:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3853,7 +3830,7 @@ app.post('/api/membership/redeem', authenticateToken, setupBusinessDatabase, req
     await usage.save();
     res.json({ success: true, data: usage });
   } catch (error) {
-    console.error('Error redeeming membership:', error);
+    logger.error('Error redeeming membership:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -3883,7 +3860,7 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
       .limit(limitNum)
       .sort({ category: 1, name: 1 }); // Sort by category alphabetically, then by name
 
-    console.log('✅ Products found:', products.length);
+    logger.debug('Products found: %d', products.length);
     res.json({
       success: true,
       data: products,
@@ -3895,7 +3872,7 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
       }
     });
   } catch (error) {
-    console.error('Error fetching products:', error);
+    logger.error('Error fetching products:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -3973,7 +3950,7 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
       data: savedProduct
     });
   } catch (error) {
-    console.error('Error creating product:', error);
+    logger.error('Error creating product:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4071,7 +4048,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
         
         await inventoryTransaction.save();
       } catch (inventoryError) {
-        console.error('❌ Error creating inventory transaction:', inventoryError);
+        logger.error('Error creating inventory transaction:', inventoryError);
       }
     }
 
@@ -4084,8 +4061,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
           await checkAndSendLowInventoryAlerts(req.user.branchId, req.params.id);
         }
       } catch (inventoryCheckError) {
-        console.error('❌ Error checking low inventory:', inventoryCheckError);
-        // Don't fail the product update if inventory check fails
+        logger.error('Error checking low inventory:', inventoryCheckError);
       }
     }
 
@@ -4094,7 +4070,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
       data: updatedProduct
     });
   } catch (error) {
-    console.error('Error updating product:', error);
+    logger.error('Error updating product:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4110,7 +4086,7 @@ app.delete('/api/products', authenticateToken, setupBusinessDatabase, requireAdm
     // Delete all products for this branch
     const result = await Product.deleteMany({ branchId: req.user.branchId });
     
-    console.log(`✅ Deleted ${result.deletedCount} products for branch ${req.user.branchId}`);
+    logger.info('Deleted %d products for branch %s', result.deletedCount, req.user.branchId);
     
     res.json({
       success: true,
@@ -4118,7 +4094,7 @@ app.delete('/api/products', authenticateToken, setupBusinessDatabase, requireAdm
       deletedCount: result.deletedCount
     });
   } catch (error) {
-    console.error('Error deleting all products:', error);
+    logger.error('Error deleting all products:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4143,7 +4119,7 @@ app.delete('/api/products/:id', authenticateToken, setupBusinessDatabase, requir
       message: 'Product deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting product:', error);
+    logger.error('Error deleting product:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4171,7 +4147,7 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
       });
     }
 
-    console.log(`📊 Processing ${products.length} products for import`);
+    logger.debug('Processing %d products for import', products.length);
 
     const results = {
       success: [],
@@ -4224,9 +4200,9 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
               normalizedProductType = 'both';
             }
           }
-          console.log(`📦 Product "${mappedData.name}": productType "${mappedData.productType}" normalized to "${normalizedProductType}"`);
+          logger.debug('Product "%s": productType "%s" normalized to "%s"', mappedData.name, mappedData.productType, normalizedProductType);
         } else {
-          console.log(`📦 Product "${mappedData.name}": No productType specified, defaulting to "retail"`);
+          logger.debug('Product "%s": No productType specified, defaulting to "retail"', mappedData.name);
         }
 
         // Check if product already exists (by normalized name, category, AND productType)
@@ -4272,7 +4248,7 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
 
         // Validate product type (already normalized above, but double-check)
         if (!['retail', 'service', 'both'].includes(productToCreate.productType)) {
-          console.warn(`⚠️ Invalid productType "${mappedData.productType}", defaulting to "retail"`);
+          logger.warn('Invalid productType "%s", defaulting to "retail"', mappedData.productType);
           productToCreate.productType = 'retail';
         }
 
@@ -4305,7 +4281,7 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
           });
 
           await inventoryTransaction.save();
-          console.log(`✅ Inventory transaction created for imported product ${savedProduct.name}: +${savedProduct.stock} units`);
+          logger.debug('Inventory transaction created for imported product %s: +%d units', savedProduct.name, savedProduct.stock);
         }
 
         results.success.push({
@@ -4313,10 +4289,10 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
           product: savedProduct
         });
 
-        console.log(`✅ Product imported successfully: ${savedProduct.name}`);
+        logger.debug('Product imported successfully: %s', savedProduct.name);
 
       } catch (error) {
-        console.error(`❌ Error importing product at row ${rowNumber}:`, error);
+        logger.error('Error importing product at row %d:', rowNumber, error);
         results.errors.push({
           row: rowNumber,
           error: error.message || 'Unknown error occurred',
@@ -4325,7 +4301,7 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
       }
     }
 
-    console.log(`📊 Import completed: ${results.success.length} success, ${results.errors.length} errors, ${results.skipped.length} skipped`);
+    logger.info('Product import completed - Success: %d, Errors: %d, Skipped: %d', results.success.length, results.errors.length, results.skipped.length);
 
     res.json({
       success: true,
@@ -4343,7 +4319,7 @@ app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requi
     });
 
   } catch (error) {
-    console.error('Error importing products:', error);
+    logger.error('Error importing products:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error during import'
@@ -4401,7 +4377,7 @@ app.get('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaff
       data: suppliers
     });
   } catch (error) {
-    console.error('Error fetching suppliers:', error);
+    logger.error('Error fetching suppliers:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4451,7 +4427,7 @@ app.get('/api/suppliers/summary', authenticateToken, setupBusinessDatabase, requ
       }
     });
   } catch (error) {
-    console.error('Error fetching suppliers summary:', error);
+    logger.error('Error fetching suppliers summary:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -4478,7 +4454,7 @@ app.get('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireS
       data: supplier
     });
   } catch (error) {
-    console.error('Error fetching supplier:', error);
+    logger.error('Error fetching supplier:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4499,7 +4475,7 @@ app.get('/api/suppliers/:id/orders', authenticateToken, setupBusinessDatabase, r
 
     res.json({ success: true, data: orders });
   } catch (error) {
-    console.error('Error fetching supplier orders:', error);
+    logger.error('Error fetching supplier orders:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -4519,7 +4495,7 @@ app.get('/api/suppliers/:id/outstanding', authenticateToken, setupBusinessDataba
 
     res.json({ success: true, data: { outstanding, payables } });
   } catch (error) {
-    console.error('Error fetching supplier outstanding:', error);
+    logger.error('Error fetching supplier outstanding:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -4575,7 +4551,7 @@ app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaf
       data: supplier
     });
   } catch (error) {
-    console.error('Error creating supplier:', error);
+    logger.error('Error creating supplier:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4645,7 +4621,7 @@ app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireS
       data: updatedSupplier
     });
   } catch (error) {
-    console.error('Error updating supplier:', error);
+    logger.error('Error updating supplier:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4671,7 +4647,7 @@ app.delete('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requi
       message: 'Supplier deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting supplier:', error);
+    logger.error('Error deleting supplier:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -4724,7 +4700,7 @@ app.post('/api/settings/business/increment-purchase-order', authenticateToken, a
 
     res.json({ success: true, data: { poNumber, purchaseOrderNumber: newNumber } });
   } catch (error) {
-    console.error('Error incrementing PO number:', error);
+    logger.error('Error incrementing PO number:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -4756,7 +4732,7 @@ app.get('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requir
 
     res.json({ success: true, data: orders });
   } catch (error) {
-    console.error('Error fetching purchase orders:', error);
+    logger.error('Error fetching purchase orders:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -4774,7 +4750,7 @@ app.get('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, re
     const payable = await SupplierPayable.findOne({ purchaseOrderId: order._id }).lean();
     res.json({ success: true, data: { ...order, payable } });
   } catch (error) {
-    console.error('Error fetching purchase order:', error);
+    logger.error('Error fetching purchase order:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -4860,7 +4836,7 @@ app.post('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requi
 
     res.status(201).json({ success: true, data: po });
   } catch (error) {
-    console.error('Error creating purchase order:', error);
+    logger.error('Error creating purchase order:', error);
     res.status(500).json({ success: false, error: error.message || 'Internal server error' });
   }
 });
@@ -4912,7 +4888,7 @@ app.put('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, re
     await po.save();
     res.json({ success: true, data: po });
   } catch (error) {
-    console.error('Error updating purchase order:', error);
+    logger.error('Error updating purchase order:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -5049,7 +5025,7 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
 
     res.json({ success: true, data: { purchaseOrder: po, payable } });
   } catch (error) {
-    console.error('Error receiving purchase order:', error);
+    logger.error('Error receiving purchase order:', error);
     res.status(500).json({ success: false, error: error.message || 'Internal server error' });
   }
 });
@@ -5069,7 +5045,7 @@ app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessData
     await po.save();
     res.json({ success: true, data: po });
   } catch (error) {
-    console.error('Error cancelling purchase order:', error);
+    logger.error('Error cancelling purchase order:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -5117,7 +5093,7 @@ app.get('/api/supplier-payables', authenticateToken, setupBusinessDatabase, requ
 
     res.json({ success: true, data: withBalance });
   } catch (error) {
-    console.error('Error fetching supplier payables:', error);
+    logger.error('Error fetching supplier payables:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -5142,7 +5118,7 @@ app.get('/api/supplier-payables/:id', authenticateToken, setupBusinessDatabase, 
       }
     });
   } catch (error) {
-    console.error('Error fetching payable:', error);
+    logger.error('Error fetching payable:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -5197,7 +5173,7 @@ app.post('/api/supplier-payables/:id/payments', authenticateToken, setupBusiness
       }
     });
   } catch (error) {
-    console.error('Error recording payment:', error);
+    logger.error('Error recording payment:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -5264,7 +5240,7 @@ app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requi
 
     res.json({ success: true, data: report });
   } catch (error) {
-    console.error('Error fetching supplier report:', error);
+    logger.error('Error fetching supplier report:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -5314,7 +5290,7 @@ app.get('/api/reports/purchase', authenticateToken, setupBusinessDatabase, requi
       },
     });
   } catch (error) {
-    console.error('Error fetching purchase report:', error);
+    logger.error('Error fetching purchase report:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -5382,7 +5358,7 @@ app.post('/api/inventory/out', authenticateToken, setupBusinessDatabase, require
       const { checkAndSendLowInventoryAlerts } = require('./utils/low-inventory-checker');
       await checkAndSendLowInventoryAlerts(req.user.branchId, productId);
     } catch (inventoryCheckError) {
-      console.error('❌ Error checking low inventory:', inventoryCheckError);
+      logger.error('Error checking low inventory:', inventoryCheckError);
       // Don't fail the deduction if inventory check fails
     }
 
@@ -5395,7 +5371,7 @@ app.post('/api/inventory/out', authenticateToken, setupBusinessDatabase, require
       message: `Successfully deducted ${deductionQuantity} units of ${product.name}`
     });
   } catch (error) {
-    console.error('Error deducting product:', error);
+    logger.error('Error deducting product:', error);
     
     // Return more detailed error message for validation errors
     let errorMessage = 'Internal server error';
@@ -5457,7 +5433,7 @@ app.get('/api/inventory/transactions', authenticateToken, setupBusinessDatabase,
       }
     });
   } catch (error) {
-    console.error('Error fetching inventory transactions:', error);
+    logger.error('Error fetching inventory transactions:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5473,7 +5449,7 @@ app.delete('/api/inventory/transactions', authenticateToken, setupBusinessDataba
     // Delete all inventory transactions for this business
     const result = await InventoryTransaction.deleteMany({});
     
-    console.log(`✅ Deleted ${result.deletedCount} inventory transactions for branch ${req.user.branchId}`);
+    logger.info('Deleted %d inventory transactions for branch %s', result.deletedCount, req.user.branchId);
     
     res.json({
       success: true,
@@ -5481,7 +5457,7 @@ app.delete('/api/inventory/transactions', authenticateToken, setupBusinessDataba
       deletedCount: result.deletedCount
     });
   } catch (error) {
-    console.error('Error deleting inventory transactions:', error);
+    logger.error('Error deleting inventory transactions:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5523,7 +5499,7 @@ app.get('/api/categories', authenticateToken, setupBusinessDatabase, requireStaf
       data: categories
     });
   } catch (error) {
-    console.error('Error fetching categories:', error);
+    logger.error('Error fetching categories:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5549,7 +5525,7 @@ app.get('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
       data: category
     });
   } catch (error) {
-    console.error('Error fetching category:', error);
+    logger.error('Error fetching category:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5608,7 +5584,7 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
       data: category
     });
   } catch (error) {
-    console.error('Error creating category:', error);
+    logger.error('Error creating category:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5667,7 +5643,7 @@ app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
       data: updatedCategory
     });
   } catch (error) {
-    console.error('Error updating category:', error);
+    logger.error('Error updating category:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5693,7 +5669,7 @@ app.delete('/api/categories/:id', authenticateToken, setupBusinessDatabase, requ
       message: 'Category deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting category:', error);
+    logger.error('Error deleting category:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5755,7 +5731,7 @@ app.patch('/api/products/:id/stock', authenticateToken, setupBusinessDatabase, r
       message: `Stock ${operation}d successfully. New stock: ${newStock}`
     });
   } catch (error) {
-    console.error('Error updating product stock:', error);
+    logger.error('Error updating product stock:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5799,7 +5775,7 @@ app.get('/api/staff', authenticateToken, setupBusinessDatabase, requireManager, 
       }
     });
   } catch (error) {
-    console.error('Error fetching staff:', error);
+    logger.error('Error fetching staff:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5825,7 +5801,7 @@ app.get('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       data: staff
     });
   } catch (error) {
-    console.error('Error fetching staff member:', error);
+    logger.error('Error fetching staff member:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5918,7 +5894,7 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
       }
     });
   } catch (error) {
-    console.error('Error fetching staff directory:', error);
+    logger.error('Error fetching staff directory:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -5997,7 +5973,7 @@ app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, a
       data: savedStaff
     });
   } catch (error) {
-    console.error('Error creating staff:', error);
+    logger.error('Error creating staff:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -6184,7 +6160,7 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       data: updatedStaff
     });
   } catch (error) {
-    console.error('Error updating staff:', error);
+    logger.error('Error updating staff:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -6222,7 +6198,7 @@ app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAd
       message: 'Staff member deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting staff:', error);
+    logger.error('Error deleting staff:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -6263,7 +6239,7 @@ app.post('/api/staff/:id/change-password', authenticateToken, setupBusinessDatab
       message: 'Password changed successfully'
     });
   } catch (error) {
-    console.error('Change staff password error:', error);
+    logger.error('Change staff password error:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -6389,7 +6365,7 @@ app.get('/api/block-time', authenticateToken, setupBusinessDatabase, requireMana
     }));
     res.json({ success: true, data: populated });
   } catch (error) {
-    console.error('Error fetching block time:', error);
+    logger.error('Error fetching block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -6441,7 +6417,7 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
     const data = { ...populated, staffId: { _id: created.staffId, name: staff?.name || 'Staff' } };
     res.status(201).json({ success: true, data });
   } catch (error) {
-    console.error('Error creating block time:', error);
+    logger.error('Error creating block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -6493,7 +6469,7 @@ app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, require
     const data = { ...updated, staffId: { _id: updated.staffId, name: staff?.name || 'Staff' } };
     res.json({ success: true, data });
   } catch (error) {
-    console.error('Error updating block time:', error);
+    logger.error('Error updating block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -6507,7 +6483,7 @@ app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requ
     }
     res.json({ success: true, message: 'Block time deleted' });
   } catch (error) {
-    console.error('Error deleting block time:', error);
+    logger.error('Error deleting block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -6517,7 +6493,7 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
   try {
     const appointment = await AppointmentModel.findById(appointmentId);
     if (!appointment) {
-      console.warn('⚠️ Appointment not found for completion update:', appointmentId);
+      logger.warn('⚠️ Appointment not found for completion update:', appointmentId);
       return;
     }
 
@@ -6562,7 +6538,7 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
         if (linkedServices.length > 0) {
           const serviceIds = linkedServices.map((i) => i.serviceId?._id || i.serviceId).filter(Boolean);
           if (serviceIds.length === 0) {
-            console.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
+            logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
           }
           const firstServiceId = serviceIds[0];
           const firstItem = linkedServices[0];
@@ -6577,7 +6553,7 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
               totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
             }
             appointment.duration = totalDuration;
-            console.log(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
+            logger.debug(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
           }
         }
 
@@ -6625,14 +6601,14 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
               staffAssignments: [{ staffId, percentage: 100, role: 'primary' }],
             });
             await newApt.save();
-            console.log(`✅ Created new appointment card for different-staff service: ${service.name}`);
+            logger.debug(`✅ Created new appointment card for different-staff service: ${service.name}`);
           }
         }
       }
     }
 
     await appointment.save();
-    console.log(`✅ Appointment ${appointmentId} marked as completed after sale.`);
+    logger.debug(`✅ Appointment ${appointmentId} marked as completed after sale.`);
 
     // Mark all appointments in the same booking group as completed (multi-staff cards)
     if (appointment.bookingGroupId) {
@@ -6641,11 +6617,11 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
         { $set: { status: 'completed' } }
       );
       if (groupUpdated.modifiedCount > 0) {
-        console.log(`✅ ${groupUpdated.modifiedCount} related appointment(s) in group marked as completed.`);
+        logger.debug(`✅ ${groupUpdated.modifiedCount} related appointment(s) in group marked as completed.`);
       }
     }
   } catch (error) {
-    console.error('❌ Failed to mark appointment as completed:', error);
+    logger.error('❌ Failed to mark appointment as completed:', error);
   }
 };
 
@@ -6708,11 +6684,11 @@ const syncCompletedLinkedAppointmentStaffFromSale = async (AppointmentModel, sal
     ];
     appointment.markModified('staffAssignments');
     await appointment.save();
-    console.log(
+    logger.debug(
       `✅ Linked completed appointment ${appointment._id} staff moved to ${newStaffIdStr} (bill ${sale.billNo})`,
     );
   } catch (err) {
-    console.error('❌ syncCompletedLinkedAppointmentStaffFromSale failed:', err);
+    logger.error('❌ syncCompletedLinkedAppointmentStaffFromSale failed:', err);
   }
 };
 
@@ -6742,12 +6718,12 @@ const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId
     if (sale.customerName) orConditions.push({ name: new RegExp(`^${String(sale.customerName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
     if (sale.customerPhone) orConditions.push({ phone: sale.customerPhone });
     if (orConditions.length === 0) {
-      console.warn('[createWalkInCardsForStandaloneSale] No customer name/phone to find client');
+      logger.warn('[createWalkInCardsForStandaloneSale] No customer name/phone to find client');
       return;
     }
     const client = await Client.findOne({ $or: orConditions }).lean();
     if (!client) {
-      console.warn('[createWalkInCardsForStandaloneSale] Client not found for:', sale.customerName, sale.customerPhone);
+      logger.warn('[createWalkInCardsForStandaloneSale] Client not found for:', sale.customerName, sale.customerPhone);
       return;
     }
 
@@ -6786,10 +6762,10 @@ const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId
         leadSource: 'Walk-in',
       });
       await newApt.save();
-      console.log(`✅ Created walk-in card (standalone sale) for staff ${staffIdStr}: ${service.name}`);
+      logger.debug(`✅ Created walk-in card (standalone sale) for staff ${staffIdStr}: ${service.name}`);
     }
   } catch (err) {
-    console.error('❌ createWalkInCardsForStandaloneSale failed:', err);
+    logger.error('❌ createWalkInCardsForStandaloneSale failed:', err);
   }
 };
 
@@ -6899,7 +6875,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
       }
     });
   } catch (error) {
-    console.error('Error fetching appointments:', error);
+    logger.error('Error fetching appointments:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch appointments'
@@ -7049,12 +7025,12 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       
       // Ensure email service is initialized
       if (!emailService.initialized) {
-        console.log('📧 Initializing email service...');
+        logger.debug('📧 Initializing email service...');
         await emailService.initialize();
       }
       
       // Debug: Log email service status
-      console.log('📧 Email Service Status:', {
+      logger.debug('📧 Email Service Status:', {
         initialized: emailService.initialized,
         enabled: emailService.enabled,
         provider: emailService.provider,
@@ -7063,8 +7039,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       
       // Check if email service is enabled (from AdminSettings)
       if (!emailService.enabled) {
-        console.log('❌ Email service is disabled, skipping appointment email');
-        console.log('💡 To enable: Check Admin Settings → Notifications → Email and ensure it\'s enabled with valid API key');
+        logger.debug('❌ Email service is disabled, skipping appointment email');
+        logger.debug('💡 To enable: Check Admin Settings → Notifications → Email and ensure it\'s enabled with valid API key');
       } else {
         // Get Business from main database (not business database)
         const databaseManager = require('./config/database-manager');
@@ -7073,9 +7049,9 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         const business = await Business.findById(req.user.branchId);
         
         if (!business) {
-          console.error('❌ Business not found for branchId:', req.user.branchId);
+          logger.error('❌ Business not found for branchId:', req.user.branchId);
         } else {
-          console.log('✅ Business found:', business.name);
+          logger.debug('✅ Business found:', business.name);
         }
         
         const rawEmailSettings = business?.settings?.emailNotificationSettings;
@@ -7084,7 +7060,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
         
         // Debug: Log email settings
-        console.log('📧 Email Settings:', {
+        logger.debug('📧 Email Settings:', {
           emailSettingsExists: !!rawEmailSettings,
           appointmentNotificationsEnabled: emailSettings?.appointmentNotifications?.enabled,
           newAppointmentsEnabled: emailSettings?.appointmentNotifications?.newAppointments
@@ -7096,7 +7072,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         // Use merged settings with defaults - defaults to true if not explicitly set to false
         const appointmentNotificationsEnabled = emailSettings.appointmentNotifications?.enabled === true;
         
-        console.log(`📧 Appointment notifications enabled: ${appointmentNotificationsEnabled}`, {
+        logger.debug(`📧 Appointment notifications enabled: ${appointmentNotificationsEnabled}`, {
           enabled: emailSettings?.appointmentNotifications?.enabled,
           newAppointments: emailSettings?.appointmentNotifications?.newAppointments
         });
@@ -7105,14 +7081,14 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         // Send confirmation to client if email exists
         // Check if new appointments are enabled
         const sendNewAppointments = emailSettings?.appointmentNotifications?.newAppointments === true;
-        console.log(`📧 Send new appointments to clients: ${sendNewAppointments}`);
+        logger.debug(`📧 Send new appointments to clients: ${sendNewAppointments}`);
         
         if (sendNewAppointments) {
-          console.log(`📧 Processing ${createdAppointments.length} appointment(s) for client emails`);
+          logger.debug(`📧 Processing ${createdAppointments.length} appointment(s) for client emails`);
           
           for (const appointment of createdAppointments) {
             // Debug: Log appointment structure
-            console.log('📧 Appointment Structure:', {
+            logger.debug('📧 Appointment Structure:', {
               appointmentId: appointment._id,
               clientIdType: typeof appointment.clientId,
               clientIdIsObject: typeof appointment.clientId === 'object',
@@ -7132,7 +7108,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
               clientEmail = client.email ? client.email.trim() : null;
               clientName = client.name || 'Client';
               
-              console.log('📧 Using populated client data:', {
+              logger.debug('📧 Using populated client data:', {
                 name: clientName,
                 email: clientEmail,
                 hasEmail: !!clientEmail
@@ -7140,28 +7116,28 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             } else {
               // Client is not populated, fetch it
               const clientId = appointment.clientId?._id || appointment.clientId;
-              console.log('📧 Client not populated, fetching from database. ClientId:', clientId);
+              logger.debug('📧 Client not populated, fetching from database. ClientId:', clientId);
               
               if (clientId) {
                 client = await Client.findById(clientId);
                 if (client) {
                   clientEmail = client.email ? client.email.trim() : null;
                   clientName = client.name || 'Client';
-                  console.log('📧 Fetched client from database:', {
+                  logger.debug('📧 Fetched client from database:', {
                     name: clientName,
                     email: clientEmail,
                     hasEmail: !!clientEmail
                   });
                 } else {
-                  console.error('❌ Client not found in database with ID:', clientId);
+                  logger.error('❌ Client not found in database with ID:', clientId);
                 }
               } else {
-                console.error('❌ No clientId found in appointment');
+                logger.error('❌ No clientId found in appointment');
               }
             }
             
             // Debug: Log client email check
-            console.log('📧 Client Email Check Summary:', {
+            logger.debug('📧 Client Email Check Summary:', {
               appointmentId: appointment._id,
               clientId: appointment.clientId?._id || appointment.clientId,
               clientEmail: clientEmail,
@@ -7171,7 +7147,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             });
             
             if (clientEmail && clientEmail.length > 0) {
-              console.log(`📧 Attempting to send appointment confirmation to: ${clientEmail}`);
+              logger.debug(`📧 Attempting to send appointment confirmation to: ${clientEmail}`);
               try {
                 // Get service name - check if populated or fetch
                 let serviceName = 'Service';
@@ -7204,8 +7180,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                   }
                 }
                 
-                console.log(`📧 Preparing to send email to: ${clientEmail}`);
-                console.log(`📧 Email details:`, {
+                logger.debug(`📧 Preparing to send email to: ${clientEmail}`, {
                   to: clientEmail,
                   clientName: clientName,
                   serviceName: serviceName,
@@ -7229,31 +7204,32 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                   }
                 });
                 
-                console.log(`📧 Email result:`, {
+                logger.debug(`📧 Email result:`, {
                   success: emailResult?.success,
                   error: emailResult?.error,
                   data: emailResult?.data
                 });
                 
                 if (emailResult && emailResult.success !== false) {
-                  console.log(`✅ Appointment confirmation sent to client: ${clientEmail}`);
+                  logger.debug(`✅ Appointment confirmation sent to client: ${clientEmail}`);
                 } else {
-                  console.error(`❌ Failed to send appointment email to ${clientEmail}:`, emailResult?.error || 'Unknown error');
-                  console.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
+                  logger.error(`❌ Failed to send appointment email to ${clientEmail}:`, emailResult?.error || 'Unknown error');
+                  logger.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
                 }
               } catch (clientEmailError) {
-                console.error('❌ Error sending appointment confirmation to client:', clientEmailError);
-                console.error('❌ Error details:', {
+                logger.error('❌ Error sending appointment confirmation to client:', clientEmailError);
+                logger.error('❌ Error details:', {
                   message: clientEmailError.message,
                   stack: clientEmailError.stack
                 });
               }
             } else {
-              console.log(`⚠️ Skipping email for appointment - client has no email address.`);
-              console.log(`   Appointment ID: ${appointment._id}`);
-              console.log(`   Client ID: ${appointment.clientId?._id || appointment.clientId}`);
-              console.log(`   Client Name: ${clientName || 'Unknown'}`);
-              console.log(`   💡 To fix: Add email address to client profile in Clients section`);
+              logger.debug('⚠️ Skipping email for appointment - client has no email address.', {
+                appointmentId: appointment._id,
+                clientId: appointment.clientId?._id || appointment.clientId,
+                clientName: clientName || 'Unknown',
+                tip: 'To fix: Add email address to client profile in Clients section'
+              });
             }
           }
         }
@@ -7268,7 +7244,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         
         const recipientStaffIds = emailSettings?.appointmentNotifications?.recipientStaffIds || [];
         
-        console.log('📧 Staff Notification Check:', {
+        logger.debug('📧 Staff Notification Check:', {
           staffNotificationsEnabled,
           staffExplicitlyDisabled,
           staffHasRecipientList,
@@ -7290,7 +7266,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             }).lean();
           } else {
             // Fallback: Find all staff with appointment alerts enabled
-            console.log('⚠️ No recipient list configured, finding all staff with appointment alerts enabled');
+            logger.debug('⚠️ No recipient list configured, finding all staff with appointment alerts enabled');
             recipients = await Staff.find({
               branchId: req.user.branchId,
               'emailNotifications.enabled': true,
@@ -7308,7 +7284,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             email: { $exists: true, $ne: '' }
           }).lean();
           
-          console.log(`📧 Found ${adminUsers.length} admin user(s) for business`);
+          logger.debug(`📧 Found ${adminUsers.length} admin user(s) for business`);
           
           // Add admin users to recipients (they always have notifications enabled)
           let adminCount = 0;
@@ -7329,21 +7305,16 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                 }
               });
               adminCount++;
-              console.log(`📧 Added admin user to recipients: ${admin.email} (${admin.name || admin.email})`);
+              logger.debug(`📧 Added admin user to recipients: ${admin.email} (${admin.name || admin.email})`);
             } else {
-              console.log(`📧 Admin user already in recipients: ${admin.email}`);
+              logger.debug(`📧 Admin user already in recipients: ${admin.email}`);
             }
           }
           
-          console.log(`📧 Found ${recipients.length} total recipients for appointment notifications (${recipients.length - adminCount} staff + ${adminCount} admin)`);
+          logger.debug(`📧 Found ${recipients.length} total recipients for appointment notifications (${recipients.length - adminCount} staff + ${adminCount} admin)`);
           
           if (recipients.length === 0) {
-            console.log('⚠️ No recipients found. Reasons:');
-            console.log('   - Check if staff have email notifications enabled');
-            console.log('   - Check if staff have appointment alerts preference enabled');
-            console.log('   - Check if staff have valid email addresses');
-            console.log('   - Check if recipient list is configured in business settings');
-            console.log('   - Check if admin users have email addresses');
+            logger.debug('⚠️ No recipients found. Check: staff email notifications enabled, appointment alerts preference enabled, valid email addresses, recipient list in business settings, admin user email addresses');
           }
           
           const emailDelayMs = 600; // Resend limit: 2 req/sec
@@ -7351,7 +7322,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             if (i > 0) await new Promise(r => setTimeout(r, emailDelayMs));
             const recipient = recipients[i];
             try {
-              console.log(`📧 Sending appointment notification to: ${recipient.email} (${recipient.name || recipient.role})`);
+              logger.debug(`📧 Sending appointment notification to: ${recipient.email} (${recipient.name || recipient.role})`);
               
               // Get appointment details for the first appointment (if available)
               const firstAppointment = createdAppointments[0];
@@ -7378,23 +7349,23 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                 businessName: business.name,
                 appointmentDetails: appointmentDetails
               });
-              console.log(`✅ Appointment notification sent to: ${recipient.email}`);
+              logger.debug(`✅ Appointment notification sent to: ${recipient.email}`);
             } catch (emailError) {
-              console.error(`❌ Error sending appointment notification to ${recipient.email}:`, emailError);
-              console.error('❌ Error details:', {
+              logger.error(`❌ Error sending appointment notification to ${recipient.email}:`, emailError);
+              logger.error('❌ Error details:', {
                 message: emailError.message,
                 stack: emailError.stack
               });
             }
           }
         } else {
-          console.log('⚠️ Staff appointment notifications are disabled in business settings');
+          logger.debug('⚠️ Staff appointment notifications are disabled in business settings');
         }
       }
       }
     } catch (emailError) {
-      console.error('❌ Error sending appointment email:', emailError);
-      console.error('❌ Error stack:', emailError.stack);
+      logger.error('❌ Error sending appointment email:', emailError);
+      logger.error('❌ Error stack:', emailError.stack);
       // Don't fail appointment creation if email fails
     }
 
@@ -7414,8 +7385,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
         const adminAppointmentNotificationsEnabled = adminSettings?.notifications?.whatsapp?.appointmentNotifications === true;
         
-        console.log('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
-        console.log('📱 [WhatsApp] Admin Appointment Notifications enabled:', adminAppointmentNotificationsEnabled);
+        logger.debug('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
+        logger.debug('📱 [WhatsApp] Admin Appointment Notifications enabled:', adminAppointmentNotificationsEnabled);
         
         if (whatsappEnabled && adminAppointmentNotificationsEnabled) {
           const business = await Business.findById(req.user.branchId);
@@ -7513,29 +7484,29 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                           { _id: business._id },
                           { $inc: { 'plan.addons.whatsapp.used': 1 } }
                         );
-                        console.log(`📊 WhatsApp quota incremented for business: ${business._id}`);
+                        logger.debug(`📊 WhatsApp quota incremented for business: ${business._id}`);
                       } catch (quotaError) {
-                        console.error('❌ Error incrementing WhatsApp quota:', quotaError);
+                        logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
                         // Don't fail the appointment if quota increment fails
                       }
                       
-                      console.log(`✅ Appointment WhatsApp sent to client: ${client.phone}`);
+                      logger.debug(`✅ Appointment WhatsApp sent to client: ${client.phone}`);
                     } else {
-                      console.error(`❌ Failed to send appointment WhatsApp to ${client.phone}:`, result.error);
+                      logger.error(`❌ Failed to send appointment WhatsApp to ${client.phone}:`, result.error);
                     }
                   } catch (whatsappError) {
-                    console.error('❌ Error sending appointment WhatsApp to client:', whatsappError);
+                    logger.error('❌ Error sending appointment WhatsApp to client:', whatsappError);
                   }
                 }
               }
             } else {
-              console.log('📱 WhatsApp quiet hours active, skipping appointment message');
+              logger.debug('📱 WhatsApp quiet hours active, skipping appointment message');
             }
           }
         }
       }
     } catch (whatsappError) {
-      console.error('Error sending appointment WhatsApp:', whatsappError);
+      logger.error('Error sending appointment WhatsApp:', whatsappError);
       // Don't fail appointment creation if WhatsApp fails
     }
 
@@ -7602,7 +7573,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         }
       }
     } catch (smsErr) {
-      console.error('Error sending appointment confirmation SMS:', smsErr);
+      logger.error('Error sending appointment confirmation SMS:', smsErr);
     }
 
     res.status(201).json({
@@ -7611,7 +7582,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       message: 'Appointments created successfully'
     });
   } catch (error) {
-    console.error('Error creating appointment:', error);
+    logger.error('Error creating appointment:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to create appointment'
@@ -7654,7 +7625,7 @@ app.get('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, r
       }
     });
   } catch (error) {
-    console.error('Error fetching receipts:', error);
+    logger.error('Error fetching receipts:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch receipts'
@@ -7727,7 +7698,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
       
       // Check if email service is enabled (from AdminSettings)
       if (!emailService.enabled) {
-        console.log('📧 Email service is disabled, skipping receipt email');
+        logger.debug('📧 Email service is disabled, skipping receipt email');
       } else {
         // Get Business from main database (not business database)
         const databaseManager = require('./config/database-manager');
@@ -7745,7 +7716,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         // Use merged settings with defaults - defaults to true if not explicitly set to false
         const receiptNotificationsEnabled = emailSettings.receiptNotifications?.enabled === true;
         
-        console.log(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}`, {
+        logger.debug(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}`, {
           enabled: emailSettings?.receiptNotifications?.enabled,
           sendToClients: emailSettings?.receiptNotifications?.sendToClients
         });
@@ -7757,7 +7728,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
             const client = await Client.findById(clientId);
             if (client?.email) {
             try {
-              console.log(`📧 Attempting to send receipt email to: ${client.email}`);
+              logger.debug(`📧 Attempting to send receipt email to: ${client.email}`);
               
               // Try to find related sale by receiptNumber (which might match billNo)
               let receiptLink = null;
@@ -7767,12 +7738,12 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                 if (relatedSale?.shareToken) {
                   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
                   receiptLink = `${frontendUrl}/receipt/public/${relatedSale.billNo}/${relatedSale.shareToken}`;
-                  console.log(`✅ Receipt link generated from related sale: ${receiptLink}`);
+                  logger.debug(`✅ Receipt link generated from related sale: ${receiptLink}`);
                 } else {
-                  console.log('⚠️ No related sale found or sale does not have shareToken');
+                  logger.debug('⚠️ No related sale found or sale does not have shareToken');
                 }
               } catch (saleLookupError) {
-                console.warn('⚠️ Error looking up related sale:', saleLookupError.message);
+                logger.warn('⚠️ Error looking up related sale:', saleLookupError.message);
               }
               
               const emailResult = await emailService.sendReceipt({
@@ -7792,13 +7763,13 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                 receiptLink: receiptLink
               });
               if (emailResult && emailResult.success !== false) {
-                console.log(`✅ Receipt email sent to client: ${client.email}`);
+                logger.debug(`✅ Receipt email sent to client: ${client.email}`);
               } else {
-                console.error(`❌ Failed to send receipt email to ${client.email}:`, emailResult?.error || 'Unknown error');
+                logger.error(`❌ Failed to send receipt email to ${client.email}:`, emailResult?.error || 'Unknown error');
               }
             } catch (clientEmailError) {
-              console.error('❌ Error sending receipt email to client:', clientEmailError);
-              console.error('❌ Error details:', {
+              logger.error('❌ Error sending receipt email to client:', clientEmailError);
+              logger.error('❌ Error details:', {
                 message: clientEmailError.message,
                 stack: clientEmailError.stack
               });
@@ -7824,9 +7795,9 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                   message: `A new receipt ${savedReceipt.receiptNumber} has been generated for ₹${savedReceipt.total}`,
                   businessName: business.name
                 });
-                console.log(`✅ Receipt notification sent to staff: ${staff.email}`);
+                logger.debug(`✅ Receipt notification sent to staff: ${staff.email}`);
               } catch (staffEmailError) {
-                console.error('Error sending receipt notification to staff:', staffEmailError);
+                logger.error('Error sending receipt notification to staff:', staffEmailError);
               }
             }
           }
@@ -7834,7 +7805,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
       }
       }
     } catch (emailError) {
-      console.error('Error sending receipt email:', emailError);
+      logger.error('Error sending receipt email:', emailError);
       // Don't fail receipt creation if email fails
     }
 
@@ -7884,7 +7855,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                       receiptLink = `${frontendUrl}/receipt/public/${relatedSale.billNo}/${relatedSale.shareToken}`;
                     }
                   } catch (saleLookupError) {
-                    console.warn('⚠️ Error looking up related sale for WhatsApp:', saleLookupError.message);
+                    logger.warn('⚠️ Error looking up related sale for WhatsApp:', saleLookupError.message);
                   }
                   
                   const result = await whatsappService.sendReceipt({
@@ -7920,28 +7891,28 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                         { _id: business._id },
                         { $inc: { 'plan.addons.whatsapp.used': 1 } }
                       );
-                      console.log(`📊 WhatsApp quota incremented for business: ${business._id}`);
+                      logger.debug(`📊 WhatsApp quota incremented for business: ${business._id}`);
                     } catch (quotaError) {
-                      console.error('❌ Error incrementing WhatsApp quota:', quotaError);
+                      logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
                       // Don't fail the receipt if quota increment fails
                     }
                     
-                    console.log(`✅ Receipt WhatsApp sent to client: ${client.phone}`);
+                    logger.debug(`✅ Receipt WhatsApp sent to client: ${client.phone}`);
                   } else {
-                    console.error(`❌ Failed to send receipt WhatsApp to ${client.phone}:`, result.error);
+                    logger.error(`❌ Failed to send receipt WhatsApp to ${client.phone}:`, result.error);
                   }
                 } catch (whatsappError) {
-                  console.error('❌ Error sending receipt WhatsApp to client:', whatsappError);
+                  logger.error('❌ Error sending receipt WhatsApp to client:', whatsappError);
                 }
               }
             } else {
-              console.log('📱 WhatsApp quiet hours active, skipping receipt message');
+              logger.debug('📱 WhatsApp quiet hours active, skipping receipt message');
             }
           }
         }
       }
     } catch (whatsappError) {
-      console.error('Error sending receipt WhatsApp:', whatsappError);
+      logger.error('Error sending receipt WhatsApp:', whatsappError);
       // Don't fail receipt creation if WhatsApp fails
     }
 
@@ -8002,7 +7973,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         }
       }
     } catch (smsErr) {
-      console.error('Error sending receipt SMS:', smsErr);
+      logger.error('Error sending receipt SMS:', smsErr);
     }
 
     res.status(201).json({
@@ -8010,7 +7981,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
       data: savedReceipt
     });
   } catch (error) {
-    console.error('Error creating receipt:', error);
+    logger.error('Error creating receipt:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to create receipt'
@@ -8117,7 +8088,7 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       relatedAppointments: relatedAppointments.length ? relatedAppointments : undefined,
     });
   } catch (error) {
-    console.error('Error fetching appointment:', error);
+    logger.error('Error fetching appointment:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch appointment' });
   }
 });
@@ -8158,7 +8129,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       );
     }
 
-    console.log('📧 Appointment Update Check:', {
+    logger.debug('📧 Appointment Update Check:', {
       appointmentId: id,
       previousStatus: previousStatus,
       newStatus: updateData.status,
@@ -8177,17 +8148,17 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
 
     // Send cancellation emails if appointment was cancelled
     if (isBeingCancelled) {
-      console.log('📧 Appointment is being cancelled, sending emails...');
+      logger.debug('📧 Appointment is being cancelled, sending emails...');
       try {
         const emailService = require('./services/email-service');
         
         // Ensure email service is initialized
         if (!emailService.initialized) {
-          console.log('📧 Initializing email service...');
+          logger.debug('📧 Initializing email service...');
           await emailService.initialize();
         }
         
-        console.log('📧 Email Service Status:', {
+        logger.debug('📧 Email Service Status:', {
           initialized: emailService.initialized,
           enabled: emailService.enabled
         });
@@ -8200,9 +8171,9 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           const business = await Business.findById(req.user.branchId);
           
           if (!business) {
-            console.error('❌ Business not found for branchId:', req.user.branchId);
+            logger.error('❌ Business not found for branchId:', req.user.branchId);
           } else {
-            console.log('✅ Business found:', business.name);
+            logger.debug('✅ Business found:', business.name);
           }
           
           const emailSettings = business?.settings?.emailNotificationSettings;
@@ -8213,7 +8184,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
             !emailSettings?.appointmentNotifications ||
             (!explicitlyDisabledCancellations || !hasRecipientList);
           
-          console.log('📧 Cancellation Email Settings:', {
+          logger.debug('📧 Cancellation Email Settings:', {
             emailSettingsExists: !!emailSettings,
             cancellations: emailSettings?.appointmentNotifications?.cancellations,
             explicitlyDisabledCancellations: explicitlyDisabledCancellations,
@@ -8223,7 +8194,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           
           if (cancellationEnabled && updatedAppointment.clientId) {
             const client = updatedAppointment.clientId;
-            console.log('📧 Client Check:', {
+            logger.debug('📧 Client Check:', {
               clientId: client?._id || client,
               clientName: client?.name,
               clientEmail: client?.email,
@@ -8233,7 +8204,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
             const clientEmail = client?.email ? client.email.trim() : null;
             
             if (clientEmail) {
-              console.log(`📧 Sending cancellation email to client: ${clientEmail}`);
+              logger.debug(`📧 Sending cancellation email to client: ${clientEmail}`);
               
               // Get service name
               let serviceName = 'Service';
@@ -8247,7 +8218,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                 }
               }
               
-              console.log('📧 Cancellation Email Details:', {
+              logger.debug('📧 Cancellation Email Details:', {
                 to: clientEmail,
                 clientName: client.name || 'Client',
                 serviceName: serviceName,
@@ -8268,16 +8239,16 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                 }
               });
               
-              console.log('📧 Cancellation Email Result:', {
+              logger.debug('📧 Cancellation Email Result:', {
                 success: emailResult?.success,
                 error: emailResult?.error
               });
               
               if (emailResult && emailResult.success !== false) {
-                console.log(`✅ Cancellation email sent to client: ${clientEmail}`);
+                logger.debug(`✅ Cancellation email sent to client: ${clientEmail}`);
               } else {
-                console.error(`❌ Failed to send cancellation email:`, emailResult?.error);
-                console.error(`❌ Full error:`, JSON.stringify(emailResult, null, 2));
+                logger.error(`❌ Failed to send cancellation email:`, emailResult?.error);
+                logger.error(`❌ Full error:`, JSON.stringify(emailResult, null, 2));
               }
 
               // Send SMS appointment cancellation if enabled
@@ -8315,20 +8286,21 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                     }
                   }
                 } catch (smsErr) {
-                  console.error('Error sending appointment cancellation SMS:', smsErr);
+                  logger.error('Error sending appointment cancellation SMS:', smsErr);
                 }
               }
             } else {
-              console.log(`⚠️ Skipping cancellation email - client has no email address`);
-              console.log(`   Client ID: ${client?._id || client}`);
-              console.log(`   Client Name: ${client?.name || 'Unknown'}`);
+              logger.debug('⚠️ Skipping cancellation email - client has no email address', {
+                clientId: client?._id || client,
+                clientName: client?.name || 'Unknown'
+              });
             }
           } else {
             if (!cancellationEnabled) {
-              console.log('⚠️ Client cancellation emails are disabled in business settings');
+              logger.debug('⚠️ Client cancellation emails are disabled in business settings');
             }
             if (!updatedAppointment.clientId) {
-              console.log('⚠️ No client found for appointment');
+              logger.debug('⚠️ No client found for appointment');
             }
           }
           
@@ -8337,7 +8309,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
             !emailSettings?.appointmentNotifications ||
             (!explicitlyDisabledCancellations || !hasRecipientList);
           
-          console.log('📧 Staff Cancellation Notification Check:', {
+          logger.debug('📧 Staff Cancellation Notification Check:', {
             staffCancellationEnabled: staffCancellationEnabled,
             explicitlyDisabledCancellations: explicitlyDisabledCancellations,
             hasRecipientList: hasRecipientList
@@ -8372,7 +8344,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
               email: { $exists: true, $ne: '' }
             }).lean();
             
-            console.log(`📧 Found ${adminUsers.length} admin user(s) for cancellation notification`);
+            logger.debug(`📧 Found ${adminUsers.length} admin user(s) for cancellation notification`);
             
             for (const admin of adminUsers) {
               const alreadyInList = recipients.some(r => r.email === admin.email);
@@ -8383,7 +8355,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                   email: admin.email,
                   role: 'admin'
                 });
-                console.log(`📧 Added admin user to cancellation recipients: ${admin.email}`);
+                logger.debug(`📧 Added admin user to cancellation recipients: ${admin.email}`);
               }
             }
             
@@ -8400,14 +8372,14 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
               }
             }
             
-            console.log(`📧 Found ${recipients.length} total recipients for cancellation notification`);
+            logger.debug(`📧 Found ${recipients.length} total recipients for cancellation notification`);
             
             const cancelDelayMs = 600; // Resend limit: 2 req/sec
             for (let i = 0; i < recipients.length; i++) {
               if (i > 0) await new Promise(r => setTimeout(r, cancelDelayMs));
               const recipient = recipients[i];
               try {
-                console.log(`📧 Sending cancellation notification to: ${recipient.email} (${recipient.name || recipient.role})`);
+                logger.debug(`📧 Sending cancellation notification to: ${recipient.email} (${recipient.name || recipient.role})`);
                 await emailService.sendAppointmentCancellationNotification({
                   to: recipient.email,
                   appointmentCount: 1,
@@ -8419,22 +8391,22 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                     serviceName: serviceNameForStaff
                   }
                 });
-                console.log(`✅ Cancellation notification sent to: ${recipient.email}`);
+                logger.debug(`✅ Cancellation notification sent to: ${recipient.email}`);
               } catch (error) {
-                console.error(`❌ Error sending cancellation notification to ${recipient.email}:`, error);
-                console.error(`❌ Error details:`, {
+                logger.error(`❌ Error sending cancellation notification to ${recipient.email}:`, error);
+                logger.error(`❌ Error details:`, {
                   message: error.message,
                   stack: error.stack
                 });
               }
             }
           } else {
-            console.log('⚠️ Staff cancellation notifications are disabled in business settings');
+            logger.debug('⚠️ Staff cancellation notifications are disabled in business settings');
           }
         }
       } catch (emailError) {
-        console.error('❌ Error sending cancellation emails:', emailError);
-        console.error('❌ Error stack:', emailError.stack);
+        logger.error('❌ Error sending cancellation emails:', emailError);
+        logger.error('❌ Error stack:', emailError.stack);
         // Don't fail the update if email fails
       }
     }
@@ -8444,7 +8416,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       data: updatedAppointment
     });
   } catch (error) {
-    console.error('Error updating appointment:', error);
+    logger.error('Error updating appointment:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update appointment'
@@ -8473,7 +8445,7 @@ app.delete('/api/appointments/:id', authenticateToken, setupBusinessDatabase, as
       message: 'Appointment deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting appointment:', error);
+    logger.error('Error deleting appointment:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to delete appointment'
@@ -8494,7 +8466,7 @@ app.get('/api/receipts/client/:clientId', authenticateToken, setupBusinessDataba
       data: clientReceipts
     });
   } catch (error) {
-    console.error('Error fetching receipts by client:', error);
+    logger.error('Error fetching receipts by client:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch client receipts'
@@ -8510,27 +8482,27 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
     
     // Get counts from business-specific database
     const totalServices = await Service.countDocuments();
-    console.log('Total services:', totalServices);
+    logger.debug('Total services:', totalServices);
     
     const totalProducts = await Product.countDocuments();
-    console.log('Total products:', totalProducts);
+    logger.debug('Total products:', totalProducts);
     
     const totalStaff = await Staff.countDocuments();
-    console.log('Total staff:', totalStaff);
+    logger.debug('Total staff:', totalStaff);
     
     const totalClients = await Client.countDocuments();
-    console.log('Total clients:', totalClients);
+    logger.debug('Total clients:', totalClients);
     
     const totalAppointments = await Appointment.countDocuments();
-    console.log('Total appointments:', totalAppointments);
+    logger.debug('Total appointments:', totalAppointments);
     
     const totalReceipts = await Receipt.countDocuments();
-    console.log('Total receipts:', totalReceipts);
+    logger.debug('Total receipts:', totalReceipts);
 
     // Calculate total revenue from receipts
     const receipts = await Receipt.find();
     const totalRevenue = receipts.reduce((sum, receipt) => sum + receipt.total, 0);
-    console.log('Total revenue:', totalRevenue);
+    logger.debug('Total revenue:', totalRevenue);
 
     // Membership metrics
     const totalActiveMembers = await MembershipSubscription.countDocuments({ status: 'ACTIVE' });
@@ -8545,7 +8517,7 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
       expiryDate: { $gte: today, $lte: in30Days }
     });
 
-    console.log('✅ Dashboard stats calculated for business:', req.user?.branchId);
+    logger.debug('✅ Dashboard stats calculated for business:', req.user?.branchId);
     res.json({
       success: true,
       data: {
@@ -8562,7 +8534,7 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
       }
     });
   } catch (error) {
-    console.error('Error fetching dashboard stats:', error);
+    logger.error('Error fetching dashboard stats:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error'
@@ -8711,7 +8683,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
       }
     });
   } catch (error) {
-    console.error('Error fetching summary report:', error);
+    logger.error('Error fetching summary report:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch summary'
@@ -8746,7 +8718,7 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
     
     res.json({ success: true, data: sales });
   } catch (err) {
-    console.error('Error fetching sales:', err);
+    logger.error('Error fetching sales:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -8754,9 +8726,9 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
 app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     if (process.env.DEBUG_SALES) {
-      console.log('🔍 Sales POST request received');
-      console.log('📋 Request body:', JSON.stringify(req.body, null, 2));
-      console.log('👤 User:', req.user?.email);
+      logger.debug('🔍 Sales POST request received');
+      logger.debug('📋 Request body:', JSON.stringify(req.body, null, 2));
+      logger.debug('👤 User:', req.user?.email);
     }
     
     const { Sale, Product, InventoryTransaction, Appointment } = req.businessModels;
@@ -8827,7 +8799,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     // Reload sale to ensure shareToken is included (generated by pre-save middleware)
     const savedSale = await Sale.findById(sale._id);
     if (!savedSale.shareToken) {
-      console.warn('⚠️ Sale saved but shareToken is missing, generating now...');
+      logger.warn('⚠️ Sale saved but shareToken is missing, generating now...');
       const crypto = require('crypto');
       savedSale.shareToken = crypto.randomBytes(32).toString('hex');
       await savedSale.save();
@@ -8846,10 +8818,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         const autoConsumption = require('./services/auto-consumption');
         const { runAutoConsumptionForSale } = autoConsumption;
         const { processedCount, warnings } = await runAutoConsumptionForSale(savedSale, req.businessModels, { user: req.user });
-        console.log('[AutoConsumption] Sale create result:', { billNo: savedSale.billNo, processedCount, warnings: warnings.length });
-        if (warnings.length) console.warn('[AutoConsumption] Warnings:', warnings);
+        logger.debug('[AutoConsumption] Sale create result:', { billNo: savedSale.billNo, processedCount, warnings: warnings.length });
+        if (warnings.length) logger.warn('[AutoConsumption] Warnings:', warnings);
       } catch (autoConsumptionErr) {
-        console.error('Auto consumption on sale create failed:', autoConsumptionErr);
+        logger.error('Auto consumption on sale create failed:', autoConsumptionErr);
         // Don't fail the sale; consumption can be reviewed
       }
     }
@@ -8897,9 +8869,9 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                       billingId: savedSale._id
                     });
                     await usage.save();
-                    console.log('[Membership] Redeemed service for bill:', savedSale.billNo);
+                    logger.debug('[Membership] Redeemed service for bill:', savedSale.billNo);
                   } catch (membershipErr) {
-                    console.error('[Membership] Redeem failed for item:', item.name, membershipErr);
+                    logger.error('[Membership] Redeem failed for item:', item.name, membershipErr);
                   }
                 }
               }
@@ -8935,15 +8907,15 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
               saleId: savedSale._id
             });
             await subscription.save();
-            console.log('[Membership] Assigned plan on checkout for bill:', savedSale.billNo);
+            logger.debug('[Membership] Assigned plan on checkout for bill:', savedSale.billNo);
           } else {
-            console.warn('[Membership] Customer already has active membership, skipping assign on checkout for bill:', savedSale.billNo);
+            logger.warn('[Membership] Customer already has active membership, skipping assign on checkout for bill:', savedSale.billNo);
           }
         } else {
-          console.warn('[Membership] Plan not found or inactive, skipping assign on checkout for bill:', savedSale.billNo);
+          logger.warn('[Membership] Plan not found or inactive, skipping assign on checkout for bill:', savedSale.billNo);
         }
       } catch (membershipAssignErr) {
-        console.error('[Membership] Assign on checkout failed:', membershipAssignErr);
+        logger.error('[Membership] Assign on checkout failed:', membershipAssignErr);
         // Don't fail the sale; membership can be assigned manually
       }
     }
@@ -8988,10 +8960,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
               // Track product for low inventory check
               updatedProductIds.add(item.productId.toString());
               
-              console.log(`✅ Inventory transaction created for product ${item.name}: ${item.quantity} units sold`);
+              logger.debug(`✅ Inventory transaction created for product ${item.name}: ${item.quantity} units sold`);
             }
           } catch (inventoryError) {
-            console.error('Error creating inventory transaction:', inventoryError);
+            logger.error('Error creating inventory transaction:', inventoryError);
             // Don't fail the sale if inventory tracking fails
           }
         }
@@ -9007,13 +8979,13 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           await checkAndSendLowInventoryAlerts(req.user.branchId, productId);
         }
       } catch (inventoryCheckError) {
-        console.error('❌ Error checking low inventory:', inventoryCheckError);
+        logger.error('❌ Error checking low inventory:', inventoryCheckError);
         // Don't fail the sale if inventory check fails
       }
     }
 
-    console.log('✅ Sale created successfully:', sale._id);
-    console.log('📧 Sale customer email check:', {
+    logger.debug('✅ Sale created successfully:', sale._id);
+    logger.debug('📧 Sale customer email check:', {
       customerEmail: sale.customerEmail,
       hasEmail: !!sale.customerEmail,
       customerName: sale.customerName,
@@ -9040,11 +9012,11 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       
       // Ensure email service is initialized
       if (!emailService.initialized) {
-        console.log('📧 Email service not initialized, initializing now...');
+        logger.debug('📧 Email service not initialized, initializing now...');
         await emailService.initialize();
       }
       
-      console.log('📧 Email service status:', {
+      logger.debug('📧 Email service status:', {
         initialized: emailService.initialized,
         enabled: emailService.enabled,
         provider: emailService.provider
@@ -9054,7 +9026,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       
       // Check if email service is enabled (from AdminSettings)
       if (!emailService.enabled) {
-        console.log('📧 Email service is disabled, skipping receipt email');
+        logger.debug('📧 Email service is disabled, skipping receipt email');
         emailStatus.error = 'Email service is disabled';
       } else {
         // Get Business from main database (not business database)
@@ -9079,24 +9051,24 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         emailStatus.debug.receiptNotificationsExists = !!emailSettings?.receiptNotifications;
         emailStatus.debug.receiptNotificationsEnabledValue = emailSettings?.receiptNotifications?.enabled;
         
-        console.log(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}, emailSettings exists: ${!!emailSettings}, receiptNotifications exists: ${!!emailSettings?.receiptNotifications}, enabled value: ${emailSettings?.receiptNotifications?.enabled}`);
+        logger.debug(`📧 Receipt notifications enabled: ${receiptNotificationsEnabled}, emailSettings exists: ${!!emailSettings}, receiptNotifications exists: ${!!emailSettings?.receiptNotifications}, enabled value: ${emailSettings?.receiptNotifications?.enabled}`);
         
         if (!receiptNotificationsEnabled) {
           emailStatus.error = 'Receipt notifications disabled in business settings';
-          console.log('📧 Receipt notifications are disabled in business settings');
+          logger.debug('📧 Receipt notifications are disabled in business settings');
         } else {
           // Send receipt to client if email exists (default to true if not set)
           const sendToClients = !emailSettings || emailSettings?.receiptNotifications?.sendToClients !== false;
           emailStatus.debug.sendToClients = sendToClients;
           
-          console.log(`📧 Email sending check:`, {
+          logger.debug(`📧 Email sending check:`, {
             sendToClients,
             hasCustomerEmail: !!sale.customerEmail,
             customerEmail: sale.customerEmail
           });
           if (sendToClients && sale.customerEmail) {
             emailStatus.attempted = true;
-            console.log(`📧 Attempting to send receipt email to: ${sale.customerEmail}`);
+            logger.debug(`📧 Attempting to send receipt email to: ${sale.customerEmail}`);
             try {
               // Calculate subtotal from items
               const subtotal = sale.items?.reduce((sum, item) => sum + (item.total || 0), 0) || 0;
@@ -9109,18 +9081,18 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
               if (saleForEmail.shareToken) {
                 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
                 receiptLink = `${frontendUrl}/receipt/public/${saleForEmail.billNo}/${saleForEmail.shareToken}`;
-                console.log(`✅ Receipt link generated: ${receiptLink}`);
-                console.log(`🔍 ShareToken: ${saleForEmail.shareToken.substring(0, 10)}...`);
+                logger.debug(`✅ Receipt link generated: ${receiptLink}`);
+                logger.debug(`🔍 ShareToken: ${saleForEmail.shareToken.substring(0, 10)}...`);
               } else {
-                console.error('❌ Sale does not have shareToken, cannot generate receipt link');
-                console.error('❌ Sale data:', {
+                logger.error('❌ Sale does not have shareToken, cannot generate receipt link');
+                logger.error('❌ Sale data:', {
                   _id: saleForEmail._id,
                   billNo: saleForEmail.billNo,
                   hasShareToken: !!saleForEmail.shareToken
                 });
               }
               
-              console.log(`📧 Calling emailService.sendReceipt with:`, {
+              logger.debug(`📧 Calling emailService.sendReceipt with:`, {
                 to: saleForEmail.customerEmail,
                 clientName: saleForEmail.customerName,
                 receiptNumber: saleForEmail.billNo,
@@ -9146,19 +9118,19 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                 receiptLink: receiptLink
               });
               
-              console.log(`📧 Email result:`, emailResult);
+              logger.debug(`📧 Email result:`, emailResult);
               
               if (emailResult && emailResult.success !== false) {
-                console.log(`✅ Receipt email sent to client: ${sale.customerEmail}`);
+                logger.debug(`✅ Receipt email sent to client: ${sale.customerEmail}`);
                 emailStatus.sent = true;
               } else {
-                console.error(`❌ Failed to send receipt email to ${sale.customerEmail}:`, emailResult?.error || 'Unknown error');
-                console.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
+                logger.error(`❌ Failed to send receipt email to ${sale.customerEmail}:`, emailResult?.error || 'Unknown error');
+                logger.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
                 emailStatus.error = emailResult?.error || 'Unknown error';
               }
             } catch (clientEmailError) {
-              console.error('❌ Error sending receipt email to client:', clientEmailError);
-              console.error('❌ Error details:', {
+              logger.error('❌ Error sending receipt email to client:', clientEmailError);
+              logger.error('❌ Error details:', {
                 message: clientEmailError.message,
                 stack: clientEmailError.stack
               });
@@ -9170,7 +9142,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         }
       }
     } catch (emailError) {
-      console.error('Error sending receipt email:', emailError);
+      logger.error('Error sending receipt email:', emailError);
       emailStatus.error = emailError.message;
       // Don't fail sale creation if email fails
     }
@@ -9178,11 +9150,11 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     // Send WhatsApp receipt if enabled
     const whatsappStatus = { sent: false, error: null };
     try {
-      console.log('📱 [WhatsApp] Starting WhatsApp receipt sending for sale...');
+      logger.debug('📱 [WhatsApp] Starting WhatsApp receipt sending for sale...');
       const whatsappService = require('./services/whatsapp-service');
       await whatsappService.initialize();
       
-      console.log('📱 [WhatsApp] Service initialized. Enabled:', whatsappService.enabled);
+      logger.debug('📱 [WhatsApp] Service initialized. Enabled:', whatsappService.enabled);
       
       if (whatsappService.enabled) {
         const databaseManager = require('./config/database-manager');
@@ -9195,15 +9167,15 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
         const adminReceiptNotificationsEnabled = adminSettings?.notifications?.whatsapp?.receiptNotifications === true; // Admin master switch
         
-        console.log('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
-        console.log('📱 [WhatsApp] Admin Receipt Notifications enabled:', adminReceiptNotificationsEnabled);
+        logger.debug('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
+        logger.debug('📱 [WhatsApp] Admin Receipt Notifications enabled:', adminReceiptNotificationsEnabled);
         
         if (whatsappEnabled && adminReceiptNotificationsEnabled) { // Check admin master switch
           // Use lean() to get plain object so nested objects are accessible
           const business = await Business.findById(req.user.branchId).lean();
           
           // Debug: Log the entire business object structure
-          console.log('📱 [WhatsApp] Business object structure:', {
+          logger.debug('📱 [WhatsApp] Business object structure:', {
             hasBusiness: !!business,
             hasSettings: !!business?.settings,
             settingsKeys: business?.settings ? Object.keys(business.settings) : [],
@@ -9220,7 +9192,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           const receiptNotificationsEnabled = whatsappSettings.receiptNotifications?.enabled === true;
           const autoSendEnabled = whatsappSettings.receiptNotifications?.autoSendToClients === true;
           
-          console.log('📱 [WhatsApp] Business settings:', {
+          logger.debug('📱 [WhatsApp] Business settings:', {
             businessWhatsappEnabled,
             receiptNotificationsEnabled,
             autoSendEnabled,
@@ -9232,13 +9204,13 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
             const quietHours = adminSettings?.notifications?.whatsapp?.quietHours;
             const inQuietHours = whatsappService.isQuietHours(quietHours);
             
-            console.log('📱 [WhatsApp] Quiet hours check:', { inQuietHours, quietHours });
+            logger.debug('📱 [WhatsApp] Quiet hours check:', { inQuietHours, quietHours });
             
             if (!inQuietHours) {
               // Get client phone number from sale
               const customerPhone = sale?.customerPhone || sale?.customerMobile;
               
-              console.log('📱 [WhatsApp] Customer phone from sale:', customerPhone);
+              logger.debug('📱 [WhatsApp] Customer phone from sale:', customerPhone);
               
               if (customerPhone) {
                 try {
@@ -9248,9 +9220,9 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                   if (saleForWhatsapp?.shareToken) {
                     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
                     whatsappReceiptLink = `${frontendUrl}/receipt/public/${saleForWhatsapp.billNo}/${saleForWhatsapp.shareToken}`;
-                    console.log(`📱 [WhatsApp] Receipt link generated: ${whatsappReceiptLink}`);
+                    logger.debug(`📱 [WhatsApp] Receipt link generated: ${whatsappReceiptLink}`);
                   } else {
-                    console.warn('⚠️ [WhatsApp] Sale does not have shareToken, receipt link will be null');
+                    logger.warn('⚠️ [WhatsApp] Sale does not have shareToken, receipt link will be null');
                   }
                   
                   const result = await whatsappService.sendReceipt({
@@ -9286,43 +9258,44 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                         { _id: business._id },
                         { $inc: { 'plan.addons.whatsapp.used': 1 } }
                       );
-                      console.log(`📊 WhatsApp quota incremented for business: ${business._id}`);
+                      logger.debug(`📊 WhatsApp quota incremented for business: ${business._id}`);
                     } catch (quotaError) {
-                      console.error('❌ Error incrementing WhatsApp quota:', quotaError);
+                      logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
                       // Don't fail the sale if quota increment fails
                     }
                     
                     if (result.queued) {
-                      console.log(`⏳ Sale receipt WhatsApp queued for delivery to client: ${customerPhone}`);
-                      console.log(`📱 Request ID: ${result.requestId || 'N/A'}`);
-                      console.log(`⚠️ Message is queued. Check MSG91 dashboard for delivery status.`);
+                      logger.debug(`⏳ Sale receipt WhatsApp queued for delivery to client: ${customerPhone}`, {
+                        requestId: result.requestId || 'N/A',
+                        note: 'Message is queued. Check MSG91 dashboard for delivery status.'
+                      });
                       whatsappStatus.sent = true;
                       whatsappStatus.queued = true;
                       whatsappStatus.requestId = result.requestId;
                       whatsappStatus.message = 'Message queued for delivery. Check MSG91 dashboard for status.';
                     } else {
-                      console.log(`✅ Sale receipt WhatsApp sent to client: ${customerPhone}`);
+                      logger.debug(`✅ Sale receipt WhatsApp sent to client: ${customerPhone}`);
                       whatsappStatus.sent = true;
                     }
                   } else {
-                    console.error(`❌ Failed to send sale receipt WhatsApp to ${customerPhone}:`, result.error);
+                    logger.error(`❌ Failed to send sale receipt WhatsApp to ${customerPhone}:`, result.error);
                     whatsappStatus.error = result.error;
                   }
                 } catch (whatsappError) {
-                  console.error('❌ Error sending sale receipt WhatsApp to client:', whatsappError);
-                  console.error('❌ Error stack:', whatsappError.stack);
+                  logger.error('❌ Error sending sale receipt WhatsApp to client:', whatsappError);
+                  logger.error('❌ Error stack:', whatsappError.stack);
                   whatsappStatus.error = whatsappError.message;
                 }
               } else {
-                console.log('📱 [WhatsApp] No customer phone number found in sale');
+                logger.debug('📱 [WhatsApp] No customer phone number found in sale');
                 whatsappStatus.error = 'No customer phone number';
               }
             } else {
-              console.log('📱 [WhatsApp] Quiet hours active, skipping sale receipt message');
+              logger.debug('📱 [WhatsApp] Quiet hours active, skipping sale receipt message');
               whatsappStatus.error = 'Quiet hours active';
             }
           } else {
-            console.log('📱 [WhatsApp] Business WhatsApp settings not enabled:', {
+            logger.debug('📱 [WhatsApp] Business WhatsApp settings not enabled:', {
               businessWhatsappEnabled,
               receiptNotificationsEnabled,
               autoSendEnabled
@@ -9341,20 +9314,20 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           }
         } else {
           if (!whatsappEnabled) {
-            console.log('📱 [WhatsApp] WhatsApp not enabled at admin level');
+            logger.debug('📱 [WhatsApp] WhatsApp not enabled at admin level');
             whatsappStatus.error = 'WhatsApp not enabled at admin level';
           } else if (!adminReceiptNotificationsEnabled) {
-            console.log('📱 [WhatsApp] Receipt notifications not enabled at admin level');
+            logger.debug('📱 [WhatsApp] Receipt notifications not enabled at admin level');
             whatsappStatus.error = 'Receipt notifications not enabled at admin level';
           }
         }
       } else {
-        console.log('📱 [WhatsApp] WhatsApp service not configured (enabled=false)');
+        logger.debug('📱 [WhatsApp] WhatsApp service not configured (enabled=false)');
         whatsappStatus.error = 'WhatsApp service not configured';
       }
     } catch (whatsappError) {
-      console.error('❌ [WhatsApp] Error in WhatsApp sending block:', whatsappError);
-      console.error('❌ [WhatsApp] Error stack:', whatsappError.stack);
+      logger.error('❌ [WhatsApp] Error in WhatsApp sending block:', whatsappError);
+      logger.error('❌ [WhatsApp] Error stack:', whatsappError.stack);
       whatsappStatus.error = whatsappError.message;
       // Don't fail sale creation if WhatsApp fails
     }
@@ -9388,7 +9361,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           if (canSendSms) {
             const customerPhone = sale?.customerPhone || sale?.customerMobile;
             if (!customerPhone) {
-              console.log('📱 [SMS] Sale receipt skipped: no customer phone on bill (customerPhone/customerMobile)');
+              logger.debug('📱 [SMS] Sale receipt skipped: no customer phone on bill (customerPhone/customerMobile)');
             }
             if (customerPhone) {
               const saleForSms = savedSale || sale;
@@ -9409,19 +9382,19 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                   { _id: business._id },
                   { $inc: { 'plan.addons.sms.used': 1 } }
                 );
-                console.log('📱 [SMS] Sale receipt sent to', customerPhone);
+                logger.debug('📱 [SMS] Sale receipt sent to', customerPhone);
               } else {
-                console.warn('📱 [SMS] Sale receipt failed:', result.error);
+                logger.warn('📱 [SMS] Sale receipt failed:', result.error);
               }
             }
           }
         }
       }
     } catch (smsErr) {
-      console.error('Error sending sale receipt SMS:', smsErr);
+      logger.error('Error sending sale receipt SMS:', smsErr);
     }
     
-    console.log('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
+    logger.debug('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
 
     res.status(201).json({ 
       success: true, 
@@ -9430,8 +9403,8 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       whatsappStatus: whatsappStatus // Include WhatsApp sending status in response
     });
   } catch (err) {
-    console.error('❌ Sales creation error:', err);
-    console.error('❌ Error details:', {
+    logger.error('❌ Sales creation error:', err);
+    logger.error('❌ Error details:', {
       message: err.message,
       name: err.name,
       stack: err.stack,
@@ -9479,7 +9452,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
   const session = null;
   const useTransactions = false;
   
-  console.log('⚠️ Running PUT /api/sales/:id without transactions (standalone MongoDB)');
+  logger.debug('⚠️ Running PUT /api/sales/:id without transactions (standalone MongoDB)');
 
   try {
     const {
@@ -9526,7 +9499,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         );
       }
     } catch (archiveError) {
-      console.error('⚠️ Failed to archive original bill before edit:', archiveError);
+      logger.error('⚠️ Failed to archive original bill before edit:', archiveError);
     }
 
     // Ensure immutable fields are not changed
@@ -9604,14 +9577,14 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       if (!product) {
         // Product was deleted - allow keeping it in the bill but mark as unavailable
         // Don't fail the edit, but log a warning
-        console.warn(`⚠️ Product ${productId} (${diff.name}) not found - may have been deleted. Keeping in bill but cannot adjust inventory.`);
+        logger.warn(`⚠️ Product ${productId} (${diff.name}) not found - may have been deleted. Keeping in bill but cannot adjust inventory.`);
         // Skip inventory adjustment for deleted products
         continue;
       }
 
       // Check if product is active
       if (product.isActive === false) {
-        console.warn(`⚠️ Product ${product.name} is inactive. Proceeding with inventory adjustment.`);
+        logger.warn(`⚠️ Product ${product.name} is inactive. Proceeding with inventory adjustment.`);
       }
 
       const previousStock = Number(product.stock || 0);
@@ -9708,18 +9681,18 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           existingSale.items = updatedItems;
         } else if (field === 'payments') {
           // Explicitly handle payments array update
-          console.log('💳 Updating payments array:', updateData.payments);
+          logger.debug('💳 Updating payments array:', updateData.payments);
           if (Array.isArray(updateData.payments)) {
             existingSale.payments = updateData.payments;
             // Mark the array as modified for Mongoose to save it
             existingSale.markModified('payments');
-            console.log('💳 Updated payments on sale:', existingSale.payments);
+            logger.debug('💳 Updated payments on sale:', existingSale.payments);
           }
         } else if (field === 'paymentMode') {
           // Explicitly handle paymentMode update
-          console.log('💳 Updating paymentMode:', updateData.paymentMode);
+          logger.debug('💳 Updating paymentMode:', updateData.paymentMode);
           existingSale.paymentMode = updateData.paymentMode || '';
-          console.log('💳 Updated paymentMode on sale:', existingSale.paymentMode);
+          logger.debug('💳 Updated paymentMode on sale:', existingSale.paymentMode);
         } else if (field === 'tip') {
           existingSale.tip = Number(updateData.tip) || 0;
           existingSale.tipStaffId = existingSale.tip > 0 ? (updateData.tipStaffId || null) : null;
@@ -9736,17 +9709,17 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
 
     // Recalculate paidAmount from payments array if payments were updated
     if (updateData.payments && Array.isArray(updateData.payments)) {
-      console.log('💰 Recalculating payment amounts from payments array:', updateData.payments);
+      logger.debug('💰 Recalculating payment amounts from payments array:', updateData.payments);
       const newPaidAmount = updateData.payments.reduce((sum, payment) => {
         const amount = Number(payment.amount) || 0;
-        console.log(`  - Payment: ${payment.mode || payment.type}, Amount: ${amount}`);
+        logger.debug(`  - Payment: ${payment.mode || payment.type}, Amount: ${amount}`);
         return sum + amount;
       }, 0);
       
-      console.log('💰 Calculated newPaidAmount:', newPaidAmount);
+      logger.debug('💰 Calculated newPaidAmount:', newPaidAmount);
       // totalAmount = netTotal (grossTotal + tip) so tip removal is reflected
       const totalAmount = Number(updateData.netTotal ?? updateData.paymentStatus?.totalAmount ?? updateData.grossTotal ?? existingSale.paymentStatus?.totalAmount ?? existingSale.grossTotal ?? 0);
-      console.log('💰 Total amount:', totalAmount);
+      logger.debug('💰 Total amount:', totalAmount);
       
       if (!existingSale.paymentStatus) {
         existingSale.paymentStatus = {
@@ -9761,7 +9734,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         existingSale.paymentStatus.remainingAmount = totalAmount - newPaidAmount;
       }
       
-      console.log('💰 Updated paymentStatus:', existingSale.paymentStatus);
+      logger.debug('💰 Updated paymentStatus:', existingSale.paymentStatus);
       
       // Update status based on payment
       if (newPaidAmount === 0) {
@@ -9772,7 +9745,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         existingSale.status = 'partial';
       }
       
-      console.log('💰 Updated status:', existingSale.status);
+      logger.debug('💰 Updated status:', existingSale.status);
 
       // Sync paymentHistory when payment collected via bill edit (so Dues Collected reflects it)
       if (newPaidAmount > oldPaidAmount) {
@@ -9814,7 +9787,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     existingSale.editedAt = new Date();
 
     // Debug: Log what we're about to save
-    console.log('💾 About to save sale with:', {
+    logger.debug('💾 About to save sale with:', {
       billNo: existingSale.billNo,
       payments: existingSale.payments,
       paymentMode: existingSale.paymentMode,
@@ -9825,7 +9798,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
     const savedSale = await existingSale.save(session ? { session } : {});
     
     // Debug: Log what was actually saved
-    console.log('✅ Sale saved with:', {
+    logger.debug('✅ Sale saved with:', {
       billNo: savedSale.billNo,
       payments: savedSale.payments,
       paymentMode: savedSale.paymentMode,
@@ -9846,7 +9819,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         const autoConsumption = require('./services/auto-consumption');
         await autoConsumption.runAutoConsumptionForSale(savedSale, req.businessModels, { user: req.user });
       } catch (autoConsumptionErr) {
-        console.error('Auto consumption on sale update failed:', autoConsumptionErr);
+        logger.error('Auto consumption on sale update failed:', autoConsumptionErr);
       }
     }
     if (newStatus === 'cancelled' && previousStatus === 'completed') {
@@ -9854,7 +9827,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         const autoConsumption = require('./services/auto-consumption');
         await autoConsumption.reverseConsumptionForBill(savedSale._id, req.businessModels);
       } catch (reversalErr) {
-        console.error('Auto consumption reversal on bill cancel failed:', reversalErr);
+        logger.error('Auto consumption reversal on bill cancel failed:', reversalErr);
       }
     }
 
@@ -9887,7 +9860,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         );
       }
     } catch (historyError) {
-      console.error('⚠️ Failed to record bill edit history:', historyError);
+      logger.error('⚠️ Failed to record bill edit history:', historyError);
     }
 
     if (useTransactions && session) {
@@ -9899,7 +9872,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
 
     res.json({ success: true, data: savedSale });
   } catch (err) {
-    console.error('❌ Error updating sale:', err);
+    logger.error('❌ Error updating sale:', err);
     if (useTransactions && session) {
       try {
         await session.abortTransaction();
@@ -9927,7 +9900,7 @@ app.get('/api/consumption-rules', authenticateToken, setupBusinessDatabase, requ
     const rules = await ServiceConsumptionRule.find(query).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
     res.json({ success: true, data: rules });
   } catch (err) {
-    console.error('Error listing consumption rules:', err);
+    logger.error('Error listing consumption rules:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -9967,7 +9940,7 @@ app.post('/api/consumption-rules', authenticateToken, setupBusinessDatabase, req
     const populated = await ServiceConsumptionRule.findById(rule._id).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
     res.status(201).json({ success: true, data: populated });
   } catch (err) {
-    console.error('Error creating consumption rule:', err);
+    logger.error('Error creating consumption rule:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -9996,7 +9969,7 @@ app.put('/api/consumption-rules/:id', authenticateToken, setupBusinessDatabase, 
     const populated = await ServiceConsumptionRule.findById(rule._id).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
     res.json({ success: true, data: populated });
   } catch (err) {
-    console.error('Error updating consumption rule:', err);
+    logger.error('Error updating consumption rule:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -10010,7 +9983,7 @@ app.delete('/api/consumption-rules/:id', authenticateToken, setupBusinessDatabas
     if (!rule) return res.status(404).json({ success: false, error: 'Rule not found' });
     res.json({ success: true });
   } catch (err) {
-    console.error('Error deleting consumption rule:', err);
+    logger.error('Error deleting consumption rule:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -10051,7 +10024,7 @@ app.post('/api/consumption-rules/bulk', authenticateToken, setupBusinessDatabase
     }
     res.status(201).json({ success: true, data: created });
   } catch (err) {
-    console.error('Error bulk creating consumption rules:', err);
+    logger.error('Error bulk creating consumption rules:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -10075,12 +10048,21 @@ app.get('/api/consumption-logs', authenticateToken, setupBusinessDatabase, requi
     const logs = await InventoryConsumptionLog.find(query).sort({ createdAt: -1 }).limit(limitNum).populate('productId', 'name baseUnit').populate('serviceId', 'name').lean();
     res.json({ success: true, data: logs });
   } catch (err) {
-    console.error('Error listing consumption logs:', err);
+    logger.error('Error listing consumption logs:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Bulk client stats - aggregates totalVisits, totalSpent, lastVisit for multiple clients in one query
+// Bulk client stats - aggregates totalVisits, totalSpent, lastVisit (batched $match to avoid huge $in arrays)
+const BULK_STATS_PHONE_BATCH = 200;
+const BULK_STATS_MAX_IDS = 8000;
+
+const chunkArray = (arr, size) => {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+};
+
 app.post('/api/clients/bulk-stats', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { clientIds } = req.body;
@@ -10090,7 +10072,19 @@ app.post('/api/clients/bulk-stats', authenticateToken, setupBusinessDatabase, as
 
     const { Sale, Client } = req.businessModels;
 
-    const clients = await Client.find({ _id: { $in: clientIds } }).select('phone').lean();
+    const uniqueIds = [...new Set(
+      clientIds.map((id) => String(id || '').trim()).filter(Boolean),
+    )].slice(0, BULK_STATS_MAX_IDS);
+
+    const objectIds = uniqueIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    if (objectIds.length === 0) {
+      return res.json({ success: true, data: {} });
+    }
+
+    const clients = await Client.find({ _id: { $in: objectIds } }).select('phone').lean();
     const phoneToClientId = {};
     const phones = [];
     for (const c of clients) {
@@ -10104,35 +10098,40 @@ app.post('/api/clients/bulk-stats', authenticateToken, setupBusinessDatabase, as
       return res.json({ success: true, data: {} });
     }
 
-    const pipeline = [
-      { $match: { customerPhone: { $in: phones } } },
+    const buildPipeline = (phoneBatch) => [
+      { $match: { customerPhone: { $in: phoneBatch } } },
       {
         $group: {
           _id: '$customerPhone',
           totalVisits: { $sum: 1 },
           totalSpent: { $sum: { $ifNull: ['$grossTotal', 0] } },
-          lastVisit: { $max: '$date' }
-        }
-      }
+          lastVisit: { $max: '$date' },
+        },
+      },
     ];
 
-    const stats = await Sale.aggregate(pipeline);
+    const phoneBatches = chunkArray(phones, BULK_STATS_PHONE_BATCH);
+    const statsParts = await Promise.all(
+      phoneBatches.map((batch) =>
+        Sale.aggregate(buildPipeline(batch)).option({ allowDiskUse: true }),
+      ),
+    );
 
     const result = {};
-    for (const s of stats) {
+    for (const s of statsParts.flat()) {
       const clientId = phoneToClientId[s._id];
       if (clientId) {
         result[clientId] = {
           totalVisits: s.totalVisits,
           totalSpent: s.totalSpent,
-          lastVisit: s.lastVisit
+          lastVisit: s.lastVisit,
         };
       }
     }
 
     res.json({ success: true, data: result });
   } catch (error) {
-    console.error('Error fetching bulk client stats:', error);
+    logger.error('Error fetching bulk client stats:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch client stats' });
   }
 });
@@ -10155,7 +10154,7 @@ app.get('/api/sales/by-phone/:phone', authenticateToken, setupBusinessDatabase, 
       data: sales
     });
   } catch (error) {
-    console.error('Error fetching sales by client phone:', error);
+    logger.error('Error fetching sales by client phone:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch client sales'
@@ -10244,7 +10243,7 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
         }
       } catch (businessError) {
         // Continue searching other businesses if one fails
-        console.error(`Error searching business ${business.name}:`, businessError.message);
+        logger.error(`Error searching business ${business.name}:`, businessError.message);
         continue;
       }
     }
@@ -10255,7 +10254,7 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
       error: 'Receipt not found or invalid token' 
     });
   } catch (err) {
-    console.error('Error in public sale endpoint:', err);
+    logger.error('Error in public sale endpoint:', err);
     res.status(500).json({ 
       success: false, 
       error: 'Failed to retrieve receipt' 
@@ -10411,7 +10410,7 @@ app.post('/api/sales/:id/exchange', authenticateToken, setupBusinessDatabase, re
         );
       }
     } catch (archiveError) {
-      console.error('⚠️ Failed to archive original bill before exchange:', archiveError);
+      logger.error('⚠️ Failed to archive original bill before exchange:', archiveError);
     }
 
     const originalItems = existingSale.items || [];
@@ -10447,14 +10446,14 @@ app.post('/api/sales/:id/exchange', authenticateToken, setupBusinessDatabase, re
       const product = await Product.findById(productId).session(session);
       if (!product) {
         // Product was deleted - allow keeping it in the bill but mark as unavailable
-        console.warn(`⚠️ Product ${productId} (${diff.name}) not found during exchange - may have been deleted. Keeping in bill but cannot adjust inventory.`);
+        logger.warn(`⚠️ Product ${productId} (${diff.name}) not found during exchange - may have been deleted. Keeping in bill but cannot adjust inventory.`);
         // Skip inventory adjustment for deleted products
         continue;
       }
 
       // Check if product is active
       if (product.isActive === false) {
-        console.warn(`⚠️ Product ${product.name} is inactive during exchange. Proceeding with inventory adjustment.`);
+        logger.warn(`⚠️ Product ${product.name} is inactive during exchange. Proceeding with inventory adjustment.`);
       }
 
       const previousStock = Number(product.stock || 0);
@@ -10558,7 +10557,7 @@ app.post('/api/sales/:id/exchange', authenticateToken, setupBusinessDatabase, re
         );
       }
     } catch (historyError) {
-      console.error('⚠️ Failed to record bill exchange history:', historyError);
+      logger.error('⚠️ Failed to record bill exchange history:', historyError);
     }
 
     await session.commitTransaction();
@@ -10570,12 +10569,12 @@ app.post('/api/sales/:id/exchange', authenticateToken, setupBusinessDatabase, re
         await syncCompletedLinkedAppointmentStaffFromSale(Appointment, savedSale);
       }
     } catch (syncErr) {
-      console.error('⚠️ Appointment staff sync after exchange failed:', syncErr);
+      logger.error('⚠️ Appointment staff sync after exchange failed:', syncErr);
     }
 
     res.json({ success: true, data: savedSale });
   } catch (err) {
-    console.error('❌ Error exchanging products in sale:', err);
+    logger.error('❌ Error exchanging products in sale:', err);
     try {
       await session.abortTransaction();
     } catch {
@@ -10770,13 +10769,13 @@ app.get("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
       await settings.save();
     }
 
-    console.log('✅ Business settings found:', settings.name);
+    logger.debug('✅ Business settings found:', settings.name);
     res.json({
       success: true,
       data: settings
     });
   } catch (error) {
-    console.error("Get business settings error:", error);
+    logger.error("Get business settings error:", error);
     res.status(500).json({
       success: false,
       error: "Internal server error"
@@ -10786,8 +10785,8 @@ app.get("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
 
 app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    console.log('📝 Business settings update request received for user:', req.user?.email, 'branchId:', req.user?.branchId);
-    console.log('📊 Request body size:', JSON.stringify(req.body).length, 'characters');
+    logger.debug('📝 Business settings update request received for user:', req.user?.email, 'branchId:', req.user?.branchId);
+    logger.debug('📊 Request body size:', JSON.stringify(req.body).length, 'characters');
     
     const { BusinessSettings } = req.businessModels;
     const {
@@ -10805,8 +10804,8 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
       gstNumber
     } = req.body;
     
-    console.log('🖼️ Logo data length:', logo ? logo.length : 0, 'characters');
-    console.log('🧾 GST Number:', gstNumber);
+    logger.debug('🖼️ Logo data length:', logo ? logo.length : 0, 'characters');
+    logger.debug('🧾 GST Number:', gstNumber);
 
     // Validate required fields
     if (!name || !email || !phone || !address || !city || !state || !zipCode) {
@@ -10838,15 +10837,15 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
 
     await settings.save();
 
-    console.log('✅ Business settings updated for:', settings.name);
+    logger.debug('✅ Business settings updated for:', settings.name);
     res.json({
       success: true,
       data: settings,
       message: "Business settings updated successfully"
     });
   } catch (error) {
-    console.error("❌ Update business settings error:", error);
-    console.error("❌ Error details:", {
+    logger.error("❌ Update business settings error:", error);
+    logger.error("❌ Error details:", {
       message: error.message,
       stack: error.stack,
       name: error.name
@@ -10890,8 +10889,8 @@ app.get("/api/test-business-db", authenticateToken, setupBusinessDatabase, (req,
 
 // Test endpoint to verify logging is working
 app.post("/api/test-increment", authenticateToken, async (req, res) => {
-  console.log('🧪 ===== TEST INCREMENT ENDPOINT CALLED =====');
-  console.log('🧪 User:', req.user);
+  logger.debug('🧪 ===== TEST INCREMENT ENDPOINT CALLED =====');
+  logger.debug('🧪 User:', req.user);
   res.json({ success: true, message: "Test endpoint working", user: req.user });
 });
 
@@ -10911,7 +10910,7 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
       const mainConnection = await databaseManager.getMainConnection();
       businessConnection = await databaseManager.getConnection(businessId, mainConnection);
     } catch (connectionError) {
-      console.error('❌ Error getting business connection:', connectionError);
+      logger.error('❌ Error getting business connection:', connectionError);
       return res.status(500).json({
         success: false,
         error: 'Failed to connect to business database',
@@ -10923,7 +10922,7 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
     try {
       businessModels = modelFactory.createBusinessModels(businessConnection);
     } catch (modelsError) {
-      console.error('❌ Error creating business models:', modelsError);
+      logger.error('❌ Error creating business models:', modelsError);
       return res.status(500).json({
         success: false,
         error: 'Failed to create business models',
@@ -10949,7 +10948,7 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
       try {
         await settings.save();
       } catch (createError) {
-        console.error('❌ Error creating settings:', createError);
+        logger.error('❌ Error creating settings:', createError);
         return res.status(500).json({
           success: false,
           error: 'Failed to create business settings',
@@ -10969,7 +10968,7 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
     );
 
     if (!updatedSettings) {
-      console.error('❌ Failed to atomically increment receipt number');
+      logger.error('❌ Failed to atomically increment receipt number');
       return res.status(500).json({
         success: false,
         error: 'Failed to increment receipt number'
@@ -10999,7 +10998,7 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
       }
 
       if (attempts >= maxAttempts) {
-        console.error('❌ Could not find available receipt number after', maxAttempts, 'attempts');
+        logger.error('❌ Could not find available receipt number after', maxAttempts, 'attempts');
         return res.status(500).json({
           success: false,
           error: 'Could not find available receipt number. Please contact support.'
@@ -11027,7 +11026,7 @@ app.post("/api/settings/business/increment-receipt", authenticateToken, async (r
       message: "Receipt number incremented successfully"
     });
   } catch (error) {
-    console.error("❌ Increment receipt number error:", error);
+    logger.error("❌ Increment receipt number error:", error);
     res.status(500).json({
       success: false,
       error: "Internal server error",
@@ -11049,11 +11048,11 @@ app.get("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
       });
     }
 
-    console.log('=== POS SETTINGS DEBUG ===')
-    console.log('Full settings object:', settings)
-    console.log('settings.invoicePrefix:', settings.invoicePrefix)
-    console.log('settings.receiptPrefix:', settings.receiptPrefix)
-    console.log('settings.receiptNumber:', settings.receiptNumber)
+    logger.debug('=== POS SETTINGS DEBUG ===')
+    logger.debug('Full settings object:', settings)
+    logger.debug('settings.invoicePrefix:', settings.invoicePrefix)
+    logger.debug('settings.receiptPrefix:', settings.receiptPrefix)
+    logger.debug('settings.receiptNumber:', settings.receiptNumber)
 
     // Return the NEXT receipt number (current + 1) for display
     const nextReceiptNumber = (settings.receiptNumber || 0) + 1;
@@ -11067,7 +11066,7 @@ app.get("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
       }
     });
   } catch (error) {
-    console.error("Get POS settings error:", error);
+    logger.error("Get POS settings error:", error);
     res.status(500).json({
       success: false,
       error: "Internal server error"
@@ -11079,10 +11078,10 @@ app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
   try {
     const { invoicePrefix, autoResetReceipt } = req.body;
 
-    console.log('=== UPDATE POS SETTINGS DEBUG ===')
-    console.log('Request body:', req.body)
-    console.log('invoicePrefix from request:', invoicePrefix)
-    console.log('autoResetReceipt from request:', autoResetReceipt)
+    logger.debug('=== UPDATE POS SETTINGS DEBUG ===')
+    logger.debug('Request body:', req.body)
+    logger.debug('invoicePrefix from request:', invoicePrefix)
+    logger.debug('autoResetReceipt from request:', autoResetReceipt)
 
     const { BusinessSettings } = req.businessModels;
     let settings = await BusinessSettings.findOne();
@@ -11094,7 +11093,7 @@ app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
       });
     }
 
-    console.log('Settings before update:', {
+    logger.debug('Settings before update:', {
       invoicePrefix: settings.invoicePrefix,
       receiptPrefix: settings.receiptPrefix,
       receiptNumber: settings.receiptNumber
@@ -11106,7 +11105,7 @@ app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
 
     await settings.save();
 
-    console.log('Settings after update:', {
+    logger.debug('Settings after update:', {
       invoicePrefix: settings.invoicePrefix,
       receiptPrefix: settings.receiptPrefix,
       receiptNumber: settings.receiptNumber
@@ -11118,7 +11117,7 @@ app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
       message: "POS settings updated successfully"
     });
   } catch (error) {
-    console.error("Update POS settings error:", error);
+    logger.error("Update POS settings error:", error);
     res.status(500).json({
       success: false,
       error: "Internal server error"
@@ -11148,7 +11147,7 @@ app.post("/api/settings/pos/reset-sequence", authenticateToken, setupBusinessDat
       message: "Receipt sequence reset successfully. Next receipt will be 1."
     });
   } catch (error) {
-    console.error("Reset receipt sequence error:", error);
+    logger.error("Reset receipt sequence error:", error);
     res.status(500).json({
       success: false,
       error: "Internal server error"
@@ -11164,7 +11163,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
     
     // If no settings exist, create default settings
     if (!settings) {
-      console.log("📝 No business settings found, creating default settings...");
+      logger.debug("📝 No business settings found, creating default settings...");
       const branchId = req.user?.branchId;
       
       if (!branchId) {
@@ -11220,7 +11219,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         branchId: branchId
       });
       await settings.save();
-      console.log("✅ Default business settings created");
+      logger.debug("✅ Default business settings created");
     }
 
     // Build tax categories array from settings
@@ -11282,7 +11281,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       }
     });
   } catch (error) {
-    console.error("Get payment settings error:", error);
+    logger.error("Get payment settings error:", error);
     res.status(500).json({
       success: false,
       error: "Internal server error"
@@ -11357,7 +11356,7 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       message: "Payment settings updated successfully"
     });
   } catch (error) {
-    console.error("Update payment settings error:", error);
+    logger.error("Update payment settings error:", error);
     res.status(500).json({
       success: false,
       error: "Internal server error"
@@ -11366,15 +11365,13 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
 });
 
 app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
-    const { Sale } = req.businessModels;
-  
   // For standalone MongoDB, transactions are not supported
   // We'll proceed without transactions - operations will still work
   // All operations will execute individually without atomic rollback
   const session = null;
   const useTransactions = false;
   
-  console.log('⚠️ Running DELETE without transactions (standalone MongoDB)');
+  logger.debug('⚠️ Running DELETE without transactions (standalone MongoDB)');
 
   try {
     const {
@@ -11386,19 +11383,19 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
     } = req.businessModels;
 
     const saleId = req.params.id;
-    console.log(`🗑️ DELETE /api/sales/${saleId} - Starting deletion process`);
+    logger.debug(`🗑️ DELETE /api/sales/${saleId} - Starting deletion process`);
     const sale = session
       ? await Sale.findById(saleId).session(session)
       : await Sale.findById(saleId);
     if (!sale) {
-      console.error(`❌ Sale not found: ${saleId}`);
+      logger.error(`❌ Sale not found: ${saleId}`);
       if (useTransactions && session) {
         await session.abortTransaction();
         session.endSession();
       }
       return res.status(404).json({ success: false, error: 'Sale not found' });
     }
-    console.log(`✅ Sale found: ${sale.billNo}, items count: ${sale.items?.length || 0}`);
+    logger.debug(`✅ Sale found: ${sale.billNo}, items count: ${sale.items?.length || 0}`);
 
     // Archive bill before deletion
     const deleteReason = (req.body?.reason || '').trim() || 'Bill deleted';
@@ -11420,28 +11417,26 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
         );
       }
     } catch (archiveError) {
-      console.error('⚠️ Failed to archive bill before deletion:', archiveError);
+      logger.error('⚠️ Failed to archive bill before deletion:', archiveError);
     }
 
     // Restore inventory for all product items
     const inventoryChanges = [];
     const productItems = (sale.items || []).filter(item => item.type === 'product');
-    console.log(`\n🗑️ ========== DELETING BILL ${sale.billNo} ==========`);
-    console.log(`📊 Total items: ${sale.items?.length || 0}, Products: ${productItems.length}`);
-    console.log(`📋 Full bill items structure:`, JSON.stringify(sale.items, null, 2));
-    console.log(`🔍 Sale object keys:`, Object.keys(sale.toObject ? sale.toObject() : sale));
-    
+    logger.debug('Bill delete: restoring inventory', {
+      billNo: sale.billNo,
+      totalItems: (sale.items || []).length,
+      productLineCount: productItems.length,
+    });
+
     for (const item of sale.items || []) {
-      console.log(`  📦 Checking item: ${item.name}, type: ${item.type}, productId: ${item.productId || 'MISSING'}, quantity: ${item.quantity}`);
-      
       // Skip if not a product or missing required fields
       if (item.type !== 'product') {
-        console.log(`  ⏭️ Skipping ${item.name} - not a product`);
         continue;
       }
       
       if (!item.productId) {
-        console.warn(`  ⚠️ Missing productId for ${item.name}. Trying to find by name...`);
+        logger.warn(`  ⚠️ Missing productId for ${item.name}. Trying to find by name...`);
         // Try to find product by name as fallback (case-insensitive, partial match)
         const productByName = session
           ? await Product.findOne({ 
@@ -11462,21 +11457,17 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
               });
           
           if (productByPartialName) {
-            console.log(`  ✅ Found product by partial name match: ${productByPartialName._id} (${productByPartialName.name})`);
             item.productId = productByPartialName._id;
           } else {
-            console.warn(`  ❌ Cannot restore inventory for "${item.name}" - product not found by name. Item data:`, JSON.stringify(item, null, 2));
-            console.warn(`  ⚠️ Available products in database:`, await Product.find({}).select('name _id').limit(10).lean());
+            logger.warn('Bill delete: cannot restore inventory for line (product not found by name)', { itemName: item.name, item });
             continue;
           }
         } else {
-          console.log(`  ✅ Found product by exact name: ${productByName._id} (${productByName.name})`);
           item.productId = productByName._id;
         }
       }
       
       if (!item.quantity || item.quantity <= 0) {
-        console.log(`  ⏭️ Skipping ${item.name} - invalid quantity: ${item.quantity}`);
         continue;
       }
 
@@ -11487,16 +11478,15 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
         if (mongoose.Types.ObjectId.isValid(productIdToFind)) {
           productIdToFind = new mongoose.Types.ObjectId(productIdToFind);
         } else {
-          console.error(`  ❌ Invalid productId format: ${productIdToFind} for item ${item.name}`);
+          logger.error(`  ❌ Invalid productId format: ${productIdToFind} for item ${item.name}`);
           // Try to find by name as fallback
           const productByName = session
             ? await Product.findOne({ name: item.name }).session(session)
             : await Product.findOne({ name: item.name });
           if (productByName) {
-            console.log(`  ✅ Found product by name as fallback: ${productByName._id}`);
             productIdToFind = productByName._id;
           } else {
-            console.warn(`  ❌ Cannot restore inventory for ${item.name} - invalid productId and product not found by name`);
+            logger.warn(`  ❌ Cannot restore inventory for ${item.name} - invalid productId and product not found by name`);
             continue;
           }
         }
@@ -11506,24 +11496,18 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
         ? await Product.findById(productIdToFind).session(session)
         : await Product.findById(productIdToFind);
       if (!product) {
-        console.error(`  ❌ Product not found: ${productIdToFind} for item ${item.name}`);
+        logger.error(`  ❌ Product not found: ${productIdToFind} for item ${item.name}`);
         // Don't abort transaction, just skip this item and continue with others
-        console.warn(`  ⚠️ Skipping inventory restoration for ${item.name} - product not found, continuing with other items`);
+        logger.warn(`  ⚠️ Skipping inventory restoration for ${item.name} - product not found, continuing with other items`);
         continue;
       }
-      
-      console.log(`  ✅ Found product: ${product.name}, current stock: ${product.stock}`);
 
       const previousStock = Number(product.stock || 0);
       const restoreQty = Number(item.quantity || 0);
       const newStock = previousStock + restoreQty;
 
-      console.log(`  📈 Restoring ${restoreQty} units: ${previousStock} → ${newStock}`);
-
       product.stock = newStock;
       await product.save(session ? { session } : {});
-      
-      console.log(`  ✅ Stock updated for ${product.name}`);
 
       const transaction = new InventoryTransaction({
         productId: product._id,
@@ -11559,10 +11543,7 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       const subUpdate = session
         ? MembershipSubscription.updateOne(subQuery, { $set: { status: 'CANCELLED' } }).session(session)
         : MembershipSubscription.updateOne(subQuery, { $set: { status: 'CANCELLED' } });
-      const subResult = await subUpdate;
-      if (subResult.modifiedCount > 0) {
-        console.log(`  ✅ Membership deactivated for bill ${sale.billNo}`);
-      }
+      await subUpdate;
     }
 
     if (session) {
@@ -11578,18 +11559,10 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       session.endSession();
     }
 
-    console.log(`\n✅ ========== BILL ${sale.billNo} DELETED SUCCESSFULLY ==========`);
-    console.log(`📦 Inventory restored for ${inventoryChanges.length} product(s)`);
-    if (inventoryChanges.length > 0) {
-      console.log(`📋 Restored products:`, inventoryChanges.map(ic => ({
-        productId: ic.productId,
-        quantityRestored: Math.abs(ic.quantityChange),
-        stockChange: `${ic.previousStock} → ${ic.newStock}`
-      })));
-    } else {
-      console.warn(`⚠️ WARNING: No inventory was restored! Check if items have productId or if products exist.`);
+    logger.debug('Bill delete completed', { billNo: sale.billNo, inventoryLinesRestored: inventoryChanges.length });
+    if (inventoryChanges.length === 0 && productItems.length > 0) {
+      logger.warn('Bill delete: no inventory restored despite product lines; check productId / product records', { billNo: sale.billNo });
     }
-    console.log(`==========================================\n`);
 
     res.json({ 
       success: true, 
@@ -11598,7 +11571,7 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       message: `Bill deleted. Inventory restored for ${inventoryChanges.length} product(s).`
     });
   } catch (err) {
-    console.error('❌ Error deleting sale:', err);
+    logger.error('❌ Error deleting sale:', err);
     if (useTransactions && session) {
       try {
         await session.abortTransaction();
@@ -11647,7 +11620,7 @@ app.get('/api/cash-registry/petty-cash-summary', authenticateToken, setupBusines
       }
     });
   } catch (error) {
-    console.error('Error fetching petty cash summary:', error);
+    logger.error('Error fetching petty cash summary:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -11672,7 +11645,7 @@ app.post('/api/petty-cash', authenticateToken, setupBusinessDatabase, requireSta
     await tx.save();
     res.status(201).json({ success: true, data: tx });
   } catch (error) {
-    console.error('Error adding petty cash:', error);
+    logger.error('Error adding petty cash:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -11697,7 +11670,7 @@ app.get('/api/petty-cash/logs', authenticateToken, setupBusinessDatabase, async 
 
     res.json({ success: true, data: logs });
   } catch (error) {
-    console.error('Error fetching petty cash logs:', error);
+    logger.error('Error fetching petty cash logs:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -11742,7 +11715,7 @@ app.get('/api/cash-registry/summary/dashboard', authenticateToken, setupBusiness
       }
     });
   } catch (error) {
-    console.error('Error fetching cash registry summary:', error);
+    logger.error('Error fetching cash registry summary:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -11799,7 +11772,7 @@ app.get('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (r
       }
     });
   } catch (error) {
-    console.error('Error fetching cash registries:', error);
+    logger.error('Error fetching cash registries:', error);
     res.status(500).json({ 
       success: false,
       error: 'Internal server error'
@@ -11816,7 +11789,7 @@ app.get('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
     }
     res.json(cashRegistry);
   } catch (error) {
-    console.error('Error fetching cash registry:', error);
+    logger.error('Error fetching cash registry:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -11848,7 +11821,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
     let cashBalance = 0;
     let balanceDifference = 0;
     let onlinePosDifference = 0;
-    
+    let openingBalanceStored = Number(openingBalance) || 0;
+
     // Parse date in IST (Asia/Kolkata) - all dates use IST
     const dateObj = parseDateIST(date);
     
@@ -11919,11 +11893,25 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       });
       
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
-      
+
+      const { resolveOpeningBalanceForRegistryDay } = require('./utils/cash-registry-ledger');
+      let effectiveOpening = Number(openingBalance) || 0;
+      if (!effectiveOpening) {
+        effectiveOpening = await resolveOpeningBalanceForRegistryDay({
+          CashRegistry,
+          branchId,
+          registryDate: dateObj,
+          closingDocFallback: 0,
+        });
+      }
+
+      const closingTotalPhysical = Number(closingBalance) || totalBalance;
+
       // Calculate cash balance and differences
-      cashBalance = openingBalance + cashCollected - expenseValue;
-      balanceDifference = closingBalance - cashBalance;
+      cashBalance = effectiveOpening + cashCollected - expenseValue;
+      balanceDifference = closingTotalPhysical - cashBalance;
       onlinePosDifference = onlineCash - posCash;
+      openingBalanceStored = effectiveOpening;
     }
     
     const cashRegistry = new CashRegistry({
@@ -11933,7 +11921,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       userId: req.user.id,
       branchId: req.user.branchId,
       denominations,
-      openingBalance: shiftType === 'opening' ? totalBalance : openingBalance,
+      openingBalance: shiftType === 'opening' ? totalBalance : openingBalanceStored,
       closingBalance: shiftType === 'closing' ? totalBalance : 0,
       cashCollected,
       expenseValue,
@@ -11957,7 +11945,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       message: 'Cash registry entry created successfully'
     });
   } catch (error) {
-    console.error('Error creating cash registry:', error);
+    logger.error('Error creating cash registry:', error);
     res.status(500).json({ 
       success: false,
       error: error.message,
@@ -11977,7 +11965,7 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
       balanceDifferenceReason,
       onlineCashDifferenceReason
     } = req.body;
-    const { CashRegistry } = req.businessModels;
+    const { CashRegistry, Sale, Expense } = req.businessModels;
     
     const cashRegistry = await CashRegistry.findById(req.params.id);
     if (!cashRegistry) {
@@ -11996,9 +11984,34 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
       updates.closingBalance = closingBalance;
       updates.onlineCash = onlineCash;
       updates.posCash = posCash;
-      
-      // Recalculate differences
-      const cashBalance = cashRegistry.openingBalance + cashRegistry.cashCollected - cashRegistry.expenseValue;
+
+      const {
+        computeDayCashLedger,
+        resolveOpeningBalanceForRegistryDay,
+      } = require('./utils/cash-registry-ledger');
+      const branchId = cashRegistry.branchId || req.user.branchId;
+      const { cashCollected, expenseValue } = (Sale && Expense)
+        ? await computeDayCashLedger({
+          Sale,
+          Expense,
+          branchId,
+          registryDate: cashRegistry.date,
+        })
+        : { cashCollected: cashRegistry.cashCollected, expenseValue: cashRegistry.expenseValue };
+
+      const resolvedOpening = (Sale && Expense)
+        ? await resolveOpeningBalanceForRegistryDay({
+          CashRegistry,
+          branchId,
+          registryDate: cashRegistry.date,
+          closingDocFallback: cashRegistry.openingBalance,
+        })
+        : Number(cashRegistry.openingBalance) || 0;
+
+      updates.cashCollected = cashCollected;
+      updates.expenseValue = expenseValue;
+      updates.openingBalance = resolvedOpening;
+      const cashBalance = resolvedOpening + cashCollected - expenseValue;
       updates.cashBalance = cashBalance;
       updates.balanceDifference = closingBalance - cashBalance;
       updates.onlinePosDifference = onlineCash - posCash;
@@ -12012,7 +12025,7 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
     
     res.json(updatedCashRegistry);
   } catch (error) {
-    console.error('Error updating cash registry:', error);
+    logger.error('Error updating cash registry:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -12051,14 +12064,14 @@ app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBu
     );
     res.json(updated);
   } catch (error) {
-    console.error('Error updating difference reason:', error);
+    logger.error('Error updating difference reason:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
 
 app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    const { CashRegistry } = req.businessModels;
+    const { CashRegistry, Sale, Expense } = req.businessModels;
     const { verificationNotes, balanceDifferenceReason, balanceDifferenceNote, onlineCashDifferenceReason, onlineCashDifferenceNote } = req.body;
     const updatedBy = req.user.firstName && req.user.lastName ?
       `${req.user.firstName} ${req.user.lastName}`.trim() : req.user.email || 'Unknown User';
@@ -12068,9 +12081,51 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
       return res.status(404).json({ message: 'Cash registry entry not found' });
     }
 
-    // Check if verification is required
-    const hasBalanceDifference = cashRegistry.balanceDifference !== 0;
-    const hasOnlinePosDifference = cashRegistry.onlinePosDifference !== 0;
+    const negligible = (n) => Math.abs(Number(n) || 0) < 0.01;
+
+    let hasBalanceDifference = !negligible(cashRegistry.balanceDifference);
+    let hasOnlinePosDifference = !negligible(cashRegistry.onlinePosDifference);
+    let ledgerRefresh = {};
+
+    // Recompute cash collected / expenses from Sales + Expenses for this date so
+    // verify matches the report (stale cashCollected on the row caused false ₹difference).
+    if (cashRegistry.shiftType === 'closing' && Sale && Expense) {
+      const {
+        computeDayCashLedger,
+        resolveOpeningBalanceForRegistryDay,
+      } = require('./utils/cash-registry-ledger');
+      const branchId = cashRegistry.branchId || req.user.branchId;
+      const { cashCollected, expenseValue } = await computeDayCashLedger({
+        Sale,
+        Expense,
+        branchId,
+        registryDate: cashRegistry.date,
+      });
+      const resolvedOpening = await resolveOpeningBalanceForRegistryDay({
+        CashRegistry,
+        branchId,
+        registryDate: cashRegistry.date,
+        closingDocFallback: cashRegistry.openingBalance,
+      });
+      const closingBal = Number(cashRegistry.closingBalance) || 0;
+      const onlineCash = Number(cashRegistry.onlineCash) || 0;
+      const posCash = Number(cashRegistry.posCash) || 0;
+      const cashBalance = resolvedOpening + cashCollected - expenseValue;
+      const balanceDifference = closingBal - cashBalance;
+      const onlinePosDifference = onlineCash - posCash;
+
+      hasBalanceDifference = !negligible(balanceDifference);
+      hasOnlinePosDifference = !negligible(onlinePosDifference);
+
+      ledgerRefresh = {
+        openingBalance: resolvedOpening,
+        cashCollected,
+        expenseValue,
+        cashBalance,
+        balanceDifference,
+        onlinePosDifference,
+      };
+    }
 
     if (hasBalanceDifference && !balanceDifferenceReason?.trim()) {
       return res.status(400).json({
@@ -12089,8 +12144,9 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
       hasOnlinePosDifference && onlineCashDifferenceReason && `Online: ${onlineCashDifferenceReason}`
     ].filter(Boolean).join('; ') || 'Verified';
 
-    // Update verification fields
+    // Update verification fields (+ refresh ledger totals on closing rows)
     const updates = {
+      ...ledgerRefresh,
       isVerified: true,
       verifiedBy: updatedBy,
       verifiedAt: new Date(),
@@ -12125,13 +12181,13 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
       const targetDate = new Date(verifiedCashRegistry.date);
       targetDate.setHours(0, 0, 0, 0);
       sendDailySummaryForDate(branchId, branchId, targetDate).catch(err => {
-        console.error('Failed to send daily summary after verification:', err);
+        logger.error('Failed to send daily summary after verification:', err);
       });
     }
     
     res.json(verifiedCashRegistry);
   } catch (error) {
-    console.error('Error verifying cash registry:', error);
+    logger.error('Error verifying cash registry:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -12164,7 +12220,7 @@ app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, a
     await CashRegistry.findByIdAndDelete(req.params.id);
     res.json({ message: 'Cash registry entry deleted successfully' });
   } catch (error) {
-    console.error('Error deleting cash registry:', error);
+    logger.error('Error deleting cash registry:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -12183,7 +12239,7 @@ app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, re
       data: commissionProfiles
     });
   } catch (error) {
-    console.error('Error fetching commission profiles:', error);
+    logger.error('Error fetching commission profiles:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch commission profiles'
@@ -12205,7 +12261,7 @@ app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, r
       data: profile
     });
   } catch (error) {
-    console.error('Error creating commission profile:', error);
+    logger.error('Error creating commission profile:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to create commission profile'
@@ -12241,7 +12297,7 @@ app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase
       data: updatedProfile
     });
   } catch (error) {
-    console.error('Error updating commission profile:', error);
+    logger.error('Error updating commission profile:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to update commission profile'
@@ -12269,7 +12325,7 @@ app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatab
       message: 'Commission profile deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting commission profile:', error);
+    logger.error('Error deleting commission profile:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to delete commission profile'
@@ -12310,7 +12366,7 @@ app.get('/api/inventory-transactions', authenticateToken, setupBusinessDatabase,
       }
     });
   } catch (error) {
-    console.error('Error fetching inventory transactions:', error);
+    logger.error('Error fetching inventory transactions:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch inventory transactions'
@@ -12337,7 +12393,7 @@ app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabas
       message: result.message || 'Products report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    console.error('Error exporting products report:', error);
+    logger.error('Error exporting products report:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export products report'
@@ -12362,7 +12418,7 @@ app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, 
       message: result.message || 'Sales report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    console.error('Error exporting sales report:', error);
+    logger.error('Error exporting sales report:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export sales report'
@@ -12385,7 +12441,7 @@ app.post('/api/reports/export/summary', authenticateToken, setupBusinessDatabase
       message: result.message || 'Summary report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    console.error('Error exporting summary report:', error);
+    logger.error('Error exporting summary report:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export summary report'
@@ -12409,7 +12465,7 @@ app.post('/api/reports/export/staff-performance', authenticateToken, setupBusine
       message: result.message || 'Staff performance report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    console.error('Error exporting staff performance report:', error);
+    logger.error('Error exporting staff performance report:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export staff performance report'
@@ -12432,7 +12488,7 @@ app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDat
       message: result.message || 'Service list report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    console.error('Error exporting service list report:', error);
+    logger.error('Error exporting service list report:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export service list report'
@@ -12562,7 +12618,7 @@ app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabas
       summary: { count: rows.length, totalValue }
     });
   } catch (error) {
-    console.error('Error fetching appointment list:', error);
+    logger.error('Error fetching appointment list:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch appointment list'
@@ -12635,7 +12691,7 @@ app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabas
       summary: { count: rows.length, totalOutstanding }
     });
   } catch (error) {
-    console.error('Error fetching unpaid/part-paid:', error);
+    logger.error('Error fetching unpaid/part-paid:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch unpaid/part-paid bills'
@@ -12681,7 +12737,7 @@ app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabas
       summary: { count: rows.length, totalValue }
     });
   } catch (error) {
-    console.error('Error fetching deleted invoices:', error);
+    logger.error('Error fetching deleted invoices:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch deleted invoices'
@@ -12704,7 +12760,7 @@ app.post('/api/reports/export/unpaid-part-paid', authenticateToken, setupBusines
       message: result.message || 'Unpaid/Part-Paid report has been sent to admin email(s)'
     });
   } catch (error) {
-    console.error('Error exporting unpaid/part-paid report:', error);
+    logger.error('Error exporting unpaid/part-paid report:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export unpaid/part-paid report'
@@ -12727,7 +12783,7 @@ app.post('/api/reports/export/deleted-invoices', authenticateToken, setupBusines
       message: result.message || 'Deleted invoice report has been sent to admin email(s)'
     });
   } catch (error) {
-    console.error('Error exporting deleted invoice report:', error);
+    logger.error('Error exporting deleted invoice report:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export deleted invoice report'
@@ -12750,7 +12806,7 @@ app.post('/api/reports/export/appointment-list', authenticateToken, setupBusines
       message: result.message || 'Appointment list report has been sent to admin email(s)'
     });
   } catch (error) {
-    console.error('Error exporting appointment list report:', error);
+    logger.error('Error exporting appointment list report:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export appointment list report'
@@ -12772,7 +12828,7 @@ app.get('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, re
     const payouts = await TipPayout.find(query).sort({ paidAt: -1 }).lean();
     res.json({ success: true, data: payouts });
   } catch (error) {
-    console.error('Error fetching tip payouts:', error);
+    logger.error('Error fetching tip payouts:', error);
     res.status(500).json({ success: false, error: error.message || 'Failed to fetch tip payouts' });
   }
 });
@@ -12795,7 +12851,7 @@ app.post('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, r
     });
     res.json({ success: true, data: payout });
   } catch (error) {
-    console.error('Error creating tip payout:', error);
+    logger.error('Error creating tip payout:', error);
     res.status(500).json({ success: false, error: error.message || 'Failed to create tip payout' });
   }
 });
@@ -12870,7 +12926,7 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
         paymentMode: sale.paymentMode
       }))
     } catch (err) {
-      console.error('Error fetching sales:', err)
+      logger.error('Error fetching sales:', err)
     }
 
     // Get appointments assigned to this user
@@ -12880,7 +12936,9 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
           { assignedStaff: userId },
           { createdBy: userId }
         ]
-      }).lean()
+      })
+        .limit(10000)
+        .lean()
       exportData.appointments = appointments.map(apt => ({
         id: apt._id,
         clientName: apt.clientName,
@@ -12890,7 +12948,7 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
         status: apt.status
       }))
     } catch (err) {
-      console.error('Error fetching appointments:', err)
+      logger.error('Error fetching appointments:', err)
     }
 
     // If admin/owner, include business-wide data
@@ -12908,7 +12966,7 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
           }
         }
       } catch (err) {
-        console.error('Error fetching business data:', err)
+        logger.error('Error fetching business data:', err)
       }
     }
 
@@ -12989,7 +13047,7 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
         }
         
         if (recipients.length === 0) {
-          console.log(`⚠️ No admin email found to send export to`);
+          logger.debug(`⚠️ No admin email found to send export to`);
           return res.status(400).json({
             success: false,
             error: 'No admin email found. Please ensure at least one admin user has an email address configured.'
@@ -13005,31 +13063,31 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
         // Send export file to all recipients
         for (const recipient of recipients) {
           try {
-            console.log(`📧 Sending export file to ${recipient.role}: ${recipient.email}`);
+            logger.debug(`📧 Sending export file to ${recipient.role}: ${recipient.email}`);
             await emailService.sendExportReady({
               to: recipient.email,
               exportType: 'User Data Export',
               businessName: business?.name || 'Business',
               attachments: [attachment]
             });
-            console.log(`✅ Export file sent to ${recipient.email}`);
+            logger.debug(`✅ Export file sent to ${recipient.email}`);
           } catch (emailError) {
-            console.error(`❌ Error sending export file to ${recipient.email}:`, emailError);
-            console.error(`❌ Error details:`, {
+            logger.error(`❌ Error sending export file to ${recipient.email}:`, emailError);
+            logger.error(`❌ Error details:`, {
               message: emailError.message,
               stack: emailError.stack
             });
           }
         }
       } else {
-        console.log(`⚠️ Email service is disabled, cannot send export file`);
+        logger.debug(`⚠️ Email service is disabled, cannot send export file`);
         return res.status(400).json({
           success: false,
           error: 'Email service is disabled. Please enable email service to receive export files.'
         });
       }
     } catch (emailError) {
-      console.error('Error sending export file:', emailError);
+      logger.error('Error sending export file:', emailError);
       return res.status(500).json({
         success: false,
         error: 'Failed to send export file via email. Please try again later.'
@@ -13050,7 +13108,7 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
       }
     })
   } catch (error) {
-    console.error('Error exporting user data:', error)
+    logger.error('Error exporting user data:', error)
     res.status(500).json({
       success: false,
       error: 'Failed to export user data'
@@ -13123,7 +13181,7 @@ app.delete('/api/gdpr/delete/:userId', authenticateToken, setupBusinessDatabase,
       deletionDate: deletionDate.toISOString()
     })
   } catch (error) {
-    console.error('Error deleting user data:', error)
+    logger.error('Error deleting user data:', error)
     res.status(500).json({
       success: false,
       error: 'Failed to delete user data'
@@ -13160,7 +13218,7 @@ app.get('/api/gdpr/consent/:userId', authenticateToken, setupBusinessDatabase, a
       }
     })
   } catch (error) {
-    console.error('Error fetching consent status:', error)
+    logger.error('Error fetching consent status:', error)
     res.status(500).json({
       success: false,
       error: 'Failed to fetch consent status',
@@ -13200,7 +13258,7 @@ app.post('/api/gdpr/consent/:userId', authenticateToken, setupBusinessDatabase, 
       message: 'Consent preferences updated'
     })
   } catch (error) {
-    console.error('Error updating consent:', error)
+    logger.error('Error updating consent:', error)
     res.status(500).json({
       success: false,
       error: 'Failed to update consent'
@@ -13246,7 +13304,7 @@ app.get('/api/email-service/status', authenticateToken, async (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  logger.error(err.stack);
   res.status(500).json({
     success: false,
     error: 'Something went wrong!'
@@ -13264,9 +13322,9 @@ app.use('*', (req, res) => {
 // Start server
 
 app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`🚀 EaseMySalon Backend running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🔐 API Base: http://localhost:${PORT}/api`);
+  logger.debug(`🚀 EaseMySalon Backend running on port ${PORT}`);
+  logger.debug(`📊 Health check: http://localhost:${PORT}/api/health`);
+  logger.debug(`🔐 API Base: http://localhost:${PORT}/api`);
   // Old initialization functions disabled for multi-tenant architecture
   // Admin users should be created via create-admin.js script
   // await initializeDefaultUsers();
@@ -13282,7 +13340,7 @@ app.listen(PORT, '0.0.0.0', async () => {
   // Initialize email service on server start
   const emailService = require('./services/email-service');
   emailService.initialize().catch(err => {
-    console.error('⚠️  Failed to initialize email service:', err.message);
+    logger.error('⚠️  Failed to initialize email service:', err.message);
   });
 });
 
@@ -13290,7 +13348,7 @@ app.listen(PORT, '0.0.0.0', async () => {
 function setupInactivityChecker() {
   // Run every day at 2 AM
   cron.schedule('0 2 * * *', async () => {
-    console.log('🕐 Running daily inactivity check...');
+    logger.debug('🕐 Running daily inactivity check...');
     const { checkInactiveBusinesses } = require('./inactivity-checker');
     await checkInactiveBusinesses();
   }, {
@@ -13298,6 +13356,6 @@ function setupInactivityChecker() {
     timezone: "Asia/Kolkata"
   });
   
-  console.log('⏰ Inactivity checker scheduled to run daily at 2 AM IST');
+  logger.debug('⏰ Inactivity checker scheduled to run daily at 2 AM IST');
 }
 

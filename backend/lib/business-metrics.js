@@ -5,6 +5,7 @@
 
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
+const { logger } = require('../utils/logger');
 
 /**
  * Get users count, invoices count, and revenue for one business.
@@ -24,12 +25,12 @@ async function getBusinessMetrics(businessCode, mainConnection) {
     const Sale = models.Sale;
 
     const [usersCount, invoicesCount, revenueArr] = await Promise.all([
-      Staff.countDocuments().lean(),
-      Sale.countDocuments().lean(),
+      Staff.countDocuments(),
+      Sale.countDocuments(),
       Sale.aggregate([
         { $match: { status: { $in: ['completed', 'Completed'] } } },
         { $group: { _id: null, total: { $sum: '$grossTotal' } } },
-      ]),
+      ]).option({ allowDiskUse: true }),
     ]);
     const revenueResult = revenueArr && revenueArr[0] && typeof revenueArr[0].total === 'number' ? revenueArr[0].total : 0;
 
@@ -37,7 +38,7 @@ async function getBusinessMetrics(businessCode, mainConnection) {
     result.invoicesCount = invoicesCount || 0;
     result.revenue = revenueResult || 0;
   } catch (err) {
-    console.warn(`[business-metrics] ${businessCode}:`, err.message);
+    logger.warn(`[business-metrics] ${businessCode}:`, err.message);
   }
   return result;
 }

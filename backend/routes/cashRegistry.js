@@ -1,4 +1,5 @@
 const express = require('express');
+const { logger } = require('../utils/logger');
 const router = express.Router();
 const CashRegistry = require('../models/CashRegistry');
 const Sale = require('../models/Sale');
@@ -8,7 +9,7 @@ const { parseDateIST, getStartOfDayIST, getEndOfDayIST } = require('../utils/dat
 
 // Test endpoint to verify connection (no auth for testing) - MUST BE FIRST
 router.get('/test', (req, res) => {
-  console.log('🧪 Test endpoint hit!');
+  logger.debug('🧪 Test endpoint hit!');
   res.json({ 
     success: true, 
     message: 'Cash registry test endpoint working',
@@ -67,7 +68,7 @@ router.get('/', auth, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching cash registries:', error);
+    logger.error('Error fetching cash registries:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -81,7 +82,7 @@ router.get('/:id', auth, async (req, res) => {
     }
     res.json(cashRegistry);
   } catch (error) {
-    console.error('Error fetching cash registry:', error);
+    logger.error('Error fetching cash registry:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -89,7 +90,7 @@ router.get('/:id', auth, async (req, res) => {
 // Create new cash registry entry
 router.post('/', auth, async (req, res) => {
   try {
-    console.log('🔵 Received cash registry request:', {
+    logger.debug('🔵 Received cash registry request:', {
       body: req.body,
       user: req.user,
       headers: req.headers,
@@ -142,7 +143,7 @@ router.post('/', auth, async (req, res) => {
     const startOfDay = getStartOfDayIST(date);
     const endOfDay = getEndOfDayIST(date);
     
-    console.log('Looking for existing record:', {
+    logger.debug('Looking for existing record:', {
       date: date,
       dateObj: dateObj,
       startOfDay: startOfDay,
@@ -157,7 +158,7 @@ router.post('/', auth, async (req, res) => {
       }
     });
     
-    console.log('Existing record found:', existingRecord ? {
+    logger.debug('Existing record found:', existingRecord ? {
       id: existingRecord._id,
       shiftType: existingRecord.shiftType,
       openingBalance: existingRecord.openingBalance,
@@ -267,7 +268,7 @@ router.post('/', auth, async (req, res) => {
       
       await existingRecord.save();
       
-      console.log('Record updated successfully:', {
+      logger.debug('Record updated successfully:', {
         id: existingRecord._id,
         shiftType: existingRecord.shiftType,
         openingBalance: existingRecord.openingBalance,
@@ -281,7 +282,7 @@ router.post('/', auth, async (req, res) => {
         message: 'Cash registry entry updated successfully',
         data: existingRecord
       };
-      console.log('🟢 Sending update response:', response);
+      logger.debug('🟢 Sending update response:', response);
       res.json(response);
     } else {
       // Create new record (use dateObj for consistent storage)
@@ -312,12 +313,12 @@ router.post('/', auth, async (req, res) => {
         message: 'Cash registry entry created successfully',
         data: cashRegistry
       };
-      console.log('🟢 Sending success response:', response);
+      logger.debug('🟢 Sending success response:', response);
       res.status(201).json(response);
     }
   } catch (error) {
-    console.error('Error creating/updating cash registry:', error);
-    console.error('Error details:', {
+    logger.error('Error creating/updating cash registry:', error);
+    logger.error('Error details:', {
       message: error.message,
       stack: error.stack,
       body: req.body,
@@ -384,7 +385,7 @@ router.put('/:id', auth, async (req, res) => {
     
     res.json(updatedCashRegistry);
   } catch (error) {
-    console.error('Error updating cash registry:', error);
+    logger.error('Error updating cash registry:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -394,7 +395,7 @@ router.post('/:id/verify', auth, async (req, res) => {
   try {
     const { verificationNotes, balanceDifferenceReason, onlineCashDifferenceReason } = req.body;
     
-    console.log('🔍 DEBUG Verification request:', {
+    logger.debug('🔍 DEBUG Verification request:', {
       id: req.params.id,
       verificationNotes,
       balanceDifferenceReason,
@@ -440,7 +441,7 @@ router.post('/:id/verify', auth, async (req, res) => {
       { new: true, runValidators: true }
     );
     
-    console.log('🔍 DEBUG Verification result:', {
+    logger.debug('🔍 DEBUG Verification result:', {
       id: verifiedCashRegistry._id,
       balanceDifferenceReason: verifiedCashRegistry.balanceDifferenceReason,
       onlineCashDifferenceReason: verifiedCashRegistry.onlineCashDifferenceReason,
@@ -453,7 +454,7 @@ router.post('/:id/verify', auth, async (req, res) => {
       data: verifiedCashRegistry
     });
   } catch (error) {
-    console.error('Error verifying cash registry:', error);
+    logger.error('Error verifying cash registry:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -512,7 +513,7 @@ router.delete('/:id', auth, async (req, res) => {
       res.json({ message: 'Cash registry entry deleted successfully' });
     }
   } catch (error) {
-    console.error('Error deleting cash registry:', error);
+    logger.error('Error deleting cash registry:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -567,7 +568,7 @@ router.get('/summary/dashboard', auth, async (req, res) => {
       hasClosingShift: !!closingEntry
     });
   } catch (error) {
-    console.error('Error fetching cash registry summary:', error);
+    logger.error('Error fetching cash registry summary:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });

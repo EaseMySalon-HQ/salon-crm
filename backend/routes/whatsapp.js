@@ -1,4 +1,5 @@
 const express = require('express');
+const { logger } = require('../utils/logger');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { authenticateAdmin } = require('../middleware/admin-auth');
@@ -37,7 +38,7 @@ router.post('/test', authenticateAdmin, setupMainDatabase, async (req, res) => {
     
     res.json(result);
   } catch (error) {
-    console.error('Error testing WhatsApp:', error);
+    logger.error('Error testing WhatsApp:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to test WhatsApp connection'
@@ -123,7 +124,7 @@ router.get('/tracking/admin', authenticateAdmin, setupMainDatabase, async (req, 
       }
     });
   } catch (error) {
-    console.error('Error fetching admin WhatsApp tracking:', error);
+    logger.error('Error fetching admin WhatsApp tracking:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch admin tracking data'
@@ -137,11 +138,11 @@ router.get('/tracking/admin', authenticateAdmin, setupMainDatabase, async (req, 
  */
 router.get('/tracking/business', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
   try {
-    console.log('📱 WhatsApp tracking/business route hit');
+    logger.debug('📱 WhatsApp tracking/business route hit');
     const { dateFrom, dateTo } = req.query;
     const businessId = req.user?.branchId;
     
-    console.log('📱 Business ID:', businessId);
+    logger.debug('📱 Business ID:', businessId);
     
     if (!businessId) {
       return res.status(400).json({
@@ -205,7 +206,7 @@ router.get('/tracking/business', authenticateToken, setupMainDatabase, setupBusi
       }
     });
   } catch (error) {
-    console.error('Error fetching business WhatsApp tracking:', error);
+    logger.error('Error fetching business WhatsApp tracking:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch business tracking data'
@@ -298,7 +299,7 @@ router.get('/logs', authenticateToken, setupMainDatabase, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching WhatsApp logs:', error);
+    logger.error('Error fetching WhatsApp logs:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch message logs'
@@ -312,7 +313,7 @@ router.get('/logs', authenticateToken, setupMainDatabase, async (req, res) => {
  */
 router.post('/marketing-templates/create', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
   try {
-    console.log('📱 [Template Create] Request received:', {
+    logger.debug('📱 [Template Create] Request received:', {
       businessId: req.user?.branchId,
       hasBody: !!req.body,
       templateName: req.body?.templateName,
@@ -323,7 +324,7 @@ router.post('/marketing-templates/create', authenticateToken, setupMainDatabase,
     const businessId = req.user?.branchId;
     
     if (!businessId) {
-      console.error('❌ [Template Create] Business ID not found');
+      logger.error('❌ [Template Create] Business ID not found');
       return res.status(400).json({
         success: false,
         error: 'Business ID not found'
@@ -340,7 +341,7 @@ router.post('/marketing-templates/create', authenticateToken, setupMainDatabase,
 
     // Validation
     if (!templateName) {
-      console.error('❌ [Template Create] Template name missing');
+      logger.error('❌ [Template Create] Template name missing');
       return res.status(400).json({
         success: false,
         error: 'Template name is required'
@@ -348,7 +349,7 @@ router.post('/marketing-templates/create', authenticateToken, setupMainDatabase,
     }
 
     if (!components || !Array.isArray(components) || components.length === 0) {
-      console.error('❌ [Template Create] Components missing or invalid:', {
+      logger.error('❌ [Template Create] Components missing or invalid:', {
         hasComponents: !!components,
         isArray: Array.isArray(components),
         length: components?.length
@@ -366,7 +367,7 @@ router.post('/marketing-templates/create', authenticateToken, setupMainDatabase,
     const whatsappConfig = settings.notifications?.whatsapp;
 
     if (!whatsappConfig?.msg91ApiKey || !whatsappConfig?.msg91SenderId) {
-      console.error('❌ [Template Create] WhatsApp service not configured:', {
+      logger.error('❌ [Template Create] WhatsApp service not configured:', {
         hasApiKey: !!whatsappConfig?.msg91ApiKey,
         hasSenderId: !!whatsappConfig?.msg91SenderId
       });
@@ -419,7 +420,7 @@ router.post('/marketing-templates/create', authenticateToken, setupMainDatabase,
         }
       });
     } else {
-      console.error('❌ [Template Create] MSG91 API returned error:', {
+      logger.error('❌ [Template Create] MSG91 API returned error:', {
         error: result.error,
         responseData: result.responseData
       });
@@ -430,7 +431,7 @@ router.post('/marketing-templates/create', authenticateToken, setupMainDatabase,
       });
     }
   } catch (error) {
-    console.error('Error creating marketing template:', error);
+    logger.error('Error creating marketing template:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to create template'
@@ -484,7 +485,7 @@ router.get('/marketing-templates', authenticateToken, setupMainDatabase, setupBu
       }
     });
   } catch (error) {
-    console.error('Error fetching marketing templates:', error);
+    logger.error('Error fetching marketing templates:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch templates'
@@ -528,7 +529,7 @@ router.get('/marketing-templates/:templateId', authenticateToken, setupMainDatab
       data: template
     });
   } catch (error) {
-    console.error('Error fetching marketing template:', error);
+    logger.error('Error fetching marketing template:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch template'
@@ -582,7 +583,7 @@ router.put('/marketing-templates/:templateId/check-status', authenticateToken, s
       }
     });
   } catch (error) {
-    console.error('Error checking template status:', error);
+    logger.error('Error checking template status:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to check template status'
@@ -637,7 +638,7 @@ router.delete('/marketing-templates/:templateId', authenticateToken, setupMainDa
       message: 'Template deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting marketing template:', error);
+    logger.error('Error deleting marketing template:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to delete template'

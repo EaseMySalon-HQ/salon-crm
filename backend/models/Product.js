@@ -101,6 +101,11 @@ const productSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Indexes: inventory lists and search by branch
+productSchema.index({ branchId: 1, isActive: 1, name: 1 });
+productSchema.index({ branchId: 1, category: 1 });
+productSchema.index({ branchId: 1, createdAt: -1 });
+
 // Export both schema and model for flexibility
 module.exports = {
   schema: productSchema,

@@ -36,7 +36,10 @@ const normalizePermissionList = (permissions = []) => {
   return normalized;
 };
 
-const applyPermissionOverrides = (basePermissions = [], overrides = { add: [], remove: [] }) => {
+const revokeEntries = (overrides = {}) =>
+  normalizePermissionList(overrides.revoke || overrides.remove || []);
+
+const applyPermissionOverrides = (basePermissions = [], overrides = { add: [], revoke: [] }) => {
   const permissionMap = new Map();
 
   const addActionsToMap = (moduleId, actions) => {
@@ -62,7 +65,7 @@ const applyPermissionOverrides = (basePermissions = [], overrides = { add: [], r
     addActionsToMap(module, actions);
   });
 
-  normalizePermissionList(overrides.remove).forEach(({ module, actions }) => {
+  revokeEntries(overrides).forEach(({ module, actions }) => {
     removeActionsFromMap(module, actions);
   });
 
@@ -79,14 +82,21 @@ const applyPermissionOverrides = (basePermissions = [], overrides = { add: [], r
 const normalizePermissionOverrides = (overrides = {}) => {
   return {
     add: normalizePermissionList(overrides.add || []),
-    remove: normalizePermissionList(overrides.remove || [])
+    revoke: revokeEntries(overrides)
   };
+};
+
+/** API / UI still use `remove`; storage uses `revoke` (Mongoose reserves `remove`). */
+const permissionOverridesForApi = (overrides = {}) => {
+  const n = normalizePermissionOverrides(overrides);
+  return { add: n.add, remove: n.revoke };
 };
 
 module.exports = {
   moduleActionMap,
   normalizePermissionList,
   normalizePermissionOverrides,
+  permissionOverridesForApi,
   applyPermissionOverrides
 };
 

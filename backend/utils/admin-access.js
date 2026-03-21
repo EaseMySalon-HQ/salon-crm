@@ -1,5 +1,6 @@
 const { DEFAULT_ADMIN_ROLES } = require('../config/admin-access');
 const databaseManager = require('../config/database-manager');
+const { logger } = require('./logger');
 
 let initializationPromise = null;
 
@@ -37,7 +38,7 @@ async function ensureAdminAccessDefaults() {
           existing.isSystem = true;
           existing.color = defaultRole.color || existing.color;
           await existing.save();
-          console.log(`✅ Updated role: ${defaultRole.key}`);
+          logger.debug(`Updated role: ${defaultRole.key}`);
         }
       }
     }
@@ -45,7 +46,7 @@ async function ensureAdminAccessDefaults() {
     await syncAdminRoleReferences(AdminRole, Admin);
   })().catch((error) => {
     initializationPromise = null;
-    console.error('Failed to initialize admin access defaults:', error);
+    logger.error('Failed to initialize admin access defaults:', error);
     throw error;
   });
 

@@ -1,5 +1,6 @@
 const https = require('https');
 const databaseManager = require('../config/database-manager');
+const { logger } = require('../utils/logger');
 
 class SMSService {
   constructor() {
@@ -30,14 +31,14 @@ class SMSService {
           this.config = { ...smsConfig, provider: 'msg91' };
           this.enabled = true;
           this.initialized = true;
-          console.log('✅ SMS service initialized with provider: msg91');
+          logger.debug('✅ SMS service initialized with provider: msg91');
           return;
         }
       }
       this.enabled = false;
       this.initialized = true;
     } catch (error) {
-      console.warn('⚠️ Could not load SMS config from admin settings, falling back to env:', error.message);
+      logger.warn('⚠️ Could not load SMS config from admin settings, falling back to env:', error.message);
     }
 
     if (process.env.MSG91_SMS_AUTH_KEY) {
@@ -53,7 +54,7 @@ class SMSService {
       };
       this.enabled = true;
       this.initialized = true;
-      console.log('✅ SMS service initialized from environment variables');
+      logger.debug('✅ SMS service initialized from environment variables');
     } else {
       this.enabled = false;
       this.initialized = true;
