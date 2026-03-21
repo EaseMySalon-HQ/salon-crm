@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const databaseManager = require('../config/database-manager');
+const { logger } = require('../utils/logger');
 
 // Use the same JWT_SECRET as server.js
 // Ensure dotenv is loaded first
@@ -7,29 +8,29 @@ require('dotenv').config();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
 
 const authenticateToken = (req, res, next) => {
-  console.log('🔍 AuthenticateToken middleware called');
+  logger.debug('🔍 AuthenticateToken middleware called');
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    console.log('🔍 No token found in request');
+    logger.debug('🔍 No token found in request');
     return res.status(401).json({ success: false, error: 'Access token required' });
   }
 
   // Reject mock tokens - only allow real JWT tokens
   if (token.startsWith('mock-token-')) {
-    console.log('🔑 Mock token detected, rejecting for security');
+    logger.debug('🔑 Mock token detected, rejecting for security');
     return res.status(401).json({ success: false, error: 'Invalid token format' });
   }
 
   // Regular JWT verification for production tokens
   jwt.verify(token, JWT_SECRET, async (err, decoded) => {
     if (err) {
-      console.log('🔍 JWT verification error:', err);
+      logger.debug('🔍 JWT verification error:', err);
       return res.status(403).json({ success: false, error: 'Invalid or expired token' });
     }
 
-    console.log('🔍 JWT decoded successfully:', decoded);
+    logger.debug('🔍 JWT decoded successfully:', decoded);
 
     try {
       // First try to find user in main database
@@ -40,7 +41,7 @@ const authenticateToken = (req, res, next) => {
       let staffUser = null; // Set when user is from Staff (business DB)
       
       if (!user) {
-        console.log('🔍 User not found in main database, checking if it\'s a staff user');
+        logger.debug('🔍 User not found in main database, checking if it\'s a staff user');
         let businessId = decoded.branchId || null;
         
         // If branchId is in token, directly check that business database
@@ -50,10 +51,10 @@ const authenticateToken = (req, res, next) => {
             const Staff = businessDb.model('Staff', require('../models/Staff').schema);
             staffUser = await Staff.findById(decoded.id).select('-password');
             if (staffUser) {
-              console.log('🔍 Staff user found in business database (from token branchId):', businessId);
+              logger.debug('🔍 Staff user found in business database (from token branchId):', businessId);
             }
           } catch (error) {
-            console.log('🔍 Error checking business database with branchId from token:', error.message);
+            logger.debug('🔍 Error checking business database with branchId from token:', error.message);
           }
         }
         
@@ -71,18 +72,18 @@ const authenticateToken = (req, res, next) => {
               if (staff) {
                 staffUser = staff;
                 businessId = business._id;
-                console.log('🔍 Staff user found in business database:', business.name, business._id);
+                logger.debug('🔍 Staff user found in business database:', business.name, business._id);
                 break;
               }
             } catch (error) {
-              console.log('🔍 Error checking business database:', business.name, error.message);
+              logger.debug('🔍 Error checking business database:', business.name, error.message);
               // Continue to next business
             }
           }
         }
         
         if (!staffUser) {
-          console.log('🔍 User not found in any database for ID:', decoded.id);
+          logger.debug('🔍 User not found in any database for ID:', decoded.id);
           return res.status(401).json({ success: false, error: 'User not found' });
         }
 
@@ -117,7 +118,7 @@ const authenticateToken = (req, res, next) => {
         };
       }
 
-      console.log('🔍 Auth middleware user:', {
+      logger.debug('🔍 Auth middleware user:', {
         id: user._id,
         email: user.email,
         branchId: user.branchId,
@@ -165,7 +166,7 @@ const authenticateToken = (req, res, next) => {
         }),
       };
 
-      console.log('🔍 Auth middleware req.user set:', {
+      logger.debug('🔍 Auth middleware req.user set:', {
         id: req.user.id,
         email: req.user.email,
         branchId: req.user.branchId,
@@ -173,7 +174,7 @@ const authenticateToken = (req, res, next) => {
       });
       next();
     } catch (error) {
-      console.error('Error in auth middleware:', error);
+      logger.error('Error in auth middleware:', error);
       return res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });

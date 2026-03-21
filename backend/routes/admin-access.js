@@ -1,4 +1,5 @@
 const express = require('express');
+const { logger } = require('../utils/logger');
 const bcrypt = require('bcryptjs');
 const router = express.Router();
 const databaseManager = require('../config/database-manager');
@@ -11,6 +12,7 @@ const { ensureAdminAccessDefaults } = require('../utils/admin-access');
 const {
   moduleActionMap,
   normalizePermissionOverrides,
+  permissionOverridesForApi,
   applyPermissionOverrides
 } = require('../utils/permission-helpers');
 
@@ -44,8 +46,8 @@ const formatAdminResponse = (adminDoc, roleLookup) => {
     : roleLookup.get(adminDoc.role);
 
   const basePermissions = role?.permissions || adminDoc.permissions || [];
-  const overrides = adminDoc.permissionOverrides || { add: [], remove: [] };
-  const permissions = applyPermissionOverrides(basePermissions, overrides);
+  const normalizedOverrides = normalizePermissionOverrides(adminDoc.permissionOverrides || {});
+  const permissions = applyPermissionOverrides(basePermissions, normalizedOverrides);
 
   return {
     id: adminDoc._id,
@@ -58,7 +60,7 @@ const formatAdminResponse = (adminDoc, roleLookup) => {
     isActive: adminDoc.isActive,
     lastLogin: adminDoc.lastLogin,
     permissions,
-    permissionOverrides: overrides,
+    permissionOverrides: permissionOverridesForApi(normalizedOverrides),
     createdAt: adminDoc.createdAt,
     updatedAt: adminDoc.updatedAt
   };
@@ -160,7 +162,7 @@ router.get('/overview', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Failed to load admin access overview:', error);
+    logger.error('Failed to load admin access overview:', error);
     res.status(500).json({ success: false, error: 'Failed to load access overview' });
   }
 });
@@ -182,7 +184,7 @@ router.get('/roles', async (req, res) => {
       data: roles.map((role) => roleResponse(role, countsByRole[role.key] || 0))
     });
   } catch (error) {
-    console.error('Failed to load admin roles:', error);
+    logger.error('Failed to load admin roles:', error);
     res.status(500).json({ success: false, error: 'Failed to load roles' });
   }
 });
@@ -223,11 +225,11 @@ router.post('/roles', requireAdminRole('super_admin'), async (req, res) => {
       details: { name: role.name, key: role.key, permissionsCount: permissions.length },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log activity:', err));
+    }).catch(err => logger.error('Failed to log activity:', err));
 
     res.status(201).json({ success: true, data: roleResponse(role, 0) });
   } catch (error) {
-    console.error('Failed to create admin role:', error);
+    logger.error('Failed to create admin role:', error);
     res.status(500).json({ success: false, error: 'Failed to create role' });
   }
 });
@@ -318,11 +320,11 @@ router.put('/roles/:roleId', requireAdminRole('super_admin'), async (req, res) =
       details: { name: role.name, key: role.key, changes: changes, isSystem: role.isSystem },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log activity:', err));
+    }).catch(err => logger.error('Failed to log activity:', err));
 
     res.json({ success: true, data: roleResponse(role, assignmentCount) });
   } catch (error) {
-    console.error('Failed to update admin role:', error);
+    logger.error('Failed to update admin role:', error);
     res.status(500).json({ success: false, error: 'Failed to update role' });
   }
 });
@@ -358,11 +360,11 @@ router.delete('/roles/:roleId', requireAdminRole('super_admin'), async (req, res
       details: { name: role.name, key: role.key },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log activity:', err));
+    }).catch(err => logger.error('Failed to log activity:', err));
 
     res.json({ success: true, message: 'Role deleted successfully' });
   } catch (error) {
-    console.error('Failed to delete admin role:', error);
+    logger.error('Failed to delete admin role:', error);
     res.status(500).json({ success: false, error: 'Failed to delete role' });
   }
 });
@@ -384,7 +386,7 @@ router.get('/users', async (req, res) => {
 
     res.json({ success: true, data: payload });
   } catch (error) {
-    console.error('Failed to load admin users:', error);
+    logger.error('Failed to load admin users:', error);
     res.status(500).json({ success: false, error: 'Failed to load admin users' });
   }
 });
@@ -442,14 +444,14 @@ router.post('/users', authenticateAdmin, checkAdminPermission('users', 'create')
       module: 'users',
       resourceId: admin._id.toString(),
       resourceType: 'Admin',
-      details: { email: admin.email, role: role.key, hasOverrides: normalizedOverrides.add.length > 0 || normalizedOverrides.remove.length > 0 },
+      details: { email: admin.email, role: role.key, hasOverrides: normalizedOverrides.add.length > 0 || normalizedOverrides.revoke.length > 0 },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log activity:', err));
+    }).catch(err => logger.error('Failed to log activity:', err));
 
     res.status(201).json({ success: true, data: payload });
   } catch (error) {
-    console.error('Failed to create admin user:', error);
+    logger.error('Failed to create admin user:', error);
     res.status(500).json({ success: false, error: 'Failed to create admin user' });
   }
 });
@@ -530,7 +532,7 @@ router.put('/users/:userId', authenticateAdmin, checkAdminPermission('users', 'u
       : await AdminRole.findOne({ key: admin.role });
 
     const basePermissions = roleForPermissions?.permissions || [];
-    const overrides = admin.permissionOverrides || { add: [], remove: [] };
+    const overrides = normalizePermissionOverrides(admin.permissionOverrides || {});
     admin.permissions = applyPermissionOverrides(basePermissions, overrides);
 
     await admin.save();
@@ -556,7 +558,7 @@ router.put('/users/:userId', authenticateAdmin, checkAdminPermission('users', 'u
       },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log activity:', err));
+    }).catch(err => logger.error('Failed to log activity:', err));
 
     const roles = await AdminRole.find({}).lean();
     const roleLookup = new Map();
@@ -567,7 +569,7 @@ router.put('/users/:userId', authenticateAdmin, checkAdminPermission('users', 'u
 
     res.json({ success: true, data: formatAdminResponse(admin.toObject(), roleLookup) });
   } catch (error) {
-    console.error('Failed to update admin user:', error);
+    logger.error('Failed to update admin user:', error);
     res.status(500).json({ success: false, error: 'Failed to update admin user' });
   }
 });
@@ -609,11 +611,11 @@ router.patch('/users/:userId/permissions', authenticateAdmin, checkAdminPermissi
       details: { 
         targetEmail: admin.email,
         overridesAdded: normalizedOverrides.add.length,
-        overridesRemoved: normalizedOverrides.remove.length
+        overridesRemoved: normalizedOverrides.revoke.length
       },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log activity:', err));
+    }).catch(err => logger.error('Failed to log activity:', err));
 
     const roles = await AdminRole.find({}).lean();
     const roleLookup = new Map();
@@ -624,7 +626,7 @@ router.patch('/users/:userId/permissions', authenticateAdmin, checkAdminPermissi
 
     res.json({ success: true, data: formatAdminResponse(admin.toObject(), roleLookup) });
   } catch (error) {
-    console.error('Failed to update admin permissions:', error);
+    logger.error('Failed to update admin permissions:', error);
     res.status(500).json({ success: false, error: 'Failed to update permissions' });
   }
 });
@@ -672,7 +674,7 @@ router.patch('/users/:userId/status', requireAdminRole('super_admin'), async (re
       },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log activity:', err));
+    }).catch(err => logger.error('Failed to log activity:', err));
 
     const roles = await AdminRole.find({}).lean();
     const roleLookup = new Map();
@@ -683,7 +685,7 @@ router.patch('/users/:userId/status', requireAdminRole('super_admin'), async (re
 
     res.json({ success: true, data: formatAdminResponse(admin.toObject(), roleLookup) });
   } catch (error) {
-    console.error('Failed to update admin user status:', error);
+    logger.error('Failed to update admin user status:', error);
     res.status(500).json({ success: false, error: 'Failed to update admin status' });
   }
 });
@@ -729,11 +731,11 @@ router.patch('/users/:userId/password', authenticateAdmin, async (req, res) => {
       },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent']
-    }).catch(err => console.error('Failed to log activity:', err));
+    }).catch(err => logger.error('Failed to log activity:', err));
 
     res.json({ success: true, message: 'Password reset successfully' });
   } catch (error) {
-    console.error('Failed to reset admin password:', error);
+    logger.error('Failed to reset admin password:', error);
     res.status(500).json({ success: false, error: 'Failed to reset password' });
   }
 });

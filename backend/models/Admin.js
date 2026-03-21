@@ -17,18 +17,10 @@ const adminSchema = new mongoose.Schema({
     module: { type: String, required: true }, // 'businesses', 'users', 'billing', 'settings'
     actions: [{ type: String }] // ['create', 'read', 'update', 'delete']
   }],
+  // Mixed: `remove` is reserved by Mongoose; legacy docs used { remove: [...] } — normalized on read/save.
   permissionOverrides: {
-    type: {
-      add: [{
-        module: { type: String, required: true },
-        actions: [{ type: String }]
-      }],
-      remove: [{
-        module: { type: String, required: true },
-        actions: [{ type: String }]
-      }]
-    },
-    default: { add: [], remove: [] }
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({ add: [], revoke: [] })
   },
   isActive: { type: Boolean, default: true },
   lastLogin: { type: Date },
@@ -36,6 +28,18 @@ const adminSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 }, {
   timestamps: true
+});
+
+adminSchema.pre('save', function migratePermissionOverrides(next) {
+  const po = this.permissionOverrides;
+  if (!po || typeof po !== 'object') return next();
+  if (Array.isArray(po.remove) && (!Array.isArray(po.revoke) || po.revoke.length === 0)) {
+    po.revoke = po.remove;
+  }
+  if ('remove' in po) {
+    delete po.remove;
+  }
+  next();
 });
 
 // Virtual for full name

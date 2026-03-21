@@ -1,5 +1,7 @@
 'use strict';
 
+const { logger } = require('../utils/logger');
+
 async function sendAppointmentConfirmationNotifications(req, createdAppointments, getEmailSettingsWithDefaults, getWhatsAppSettingsWithDefaults) {
   // Send email notifications if enabled
   try {
@@ -7,12 +9,11 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
     
     // Ensure email service is initialized
     if (!emailService.initialized) {
-      console.log('📧 Initializing email service...');
+      logger.info('Initializing email service');
       await emailService.initialize();
     }
     
-    // Debug: Log email service status
-    console.log('📧 Email Service Status:', {
+    logger.debug('Email Service Status', {
       initialized: emailService.initialized,
       enabled: emailService.enabled,
       provider: emailService.provider,
@@ -21,8 +22,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
     
     // Check if email service is enabled (from AdminSettings)
     if (!emailService.enabled) {
-      console.log('❌ Email service is disabled, skipping appointment email');
-      console.log('💡 To enable: Check Admin Settings → Notifications → Email and ensure it\'s enabled with valid API key');
+      logger.info('Email service is disabled, skipping appointment email. To enable: Check Admin Settings → Notifications → Email and ensure it\'s enabled with valid API key');
     } else {
       // Get Business from main database (not business database)
       const databaseManager = require('../config/database-manager');
@@ -31,9 +31,9 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       const business = await Business.findById(req.user.branchId);
       
       if (!business) {
-        console.error('❌ Business not found for branchId:', req.user.branchId);
+        logger.error('Business not found for branchId:', req.user.branchId);
       } else {
-        console.log('✅ Business found:', business.name);
+        logger.info('Business found:', business.name);
       }
       
       const rawEmailSettings = business?.settings?.emailNotificationSettings;
@@ -41,8 +41,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       // Apply defaults to email settings (similar to WhatsApp)
       const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
       
-      // Debug: Log email settings
-      console.log('📧 Email Settings:', {
+      logger.debug('Email Settings', {
         emailSettingsExists: !!rawEmailSettings,
         appointmentNotificationsEnabled: emailSettings?.appointmentNotifications?.enabled,
         newAppointmentsEnabled: emailSettings?.appointmentNotifications?.newAppointments
@@ -54,7 +53,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       // Use merged settings with defaults - defaults to true if not explicitly set to false
       const appointmentNotificationsEnabled = emailSettings.appointmentNotifications?.enabled === true;
       
-      console.log(`📧 Appointment notifications enabled: ${appointmentNotificationsEnabled}`, {
+      logger.debug(`Appointment notifications enabled: ${appointmentNotificationsEnabled}`, {
         enabled: emailSettings?.appointmentNotifications?.enabled,
         newAppointments: emailSettings?.appointmentNotifications?.newAppointments
       });
@@ -63,14 +62,13 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       // Send confirmation to client if email exists
       // Check if new appointments are enabled
       const sendNewAppointments = emailSettings?.appointmentNotifications?.newAppointments === true;
-      console.log(`📧 Send new appointments to clients: ${sendNewAppointments}`);
+      logger.debug(`Send new appointments to clients: ${sendNewAppointments}`);
       
       if (sendNewAppointments) {
-        console.log(`📧 Processing ${createdAppointments.length} appointment(s) for client emails`);
+        logger.info(`Processing ${createdAppointments.length} appointment(s) for client emails`);
         
         for (const appointment of createdAppointments) {
-          // Debug: Log appointment structure
-          console.log('📧 Appointment Structure:', {
+          logger.debug('Appointment Structure', {
             appointmentId: appointment._id,
             clientIdType: typeof appointment.clientId,
             clientIdIsObject: typeof appointment.clientId === 'object',
@@ -90,7 +88,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
             clientEmail = client.email ? client.email.trim() : null;
             clientName = client.name || 'Client';
             
-            console.log('📧 Using populated client data:', {
+            logger.debug('Using populated client data', {
               name: clientName,
               email: clientEmail,
               hasEmail: !!clientEmail
@@ -98,28 +96,27 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
           } else {
             // Client is not populated, fetch it
             const clientId = appointment.clientId?._id || appointment.clientId;
-            console.log('📧 Client not populated, fetching from database. ClientId:', clientId);
+            logger.debug('Client not populated, fetching from database. ClientId:', clientId);
             
             if (clientId) {
               client = await Client.findById(clientId);
               if (client) {
                 clientEmail = client.email ? client.email.trim() : null;
                 clientName = client.name || 'Client';
-                console.log('📧 Fetched client from database:', {
+                logger.debug('Fetched client from database', {
                   name: clientName,
                   email: clientEmail,
                   hasEmail: !!clientEmail
                 });
               } else {
-                console.error('❌ Client not found in database with ID:', clientId);
+                logger.error('Client not found in database with ID:', clientId);
               }
             } else {
-              console.error('❌ No clientId found in appointment');
+              logger.error('No clientId found in appointment');
             }
           }
           
-          // Debug: Log client email check
-          console.log('📧 Client Email Check Summary:', {
+          logger.debug('Client Email Check Summary', {
             appointmentId: appointment._id,
             clientId: appointment.clientId?._id || appointment.clientId,
             clientEmail: clientEmail,
@@ -129,7 +126,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
           });
           
           if (clientEmail && clientEmail.length > 0) {
-            console.log(`📧 Attempting to send appointment confirmation to: ${clientEmail}`);
+            logger.debug(`Attempting to send appointment confirmation to: ${clientEmail}`);
             try {
               // Get service name - check if populated or fetch
               let serviceName = 'Service';
@@ -162,8 +159,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
                 }
               }
               
-              console.log(`📧 Preparing to send email to: ${clientEmail}`);
-              console.log(`📧 Email details:`, {
+              logger.debug('Preparing to send email', {
                 to: clientEmail,
                 clientName: clientName,
                 serviceName: serviceName,
@@ -190,31 +186,27 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
                 }
               });
               
-              console.log(`📧 Email result:`, {
+              logger.debug('Email result', {
                 success: emailResult?.success,
                 error: emailResult?.error,
                 data: emailResult?.data
               });
               
               if (emailResult && emailResult.success !== false) {
-                console.log(`✅ Appointment confirmation sent to client: ${clientEmail}`);
+                logger.debug(`Appointment confirmation sent to client: ${clientEmail}`);
               } else {
-                console.error(`❌ Failed to send appointment email to ${clientEmail}:`, emailResult?.error || 'Unknown error');
-                console.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
+                logger.error(`Failed to send appointment email to ${clientEmail}:`, emailResult?.error || 'Unknown error');
+                logger.debug('Full email result:', JSON.stringify(emailResult, null, 2));
               }
             } catch (clientEmailError) {
-              console.error('❌ Error sending appointment confirmation to client:', clientEmailError);
-              console.error('❌ Error details:', {
+              logger.error('Error sending appointment confirmation to client:', clientEmailError);
+              logger.error('Error details:', {
                 message: clientEmailError.message,
                 stack: clientEmailError.stack
               });
             }
           } else {
-            console.log(`⚠️ Skipping email for appointment - client has no email address.`);
-            console.log(`   Appointment ID: ${appointment._id}`);
-            console.log(`   Client ID: ${appointment.clientId?._id || appointment.clientId}`);
-            console.log(`   Client Name: ${clientName || 'Unknown'}`);
-            console.log(`   💡 To fix: Add email address to client profile in Clients section`);
+            logger.debug(`Skipping email for appointment - client has no email address. Appointment ID: ${appointment._id}, Client ID: ${appointment.clientId?._id || appointment.clientId}, Client Name: ${clientName || 'Unknown'}. To fix: Add email address to client profile in Clients section`);
           }
         }
       }
@@ -229,7 +221,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       
       const recipientStaffIds = emailSettings?.appointmentNotifications?.recipientStaffIds || [];
       
-      console.log('📧 Staff Notification Check:', {
+      logger.debug('Staff Notification Check', {
         staffNotificationsEnabled,
         staffExplicitlyDisabled,
         staffHasRecipientList,
@@ -250,8 +242,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
             email: { $exists: true, $ne: '' }
           }).lean();
         } else {
-          // Fallback: Find all staff with appointment alerts enabled
-          console.log('⚠️ No recipient list configured, finding all staff with appointment alerts enabled');
+          logger.debug('No recipient list configured, finding all staff with appointment alerts enabled');
           recipients = await Staff.find({
             branchId: req.user.branchId,
             'emailNotifications.enabled': true,
@@ -269,7 +260,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
           email: { $exists: true, $ne: '' }
         }).lean();
         
-        console.log(`📧 Found ${adminUsers.length} admin user(s) for business`);
+        logger.info(`Found ${adminUsers.length} admin user(s) for business`);
         
         // Add admin users to recipients (they always have notifications enabled)
         let adminCount = 0;
@@ -290,21 +281,16 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
               }
             });
             adminCount++;
-            console.log(`📧 Added admin user to recipients: ${admin.email} (${admin.name || admin.email})`);
+            logger.debug(`Added admin user to recipients: ${admin.email} (${admin.name || admin.email})`);
           } else {
-            console.log(`📧 Admin user already in recipients: ${admin.email}`);
+            logger.debug(`Admin user already in recipients: ${admin.email}`);
           }
         }
         
-        console.log(`📧 Found ${recipients.length} total recipients for appointment notifications (${recipients.length - adminCount} staff + ${adminCount} admin)`);
+        logger.info(`Found ${recipients.length} total recipients for appointment notifications (${recipients.length - adminCount} staff + ${adminCount} admin)`);
         
         if (recipients.length === 0) {
-          console.log('⚠️ No recipients found. Reasons:');
-          console.log('   - Check if staff have email notifications enabled');
-          console.log('   - Check if staff have appointment alerts preference enabled');
-          console.log('   - Check if staff have valid email addresses');
-          console.log('   - Check if recipient list is configured in business settings');
-          console.log('   - Check if admin users have email addresses');
+          logger.warn('No recipients found. Check: staff email notifications enabled, staff appointment alerts preference enabled, staff have valid email addresses, recipient list configured in business settings, admin users have email addresses');
         }
         
         const emailDelayMs = 600; // Resend limit: 2 req/sec
@@ -312,7 +298,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
           if (i > 0) await new Promise(r => setTimeout(r, emailDelayMs));
           const recipient = recipients[i];
           try {
-            console.log(`📧 Sending appointment notification to: ${recipient.email} (${recipient.name || recipient.role})`);
+            logger.debug(`Sending appointment notification to: ${recipient.email} (${recipient.name || recipient.role})`);
             
             // Get appointment details for the first appointment (if available)
             const firstAppointment = createdAppointments[0];
@@ -339,23 +325,23 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
               businessName: business.name,
               appointmentDetails: appointmentDetails
             });
-            console.log(`✅ Appointment notification sent to: ${recipient.email}`);
+            logger.debug(`Appointment notification sent to: ${recipient.email}`);
           } catch (emailError) {
-            console.error(`❌ Error sending appointment notification to ${recipient.email}:`, emailError);
-            console.error('❌ Error details:', {
+            logger.error(`Error sending appointment notification to ${recipient.email}:`, emailError);
+            logger.error('Error details:', {
               message: emailError.message,
               stack: emailError.stack
             });
           }
         }
       } else {
-        console.log('⚠️ Staff appointment notifications are disabled in business settings');
+        logger.info('Staff appointment notifications are disabled in business settings');
       }
     }
     }
   } catch (emailError) {
-    console.error('❌ Error sending appointment email:', emailError);
-    console.error('❌ Error stack:', emailError.stack);
+    logger.error('Error sending appointment email:', emailError);
+    logger.error('Error stack:', emailError.stack);
     // Don't fail appointment creation if email fails
   }
 
@@ -375,8 +361,10 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
       const adminAppointmentNotificationsEnabled = adminSettings?.notifications?.whatsapp?.appointmentNotifications === true;
       
-      console.log('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
-      console.log('📱 [WhatsApp] Admin Appointment Notifications enabled:', adminAppointmentNotificationsEnabled);
+      logger.debug('WhatsApp admin settings', {
+        whatsappEnabled,
+        adminAppointmentNotificationsEnabled
+      });
       
       if (whatsappEnabled && adminAppointmentNotificationsEnabled) {
         const business = await Business.findById(req.user.branchId);
@@ -477,29 +465,29 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
                         { _id: business._id },
                         { $inc: { 'plan.addons.whatsapp.used': 1 } }
                       );
-                      console.log(`📊 WhatsApp quota incremented for business: ${business._id}`);
+                      logger.debug(`WhatsApp quota incremented for business: ${business._id}`);
                     } catch (quotaError) {
-                      console.error('❌ Error incrementing WhatsApp quota:', quotaError);
+                      logger.error('Error incrementing WhatsApp quota:', quotaError);
                       // Don't fail the appointment if quota increment fails
                     }
                     
-                    console.log(`✅ Appointment WhatsApp sent to client: ${client.phone}`);
+                    logger.debug(`Appointment WhatsApp sent to client: ${client.phone}`);
                   } else {
-                    console.error(`❌ Failed to send appointment WhatsApp to ${client.phone}:`, result.error);
+                    logger.error(`Failed to send appointment WhatsApp to ${client.phone}:`, result.error);
                   }
                 } catch (whatsappError) {
-                  console.error('❌ Error sending appointment WhatsApp to client:', whatsappError);
+                  logger.error('Error sending appointment WhatsApp to client:', whatsappError);
                 }
               }
             }
           } else {
-            console.log('📱 WhatsApp quiet hours active, skipping appointment message');
+            logger.info('WhatsApp quiet hours active, skipping appointment message');
           }
         }
       }
     }
   } catch (whatsappError) {
-    console.error('Error sending appointment WhatsApp:', whatsappError);
+    logger.error('Error sending appointment WhatsApp:', whatsappError);
     // Don't fail appointment creation if WhatsApp fails
   }
 
@@ -569,7 +557,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       }
     }
   } catch (smsErr) {
-    console.error('Error sending appointment confirmation SMS:', smsErr);
+    logger.error('Error sending appointment confirmation SMS:', smsErr);
   }
 }
 

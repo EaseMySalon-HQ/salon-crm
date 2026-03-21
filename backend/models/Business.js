@@ -215,6 +215,9 @@ const businessSchema = new mongoose.Schema({
   timestamps: true
 });
 
+businessSchema.index({ status: 1, createdAt: -1 });
+businessSchema.index({ createdAt: -1 });
+
 // Generate unique business code
 businessSchema.pre('save', async function(next) {
   if (!this.code) {

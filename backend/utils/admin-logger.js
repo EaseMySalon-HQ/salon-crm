@@ -1,4 +1,5 @@
 const databaseManager = require('../config/database-manager');
+const { logger } = require('./logger');
 
 /**
  * Log admin activity to the database
@@ -26,7 +27,7 @@ async function logAdminActivity(options) {
     } = options;
 
     if (!adminId || !action || !module) {
-      console.warn('Admin logger: Missing required fields', { adminId, action, module });
+      logger.warn('Admin logger: Missing required fields', { adminId, action, module });
       return;
     }
 
@@ -44,7 +45,7 @@ async function logAdminActivity(options) {
       // Fetch admin by ID
       const admin = await Admin.findById(adminId).select('email firstName lastName').lean();
       if (!admin) {
-        console.warn('Admin logger: Admin not found', { adminId });
+        logger.warn('Admin logger: Admin not found', { adminId });
         return;
       }
       adminEmail = admin.email;
@@ -69,7 +70,7 @@ async function logAdminActivity(options) {
     });
   } catch (error) {
     // Log errors but don't throw - logging should never break the main flow
-    console.error('Failed to log admin activity:', error);
+    logger.error('Failed to log admin activity:', error);
   }
 }
 
@@ -104,7 +105,7 @@ function createLoggingMiddleware(action, module, getResourceId = null, getResour
           ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress,
           userAgent: req.headers['user-agent']
         }).catch(err => {
-          console.error('Error in logging middleware:', err);
+          logger.error('Error in logging middleware:', err);
         });
       }
 

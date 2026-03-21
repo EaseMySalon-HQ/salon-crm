@@ -1,4 +1,5 @@
 const { checkAndSendLowInventoryAlerts } = require('../utils/low-inventory-checker');
+const { logger } = require('../utils/logger');
 
 const UNIT_ENUM = ['g', 'ml', 'pcs'];
 
@@ -51,7 +52,7 @@ async function runConsumptionForServiceItem(sale, itemIndex, businessModels, opt
   const branchIdForRules = sale.branchId || (options.user && options.user.branchId);
   const allRules = await ServiceConsumptionRule.find({ serviceId: item.serviceId, branchId: branchIdForRules }).lean();
   if (allRules.length === 0) {
-    console.log('[AutoConsumption] No consumption rules for serviceId:', item.serviceId, 'branchId:', String(branchIdForRules));
+    logger.debug('[AutoConsumption] No consumption rules for serviceId:', item.serviceId, 'branchId:', String(branchIdForRules));
   }
   const rules = variantKey
     ? allRules.filter((r) => (r.variantKey || '') === variantKey || (r.variantKey || '') === '')
@@ -118,7 +119,7 @@ async function runConsumptionForServiceItem(sale, itemIndex, businessModels, opt
       const stockDelta = useVolumeUnits ? quantityToDeduct / productVol : quantityToDeduct;
       const stockAfter = stockBefore - stockDelta;
 
-      console.log('[AutoConsumption] Deducting', { product: product.name, quantityToDeduct, productVol, useVolumeUnits, stockDelta, stockBefore, stockAfter });
+      logger.debug('[AutoConsumption] Deducting', { product: product.name, quantityToDeduct, productVol, useVolumeUnits, stockDelta, stockBefore, stockAfter });
       await Product.findByIdAndUpdate(rule.productId, { stock: stockAfter });
 
       const logPayload = {
@@ -166,10 +167,10 @@ async function runConsumptionForServiceItem(sale, itemIndex, businessModels, opt
       try {
         await checkAndSendLowInventoryAlerts(String(branchId), String(rule.productId));
       } catch (alertErr) {
-        console.warn('Auto consumption: low inventory alert check failed:', alertErr.message);
+        logger.warn('Auto consumption: low inventory alert check failed:', alertErr.message);
       }
     } catch (err) {
-      console.error('Auto consumption: error processing rule for product', rule.productId, err);
+      logger.error('Auto consumption: error processing rule for product', rule.productId, err);
       warnings.push(`Failed to deduct product (${rule.productId}): ${err.message}`);
     }
   }
@@ -193,31 +194,31 @@ async function runAutoConsumptionForSale(sale, businessModels, options = {}) {
 
   const branchId = sale.branchId || (options.user && options.user.branchId);
   if (!branchId) {
-    console.warn('[AutoConsumption] No branchId on sale and no user.branchId in options; skipping.');
+    logger.warn('[AutoConsumption] No branchId on sale and no user.branchId in options; skipping.');
     return { warnings: allWarnings, processedCount: 0 };
   }
   if (status !== 'completed') {
-    console.log('[AutoConsumption] Sale status is not completed:', status, 'billNo:', sale.billNo);
+    logger.debug('[AutoConsumption] Sale status is not completed:', status, 'billNo:', sale.billNo);
     return { warnings: allWarnings, processedCount: 0 };
   }
 
   const adjustmentsByItemIndex = options.adjustmentsByItemIndex || {};
   const items = sale.items || [];
-  console.log('[AutoConsumption] Running for sale', sale.billNo || sale._id, 'items:', items.length, 'branchId:', String(branchId));
+  logger.debug('[AutoConsumption] Running for sale', sale.billNo || sale._id, 'items:', items.length, 'branchId:', String(branchId));
   const processedIndices = [];
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (item.type !== 'service' || !item.serviceId || item.autoConsumptionProcessedAt) {
       if (item.type === 'service' && item.serviceId) {
-        console.log('[AutoConsumption] Skip item', i, 'already processed:', !!item.autoConsumptionProcessedAt);
+        logger.debug('[AutoConsumption] Skip item', i, 'already processed:', !!item.autoConsumptionProcessedAt);
       }
       continue;
     }
     const adj = adjustmentsByItemIndex[i] || {};
     const saleForItem = { ...(sale.toObject ? sale.toObject() : sale), branchId: sale.branchId || branchId };
     const { warnings, processed } = await runConsumptionForServiceItem(saleForItem, i, businessModels, { adjustments: adj, user: options.user });
-    if (warnings.length) console.warn('[AutoConsumption] Item', i, 'warnings:', warnings);
+    if (warnings.length) logger.warn('[AutoConsumption] Item', i, 'warnings:', warnings);
     allWarnings.push(...warnings);
     if (processed) {
       processedCount++;
@@ -258,7 +259,7 @@ async function reverseConsumptionForBill(saleId, businessModels) {
     try {
       const product = await Product.findById(log.productId);
       if (!product) {
-        console.warn(`Auto consumption reversal: product ${log.productId} not found; skipping log ${log._id}`);
+        logger.warn(`Auto consumption reversal: product ${log.productId} not found; skipping log ${log._id}`);
         continue;
       }
       const currentStock = Number(product.stock);
@@ -284,7 +285,7 @@ async function reverseConsumptionForBill(saleId, businessModels) {
         branchId: log.branchId
       });
     } catch (err) {
-      console.error('Auto consumption reversal: error for log', log._id, err);
+      logger.error('Auto consumption reversal: error for log', log._id, err);
     }
   }
 

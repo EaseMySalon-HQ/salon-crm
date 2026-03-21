@@ -101,6 +101,10 @@ const receiptSchema = new mongoose.Schema({
   timestamps: true
 });
 
+receiptSchema.index({ branchId: 1, date: -1 });
+receiptSchema.index({ branchId: 1, clientId: 1 });
+receiptSchema.index({ branchId: 1, createdAt: -1 });
+
 // Export both schema and model for flexibility
 module.exports = {
   schema: receiptSchema,

@@ -16,7 +16,7 @@ const adminRoleSchema = new mongoose.Schema({
   timestamps: true
 });
 
-adminRoleSchema.index({ key: 1 }, { unique: true });
+// unique: true on `key` already creates { key: 1 }; avoid duplicate schema index.
 
 module.exports = {
   schema: adminRoleSchema,

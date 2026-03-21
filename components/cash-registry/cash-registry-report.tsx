@@ -1132,6 +1132,20 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   // This represents the variance between collected online cash and actual online sales
   const onlineCashDifference = totalOnlineCashCollected - totalOnlineSales
 
+  const activeClosingForVerify = selectedClosingEntry || todayClosingEntry || null
+  const verificationSummaryDateKey = activeClosingForVerify
+    ? toDateStringIST(new Date(activeClosingForVerify.date))
+    : null
+  const verificationDaySummary = verificationSummaryDateKey
+    ? dailySummaries.find((s) => s.date === verificationSummaryDateKey) ?? null
+    : null
+  const verificationModalCashDifference = verificationDaySummary
+    ? verificationDaySummary.cashDifference
+    : cashDifference
+  const verificationModalOnlineDifference = verificationDaySummary
+    ? verificationDaySummary.onlineCashDifference
+    : onlineCashDifference
+
   console.log("Stats calculation:", {
     filteredData: filteredData.length,
     openingEntries: filteredData.filter(entry => entry.shiftType === "opening"),
@@ -2209,7 +2223,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                                                 return
                                               }
                                               
-                                              // Check if there are any differences that need reasons
+                                              // Match the summary row (live sales); server re-computes ledger on verify.
                                               const hasCashDifference = entry.cashDifference !== 0
                                               const hasOnlineDifference = entry.onlineCashDifference !== 0
                                               
@@ -2700,8 +2714,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         }}
         onVerify={handleVerification}
         closingEntry={selectedClosingEntry || todayClosingEntry || null}
-        cashDifference={cashDifference}
-        onlineCashDifference={onlineCashDifference}
+        cashDifference={verificationModalCashDifference}
+        onlineCashDifference={verificationModalOnlineDifference}
       />
 
       {/* Cash Difference Breakdown Drawer */}

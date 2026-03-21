@@ -58,6 +58,9 @@ const serviceSchema = new mongoose.Schema({
   timestamps: true
 });
 
+serviceSchema.index({ branchId: 1, isActive: 1, name: 1 });
+serviceSchema.index({ branchId: 1, category: 1 });
+
 // Export both schema and model for flexibility
 module.exports = {
   schema: serviceSchema,

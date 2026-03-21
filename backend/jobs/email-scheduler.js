@@ -2,13 +2,14 @@ const cron = require('node-cron');
 const emailService = require('../services/email-service');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
+const { logger } = require('../utils/logger');
 
 /**
  * Send daily summary emails to all businesses
  */
 async function sendDailySummaries() {
   try {
-    console.log('📧 Starting daily summary email job...');
+    logger.info('Starting daily summary email job');
     
     // Get main connection
     const mainConnection = await databaseManager.getMainConnection();
@@ -16,7 +17,7 @@ async function sendDailySummaries() {
     
     // Get all active businesses
     const businesses = await Business.find({ status: 'active' });
-    console.log(`Found ${businesses.length} active businesses`);
+    logger.info(`Found ${businesses.length} active businesses for daily summary`);
     
     for (const business of businesses) {
       try {
@@ -29,18 +30,18 @@ async function sendDailySummaries() {
           (emailSettings?.dailySummary?.enabled === false && !recipientListConfigured);
         
         if (!dailySummaryEnabled) {
-          console.log(`⏭️  Skipping daily summary for ${business.name} - disabled in settings`);
+          logger.debug(`Skipping daily summary for ${business.name} - disabled in settings`);
           continue;
         }
 
         // Respect delivery mode: skip scheduler-based send when set to "afterClosing"
         const deliveryMode = emailSettings?.dailySummary?.mode || 'fixedTime';
         if (deliveryMode === 'afterClosing') {
-          console.log(`⏭️  Skipping daily summary for ${business.name} - mode set to afterClosing (sent on verification)`);
+          logger.debug(`Skipping daily summary for ${business.name} - mode set to afterClosing (sent on verification)`);
           continue;
         }
         
-        console.log(`📧 Processing daily summary for business: ${business.name}`);
+        logger.debug(`Processing daily summary for business: ${business.name}`);
         
         // Get business database connection
         const businessDb = await databaseManager.getConnection(business._id, mainConnection);
@@ -62,7 +63,7 @@ async function sendDailySummaries() {
             $gte: today,
             $lt: tomorrow
           },
-          status: { $nin: ['cancelled', 'Cancelled'] } // Exclude cancelled sales (case variations)
+          status: { $nin: ['cancelled', 'Cancelled'] }
         }).lean();
         
         // Also get receipts for backward compatibility (tips, etc.)
@@ -130,7 +131,7 @@ async function sendDailySummaries() {
         // 10. Cash balance (from today's closing registry)
         const cashBalance = closingRegistry?.cashBalance ?? 0;
         
-        console.log(`📊 Daily summary for ${business.name}: ${totalBillCount} bills, ₹${totalSales}, cash ₹${totalSalesCash}, card ₹${totalSalesCard}, online ₹${totalSalesOnline}`);
+        logger.debug(`Daily summary for ${business.name}: ${totalBillCount} bills, ₹${totalSales}, cash ₹${totalSalesCash}, card ₹${totalSalesCard}, online ₹${totalSalesOnline}`);
         
         // Get recipient staff
         const recipientStaffIds = emailSettings?.dailySummary?.recipientStaffIds || [];
@@ -161,7 +162,7 @@ async function sendDailySummaries() {
           email: { $exists: true, $ne: '' }
         }).lean();
         
-        console.log(`📧 Found ${adminUsers.length} admin user(s) for daily summary`);
+        logger.debug(`Found ${adminUsers.length} admin user(s) for daily summary`);
         
         for (const admin of adminUsers) {
           const alreadyInList = recipients.some(r => r.email === admin.email);
@@ -172,21 +173,19 @@ async function sendDailySummaries() {
               email: admin.email,
               role: 'admin'
             });
-            console.log(`📧 Added admin user to daily summary recipients: ${admin.email}`);
+            logger.debug(`Added admin user to daily summary recipients: ${admin.email}`);
           }
         }
         
-        console.log(`📧 Found ${recipients.length} total recipients for daily summary`);
+        logger.debug(`Found ${recipients.length} total recipients for daily summary`);
         
         if (recipients.length === 0) {
-          console.log(`⚠️  No recipients found for ${business.name}. Reasons:`);
-          console.log(`   - Check if staff have email notifications enabled`);
-          console.log(`   - Check if staff have daily summary preference enabled`);
-          console.log(`   - Check if staff have valid email addresses`);
+          logger.warn(`No recipients found for ${business.name} - check staff email notification settings, daily summary preferences, and email addresses`);
           continue;
         }
         
         // Send emails (Resend limit: 2 req/sec - add delay between sends)
+        logger.debug(`Sending daily summary to ${recipients.length} recipient(s) for ${business.name}`);
         const delayMs = 600; // Stay under 2 req/sec
         for (let i = 0; i < recipients.length; i++) {
           if (i > 0) await new Promise(r => setTimeout(r, delayMs));
@@ -210,21 +209,21 @@ async function sendDailySummaries() {
                 cashBalance
               }
             });
-            console.log(`✅ Daily summary sent to ${staff.email} (${staff.name || staff.role}) for business ${business.name}`);
+            logger.debug(`Daily summary sent to ${staff.email} (${staff.name || staff.role}) for business ${business.name}`);
           } catch (error) {
-            console.error(`❌ Error sending daily summary to ${staff.email}:`, error);
+            logger.error(`Error sending daily summary to ${staff.email}:`, error);
           }
         }
         // Small delay before next business to avoid burst across businesses
         await new Promise(r => setTimeout(r, delayMs));
       } catch (error) {
-        console.error(`❌ Error processing daily summary for business ${business.name}:`, error);
+        logger.error(`Error processing daily summary for business ${business.name}:`, error);
       }
     }
     
-    console.log('✅ Daily summary email job completed');
+    logger.info('Daily summary email job completed');
   } catch (error) {
-    console.error('❌ Error in daily summary email job:', error);
+    logger.error('Daily summary email job failed:', error);
   }
 }
 
@@ -233,7 +232,7 @@ async function sendDailySummaries() {
  */
 async function sendWeeklySummaries() {
   try {
-    console.log('📧 Starting weekly summary email job...');
+    logger.info('Starting weekly summary email job');
     
     // Get main connection
     const mainConnection = await databaseManager.getMainConnection();
@@ -241,7 +240,7 @@ async function sendWeeklySummaries() {
     
     // Get all active businesses
     const businesses = await Business.find({ status: 'active' });
-    console.log(`Found ${businesses.length} active businesses`);
+    logger.info(`Found ${businesses.length} active businesses for weekly summary`);
     
     for (const business of businesses) {
       try {
@@ -254,7 +253,7 @@ async function sendWeeklySummaries() {
           (emailSettings?.weeklySummary?.enabled === false && !recipientListConfigured);
         
         if (!weeklySummaryEnabled) {
-          console.log(`⏭️  Skipping weekly summary for ${business.name} - disabled in settings`);
+          logger.debug(`Skipping weekly summary for ${business.name} - disabled in settings`);
           continue;
         }
         
@@ -268,7 +267,7 @@ async function sendWeeklySummaries() {
           continue;
         }
         
-        console.log(`📧 Processing weekly summary for business: ${business.name}`);
+        logger.debug(`Processing weekly summary for business: ${business.name}`);
         
         // Get business database connection
         const businessDb = await databaseManager.getConnection(business._id, mainConnection);
@@ -291,7 +290,7 @@ async function sendWeeklySummaries() {
             $gte: weekStart,
             $lte: weekEnd
           },
-          status: { $nin: ['cancelled', 'Cancelled'] } // Exclude cancelled sales (case variations)
+          status: { $nin: ['cancelled', 'Cancelled'] }
         }).lean();
         
         // Also get receipts for backward compatibility (if any exist)
@@ -329,7 +328,7 @@ async function sendWeeklySummaries() {
         const appointmentCount = appointments.length;
         const newClientsCount = newClients.length;
         
-        console.log(`📊 Weekly summary for ${business.name}: ${totalSales} sales, ₹${totalRevenue}, ${appointmentCount} appointments, ${newClientsCount} new clients`);
+        logger.debug(`Weekly summary for ${business.name}: ${totalSales} sales, ₹${totalRevenue}, ${appointmentCount} appointments, ${newClientsCount} new clients`);
         
         // Calculate revenue growth (simplified - compare with previous week)
         let revenueGrowth = null;
@@ -345,7 +344,7 @@ async function sendWeeklySummaries() {
               $gte: prevWeekStart,
               $lte: prevWeekEnd
             },
-            status: { $nin: ['cancelled', 'Cancelled'] } // Exclude cancelled sales (case variations)
+            status: { $nin: ['cancelled', 'Cancelled'] }
           }).lean();
           
           const prevWeekReceipts = await Receipt.find({
@@ -368,7 +367,7 @@ async function sendWeeklySummaries() {
             revenueGrowth = ((totalRevenue - prevWeekRevenue) / prevWeekRevenue) * 100;
           }
         } catch (error) {
-          console.error('Error calculating revenue growth:', error);
+          logger.error('Error calculating revenue growth:', error);
         }
         
         // Get top services and products (simplified)
@@ -404,7 +403,7 @@ async function sendWeeklySummaries() {
           email: { $exists: true, $ne: '' }
         }).lean();
         
-        console.log(`📧 Found ${adminUsers.length} admin user(s) for weekly summary`);
+        logger.debug(`Found ${adminUsers.length} admin user(s) for weekly summary`);
         
         for (const admin of adminUsers) {
           const alreadyInList = recipients.some(r => r.email === admin.email);
@@ -415,21 +414,19 @@ async function sendWeeklySummaries() {
               email: admin.email,
               role: 'admin'
             });
-            console.log(`📧 Added admin user to weekly summary recipients: ${admin.email}`);
+            logger.debug(`Added admin user to weekly summary recipients: ${admin.email}`);
           }
         }
         
-        console.log(`📧 Found ${recipients.length} total recipients for weekly summary`);
+        logger.debug(`Found ${recipients.length} total recipients for weekly summary`);
         
         if (recipients.length === 0) {
-          console.log(`⚠️  No recipients found for ${business.name}. Reasons:`);
-          console.log(`   - Check if staff have email notifications enabled`);
-          console.log(`   - Check if staff have weekly summary preference enabled`);
-          console.log(`   - Check if staff have valid email addresses`);
+          logger.warn(`No recipients found for ${business.name} - check staff email notification settings, weekly summary preferences, and email addresses`);
           continue;
         }
         
         // Send emails (Resend limit: 2 req/sec - add delay between sends)
+        logger.debug(`Sending weekly summary to ${recipients.length} recipient(s) for ${business.name}`);
         const weeklyDelayMs = 600;
         for (let i = 0; i < recipients.length; i++) {
           if (i > 0) await new Promise(r => setTimeout(r, weeklyDelayMs));
@@ -450,20 +447,20 @@ async function sendWeeklySummaries() {
                 topProducts
               }
             });
-            console.log(`✅ Weekly summary sent to ${staff.email} (${staff.name || staff.role}) for business ${business.name}`);
+            logger.debug(`Weekly summary sent to ${staff.email} (${staff.name || staff.role}) for business ${business.name}`);
           } catch (error) {
-            console.error(`❌ Error sending weekly summary to ${staff.email}:`, error);
+            logger.error(`Error sending weekly summary to ${staff.email}:`, error);
           }
         }
         await new Promise(r => setTimeout(r, weeklyDelayMs));
       } catch (error) {
-        console.error(`❌ Error processing weekly summary for business ${business.name}:`, error);
+        logger.error(`Error processing weekly summary for business ${business.name}:`, error);
       }
     }
     
-    console.log('✅ Weekly summary email job completed');
+    logger.info('Weekly summary email job completed');
   } catch (error) {
-    console.error('❌ Error in weekly summary email job:', error);
+    logger.error('Weekly summary email job failed:', error);
   }
 }
 
@@ -472,13 +469,14 @@ async function sendWeeklySummaries() {
  */
 async function expireMembershipSubscriptions() {
   try {
-    console.log('📅 Starting membership expiry job...');
+    logger.info('Starting membership expiry job');
     const mainConnection = await databaseManager.getMainConnection();
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const businesses = await Business.find({ status: 'active' });
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    logger.info(`Processing membership expiry for ${businesses.length} active businesses`);
     for (const business of businesses) {
       try {
         const businessDb = await databaseManager.getConnection(business._id, mainConnection);
@@ -491,15 +489,15 @@ async function expireMembershipSubscriptions() {
         );
 
         if (result.modifiedCount > 0) {
-          console.log(`📅 Expired ${result.modifiedCount} membership(s) for ${business.name}`);
+          logger.debug(`Expired ${result.modifiedCount} membership(s) for ${business.name}`);
         }
       } catch (err) {
-        console.error(`❌ Error expiring memberships for ${business.name}:`, err);
+        logger.error(`Error expiring memberships for ${business.name}:`, err);
       }
     }
-    console.log('✅ Membership expiry job completed');
+    logger.info('Membership expiry job completed');
   } catch (error) {
-    console.error('❌ Membership expiry job failed:', error);
+    logger.error('Membership expiry job failed:', error);
   }
 }
 
@@ -509,7 +507,7 @@ async function expireMembershipSubscriptions() {
 function setupEmailScheduler() {
   // Membership expiry - runs daily at 00:05 IST
   cron.schedule('5 0 * * *', async () => {
-    console.log('⏰ Running membership expiry job...');
+    logger.info('Running membership expiry job');
     await expireMembershipSubscriptions();
   }, {
     scheduled: true,
@@ -520,7 +518,7 @@ function setupEmailScheduler() {
   // For now, we'll check all businesses and use their configured times
   // In production, you might want separate cron jobs per business
   cron.schedule('0 21 * * *', async () => {
-    console.log('⏰ Running daily summary email job...');
+    logger.info('Running daily summary email job');
     await sendDailySummaries();
   }, {
     scheduled: true,
@@ -529,7 +527,7 @@ function setupEmailScheduler() {
   
   // Weekly summary - runs every Sunday at configured time (default 8 PM)
   cron.schedule('0 20 * * 0', async () => {
-    console.log('⏰ Running weekly summary email job...');
+    logger.info('Running weekly summary email job');
     await sendWeeklySummaries();
   }, {
     scheduled: true,
@@ -538,18 +536,14 @@ function setupEmailScheduler() {
   
   // Low inventory check - runs every day at 10 AM
   cron.schedule('0 10 * * *', async () => {
-    console.log('⏰ Running low inventory check job...');
+    logger.info('Running low inventory check job');
     await checkLowInventory();
   }, {
     scheduled: true,
     timezone: "Asia/Kolkata"
   });
   
-  console.log('✅ Email scheduler jobs configured');
-  console.log('   - Membership expiry: Every day at 12:05 AM IST');
-  console.log('   - Daily summary: Every day at 9:00 PM IST');
-  console.log('   - Weekly summary: Every Sunday at 8:00 PM IST');
-  console.log('   - Low inventory check: Every day at 10:00 AM IST');
+  logger.info('Email scheduler jobs configured: membership expiry 12:05 AM IST, daily summary 9:00 PM IST, weekly summary Sun 8:00 PM IST, low inventory 10:00 AM IST');
 }
 
 /**
@@ -557,7 +551,7 @@ function setupEmailScheduler() {
  */
 async function checkLowInventory() {
   try {
-    console.log('📦 Starting low inventory check job...');
+    logger.info('Starting low inventory check job');
     
     // Get main connection
     const mainConnection = await databaseManager.getMainConnection();
@@ -565,7 +559,7 @@ async function checkLowInventory() {
     
     // Get all active businesses
     const businesses = await Business.find({ status: 'active' });
-    console.log(`Found ${businesses.length} active businesses`);
+    logger.info(`Found ${businesses.length} active businesses for low inventory check`);
     
     for (const business of businesses) {
       try {
@@ -576,11 +570,11 @@ async function checkLowInventory() {
                                    emailSettings?.systemAlerts?.lowInventory === true;
         
         if (!lowInventoryEnabled) {
-          console.log(`⏭️  Skipping low inventory check for ${business.name} - disabled in settings`);
+          logger.debug(`Skipping low inventory check for ${business.name} - disabled in settings`);
           continue;
         }
         
-        console.log(`📦 Checking low inventory for business: ${business.name}`);
+        logger.debug(`Checking low inventory for business: ${business.name}`);
         
         // Get business database connection
         const businessDb = await databaseManager.getConnection(business._id, mainConnection);
@@ -596,11 +590,11 @@ async function checkLowInventory() {
         });
         
         if (lowStockProducts.length === 0) {
-          console.log(`✅ No low stock products found for ${business.name}`);
+          logger.debug(`No low stock products found for ${business.name}`);
           continue;
         }
         
-        console.log(`⚠️  Found ${lowStockProducts.length} low stock product(s) for ${business.name}`);
+        logger.debug(`Found ${lowStockProducts.length} low stock product(s) for ${business.name}`);
         
         // Get recipient staff
         const recipientStaffIds = emailSettings?.systemAlerts?.recipientStaffIds || [];
@@ -633,7 +627,6 @@ async function checkLowInventory() {
         
         // Add admin users to recipients (they always have notifications enabled)
         for (const admin of adminUsers) {
-          // Check if admin has low inventory preference enabled (default to true)
           const adminHasPreference = admin.emailNotifications?.preferences?.lowInventory !== false;
           if (adminHasPreference && admin.email) {
             recipients.push({
@@ -646,7 +639,7 @@ async function checkLowInventory() {
         }
         
         if (recipients.length === 0) {
-          console.log(`⚠️  No recipients found for low inventory alerts for ${business.name}`);
+          logger.warn(`No recipients found for low inventory alerts for ${business.name}`);
           continue;
         }
         
@@ -659,6 +652,7 @@ async function checkLowInventory() {
         }));
         
         // Send emails to all recipients (Resend limit: 2 req/sec)
+        logger.debug(`Sending low inventory alert to ${recipients.length} recipient(s) for ${business.name}`);
         const invDelayMs = 600;
         for (let i = 0; i < recipients.length; i++) {
           if (i > 0) await new Promise(r => setTimeout(r, invDelayMs));
@@ -669,19 +663,19 @@ async function checkLowInventory() {
               products: productsForEmail,
               businessName: business.name
             });
-            console.log(`✅ Low inventory alert sent to ${recipient.email} (${recipient.name || recipient.role}) for business ${business.name}`);
+            logger.debug(`Low inventory alert sent to ${recipient.email} (${recipient.name || recipient.role}) for business ${business.name}`);
           } catch (error) {
-            console.error(`❌ Error sending low inventory alert to ${recipient.email}:`, error);
+            logger.error(`Error sending low inventory alert to ${recipient.email}:`, error);
           }
         }
       } catch (error) {
-        console.error(`❌ Error processing low inventory check for business ${business.name}:`, error);
+        logger.error(`Error processing low inventory check for business ${business.name}:`, error);
       }
     }
     
-    console.log('✅ Low inventory check job completed');
+    logger.info('Low inventory check job completed');
   } catch (error) {
-    console.error('❌ Error in low inventory check job:', error);
+    logger.error('Low inventory check job failed:', error);
   }
 }
 
@@ -692,4 +686,3 @@ module.exports = {
   expireMembershipSubscriptions,
   setupEmailScheduler
 };
-

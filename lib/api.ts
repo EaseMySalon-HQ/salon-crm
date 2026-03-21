@@ -273,8 +273,21 @@ export class ClientsAPI {
   }
 
   static async getBulkStats(clientIds: string[]): Promise<ApiResponse<Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }>>> {
-    const response = await apiClient.post('/clients/bulk-stats', { clientIds })
-    return response.data
+    const CHUNK = 250
+    const ids = [...new Set(clientIds.map((id) => String(id || '').trim()).filter(Boolean))]
+    if (ids.length === 0) {
+      return { success: true, data: {} } as ApiResponse<Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }>>
+    }
+    const merged: Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }> = {}
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const response = await apiClient.post('/clients/bulk-stats', { clientIds: slice })
+      const payload = response.data as ApiResponse<Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }>>
+      if (payload.success && payload.data) {
+        Object.assign(merged, payload.data)
+      }
+    }
+    return { success: true, data: merged }
   }
 
   static async getStats(): Promise<ApiResponse<{ totalCustomers: number; activeCustomers: number; inactiveCustomers: number }>> {
@@ -1269,7 +1282,11 @@ export class CashRegistryAPI {
     onlineCashDifferenceNote?: string;
   }): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`/cash-registry/${id}/verify`, data)
-    return response.data
+    const raw = response.data as ApiResponse<any> & { isVerified?: boolean; _id?: string }
+    if (raw && typeof raw === 'object' && 'success' in raw && raw.success !== undefined) {
+      return raw
+    }
+    return { success: true, data: raw } as ApiResponse<any>
   }
 
   static async updateDifferenceReason(id: string, data: { 

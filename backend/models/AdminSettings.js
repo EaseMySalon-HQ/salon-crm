@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { logger } = require('../utils/logger');
 
 const adminSettingsSchema = new mongoose.Schema({
   // System Configuration
@@ -339,7 +340,7 @@ adminSettingsSchema.statics.getSettings = async function() {
       );
       
       if (hasOldFormat) {
-        console.log('🔄 Updating old receiptNotification template to new format');
+        logger.debug('🔄 Updating old receiptNotification template to new format');
         settings.notifications.templates.receiptNotification = {
           subject: 'Receipt {receiptNumber} - {businessName}',
           body: 'Dear {clientName},\n\nThank you for your visit!\n\n{receiptLink}\n\nThank you for choosing {businessName}!',

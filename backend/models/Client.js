@@ -47,6 +47,12 @@ const clientSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Indexes: branch lists, stats / inactive segmentation (phone unique globally already)
+clientSchema.index({ branchId: 1, status: 1 });
+clientSchema.index({ branchId: 1, lastVisit: -1 });
+clientSchema.index({ branchId: 1, createdAt: -1 });
+clientSchema.index({ branchId: 1, name: 1 });
+
 // Export both schema and model for flexibility
 module.exports = {
   schema: clientSchema,
