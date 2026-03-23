@@ -13,9 +13,10 @@ const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
 const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
 const {
-  buildSalesListFilter,
+  buildSalesListMatch,
   parseSalesListPagination,
   mergeEditedFlagsFromHistory,
+  computeSalesSummaryTotals,
 } = require('./lib/sales-list-query');
 
 // Import database manager and middleware
@@ -8626,47 +8627,65 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
 });
 
 // --- SALES API ---
+// Aggregate totals for filters (no row payload). Register before /api/sales/:id.
+app.get('/api/sales/summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const started = Date.now();
+  try {
+    const { Sale } = req.businessModels;
+    const branchId = req.user.branchId;
+    const match = buildSalesListMatch(branchId, req.query);
+    const totals = await computeSalesSummaryTotals(Sale, match);
+    const durationMs = Date.now() - started;
+    if (durationMs > 500) {
+      logger.warn('Slow GET /api/sales/summary', { durationMs });
+    }
+    res.json({
+      success: true,
+      data: {
+        totalRevenue: totals.totalRevenue,
+        cashCollected: totals.cashCollected,
+        onlineCash: totals.onlineCash,
+        unpaidValue: totals.unpaidValue,
+        tips: totals.tips,
+        completedSales: totals.completedSales,
+        partialSales: totals.partialSales || 0,
+        unpaidSales: totals.unpaidSales || 0,
+      },
+    });
+  } catch (err) {
+    logger.error('Error fetching sales summary:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   const started = Date.now();
   try {
     const { Sale, BillEditHistory } = req.businessModels;
-    const { dateFrom, dateTo } = req.query;
     const branchId = req.user.branchId;
-    const query = buildSalesListFilter(branchId, dateFrom, dateTo);
+    const match = buildSalesListMatch(branchId, req.query);
     const { limit, page, skip } = parseSalesListPagination(req.query);
-    const fetchLimit = limit + 1;
 
-    const salesRaw = await Sale.find(query)
-      .sort({ date: -1 })
-      .skip(skip)
-      .limit(fetchLimit)
-      .lean();
-
-    const hasMore = salesRaw.length > limit;
-    const sales = hasMore ? salesRaw.slice(0, limit) : salesRaw;
+    const [total, sales] = await Promise.all([
+      Sale.countDocuments(match),
+      Sale.find(match).sort({ date: -1 }).skip(skip).limit(limit).lean(),
+    ]);
 
     await mergeEditedFlagsFromHistory(sales, BillEditHistory);
 
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
     const durationMs = Date.now() - started;
     if (durationMs > 500) {
-      logger.warn('Slow GET /api/sales', {
-        durationMs,
-        page,
-        limit,
-        hasDateFilter: !!(dateFrom || dateTo),
-        hasMore,
-      });
+      logger.warn('Slow GET /api/sales', { durationMs, page, limit, total });
     }
 
     res.json({
       success: true,
       data: sales,
-      meta: {
-        durationMs,
-        page,
-        limit,
-        hasMore,
-      },
+      total,
+      page,
+      limit,
+      totalPages,
     });
   } catch (err) {
     logger.error('Error fetching sales:', err);
