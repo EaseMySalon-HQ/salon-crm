@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Users, CalendarDays, PieChart, Settings, Package, Clock, DollarSign, CreditCard } from "lucide-react"
 import { ReportsAPI, ServicesAPI, ProductsAPI, SalesAPI, AppointmentsAPI, CashRegistryAPI } from "@/lib/api"
+import { getTodayIST } from "@/lib/date-utils"
 import { useAuth } from "@/lib/auth-context"
 import { cn } from "@/lib/utils"
 
@@ -57,14 +58,12 @@ export function DashboardStatsCards() {
     let isAuthError = false
     const fetchStats = async () => {
       try {
-        // Build today's date string in local time (yyyy-MM-dd)
-        const toYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-        const todayStr = toYMD(new Date())
+        const todayStr = getTodayIST()
 
-        // Fetch dashboard counts, sales, and today's appointments concurrently
+        // Fetch dashboard counts, sales (today only — bounded query), and today's appointments concurrently
         const [dashboardRes, salesRes, todaysAppointmentsRes] = await Promise.all([
           ReportsAPI.getDashboardStats(),
-          SalesAPI.getAll(),
+          SalesAPI.getAll({ dateFrom: todayStr, dateTo: todayStr, limit: 2000 }),
           AppointmentsAPI.getAll({ limit: 200, date: todayStr }),
         ])
 
@@ -79,18 +78,13 @@ export function DashboardStatsCards() {
           base = dashboardRes.data
         }
 
-        // Compute today's revenue from sales
+        // Today's revenue: sales list is already date-bounded (IST) from the API
         let todaysRevenue = 0
-        const now = new Date()
-        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-        const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000 - 1)
         const sales = (salesRes && salesRes.data) ? salesRes.data : []
         if (Array.isArray(sales)) {
           todaysRevenue = sales.reduce((sum: number, sale: any) => {
-            const saleDate = new Date(sale.date)
-            const withinToday = saleDate >= startOfToday && saleDate <= endOfToday
-            const isCompleted = (sale.status || 'completed') === 'completed'
-            return withinToday && isCompleted ? sum + (sale.grossTotal || 0) : sum
+            const isCompleted = String(sale.status || '').toLowerCase() === 'completed'
+            return isCompleted ? sum + (Number(sale.grossTotal) || 0) : sum
           }, 0)
         }
 

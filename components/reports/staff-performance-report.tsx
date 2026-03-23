@@ -303,7 +303,7 @@ export function StaffPerformanceReport() {
 
 
         // Fetch sales data
-        const salesResponse = await SalesAPI.getAll()
+        const salesResponse = await SalesAPI.getAll({ limit: 10000 })
         if (salesResponse.success) {
           const allSales = salesResponse.data
           

@@ -200,7 +200,7 @@ export function SalesReport() {
     async function fetchSales() {
       setLoading(true)
       try {
-        const res = await SalesAPI.getAll()
+        const res = await SalesAPI.getAll({ limit: 10000 })
         const apiData = res.data || []
         const mapped = apiData.map((sale: any) => ({
           id: sale._id,
