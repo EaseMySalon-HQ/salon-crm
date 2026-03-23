@@ -112,7 +112,7 @@ export function StaffServiceDetailDrawer({
       setLoading(true)
       try {
         const [salesRes, profilesRes, staffRes] = await Promise.all([
-          SalesAPI.getAll(),
+          SalesAPI.getAll({ limit: 10000 }),
           CommissionProfileAPI.getProfiles(),
           StaffDirectoryAPI.getAll()
         ])

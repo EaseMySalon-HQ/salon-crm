@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
-import { toDateStringIST, formatInIST, getStartOfDayIST, getEndOfDayIST } from "@/lib/date-utils"
+import { toDateStringIST, formatInIST, getStartOfDayIST, getEndOfDayIST, getTodayIST } from "@/lib/date-utils"
 import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -130,25 +130,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
   // Generate daily summaries from existing cash registry data
   const generateDailySummaries = useCallback(() => {
-    console.log("🔄 generateDailySummaries called with:", {
-      cashRegistryDataLength: cashRegistryData.length,
-      salesDataLength: salesData.length,
-      expensesDataKeys: Object.keys(expensesData)
-    })
-    
-    console.log("📊 Sample cashRegistryData:", cashRegistryData.slice(0, 2))
-    console.log("📊 Sample salesData:", salesData.slice(0, 2))
-    console.log("📊 Sample expensesData:", Object.entries(expensesData).slice(0, 2))
-    
     // Only require cash registry data - sales can be empty
     if (!cashRegistryData.length) {
-      console.log("❌ Cannot generate summaries - no cash registry entries found")
       return
-    }
-    
-    // Sales data is optional - we can still generate summaries without sales
-    if (!salesData.length) {
-      console.log("ℹ️  No sales data found - will generate summaries with zero sales")
     }
     
     // Group entries by date
@@ -171,50 +155,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     const summaries = Object.entries(entriesByDate).map(([dateKey, entries]) => {
       const openingEntry = entries.opening
       const closingEntry = entries.closing
-      
-      // Get sales data for this date
-      const dateSales = salesData.filter(sale => {
-        const saleDate = toDateStringIST(sale.date)
-        return saleDate === dateKey
-      })
-      
-      console.log(`🔍 Date ${dateKey}: Found ${dateSales.length} sales`, dateSales)
-      
-      const cashSales = dateSales
-        .filter(sale => {
-          if (sale.payments && sale.payments.length > 0) {
-            // New split payment structure
-            const hasCashPayment = sale.payments.some((payment: any) => 
-              payment.mode?.toLowerCase() === 'cash' || payment.mode === 'Cash'
-            )
-            console.log(`💰 Sale ${sale._id}: payments=${JSON.stringify(sale.payments)}, hasCashPayment=${hasCashPayment}`)
-            return hasCashPayment
-          } else {
-            // Legacy single payment mode
-            const isCashPayment = sale.paymentMode?.toLowerCase() === 'cash' || sale.paymentMode === 'Cash'
-            console.log(`💰 Sale ${sale._id}: paymentMode=${sale.paymentMode}, isCashPayment=${isCashPayment}`)
-            return isCashPayment
-          }
-        })
-        .reduce((sum, sale) => {
-          if (sale.payments && sale.payments.length > 0) {
-            // Get cash amount from split payments
-            const cashAmount = sale.payments
-              .filter((payment: any) => 
-                payment.mode?.toLowerCase() === 'cash' || payment.mode === 'Cash'
-              )
-              .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
-            console.log(`💵 Sale ${sale._id}: cashAmount=${cashAmount}`)
-            return sum + cashAmount
-          } else {
-            // Legacy single payment mode
-            const cashAmount = sale.netTotal || 0
-            console.log(`💵 Sale ${sale._id}: cashAmount=${cashAmount}`)
-            return sum + cashAmount
-          }
-        }, 0)
-      
-      console.log(`💵 Total cashSales for ${dateKey}: ${cashSales}`)
       
       const openingBalance = openingEntry?.openingBalance || 0
       const closingBalance = closingEntry?.closingBalance || 0
@@ -252,52 +192,19 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         verifiedBy: closingEntry?.verifiedBy || ''
       }
       
-      // Debug logging for reasons
-      console.log(`🔍 DEBUG Summary for ${dateKey}:`, {
-        existingSummary: existingSummary ? {
-          cashDifferenceReason: existingSummary.cashDifferenceReason,
-          onlineCashDifferenceReason: existingSummary.onlineCashDifferenceReason
-        } : 'No existing summary found',
-        closingEntry: closingEntry ? {
-          id: closingEntry.id,
-          balanceDifferenceReason: closingEntry.balanceDifferenceReason,
-          onlineCashDifferenceReason: closingEntry.onlineCashDifferenceReason,
-          isVerified: closingEntry.isVerified,
-          allKeys: Object.keys(closingEntry)
-        } : 'No closing entry found',
-        finalReasons: {
-          cashDifferenceReason: summary.cashDifferenceReason,
-          onlineCashDifferenceReason: summary.onlineCashDifferenceReason
-        }
-      })
-      
-      console.log(`📊 Summary for ${dateKey}:`, summary)
       return summary
     })
 
-    console.log("📊 Generated daily summaries:", summaries)
-    console.log("📊 Summary count:", summaries.length)
-    
     if (summaries.length > 0) {
-      console.log("📊 Setting dailySummaries state with", summaries.length, "summaries")
       setDailySummaries(summaries)
-      console.log("✅ Daily summaries state updated")
     } else {
-      console.log("⚠️  No summaries to set (summaries.length = 0)")
-      console.log("   Cash Registry Entries:", cashRegistryData.length)
-      console.log("   Entries by Date:", Object.keys(entriesByDate))
       setDailySummaries([])
     }
   }, [cashRegistryData, salesData, expensesData])
 
-  // Get today's closing entry for verification
+  // Get today's closing entry for verification (IST calendar day)
   const todayClosingEntry = cashRegistryData.find(entry => {
-    const today = new Date()
-    const entryDate = new Date(entry.date)
-    return entry.shiftType === "closing" && 
-           entryDate.getDate() === today.getDate() &&
-           entryDate.getMonth() === today.getMonth() &&
-           entryDate.getFullYear() === today.getFullYear()
+    return entry.shiftType === "closing" && toDateStringIST(entry.date) === getTodayIST()
   })
 
   // Handle verification
@@ -344,7 +251,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           let expense = 0
           let onlineSales = 0
           
-          if (dateKey === toDateStringIST(new Date())) {
+          if (dateKey === getTodayIST()) {
             // For today's entries, use real-time data
             cashCollected = getRealTimeCashSales()
             expense = getRealTimeExpenses()
@@ -389,13 +296,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             verifiedBy: verifiedByName
           }
 
-          console.log('🔍 DEBUG Creating/updating summary with reasons:', {
-            dateKey,
-            cashDifferenceReason: data.balanceDifferenceReason,
-            onlineCashDifferenceReason: data.onlinePosDifferenceReason,
-            newSummary
-          })
-
           setDailySummaries(prev => {
             const existingIndex = prev.findIndex(summary => summary.date === dateKey)
             if (existingIndex >= 0) {
@@ -437,80 +337,25 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     }
   }
 
-  // Fetch cash registry data and set default date range
-  useEffect(() => {
-    const initializeData = async () => {
-      await fetchCashRegistryData()
-      await fetchExpensesData()
-      await fetchSalesData()
-    }
-    
-    // Set default date range to today
-    const today = new Date()
-    const todayRange: DateRange = {
-      from: new Date(today.getFullYear(), today.getMonth(), today.getDate()),
-      to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
-    }
-    setDateRange(todayRange)
-    console.log("Default date range set to:", todayRange)
-
-    // Listen for cash registry save events from top navigation
-    const handleCashRegistrySaved = () => {
-      console.log("Cash registry saved event received, refreshing data...")
-      initializeData()
-    }
-
-    window.addEventListener('cash-registry-saved', handleCashRegistrySaved)
-
-    // Initialize data
-    initializeData()
-    
-    // Also trigger daily summaries generation after a short delay
-    setTimeout(() => {
-      if (cashRegistryData.length > 0) {
-        console.log("🔄 Manual trigger for generateDailySummaries...")
-        generateDailySummaries()
-      }
-    }, 1000)
-
-    return () => {
-      window.removeEventListener('cash-registry-saved', handleCashRegistrySaved)
-    }
-  }, [])
-
-  // Refetch sales when date range changes (e.g. custom date picker)
-  useEffect(() => {
-    if (dateRange?.from && dateRange?.to) {
-      const effectiveRange = getEffectiveDateRange(dateRange.from, dateRange.to)
-      fetchSalesData(effectiveRange)
-    }
-  }, [dateRange?.from?.getTime(), dateRange?.to?.getTime()])
-
   // Generate daily summaries when data changes
   useEffect(() => {
-    console.log("🔄 useEffect triggered for daily summaries generation:", {
-      cashRegistryDataLength: cashRegistryData.length,
-      salesDataLength: salesData.length,
-      expensesDataKeys: Object.keys(expensesData)
-    })
-    
-    // Generate summaries if we have cash registry data (sales data is optional)
     if (cashRegistryData.length > 0) {
-      console.log("✅ Cash registry data available, calling generateDailySummaries...")
       generateDailySummaries()
-    } else {
-      console.log("❌ No cash registry data - cannot generate summaries")
     }
   }, [cashRegistryData, salesData, expensesData, generateDailySummaries])
 
-  // Click outside to collapse expandable cards
+  // Click outside both cards to collapse — clicking the other card must not collapse this one
+  // (so Cash + Online breakdowns can stay open together).
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node
-      if (cashSalesCardExpanded && cashSalesCardRef.current && !cashSalesCardRef.current.contains(target)) {
+      const insideCash = cashSalesCardRef.current?.contains(target) ?? false
+      const insideOnline = onlineSalesCardRef.current?.contains(target) ?? false
+      const outsideBoth = !insideCash && !insideOnline
+      if (cashSalesCardExpanded && outsideBoth) {
         setCashSalesCardExpanded(false)
       }
-      if (onlineSalesCardExpanded && onlineSalesCardRef.current && !onlineSalesCardRef.current.contains(target)) {
+      if (onlineSalesCardExpanded && outsideBoth) {
         setOnlineSalesCardExpanded(false)
       }
     }
@@ -518,21 +363,47 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [cashSalesCardExpanded, onlineSalesCardExpanded])
 
-  const fetchCashRegistryData = async (silent = false) => {
+  // Convert calendar-picked dates to effective range (start of from-day, end of to-day) — used by API filters
+  const getEffectiveDateParams = (from?: Date, to?: Date): { dateFrom?: string; dateTo?: string } => {
+    if (!from || !to) return {}
+    const fromStr = toDateStringIST(from)
+    const toStr = toDateStringIST(to)
+    return {
+      dateFrom: getStartOfDayIST(fromStr),
+      dateTo: getEndOfDayIST(toStr)
+    }
+  }
+  const getEffectiveDateRange = (from?: Date, to?: Date): { from: Date; to: Date } | null => {
+    if (!from || !to) return null
+    const fromStr = toDateStringIST(from)
+    const toStr = toDateStringIST(to)
+    return {
+      from: new Date(getStartOfDayIST(fromStr)),
+      to: new Date(getEndOfDayIST(toStr))
+    }
+  }
+
+  const fetchCashRegistryData = async (
+    silent = false,
+    rangeOverride?: { from: Date; to: Date } | null
+  ) => {
+    const range =
+      rangeOverride ??
+      (dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null)
+    if (!range) {
+      setCashRegistryData([])
+      if (!silent) setLoading(false)
+      return
+    }
+    const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
     if (!silent) setLoading(true)
     try {
-      console.log("Fetching cash registry data...")
-      const response = await CashRegistryAPI.getAll()
-      console.log("API Response:", response)
-      
-      console.log("Response structure:", {
-        success: response.success,
-        hasData: !!response.data,
-        dataType: typeof response.data,
-        dataLength: response.data?.length,
-        firstEntry: response.data?.[0]
+      const response = await CashRegistryAPI.getAll({
+        page: 1,
+        limit: 500,
+        dateFrom,
+        dateTo,
       })
-      
       if (response.data && Array.isArray(response.data)) {
         const mapped = response.data.map((entry: any) => ({
           id: entry._id,
@@ -573,10 +444,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           return 0
         })
         
-        console.log("Sorted data:", sorted)
         setCashRegistryData(sorted)
       } else {
-        console.log("No data or unsuccessful response")
         setCashRegistryData([])
       }
     } catch (error) {
@@ -587,50 +456,38 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     }
   }
 
-  const fetchExpensesData = async () => {
+  const fetchExpensesData = async (rangeOverride?: { from: Date; to: Date } | null) => {
+    const range =
+      rangeOverride ??
+      (dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null)
+    if (!range) {
+      setExpensesData({})
+      return
+    }
+    const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
     try {
-      console.log("🔄 Fetching real-time expenses data...")
-      console.log("Current dateRange:", dateRange)
-      
       // Fetch only Cash expenses - non-Cash expenses (Card, UPI, etc.) do not affect cash balance
       const response = await ExpensesAPI.getAll({ 
         page: 1, 
-        limit: 1000, // High limit to get all expenses
-        paymentMethod: 'Cash'
+        limit: 1000,
+        paymentMethod: 'Cash',
+        dateFrom,
+        dateTo,
       })
-      console.log("📊 Expenses API Response:", response)
-      
       if (response.success && response.data) {
-        console.log("✅ Expenses API successful, data length:", response.data.length)
-        console.log("📄 Pagination info:", response.pagination)
-        
         // Group expenses by date
         const expensesMap: { [date: string]: number } = {}
         
-        response.data.forEach((expense: any, index: number) => {
-          console.log(`📝 Processing expense ${index + 1}:`, {
-            originalDate: expense.date,
-            amount: expense.amount,
-            type: typeof expense.date
-          })
-          
+        response.data.forEach((expense: any) => {
           const expenseDate = toDateStringIST(expense.date)
           if (!expensesMap[expenseDate]) {
             expensesMap[expenseDate] = 0
           }
           expensesMap[expenseDate] += expense.amount || 0
-          
-          console.log(`📅 Normalized expense date: ${expenseDate}, running total: ${expensesMap[expenseDate]}`)
         })
         
-        console.log("🎯 Final expenses map:", expensesMap)
-        console.log("📊 All expenses data loaded:", response.data.length, "expenses across", Object.keys(expensesMap).length, "dates")
-        console.log("📅 Available expense dates:", Object.keys(expensesMap))
         setExpensesData(expensesMap)
       } else {
-        console.log("❌ No expenses data found or API unsuccessful")
-        console.log("Response success:", response.success)
-        console.log("Response data:", response.data)
         setExpensesData({})
       }
     } catch (error) {
@@ -641,23 +498,21 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
   const fetchSalesData = async (overrideRange?: { from: Date; to: Date } | null) => {
     try {
-      console.log("Fetching real-time sales data...")
-      // Fetch wider range to include sales with due payments collected in our date range
-      const range = overrideRange ?? (dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null)
+      const range =
+        overrideRange ??
+        (dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null)
       const params: { dateFrom?: string; dateTo?: string } = {}
       if (range) {
-        const fromExtended = new Date(range.from.getTime() - 90 * 24 * 60 * 60 * 1000)
-        params.dateFrom = toDateStringIST(fromExtended)
-        params.dateTo = toDateStringIST(range.to)
+        // Match selected period only (same IST bounds as stats). Note: bills invoiced on older
+        // dates but paid today are filtered by sale.date on the server — use a wider range if you add server-side payment-date filtering.
+        const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
+        params.dateFrom = dateFrom
+        params.dateTo = dateTo
       }
       const response = await SalesAPI.getAll(params)
-      console.log("Sales API Response:", response)
-      
       if (response.success && response.data) {
-        console.log("Sales data loaded:", response.data.length, "sales")
         setSalesData(response.data)
       } else {
-        console.log("No sales data found")
         setSalesData([])
       }
     } catch (error) {
@@ -666,17 +521,48 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     }
   }
 
+  // Default: today (IST); then load registry, expenses, and sales only for the selected range
+  useEffect(() => {
+    const todayStr = getTodayIST()
+    setDateRange({
+      from: new Date(getStartOfDayIST(todayStr)),
+      to: new Date(getEndOfDayIST(todayStr)),
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!dateRange?.from || !dateRange?.to) return
+    const effectiveRange = getEffectiveDateRange(dateRange.from, dateRange.to)
+    fetchCashRegistryData(false, effectiveRange)
+    fetchExpensesData(effectiveRange)
+    fetchSalesData(effectiveRange)
+  }, [dateRange?.from?.getTime(), dateRange?.to?.getTime()])
+
+  useEffect(() => {
+    const handleCashRegistrySaved = () => {
+      if (!dateRange?.from || !dateRange?.to) return
+      const effectiveRange = getEffectiveDateRange(dateRange.from, dateRange.to)
+      fetchCashRegistryData(true, effectiveRange)
+      fetchExpensesData(effectiveRange)
+      fetchSalesData(effectiveRange)
+    }
+    window.addEventListener("cash-registry-saved", handleCashRegistrySaved)
+    return () => window.removeEventListener("cash-registry-saved", handleCashRegistrySaved)
+  }, [dateRange?.from?.getTime(), dateRange?.to?.getTime()])
+
   // Function to get date range based on selected period
   const getDateRangeFromPeriod = (period: DatePeriod) => {
     const now = new Date()
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     
     switch (period) {
-      case "today":
+      case "today": {
+        const todayStr = getTodayIST()
         return {
-          from: today,
-          to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+          from: new Date(getStartOfDayIST(todayStr)),
+          to: new Date(getEndOfDayIST(todayStr)),
         }
+      }
       case "yesterday":
         const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
         return {
@@ -716,48 +602,24 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     }
   }
 
-  // Convert calendar-picked dates to effective range (start of from-day, end of to-day)
-  const getEffectiveDateParams = (from?: Date, to?: Date): { dateFrom?: string; dateTo?: string } => {
-    if (!from || !to) return {}
-    const fromStr = toDateStringIST(from)
-    const toStr = toDateStringIST(to)
-    return {
-      dateFrom: getStartOfDayIST(fromStr),
-      dateTo: getEndOfDayIST(toStr)
-    }
-  }
-  const getEffectiveDateRange = (from?: Date, to?: Date): { from: Date; to: Date } | null => {
-    if (!from || !to) return null
-    const fromStr = toDateStringIST(from)
-    const toStr = toDateStringIST(to)
-    return {
-      from: new Date(getStartOfDayIST(fromStr)),
-      to: new Date(getEndOfDayIST(toStr))
-    }
-  }
-
   const handleDatePeriodChange = (period: DatePeriod) => {
     setDatePeriod(period)
-    const range = getDateRangeFromPeriod(period)
-    setDateRange(range)
-    
-    // Fetch expenses and sales for the new date range
-    const effectiveRange = range?.from && range?.to ? getEffectiveDateRange(range.from, range.to) : null
-    setTimeout(() => {
-      fetchExpensesData()
-      fetchSalesData(effectiveRange)
-    }, 100)
+    setDateRange(getDateRangeFromPeriod(period))
   }
 
   // Filter data for stats calculations (ALWAYS use unfiltered data, only affected by date range)
   const effectiveRange = dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null
   const rangeForPeriod = datePeriod !== "custom" ? getDateRangeFromPeriod(datePeriod) : null
   const activeDateRange = effectiveRange || (rangeForPeriod?.from && rangeForPeriod?.to ? { from: rangeForPeriod.from, to: rangeForPeriod.to } : null)
-  const statsFilteredData = cashRegistryData.filter(entry => {
-    const matchesDateRange = !activeDateRange || 
-      (new Date(entry.date) >= activeDateRange.from && new Date(entry.date) <= activeDateRange.to)
-    return matchesDateRange
-  })
+  /** IST calendar-day comparison avoids UTC/local midnight mismatches on YYYY-MM-DD strings */
+  const isInSelectedDateRange = (d: Date | string) => {
+    if (!activeDateRange) return true
+    const day = toDateStringIST(d)
+    const fromDay = toDateStringIST(activeDateRange.from)
+    const toDay = toDateStringIST(activeDateRange.to)
+    return day >= fromDay && day <= toDay
+  }
+  const statsFilteredData = cashRegistryData.filter(entry => isInSelectedDateRange(entry.date))
 
   // Filter data for table display (affected by search, shift filter, and report type)
   const filteredData = cashRegistryData.filter(entry => {
@@ -778,16 +640,16 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       matchesReportType = true
     }
     
-    const matchesDateRange = !activeDateRange || 
-      (new Date(entry.date) >= activeDateRange.from && new Date(entry.date) <= activeDateRange.to)
+    const matchesDateRange = isInSelectedDateRange(entry.date)
     return matchesSearch && matchesShift && matchesReportType && matchesDateRange
   })
 
   // Filter daily summaries by date range (for Summary By Day report)
   const filteredDailySummaries = dailySummaries.filter(summary => {
     if (!activeDateRange) return true
-    const summaryDate = new Date(summary.date + 'T12:00:00')
-    return summaryDate >= activeDateRange.from && summaryDate <= activeDateRange.to
+    const fromDay = toDateStringIST(activeDateRange.from)
+    const toDay = toDateStringIST(activeDateRange.to)
+    return summary.date >= fromDay && summary.date <= toDay
   })
 
   // Calculate real-time stats from sales and expenses data
@@ -795,11 +657,13 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   // Total Cash Sales = New payments today (checkout) + Due collections today
   const getRealTimeCashSales = () => {
     if (!activeDateRange) return 0
+    const fromDay = toDateStringIST(activeDateRange.from)
+    const toDay = toDateStringIST(activeDateRange.to)
     let total = 0
     salesData.forEach((sale: any) => {
-      const saleDate = new Date(sale.date)
+      const saleDay = toDateStringIST(sale.date)
       // 1. Cash from new bills (checkout payments) - use sale date (payment at checkout = same day as invoice)
-      if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
+      if (saleDay >= fromDay && saleDay <= toDay) {
         let cashAmt = 0
         let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
@@ -821,8 +685,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       // 2. Cash from due collections - use paymentHistory date (when payment was actually collected)
       ;(sale.paymentHistory || []).forEach((ph: any) => {
         if (!ph || (ph.method || "").toLowerCase() !== "cash") return
-        const phDate = ph.date ? new Date(ph.date) : null
-        if (phDate && phDate >= activeDateRange.from && phDate <= activeDateRange.to) {
+        const phDay = ph.date ? toDateStringIST(ph.date) : ""
+        if (phDay && phDay >= fromDay && phDay <= toDay) {
           total += ph.amount || 0
         }
       })
@@ -832,19 +696,17 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
   const getRealTimeOnlineSales = () => {
     if (!activeDateRange) return 0
-    
+    const fromDay = toDateStringIST(activeDateRange.from)
+    const toDay = toDateStringIST(activeDateRange.to)
     return salesData.reduce((sum: number, sale: any) => {
-      const saleDate = new Date(sale.date)
-      if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
+      const saleDay = toDateStringIST(sale.date)
+      if (saleDay >= fromDay && saleDay <= toDay) {
         if (sale.payments && sale.payments.length > 0) {
-          // Split payment structure
           return sum + sale.payments
             .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
             .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
-        } else {
-          // Legacy single payment mode
-          return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
         }
+        return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
       }
       return sum
     }, 0)
@@ -852,45 +714,32 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
   const getRealTimeExpenses = () => {
     if (!activeDateRange) return 0
-    
+    const fromDay = toDateStringIST(activeDateRange.from)
+    const toDay = toDateStringIST(activeDateRange.to)
     return Object.entries(expensesData).reduce((sum: number, [date, amount]) => {
-      const expenseDate = new Date(date)
-      if (expenseDate >= activeDateRange.from && expenseDate <= activeDateRange.to) {
+      const expenseDay = toDateStringIST(date)
+      if (expenseDay >= fromDay && expenseDay <= toDay) {
         return sum + amount
       }
       return sum
     }, 0)
   }
 
-  // Get today's online sales specifically for the modal
+  // Get today's online sales specifically for the modal (IST calendar day)
   const getTodayOnlineSales = () => {
-    const today = new Date()
-    const todayString = toDateStringIST(today)
-    
-    const result = salesData.reduce((sum: number, sale: any) => {
+    const todayString = getTodayIST()
+    return salesData.reduce((sum: number, sale: any) => {
       const saleDate = toDateStringIST(sale.date)
       if (saleDate === todayString) {
         if (sale.payments && sale.payments.length > 0) {
-          // Split payment structure
           return sum + sale.payments
             .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
             .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
-        } else {
-          // Legacy single payment mode
-          return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
         }
+        return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
       }
       return sum
     }, 0)
-    
-    console.log("🔍 getTodayOnlineSales:", {
-      todayString,
-      salesDataCount: salesData.length,
-      availableDates: salesData.map(sale => toDateStringIST(sale.date)),
-      result
-    })
-    
-    return result
   }
 
   // Use real-time data for stats
@@ -901,11 +750,13 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   // Cash breakdown for UI (From New Bills + From Due Collected)
   const getCashSalesBreakdown = () => {
     if (!activeDateRange) return { fromNewBills: 0, fromDueCollected: 0 }
+    const fromDay = toDateStringIST(activeDateRange.from)
+    const toDay = toDateStringIST(activeDateRange.to)
     let fromNewBills = 0
     let fromDueCollected = 0
     salesData.forEach((sale: any) => {
-      const saleDate = new Date(sale.date)
-      if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
+      const saleDay = toDateStringIST(sale.date)
+      if (saleDay >= fromDay && saleDay <= toDay) {
         let cashAmt = 0
         let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
@@ -926,8 +777,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       }
       ;(sale.paymentHistory || []).forEach((ph: any) => {
         if (!ph || (ph.method || "").toLowerCase() !== "cash") return
-        const phDate = ph.date ? new Date(ph.date) : null
-        if (phDate && phDate >= activeDateRange.from && phDate <= activeDateRange.to) {
+        const phDay = ph.date ? toDateStringIST(ph.date) : ""
+        if (phDay && phDay >= fromDay && phDay <= toDay) {
           fromDueCollected += ph.amount || 0
         }
       })
@@ -939,11 +790,13 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   // Online sales breakdown (Card vs Online/UPI)
   const getOnlineSalesBreakdown = () => {
     if (!activeDateRange) return { fromCard: 0, fromOnline: 0 }
+    const fromDay = toDateStringIST(activeDateRange.from)
+    const toDay = toDateStringIST(activeDateRange.to)
     let fromCard = 0
     let fromOnline = 0
     salesData.forEach((sale: any) => {
-      const saleDate = new Date(sale.date)
-      if (saleDate >= activeDateRange.from && saleDate <= activeDateRange.to) {
+      const saleDay = toDateStringIST(sale.date)
+      if (saleDay >= fromDay && saleDay <= toDay) {
         if (sale.payments && sale.payments.length > 0) {
           sale.payments.forEach((p: any) => {
             const mode = (p.mode || p.type || "").toLowerCase()
@@ -961,16 +814,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     return { fromCard, fromOnline }
   }
   const onlineSalesBreakdown = getOnlineSalesBreakdown()
-
-  // Log real-time stats for debugging
-  console.log("🔄 Real-time stats calculated:", {
-    dateRange: dateRange,
-    totalCashSales,
-    totalOnlineSales,
-    totalExpenses,
-    salesDataCount: salesData.length,
-    expensesDataCount: Object.keys(expensesData).length
-  })
 
   // Helper functions to get real-time data for each entry
   const getEntryCashSales = (entryDate: string) => {
@@ -1016,60 +859,29 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     // Normalize entry date to YYYY-MM-DD format
     const normalizedEntryDate = toDateStringIST(entryDate)
     
-    const result = salesData.reduce((sum: number, sale: any) => {
-      // Normalize sale date to YYYY-MM-DD format
+    return salesData.reduce((sum: number, sale: any) => {
       const saleDate = toDateStringIST(sale.date)
-      
       if (saleDate === normalizedEntryDate) {
         if (sale.payments && sale.payments.length > 0) {
           return sum + sale.payments
             .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
             .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
-        } else {
-          return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
         }
+        return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
       }
       return sum
     }, 0)
-    
-    console.log(`💳 Online sales for ${entryDate} (normalized: ${normalizedEntryDate}):`, {
-      totalSales: salesData.length,
-      availableSaleDates: salesData.map(sale => toDateStringIST(sale.date)),
-      normalizedEntryDate,
-      matchingSales: salesData.filter(sale => {
-        const saleDate = toDateStringIST(sale.date)
-        return saleDate === normalizedEntryDate
-      }),
-      result
-    })
-    
-    return result
   }
 
   const getEntryExpenses = (entryDate: string) => {
-    // Use the same logic as stats cards - calculate expenses from the expensesData
-    // This ensures consistency between stats and table columns
     const normalizedEntryDate = toDateStringIST(entryDate)
-    
-    console.log(`🔍 DEBUG: Looking for expenses on ${entryDate}`)
-    console.log(`📅 DEBUG: Normalized entry date: ${normalizedEntryDate}`)
-    console.log(`📊 DEBUG: Available expense dates:`, Object.keys(expensesData))
-    console.log(`💰 DEBUG: All expenses data:`, expensesData)
-    
-    // Calculate expenses for this specific date using the same approach as getRealTimeExpenses
-    const result = Object.entries(expensesData).reduce((sum: number, [date, amount]) => {
+    return Object.entries(expensesData).reduce((sum: number, [date, amount]) => {
       const expenseDate = toDateStringIST(date)
-      console.log(`🔍 DEBUG: Comparing expense date ${expenseDate} with entry date ${normalizedEntryDate}`)
       if (expenseDate === normalizedEntryDate) {
-        console.log(`✅ DEBUG: Match found! Adding amount ${amount}`)
         return sum + amount
       }
       return sum
     }, 0)
-    
-    console.log(`📊 DEBUG: Final result for ${entryDate}:`, result)
-    
-    return result
   }
   
   const totalOpeningBalance = statsFilteredData
@@ -1085,48 +897,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     .filter(entry => entry.shiftType === "closing")
     .reduce((sum, entry) => sum + (entry.posCash || 0), 0)
   
-  // Debug the online cash collected calculation
-  console.log("💳 Online Cash Collected Calculation:", {
-    closingEntries: statsFilteredData.filter(entry => entry.shiftType === "closing"),
-    posCashValues: statsFilteredData
-      .filter(entry => entry.shiftType === "closing")
-      .map(entry => ({ date: entry.date, posCash: entry.posCash || 0 })),
-    totalOnlineCashCollected
-  })
-  
-  // Debug the online cash difference calculation
-  console.log("💳 Online Cash Difference Calculation:", {
-    totalOnlineCashCollected,
-    totalOnlineSales,
-    calculation: `${totalOnlineCashCollected} - ${totalOnlineSales}`,
-    result: totalOnlineCashCollected - totalOnlineSales
-  })
-  
-  // Debug the data filtering separation
-  console.log("🔍 Data Filtering Debug:", {
-    reportType,
-    totalCashRegistryEntries: cashRegistryData.length,
-    statsFilteredEntries: statsFilteredData.length,
-    tableFilteredEntries: filteredData.length,
-    statsFilteredOpening: statsFilteredData.filter(entry => entry.shiftType === "opening").length,
-    statsFilteredClosing: statsFilteredData.filter(entry => entry.shiftType === "closing").length,
-    tableFilteredOpening: filteredData.filter(entry => entry.shiftType === "opening").length,
-    tableFilteredClosing: filteredData.filter(entry => entry.shiftType === "closing").length
-  })
-
   // Calculate Cash Difference using the formula: ((Total Opening Balance + Total Cash Sales) - Total Expenses) - Total Closing Balance
   // This represents the variance between expected and actual cash at closing
   const cashDifference =   totalClosingBalance - ((totalOpeningBalance + totalCashSales) - totalExpenses)
-  
-  // Debug the cash difference calculation
-  console.log("💰 Cash Difference Calculation:", {
-    totalOpeningBalance,
-    totalCashSales,
-    totalExpenses,
-    totalClosingBalance,
-    calculation: `${totalClosingBalance} - ((${totalOpeningBalance} + ${totalCashSales}) - ${totalExpenses})`,
-    result: cashDifference
-  })
   
   // Calculate Online Cash Difference using the formula: Online Cash Collected - Total Online Sales
   // This represents the variance between collected online cash and actual online sales
@@ -1145,19 +918,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   const verificationModalOnlineDifference = verificationDaySummary
     ? verificationDaySummary.onlineCashDifference
     : onlineCashDifference
-
-  console.log("Stats calculation:", {
-    filteredData: filteredData.length,
-    openingEntries: filteredData.filter(entry => entry.shiftType === "opening"),
-    totalOpeningBalance,
-    totalClosingBalance,
-    totalOnlineCashCollected,
-    totalCashSales,
-    totalOnlineSales,
-    totalExpenses,
-    cashDifference: totalClosingBalance - ((totalOpeningBalance + totalCashSales) - totalExpenses),
-    onlineCashDifference: totalOnlineCashCollected - totalOnlineSales
-  })
 
   const handleExportPDF = async () => {
     toast({ title: "Export requested", description: "Generating cash registry PDF...", duration: 3000 })
@@ -1306,8 +1066,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       
       if (isDeletingDailySummary && selectedSummaryDate) {
         // Delete all entries for the selected date (daily summary deletion)
-        console.log("Deleting daily summary for date:", selectedSummaryDate)
-        
         // Find all entries for this date
         const entriesForDate = cashRegistryData.filter(entry => {
           const entryDate = toDateStringIST(entry.date)
@@ -1354,20 +1112,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           shiftTypeToDelete = 'closing'
         }
         
-        console.log("Deleting entry:", {
-          id: selectedEntry.id,
-          date: selectedEntry.date,
-          shiftType: selectedEntry.shiftType,
-          shiftTypeToDelete,
-          createdBy: selectedEntry.createdBy
-        })
-        
-        // Auth token is managed by AuthContext
-        
         // Call delete API (shiftType parameter removed for now)
         response = await CashRegistryAPI.delete(selectedEntry.id)
-        
-        console.log("Delete response:", response)
         
         // Check if the response has a success message (backend returns { message: '...' })
         if (response.message && response.message.includes('deleted successfully')) {
@@ -2449,10 +2195,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         onOpenChange={setIsAddModalOpen}
         onSaveSuccess={fetchCashRegistryData}
         onlineSalesAmount={getTodayOnlineSales()}
-        onPosCashChange={(amount) => {
-          console.log("POS Cash amount changed:", amount)
-          // This will be used to update the POS Cash column after saving
-        }}
+        onPosCashChange={() => {}}
       />
 
       {/* Denominations Modal */}

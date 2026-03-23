@@ -535,6 +535,7 @@ export const AppointmentsCalendarGrid = forwardRef<
         const res = await SalesAPI.getAll({
           dateFrom: selectedDate,
           dateTo: selectedDate,
+          limit: 5000,
         })
         if (cancelled) return
         if (res?.success && Array.isArray(res?.data)) {

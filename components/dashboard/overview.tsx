@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis } from "recharts"
 import { AppointmentsAPI, SalesAPI } from "@/lib/api"
+import { getTodayIST } from "@/lib/date-utils"
 import { useCurrency } from "@/hooks/use-currency"
 
 interface ChartData {
@@ -23,9 +24,12 @@ export function Overview() {
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         const base: ChartData[] = months.map((name) => ({ name, appointments: 0, revenue: 0 }))
 
+        const y = new Date().getFullYear()
+        const yearStart = `${y}-01-01`
+        const today = getTodayIST()
         const [appointmentsRes, salesRes] = await Promise.all([
           AppointmentsAPI.getAll({ limit: 500 }),
-          SalesAPI.getAll(),
+          SalesAPI.getAll({ dateFrom: yearStart, dateTo: today, limit: 10000 }),
         ])
 
         // Aggregate appointments by month

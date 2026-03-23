@@ -3,6 +3,7 @@
  * High-traffic safe: work skipped when level disabled; rate-limit map pruned periodically.
  */
 
+// Production default: warn — avoids debug/info flooding stdout (rate limits, slow I/O).
 const rawLevel = process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'warn' : 'info');
 const LOG_LEVEL = String(rawLevel).toLowerCase();
 

@@ -1324,11 +1324,19 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
     const tomorrowDate = new Date(dateTo.getTime() + 24 * 60 * 60 * 1000);
     const tomorrowDateString = toDateStringIST(tomorrowDate);
 
+    const invoiceDateRange = { $gte: dateFrom, $lte: dateTo };
     const sales = await Sale.find({
       branchId,
-      date: { $gte: dateFrom, $lte: dateTo },
-      status: { $nin: ['cancelled', 'Cancelled'] }
+      status: { $nin: ['cancelled', 'Cancelled'] },
+      $or: [
+        { date: invoiceDateRange },
+        { paymentHistory: { $elemMatch: { date: invoiceDateRange } } }
+      ]
     }).lean();
+    const salesInInvoiceRange = sales.filter((s) => {
+      const d = s.date ? new Date(s.date) : null;
+      return d && d >= dateFrom && d <= dateTo;
+    });
 
     const receipts = await Receipt.find({
       branchId,
@@ -1355,12 +1363,12 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
       status: { $in: ['approved', 'pending'] }
     }).lean();
 
-    const totalBillCount = sales.length;
-    const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
+    const totalBillCount = salesInInvoiceRange.length;
+    const uniqueCustomers = new Set(salesInInvoiceRange.map(s => (s.customerName || '').trim()).filter(Boolean));
     const totalCustomerCount = uniqueCustomers.size || totalBillCount;
-    const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
+    const totalSales = salesInInvoiceRange.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
     let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
-    sales.forEach(s => {
+    salesInInvoiceRange.forEach(s => {
       let cashAmt = 0;
       let isAllCash = false;
       if (s.payments && s.payments.length) {
@@ -1391,7 +1399,7 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
     const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     const pettyCashExpense = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     // Tip collected: sum from Sales (Quick Sale) + Receipts (manual receipts), matches API
-    const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
+    const tipFromSales = salesInInvoiceRange.reduce((sum, s) => sum + (s.tip || 0), 0);
     const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
     const tipCollected = tipFromSales + tipFromReceipts;
     // Use closingBalance (actual counted) when available, else cashBalance (calculated) - matches API & UI
@@ -1400,7 +1408,7 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
     // Outstanding: invoices in date range with due_amount > 0
     let totalDue = 0;
     const customersWithDueSet = new Set();
-    sales.forEach(s => {
+    salesInInvoiceRange.forEach(s => {
       const totalBillAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? s.netTotal ?? 0;
       const amountPaid = s.paymentStatus?.paidAmount ?? (s.payments?.reduce((sum, p) => sum + (p.amount || 0), 0) ?? 0);
       const dueAmount = totalBillAmount - amountPaid;

@@ -124,19 +124,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string; message?: string }> => {
     setIsLoading(true)
-    console.log('🔍 DEBUG: Starting login process...')
-    console.log('📧 Email:', email)
 
     try {
-      // Use real API authentication only
-      console.log('🌐 Attempting real API login...')
       const response = await AuthAPI.login(email, password)
       
       if (response.success) {
         const { user: userData, token } = response.data
-        console.log('✅ Real API login successful')
-        console.log('👤 User data:', userData)
-        console.log('🔑 Token received:', token ? 'Yes' : 'No')
         setUser(userData)
         
         // Only use localStorage in browser environment
@@ -148,7 +141,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsLoading(false)
         return { success: true }
       } else {
-        console.log('❌ Real API login failed:', response.error)
         setIsLoading(false)
         return { 
           success: false, 
@@ -158,7 +150,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } catch (error: any) {
       console.error("API login error:", error)
-      console.log('❌ Login failed - API error or invalid credentials')
       setIsLoading(false)
       
       // Check if it's a suspension error
@@ -180,19 +171,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const staffLogin = async (email: string, password: string, businessCode: string): Promise<boolean> => {
     setIsLoading(true)
-    console.log('🔍 DEBUG: Starting staff login process...')
-    console.log('📧 Email:', email)
-    console.log('🏢 Business Code:', businessCode)
 
     try {
-      console.log('🌐 Attempting staff API login...')
       const response = await AuthAPI.staffLogin(email, password, businessCode)
       
       if (response.success) {
         const { user: userData, token } = response.data
-        console.log('✅ Staff API login successful')
-        console.log('👤 Staff data:', userData)
-        console.log('🔑 Token received:', token ? 'Yes' : 'No')
         setUser(userData)
         
         // Only use localStorage in browser environment
@@ -204,13 +188,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsLoading(false)
         return true
       } else {
-        console.log('❌ Staff API login failed:', response.error)
         setIsLoading(false)
         return false
       }
     } catch (error) {
       console.error("Staff API login error:", error)
-      console.log('❌ Staff login failed - API error or invalid credentials')
       setIsLoading(false)
       return false
     }

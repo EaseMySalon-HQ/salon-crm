@@ -12,6 +12,11 @@ const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
 const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
+const {
+  buildSalesListFilter,
+  parseSalesListPagination,
+  mergeEditedFlagsFromHistory,
+} = require('./lib/sales-list-query');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -89,7 +94,8 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
-if (process.env.NODE_ENV !== 'production') {
+// Per-request HTTP log (dev only). Set HTTP_LOG=0 to disable morgan during local profiling.
+if (process.env.NODE_ENV !== 'production' && process.env.HTTP_LOG !== '0') {
   app.use(morgan('short'));
 }
 app.use(express.json({ limit: '10mb' }));
@@ -8129,13 +8135,6 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       );
     }
 
-    logger.debug('📧 Appointment Update Check:', {
-      appointmentId: id,
-      previousStatus: previousStatus,
-      newStatus: updateData.status,
-      isBeingCancelled: isBeingCancelled
-    });
-
     // Update the appointment
     const updatedAppointment = await Appointment.findByIdAndUpdate(
       id,
@@ -8146,22 +8145,14 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     .populate('serviceId', 'name price duration')
     .populate('staffId', 'name role');
 
-    // Send cancellation emails if appointment was cancelled
+    // Send cancellation emails if appointment was cancelled (errors only — no per-update debug)
     if (isBeingCancelled) {
-      logger.debug('📧 Appointment is being cancelled, sending emails...');
       try {
         const emailService = require('./services/email-service');
         
-        // Ensure email service is initialized
         if (!emailService.initialized) {
-          logger.debug('📧 Initializing email service...');
           await emailService.initialize();
         }
-        
-        logger.debug('📧 Email Service Status:', {
-          initialized: emailService.initialized,
-          enabled: emailService.enabled
-        });
         
         if (emailService.enabled) {
           // Get business info
@@ -8172,8 +8163,6 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           
           if (!business) {
             logger.error('❌ Business not found for branchId:', req.user.branchId);
-          } else {
-            logger.debug('✅ Business found:', business.name);
           }
           
           const emailSettings = business?.settings?.emailNotificationSettings;
@@ -8184,28 +8173,12 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
             !emailSettings?.appointmentNotifications ||
             (!explicitlyDisabledCancellations || !hasRecipientList);
           
-          logger.debug('📧 Cancellation Email Settings:', {
-            emailSettingsExists: !!emailSettings,
-            cancellations: emailSettings?.appointmentNotifications?.cancellations,
-            explicitlyDisabledCancellations: explicitlyDisabledCancellations,
-            hasRecipientList: hasRecipientList,
-            cancellationEnabled: cancellationEnabled
-          });
-          
           if (cancellationEnabled && updatedAppointment.clientId) {
             const client = updatedAppointment.clientId;
-            logger.debug('📧 Client Check:', {
-              clientId: client?._id || client,
-              clientName: client?.name,
-              clientEmail: client?.email,
-              clientIsObject: typeof client === 'object'
-            });
             
             const clientEmail = client?.email ? client.email.trim() : null;
             
             if (clientEmail) {
-              logger.debug(`📧 Sending cancellation email to client: ${clientEmail}`);
-              
               // Get service name
               let serviceName = 'Service';
               if (updatedAppointment.serviceId) {
@@ -8217,15 +8190,6 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                   serviceName = service?.name || 'Service';
                 }
               }
-              
-              logger.debug('📧 Cancellation Email Details:', {
-                to: clientEmail,
-                clientName: client.name || 'Client',
-                serviceName: serviceName,
-                date: updatedAppointment.date,
-                time: updatedAppointment.time,
-                businessName: business?.name || 'Business'
-              });
               
               const emailResult = await emailService.sendAppointmentCancellation({
                 to: clientEmail,
@@ -8239,16 +8203,8 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                 }
               });
               
-              logger.debug('📧 Cancellation Email Result:', {
-                success: emailResult?.success,
-                error: emailResult?.error
-              });
-              
-              if (emailResult && emailResult.success !== false) {
-                logger.debug(`✅ Cancellation email sent to client: ${clientEmail}`);
-              } else {
-                logger.error(`❌ Failed to send cancellation email:`, emailResult?.error);
-                logger.error(`❌ Full error:`, JSON.stringify(emailResult, null, 2));
+              if (emailResult && emailResult.success === false) {
+                logger.error('Failed to send cancellation email:', emailResult?.error || emailResult);
               }
 
               // Send SMS appointment cancellation if enabled
@@ -8289,18 +8245,6 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                   logger.error('Error sending appointment cancellation SMS:', smsErr);
                 }
               }
-            } else {
-              logger.debug('⚠️ Skipping cancellation email - client has no email address', {
-                clientId: client?._id || client,
-                clientName: client?.name || 'Unknown'
-              });
-            }
-          } else {
-            if (!cancellationEnabled) {
-              logger.debug('⚠️ Client cancellation emails are disabled in business settings');
-            }
-            if (!updatedAppointment.clientId) {
-              logger.debug('⚠️ No client found for appointment');
             }
           }
           
@@ -8308,12 +8252,6 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           const staffCancellationEnabled = !emailSettings || 
             !emailSettings?.appointmentNotifications ||
             (!explicitlyDisabledCancellations || !hasRecipientList);
-          
-          logger.debug('📧 Staff Cancellation Notification Check:', {
-            staffCancellationEnabled: staffCancellationEnabled,
-            explicitlyDisabledCancellations: explicitlyDisabledCancellations,
-            hasRecipientList: hasRecipientList
-          });
           
           if (staffCancellationEnabled) {
             const { Staff } = req.businessModels;
@@ -8344,8 +8282,6 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
               email: { $exists: true, $ne: '' }
             }).lean();
             
-            logger.debug(`📧 Found ${adminUsers.length} admin user(s) for cancellation notification`);
-            
             for (const admin of adminUsers) {
               const alreadyInList = recipients.some(r => r.email === admin.email);
               if (!alreadyInList) {
@@ -8355,7 +8291,6 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                   email: admin.email,
                   role: 'admin'
                 });
-                logger.debug(`📧 Added admin user to cancellation recipients: ${admin.email}`);
               }
             }
             
@@ -8372,14 +8307,11 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
               }
             }
             
-            logger.debug(`📧 Found ${recipients.length} total recipients for cancellation notification`);
-            
             const cancelDelayMs = 600; // Resend limit: 2 req/sec
             for (let i = 0; i < recipients.length; i++) {
               if (i > 0) await new Promise(r => setTimeout(r, cancelDelayMs));
               const recipient = recipients[i];
               try {
-                logger.debug(`📧 Sending cancellation notification to: ${recipient.email} (${recipient.name || recipient.role})`);
                 await emailService.sendAppointmentCancellationNotification({
                   to: recipient.email,
                   appointmentCount: 1,
@@ -8391,22 +8323,14 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                     serviceName: serviceNameForStaff
                   }
                 });
-                logger.debug(`✅ Cancellation notification sent to: ${recipient.email}`);
               } catch (error) {
-                logger.error(`❌ Error sending cancellation notification to ${recipient.email}:`, error);
-                logger.error(`❌ Error details:`, {
-                  message: error.message,
-                  stack: error.stack
-                });
+                logger.error(`Error sending cancellation notification to ${recipient.email}:`, error);
               }
             }
-          } else {
-            logger.debug('⚠️ Staff cancellation notifications are disabled in business settings');
           }
         }
       } catch (emailError) {
-        logger.error('❌ Error sending cancellation emails:', emailError);
-        logger.error('❌ Error stack:', emailError.stack);
+        logger.error('Error sending cancellation emails:', emailError);
         // Don't fail the update if email fails
       }
     }
@@ -8562,11 +8486,21 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     const tomorrowDate = new Date(dateTo.getTime() + 1);
     const tomorrowDateString = toDateStringIST(tomorrowDate);
 
+    // Include (a) bills whose invoice date is in range, and (b) older bills with a due/partial
+    // payment in range — otherwise "Dues Collected" is ₹0 when only paymentHistory matches "Today".
+    const invoiceDateRange = { $gte: dateFrom, $lte: dateTo };
     const sales = await Sale.find({
       branchId,
-      date: { $gte: dateFrom, $lte: dateTo },
-      status: { $nin: ['cancelled', 'Cancelled'] }
+      status: { $nin: ['cancelled', 'Cancelled'] },
+      $or: [
+        { date: invoiceDateRange },
+        { paymentHistory: { $elemMatch: { date: invoiceDateRange } } }
+      ]
     }).lean();
+    const salesInInvoiceRange = sales.filter((s) => {
+      const d = s.date ? new Date(s.date) : null;
+      return d && d >= dateFrom && d <= dateTo;
+    });
 
     const receipts = await Receipt.find({
       branchId,
@@ -8599,12 +8533,12 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
       status: { $in: ['approved', 'pending'] }
     }).lean();
 
-    const totalBillCount = sales.length;
-    const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
+    const totalBillCount = salesInInvoiceRange.length;
+    const uniqueCustomers = new Set(salesInInvoiceRange.map(s => (s.customerName || '').trim()).filter(Boolean));
     const totalCustomerCount = uniqueCustomers.size || totalBillCount;
-    const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
+    const totalSales = salesInInvoiceRange.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
     let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
-    sales.forEach(s => {
+    salesInInvoiceRange.forEach(s => {
       let cashAmt = 0;
       let isAllCash = false;
       if (s.payments && s.payments.length) {
@@ -8639,7 +8573,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     const cashExpense = cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     const pettyCashExpense = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
     // Tip collected: sum from Sales (Quick Sale flow) + Receipts (manual receipt flow), for selected date range, all staff
-    const tipFromSales = sales.reduce((sum, s) => sum + (s.tip || 0), 0);
+    const tipFromSales = salesInInvoiceRange.reduce((sum, s) => sum + (s.tip || 0), 0);
     const tipFromReceipts = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
     const tipCollected = tipFromSales + tipFromReceipts;
     const cashBalance = closingRegistry?.cashBalance ?? 0;
@@ -8649,7 +8583,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     // Outstanding: invoices in date range with due_amount > 0
     let totalDue = 0;
     const customersWithDueSet = new Set();
-    sales.forEach(s => {
+    salesInInvoiceRange.forEach(s => {
       const totalBillAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? s.netTotal ?? 0;
       const amountPaid = s.paymentStatus?.paidAmount ?? (s.payments?.reduce((sum, p) => sum + (p.amount || 0), 0) ?? 0);
       const dueAmount = totalBillAmount - amountPaid;
@@ -8693,30 +8627,47 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
 
 // --- SALES API ---
 app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const started = Date.now();
   try {
-    
     const { Sale, BillEditHistory } = req.businessModels;
     const { dateFrom, dateTo } = req.query;
-    let query = { status: { $nin: ['cancelled', 'Cancelled'] } };
-    if (dateFrom || dateTo) {
-      query.date = {};
-      if (dateFrom) query.date.$gte = getStartOfDayIST(dateFrom);
-      if (dateTo) query.date.$lte = getEndOfDayIST(dateTo);
-    }
-    const sales = await Sale.find(query).sort({ date: -1 }).lean();
-    
-    // For bills that don't have isEdited set but have edit history, mark them as edited
-    if (BillEditHistory) {
-      const editedBillIds = await BillEditHistory.distinct('saleId');
-      sales.forEach(sale => {
-        const saleIdStr = sale._id.toString();
-        if (editedBillIds.some(id => id.toString() === saleIdStr) && !sale.isEdited) {
-          sale.isEdited = true;
-        }
+    const branchId = req.user.branchId;
+    const query = buildSalesListFilter(branchId, dateFrom, dateTo);
+    const { limit, page, skip } = parseSalesListPagination(req.query);
+    const fetchLimit = limit + 1;
+
+    const salesRaw = await Sale.find(query)
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(fetchLimit)
+      .lean();
+
+    const hasMore = salesRaw.length > limit;
+    const sales = hasMore ? salesRaw.slice(0, limit) : salesRaw;
+
+    await mergeEditedFlagsFromHistory(sales, BillEditHistory);
+
+    const durationMs = Date.now() - started;
+    if (durationMs > 500) {
+      logger.warn('Slow GET /api/sales', {
+        durationMs,
+        page,
+        limit,
+        hasDateFilter: !!(dateFrom || dateTo),
+        hasMore,
       });
     }
-    
-    res.json({ success: true, data: sales });
+
+    res.json({
+      success: true,
+      data: sales,
+      meta: {
+        durationMs,
+        page,
+        limit,
+        hasMore,
+      },
+    });
   } catch (err) {
     logger.error('Error fetching sales:', err);
     res.status(500).json({ success: false, error: err.message });
