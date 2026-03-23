@@ -187,6 +187,13 @@ export interface ApiResponse<T = any> {
   data: T
   message?: string
   error?: string
+  /** GET /sales and other list endpoints may include timing/pagination hints */
+  meta?: {
+    durationMs?: number
+    page?: number
+    limit?: number
+    hasMore?: boolean
+  }
 }
 
 export interface PaginatedResponse<T> extends ApiResponse<T[]> {
@@ -780,7 +787,13 @@ export class ReceiptsAPI {
 }
 
 export class SalesAPI {
-  static async getAll(params?: { page?: number; limit?: number; search?: string; dateFrom?: string; dateTo?: string }): Promise<PaginatedResponse<any>> {
+  static async getAll(params?: {
+    page?: number
+    limit?: number
+    search?: string
+    dateFrom?: string
+    dateTo?: string
+  }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/sales', { params })
     return response.data
   }

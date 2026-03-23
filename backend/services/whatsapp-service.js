@@ -359,13 +359,9 @@ class WhatsAppService {
         logger.debug('📱 [MSG91] Request ID:', requestId);
         logger.debug('📱 [MSG91] Note: Message is queued for delivery. Check MSG91 dashboard for delivery status.');
         
-        // Log warning if message is just queued (not immediately delivered)
+        // Queued delivery is normal; avoid multi-line warn spam (was 4+ log lines per message).
         if (responseData.data && responseData.data.includes('in process')) {
-          logger.warn('⚠️ [MSG91] Message queued for delivery. Possible reasons:');
-          logger.warn('   - Template may not be approved/active in MSG91');
-          logger.warn('   - Phone number may not be registered/verified');
-          logger.warn('   - Template variables may not match approved template');
-          logger.warn('   - Check MSG91 dashboard for delivery status using request_id:', requestId);
+          logger.debug('[MSG91] WhatsApp queued (in process), request_id=%s', requestId);
         }
         
         return { 
