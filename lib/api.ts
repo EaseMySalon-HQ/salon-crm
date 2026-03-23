@@ -786,6 +786,24 @@ export class ReceiptsAPI {
   }
 }
 
+export interface SalesListResponse extends ApiResponse<any[]> {
+  total?: number
+  page?: number
+  limit?: number
+  totalPages?: number
+}
+
+export interface SalesSummaryData {
+  totalRevenue: number
+  cashCollected: number
+  onlineCash: number
+  unpaidValue: number
+  tips: number
+  completedSales: number
+  partialSales: number
+  unpaidSales: number
+}
+
 export class SalesAPI {
   static async getAll(params?: {
     page?: number
@@ -793,8 +811,26 @@ export class SalesAPI {
     search?: string
     dateFrom?: string
     dateTo?: string
-  }): Promise<ApiResponse<any[]>> {
+    date?: string
+    status?: string
+    paymentMode?: string
+    tipStaffId?: string
+  }): Promise<SalesListResponse> {
     const response = await apiClient.get('/sales', { params })
+    return response.data
+  }
+
+  /** Aggregate totals for filters (no row payload). Same query params as getAll except page/limit are ignored. */
+  static async getSummary(params?: {
+    search?: string
+    dateFrom?: string
+    dateTo?: string
+    date?: string
+    status?: string
+    paymentMode?: string
+    tipStaffId?: string
+  }): Promise<ApiResponse<SalesSummaryData>> {
+    const response = await apiClient.get('/sales/summary', { params })
     return response.data
   }
 

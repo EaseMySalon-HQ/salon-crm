@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,7 +17,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { CursorTooltip } from "@/components/ui/cursor-tooltip"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
-import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI } from "@/lib/api"
+import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, type SalesSummaryData } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
@@ -90,7 +90,33 @@ interface SalesRecord {
   items?: Array<{ type: string; [key: string]: unknown }>
 }
 
+function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
+  return {
+    id: String(sale._id),
+    billNo: String(sale.billNo ?? ""),
+    customerName: String(sale.customerName ?? ""),
+    date: typeof sale.date === "string" ? sale.date : (sale.date as Date)?.toISOString?.() ?? "",
+    time: sale.time as string | undefined,
+    paymentMode: String(sale.paymentMode ?? ""),
+    payments: (sale.payments as SalesRecord["payments"]) || [],
+    tip: (sale.tip as number) || 0,
+    tipStaffId: sale.tipStaffId != null ? String(sale.tipStaffId) : undefined,
+    tipStaffName: sale.tipStaffName as string | undefined,
+    netTotal: Number(sale.netTotal ?? 0),
+    taxAmount: Number(sale.taxAmount ?? 0),
+    grossTotal: Number(sale.grossTotal ?? 0),
+    paymentStatus: sale.paymentStatus as SalesRecord["paymentStatus"],
+    status: (sale.status as SalesRecord["status"]) || "unpaid",
+    staffName: String(sale.staffName ?? ""),
+    items: (sale.items as SalesRecord["items"]) || [],
+    isEdited: sale.isEdited === true || !!sale.editedAt,
+    editedAt: sale.editedAt as Date | string | undefined,
+  }
+}
+
 type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "all" | "custom"
+
+const SALES_SEARCH_DEBOUNCE_MS = 400
 
 export function SalesReport() {
   const router = useRouter()
@@ -98,14 +124,24 @@ export function SalesReport() {
   const { hasAccess: canExport } = useFeature("data_export")
   const [reportType, setReportType] = useState("sales")
   const [searchTerm, setSearchTerm] = useState("")
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({})
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("today")
   const [paymentFilter, setPaymentFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [staffTipFilter, setStaffTipFilter] = useState<string>("all")
   const [salesStaff, setSalesStaff] = useState<{ _id: string; name: string }[]>([])
-  const [salesData, setSalesData] = useState<SalesRecord[]>([])
-  const [loading, setLoading] = useState(true)
+  /** Staff-tip report only: wider fetch for aggregation */
+  const [staffTipData, setStaffTipData] = useState<SalesRecord[]>([])
+  const [salesListRows, setSalesListRows] = useState<SalesRecord[]>([])
+  const [salesTotalCount, setSalesTotalCount] = useState(0)
+  const [salesTotalPages, setSalesTotalPages] = useState(1)
+  const [salesListLoading, setSalesListLoading] = useState(false)
+  const [salesStatsLoading, setSalesStatsLoading] = useState(false)
+  const [summaryStats, setSummaryStats] = useState<SalesSummaryData | null>(null)
+  const [salesRefreshKey, setSalesRefreshKey] = useState(0)
+  /** Bumps staff-tip wide fetch after Mark as paid (payout state + row data). */
+  const [staffTipRefreshKey, setStaffTipRefreshKey] = useState(0)
   const [selectedBill, setSelectedBill] = useState<SalesRecord | null>(null)
   const [isBillDialogOpen, setIsBillDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
@@ -175,7 +211,10 @@ export function SalesReport() {
     totalDue?: number
     customersWithDue?: number
   } | null>(null)
-  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [summaryReportLoading, setSummaryReportLoading] = useState(false)
+
+  /** Ref for sales list: reset page when filter key changes (avoids stale page + fetch race). */
+  const prevSalesFilterKeyRef = useRef<string | null>(null)
 
   // Function to navigate to receipt page
   const handleViewReceipt = (sale: SalesRecord) => {
@@ -191,46 +230,18 @@ export function SalesReport() {
   }
 
 
-  // Mock data - replace with actual API call
+  // Default date range: today (IST); sales load via server-side filters + pagination
   useEffect(() => {
-    // Set default date range to today (IST)
     const todayRange = getDateRangeFromPeriod("today")
     setDateRange(todayRange)
-    
-    async function fetchSales() {
-      setLoading(true)
-      try {
-        const res = await SalesAPI.getAll({ limit: 10000 })
-        const apiData = res.data || []
-        const mapped = apiData.map((sale: any) => ({
-          id: sale._id,
-          billNo: sale.billNo,
-          customerName: sale.customerName,
-          date: sale.date,
-          time: sale.time,
-          paymentMode: sale.paymentMode,
-          payments: sale.payments || [],
-          tip: sale.tip || 0,
-          tipStaffId: sale.tipStaffId,
-          tipStaffName: sale.tipStaffName,
-          netTotal: sale.netTotal,
-          taxAmount: sale.taxAmount,
-          grossTotal: sale.grossTotal,
-          paymentStatus: sale.paymentStatus,
-          status: sale.status,
-          staffName: sale.staffName,
-          items: sale.items || [],
-          isEdited: sale.isEdited === true || !!sale.editedAt,
-          editedAt: sale.editedAt,
-        }))
-        setSalesData(mapped)
-      } catch (err) {
-        setSalesData([])
-      }
-      setLoading(false)
-    }
-    fetchSales()
   }, [])
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim())
+    }, SALES_SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(id)
+  }, [searchTerm])
 
   // Fetch staff for Staff Tip dropdown when Sales or Staff Tip report is selected
   useEffect(() => {
@@ -326,6 +337,111 @@ export function SalesReport() {
     }
   }
 
+  /** Query params for GET /api/sales and /api/sales/summary (server-side filters). */
+  const buildSalesListFilterParams = useCallback((): Record<string, string> | null => {
+    if (datePeriod === "custom" && (!dateRange.from || !dateRange.to)) {
+      return null
+    }
+    const effectiveRange = dateRange.from && dateRange.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null
+    const rangeForPeriod = datePeriod !== "all" && datePeriod !== "custom" ? getDateRangeFromPeriod(datePeriod) : null
+    const activeRange =
+      effectiveRange ||
+      (rangeForPeriod?.from && rangeForPeriod?.to ? { from: rangeForPeriod.from, to: rangeForPeriod.to } : null)
+
+    const params: Record<string, string> = {}
+    if (activeRange) {
+      const { dateFrom, dateTo } = getEffectiveDateParams(activeRange.from, activeRange.to)
+      if (dateFrom) params.dateFrom = dateFrom
+      if (dateTo) params.dateTo = dateTo
+    }
+    if (statusFilter !== "all") params.status = statusFilter
+    if (paymentFilter !== "all") params.paymentMode = paymentFilter
+    if (staffTipFilter !== "all") params.tipStaffId = staffTipFilter
+    const q = debouncedSearchTerm
+    if (q) params.search = q
+    return params
+  }, [datePeriod, dateRange.from, dateRange.to, statusFilter, paymentFilter, staffTipFilter, debouncedSearchTerm])
+
+  // Sales report: paginated list + aggregate summary (server-side filters)
+  useEffect(() => {
+    if (reportType !== "sales") return
+    const base = buildSalesListFilterParams()
+    if (!base) {
+      prevSalesFilterKeyRef.current = null
+      setSalesListRows([])
+      setSalesTotalCount(0)
+      setSalesTotalPages(1)
+      setSummaryStats(null)
+      setSalesListLoading(false)
+      setSalesStatsLoading(false)
+      return
+    }
+    const filterKey = JSON.stringify(base)
+    const filterChanged = prevSalesFilterKeyRef.current !== filterKey
+    if (filterChanged) {
+      prevSalesFilterKeyRef.current = filterKey
+      if (salesPageIndex !== 0) {
+        setSalesPageIndex(0)
+        return
+      }
+    }
+    let cancelled = false
+    setSalesListLoading(true)
+    setSalesStatsLoading(true)
+    const listParams = { ...base, page: salesPageIndex + 1, limit: salesPageSize }
+    Promise.all([SalesAPI.getAll(listParams), SalesAPI.getSummary(base)])
+      .then(([listRes, sumRes]) => {
+        if (cancelled) return
+        const rows = (listRes.data || []).map(mapApiSaleToRecord)
+        setSalesListRows(rows)
+        setSalesTotalCount(listRes.total ?? rows.length)
+        setSalesTotalPages(Math.max(1, listRes.totalPages ?? 1))
+        if (sumRes?.success && sumRes?.data) setSummaryStats(sumRes.data)
+        else setSummaryStats(null)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSalesListRows([])
+          setSalesTotalCount(0)
+          setSalesTotalPages(1)
+          setSummaryStats(null)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSalesListLoading(false)
+          setSalesStatsLoading(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reportType, buildSalesListFilterParams, salesPageIndex, salesPageSize, salesRefreshKey])
+
+  // Staff tip report: wide fetch for per-staff tip aggregation.
+  // Filters (date, status, payment, tip staff, search) flow through buildSalesListFilterParams — do not list them here separately.
+  useEffect(() => {
+    if (reportType !== "staff-tip") return
+    const base = buildSalesListFilterParams()
+    if (!base) {
+      setStaffTipData([])
+      return
+    }
+    let cancelled = false
+    SalesAPI.getAll({ ...base, page: 1, limit: 5000 })
+      .then((res) => {
+        if (cancelled) return
+        const rows = (res.data || []).map(mapApiSaleToRecord)
+        setStaffTipData(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setStaffTipData([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reportType, buildSalesListFilterParams, staffTipRefreshKey])
+
   // Handle date period change
   const handleDatePeriodChange = (period: DatePeriod) => {
     setDatePeriod(period)
@@ -420,7 +536,7 @@ export function SalesReport() {
   useEffect(() => {
     if (reportType !== "summary") return
     let cancelled = false
-    setSummaryLoading(true)
+    setSummaryReportLoading(true)
     const params: { dateFrom?: string; dateTo?: string } = {}
     if (dateRange.from && dateRange.to) {
       Object.assign(params, getEffectiveDateParams(dateRange.from, dateRange.to))
@@ -439,7 +555,7 @@ export function SalesReport() {
         if (!cancelled) setSummaryData(null)
       })
       .finally(() => {
-        if (!cancelled) setSummaryLoading(false)
+        if (!cancelled) setSummaryReportLoading(false)
       })
     return () => { cancelled = true }
   }, [reportType, datePeriod, dateRange.from, dateRange.to])
@@ -599,15 +715,14 @@ export function SalesReport() {
   const staffTipDateRange = reportType === "staff-tip"
     ? (dateRange.from && dateRange.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : datePeriod !== "all" && datePeriod !== "custom" ? getDateRangeFromPeriod(datePeriod) : null)
     : null
-  const staffTipSales = reportType === "staff-tip" && staffTipDateRange && staffTipDateRange.from != null && staffTipDateRange.to != null
-    ? salesData.filter((sale) => {
-        const saleDate = new Date(sale.date)
-        const inRange = saleDate >= staffTipDateRange!.from && saleDate <= staffTipDateRange!.to
-        const hasTip = !!(sale.tip && sale.tip > 0) && (sale.tipStaffId || sale.tipStaffName)
-        const matchesStaff = staffTipFilter === "all" || sale.tipStaffId === staffTipFilter
-        return inRange && hasTip && matchesStaff
-      })
-    : []
+  const staffTipSales =
+    reportType === "staff-tip" && staffTipDateRange && staffTipDateRange.from != null && staffTipDateRange.to != null
+      ? staffTipData.filter((sale) => {
+          const hasTip = !!(sale.tip && sale.tip > 0) && (sale.tipStaffId || sale.tipStaffName)
+          const matchesStaff = staffTipFilter === "all" || sale.tipStaffId === staffTipFilter
+          return hasTip && matchesStaff
+        })
+      : []
   const getTipPaymentMode = (sale: SalesRecord): "Cash" | "Card" | "Online" | "Mixed" => {
     const norm = (s: string) => (s || "").toLowerCase()
     if (sale.payments && sale.payments.length > 0) {
@@ -683,121 +798,34 @@ export function SalesReport() {
           dateTo: to.toISOString()
         })
         if (list?.success && list?.data) setTipPayouts(Array.isArray(list.data) ? list.data : [])
+        setStaffTipRefreshKey((k) => k + 1)
       } else throw new Error((res as any)?.error || "Failed")
     } catch (e: any) {
       toast({ title: "Failed to mark as paid", description: e?.message || "Please try again.", variant: "destructive" })
     }
   }
 
-  // Enhanced filtering for split payments
-  const filteredSales = salesData.filter((sale) => {
-    const matchesSearch = 
-      sale.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      sale.billNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      sale.staffName.toLowerCase().includes(searchTerm.toLowerCase())
-    
-    // Enhanced payment filtering for split payments
-    let matchesPayment = true
-    if (paymentFilter !== "all") {
-      if (sale.payments && sale.payments.length > 0) {
-        matchesPayment = sale.payments.some((payment) => payment.mode === paymentFilter)
-      } else {
-        matchesPayment = sale.paymentMode === paymentFilter
-      }
-    }
-    
-    const matchesStatus = statusFilter === "all" || sale.status === statusFilter
-
-    // Staff Tip filter: show only sales where tip was given to selected staff
-    const matchesStaffTip =
-      staffTipFilter === "all" || (!!(sale.tip && sale.tip > 0) && sale.tipStaffId === staffTipFilter)
-    
-    // Date range filtering (use effective range so same-day selection includes full day)
-    const saleDate = new Date(sale.date)
-    const effectiveRange = dateRange.from && dateRange.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null
-    const rangeForPeriod = datePeriod !== "all" && datePeriod !== "custom" ? getDateRangeFromPeriod(datePeriod) : null
-    const activeRange = effectiveRange || (rangeForPeriod?.from && rangeForPeriod?.to ? { from: rangeForPeriod.from, to: rangeForPeriod.to } : null)
-    const matchesDateRange = !activeRange || (saleDate >= activeRange.from && saleDate <= activeRange.to)
-    
-    return matchesSearch && matchesPayment && matchesStatus && matchesStaffTip && matchesDateRange
-  })
-
-  // Sort by bill number descending (latest first) - extract numeric part for correct ordering
-  const extractBillNum = (billNo: string) => {
-    const m = (billNo || "").match(/\d+/)
-    return m ? parseInt(m[0], 10) : 0
-  }
-  const sortedFilteredSales = [...filteredSales].sort(
-    (a, b) => extractBillNum(b.billNo) - extractBillNum(a.billNo)
-  )
-
-  // Reset pagination and partial/unpaid card when filters change
+  // Reset partial/unpaid card when filters change
   useEffect(() => {
-    setSalesPageIndex(0)
     setShowPartialUnpaidBreakdown(false)
-  }, [searchTerm, paymentFilter, statusFilter, staffTipFilter, datePeriod, dateRange])
+  }, [debouncedSearchTerm, paymentFilter, statusFilter, staffTipFilter, datePeriod, dateRange])
 
-  // Pagination for the sales table
-  const totalSalesRows = sortedFilteredSales.length
-  const totalSalesPages = Math.max(1, Math.ceil(totalSalesRows / salesPageSize))
-  const safeSalesPageIndex = Math.min(salesPageIndex, totalSalesPages - 1)
-  const paginatedSales = sortedFilteredSales.slice(
-    safeSalesPageIndex * salesPageSize,
-    (safeSalesPageIndex + 1) * salesPageSize
-  )
+  // Pagination for the sales table (server-side; order matches API — date desc)
+  const totalSalesRows = salesTotalCount
+  const displayTotalPages = Math.max(1, salesTotalPages)
+  const safeSalesPageIndex = Math.min(salesPageIndex, displayTotalPages - 1)
+  const paginatedSales = salesListRows
   const salesStartRow = totalSalesRows === 0 ? 0 : safeSalesPageIndex * salesPageSize + 1
-  const salesEndRow = Math.min(salesStartRow + salesPageSize - 1, totalSalesRows)
+  const salesEndRow = totalSalesRows === 0 ? 0 : Math.min(salesStartRow + Math.max(0, paginatedSales.length - 1), totalSalesRows)
 
-  const totalRevenue = filteredSales.reduce((sum, sale) => sum + sale.grossTotal, 0)
-  const completedSales = filteredSales.filter(sale => sale.status === "completed").length
-  const partialSales = filteredSales.filter(sale => sale.status === "partial").length
-  const unpaidSales = filteredSales.filter(sale => sale.status === "unpaid").length
-  const getFullPaidAmount = (sale: SalesRecord) =>
-    sale.paymentStatus?.paidAmount ?? sale.payments?.reduce((s, p) => s + (p.amount || 0), 0) ?? 0
-  const getOutstandingBalance = (sale: SalesRecord) => {
-    const rem = sale.paymentStatus?.remainingAmount
-    if (typeof rem === "number" && !Number.isNaN(rem)) return Math.max(0, rem)
-    const total = sale.grossTotal || 0
-    return Math.max(0, total - getFullPaidAmount(sale))
-  }
-  const unpaidValue = filteredSales
-    .filter((s) => s.status === "unpaid" || s.status === "partial")
-    .reduce((sum, s) => sum + getOutstandingBalance(s), 0)
-  const tipsCollected = filteredSales.reduce((sum, sale) => sum + (sale.tip || 0), 0)
-  
-  // Calculate cash and online collections (supporting both legacy and split payments)
-  // Exclude tip from Cash Collected when tip was paid in cash
-  const cashCollected = filteredSales.reduce((sum, sale) => {
-    let cashAmt = 0
-    let isAllCash = false
-    if (sale.payments && sale.payments.length > 0) {
-      const cashPayments = sale.payments.filter((p: any) => (p.mode || p.type || "").toLowerCase().includes("cash"))
-      const hasNonCash = sale.payments.some((p: any) => {
-        const m = (p.mode || p.type || "").toLowerCase()
-        return m.includes("card") || m.includes("online") || m.includes("upi")
-      })
-      cashAmt = cashPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
-      isAllCash = cashAmt > 0 && !hasNonCash
-    } else {
-      const pm = (sale.paymentMode || "").toLowerCase()
-      cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
-      isAllCash = cashAmt > 0
-    }
-    const tip = sale.tip || 0
-    return sum + cashAmt - (isAllCash ? tip : 0)
-  }, 0)
-  
-  const onlineCashCollected = filteredSales.reduce((sum, sale) => {
-    if (sale.payments && sale.payments.length > 0) {
-      // New split payment structure
-      return sum + sale.payments
-        .filter(payment => payment.mode === "Card" || payment.mode === "Online")
-        .reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
-    } else {
-      // Legacy single payment mode
-      return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
-    }
-  }, 0)
+  const totalRevenue = summaryStats?.totalRevenue ?? 0
+  const completedSales = summaryStats?.completedSales ?? 0
+  const partialSales = summaryStats?.partialSales ?? 0
+  const unpaidSales = summaryStats?.unpaidSales ?? 0
+  const unpaidValue = summaryStats?.unpaidValue ?? 0
+  const tipsCollected = summaryStats?.tips ?? 0
+  const cashCollected = summaryStats?.cashCollected ?? 0
+  const onlineCashCollected = summaryStats?.onlineCash ?? 0
 
   const cashCollectedTooltip =
     paymentFilter === "all"
@@ -813,6 +841,12 @@ export function SalesReport() {
         : paymentFilter === "Online"
           ? "Filtered: Online only"
           : "All online payments"
+
+  const salesStatSkeleton = <div className="h-8 w-24 max-w-full bg-slate-200 rounded animate-pulse" aria-hidden />
+
+  useEffect(() => {
+    setSalesPageIndex((i) => Math.min(i, Math.max(0, salesTotalPages - 1)))
+  }, [salesTotalPages])
 
   const handleExportPDF = async () => {
     toast({ title: "Export requested", description: "Generating sales report PDF...", duration: 3000 })
@@ -1212,8 +1246,7 @@ export function SalesReport() {
       const response = await SalesAPI.delete(selectedSale.id, deleteSaleReason.trim())
       
       if (response.success) {
-        // Remove from local state only after successful API call
-        setSalesData(prev => prev.filter(sale => sale.id !== selectedSale.id))
+        setSalesRefreshKey((k) => k + 1)
         setIsDeleteDialogOpen(false)
         setSelectedSale(null)
         setDeleteSaleReason("")
@@ -1295,34 +1328,6 @@ export function SalesReport() {
       return filteredPayment ? filteredPayment.amount : 0
     }
     return sale.paymentMode === paymentFilter ? fullPaid : 0
-  }
-
-  if (loading) {
-    return (
-      <div className="space-y-8">
-        <div className="grid gap-6 md:grid-cols-5">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium bg-slate-200 h-4 rounded"></CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold bg-slate-200 h-8 rounded"></div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <div className="text-center py-16">
-          <div className="flex flex-col items-center space-y-4">
-            <div className="w-20 h-20 bg-slate-200 rounded-full animate-pulse"></div>
-            <div className="text-center">
-              <h3 className="text-lg font-medium text-slate-900 mb-2">Loading sales data...</h3>
-              <p className="text-slate-500 text-sm">Please wait while we fetch your data</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
   }
 
   return (
@@ -2302,7 +2307,7 @@ export function SalesReport() {
         />
       ) : reportType === "summary" ? (
         <div className="min-h-[480px] bg-slate-50/80 rounded-2xl p-6 space-y-6">
-          {summaryLoading ? (
+          {summaryReportLoading ? (
             <div className="flex items-center justify-center py-24">
               <div className="flex flex-col items-center gap-3">
                 <div className="w-10 h-10 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
@@ -2645,7 +2650,9 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">{completedSales}</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {salesStatsLoading ? salesStatSkeleton : completedSales}
+              </div>
             </CardContent>
           </Card>
         </CursorTooltip>
@@ -2685,7 +2692,9 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              {!showPartialUnpaidBreakdown ? (
+              {salesStatsLoading ? (
+                salesStatSkeleton
+              ) : !showPartialUnpaidBreakdown ? (
                 <div className="space-y-1">
                   <div className="text-2xl font-bold text-gray-900">{partialSales + unpaidSales}</div>
                   <p className="text-xs font-medium text-gray-500">Partial + Unpaid</p>
@@ -2710,7 +2719,7 @@ export function SalesReport() {
         <CursorTooltip
           wrapperClassName="h-full min-h-0"
           className="text-center"
-          content={<>From {filteredSales.length} sales</>}
+          content={<>From {totalSalesRows} sales</>}
         >
           <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
@@ -2720,7 +2729,9 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">₹{totalRevenue.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {salesStatsLoading ? salesStatSkeleton : `₹${totalRevenue.toFixed(2)}`}
+              </div>
             </CardContent>
           </Card>
         </CursorTooltip>
@@ -2742,7 +2753,9 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">₹{unpaidValue.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {salesStatsLoading ? salesStatSkeleton : `₹${unpaidValue.toFixed(2)}`}
+              </div>
             </CardContent>
           </Card>
         </CursorTooltip>
@@ -2756,7 +2769,9 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">₹{cashCollected.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {salesStatsLoading ? salesStatSkeleton : `₹${cashCollected.toFixed(2)}`}
+              </div>
             </CardContent>
           </Card>
         </CursorTooltip>
@@ -2770,7 +2785,9 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">₹{onlineCashCollected.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {salesStatsLoading ? salesStatSkeleton : `₹${onlineCashCollected.toFixed(2)}`}
+              </div>
             </CardContent>
           </Card>
         </CursorTooltip>
@@ -2784,7 +2801,9 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">₹{tipsCollected.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-gray-900">
+                {salesStatsLoading ? salesStatSkeleton : `₹${tipsCollected.toFixed(2)}`}
+              </div>
             </CardContent>
           </Card>
         </CursorTooltip>
@@ -2798,11 +2817,22 @@ export function SalesReport() {
             <h3 className="text-lg font-semibold text-gray-800">Sales Records</h3>
             <div className="flex items-center gap-4">
               <div className="text-sm text-gray-600">
-                {totalSalesRows > 0 ? `Showing ${salesStartRow}-${salesEndRow} of ${totalSalesRows} sales` : 'No sales'}
+                {salesListLoading
+                  ? "Loading…"
+                  : totalSalesRows > 0
+                    ? `Showing ${salesStartRow}-${salesEndRow} of ${totalSalesRows} sales`
+                    : "No sales"}
               </div>
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <span>Rows per page:</span>
-                <Select value={String(salesPageSize)} onValueChange={(v) => { setSalesPageSize(parseInt(v)); setSalesPageIndex(0) }}>
+                <Select
+                  value={String(salesPageSize)}
+                  disabled={salesListLoading}
+                  onValueChange={(v) => {
+                    setSalesPageSize(parseInt(v, 10))
+                    setSalesPageIndex(0)
+                  }}
+                >
                   <SelectTrigger className="h-8 w-[90px]">
                     <SelectValue />
                   </SelectTrigger>
@@ -2842,9 +2872,18 @@ export function SalesReport() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paginatedSales.length === 0 ? (
+              {salesListLoading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-12 text-slate-500">
+                  <TableCell colSpan={9} className="text-center py-16 text-slate-500">
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="h-8 w-8 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin" />
+                      <span className="text-sm">Loading sales…</span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : paginatedSales.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="text-center py-12 text-slate-500">
                     No sales records found for the selected filters.
                   </TableCell>
                 </TableRow>
@@ -2930,18 +2969,18 @@ export function SalesReport() {
         </div>
 
         {/* Pagination Footer */}
-        {totalSalesPages > 1 && (
+        {displayTotalPages > 1 && (
           <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-200">
             <div className="flex items-center justify-between">
               <div className="text-sm text-gray-600">
-                Page {safeSalesPageIndex + 1} of {totalSalesPages}
+                Page {safeSalesPageIndex + 1} of {displayTotalPages}
               </div>
               <div className="flex items-center space-x-2">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => setSalesPageIndex(prev => Math.max(0, prev - 1))}
-                  disabled={safeSalesPageIndex === 0}
+                  disabled={safeSalesPageIndex === 0 || salesListLoading}
                   className="h-9 px-4 border-gray-200 hover:border-gray-300"
                 >
                   Previous
@@ -2949,8 +2988,8 @@ export function SalesReport() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setSalesPageIndex(prev => Math.min(totalSalesPages - 1, prev + 1))}
-                  disabled={safeSalesPageIndex >= totalSalesPages - 1}
+                  onClick={() => setSalesPageIndex(prev => Math.min(displayTotalPages - 1, prev + 1))}
+                  disabled={safeSalesPageIndex >= displayTotalPages - 1 || salesListLoading}
                   className="h-9 px-4 border-gray-200 hover:border-gray-300"
                 >
                   Next
