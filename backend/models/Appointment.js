@@ -83,7 +83,6 @@ const appointmentSchema = new mongoose.Schema({
   bookingGroupId: {
     type: String,
     default: null,
-    sparse: true
   }
 }, {
   timestamps: true
