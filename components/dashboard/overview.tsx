@@ -29,6 +29,7 @@ export function Overview() {
         const today = getTodayIST()
         const [appointmentsRes, salesRows] = await Promise.all([
           AppointmentsAPI.getAll({ limit: 500 }),
+          // Monthly revenue aggregation: long-term fix is a single API that returns revenue-by-month (not raw rows).
           SalesAPI.getAllMergePages({ dateFrom: yearStart, dateTo: today, batchSize: 500 }),
         ])
 

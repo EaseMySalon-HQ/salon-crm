@@ -823,6 +823,10 @@ export class SalesAPI {
   /**
    * Loads all rows matching the same filters as getAll by paging (default batch 500).
    * Prefer this over a single huge limit=10000 request to avoid slow DB/response times.
+   *
+   * Note: pages are fetched sequentially (N round-trips for large datasets). Screens that only
+   * need aggregates (e.g. YTD revenue by month, staff performance totals) should eventually use
+   * dedicated server-side aggregation endpoints instead of pulling every sale row.
    */
   static async getAllMergePages(params?: {
     batchSize?: number

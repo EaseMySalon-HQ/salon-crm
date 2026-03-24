@@ -302,7 +302,7 @@ export function StaffPerformanceReport() {
         }
 
 
-        // Fetch sales data (paged — avoids a single 10k-row request)
+        // Paged fetch avoids one huge response; N sequential calls for large DBs. Long-term: server aggregates by staff/range.
         const allSales = await SalesAPI.getAllMergePages({ batchSize: 500 })
         if (Array.isArray(allSales)) {
           
