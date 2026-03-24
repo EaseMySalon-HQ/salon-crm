@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { CalendarIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SalesAPI, CommissionProfileAPI, StaffDirectoryAPI } from "@/lib/api"
+import { toDateStringIST, getStartOfDayIST, getEndOfDayIST } from "@/lib/date-utils"
 import { CommissionProfileCalculator } from "@/lib/commission-profile-calculator"
 import type { CommissionProfile } from "@/lib/commission-profile-types"
 import type { Sale } from "@/lib/commission-profile-calculator"
@@ -111,12 +112,17 @@ export function StaffServiceDetailDrawer({
     const load = async () => {
       setLoading(true)
       try {
-        const [salesRes, profilesRes, staffRes] = await Promise.all([
-          SalesAPI.getAll({ limit: 10000 }),
+        const salesParams: Parameters<typeof SalesAPI.getAllMergePages>[0] = { batchSize: 500 }
+        if (from && to) {
+          salesParams.dateFrom = getStartOfDayIST(toDateStringIST(from))
+          salesParams.dateTo = getEndOfDayIST(toDateStringIST(to))
+        }
+        const [salesRows, profilesRes, staffRes] = await Promise.all([
+          SalesAPI.getAllMergePages(salesParams),
           CommissionProfileAPI.getProfiles(),
           StaffDirectoryAPI.getAll()
         ])
-        if (salesRes.success && salesRes.data) setSales(salesRes.data)
+        setSales(Array.isArray(salesRows) ? salesRows : [])
         if (profilesRes.success && profilesRes.data) setCommissionProfiles(profilesRes.data)
         if (staffRes.success && staffRes.data) setStaffMembers(staffRes.data)
       } catch (e) {
@@ -126,7 +132,7 @@ export function StaffServiceDetailDrawer({
       }
     }
     load()
-  }, [open, staffId])
+  }, [open, staffId, from?.getTime(), to?.getTime()])
 
   const staff = staffMembers.find((s: any) => (s._id || s.id) === staffId)
   const staffProfileIds = staff?.commissionProfileIds || []
