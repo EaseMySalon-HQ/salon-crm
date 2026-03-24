@@ -220,7 +220,7 @@ export function StaffServiceDetailDrawer({
         const saleFallback = { staffId: sale.staffId, staffName: sale.staffName }
         const gross = getAttributedRevenueForStaff(item, staffId, staffName, saleFallback)
         if (gross <= 0) return
-        const lineGross = getLineNetTotal(item)
+        const lineGross = getLinePreTaxTotal(item)
         const qty = item.quantity ?? 1
         const share =
           lineGross > 0 ? gross / lineGross : 1 / Math.max(1, item.staffContributions?.length ?? 1)

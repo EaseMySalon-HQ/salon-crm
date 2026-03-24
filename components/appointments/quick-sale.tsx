@@ -3960,152 +3960,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   )}
                 </div>
               )}
-
-              {/* Selected Customer Details */}
-              {selectedCustomer && (
-                <div className={cn(
-                  "mt-4 p-6 rounded-xl shadow-sm",
-                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                    ? "bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100/80 border border-amber-200/60"
-                    : "bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 border border-indigo-100/50"
-                )}>
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className={cn(
-                        "p-3 rounded-xl shadow-md",
-                        membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                          ? "bg-gradient-to-br from-amber-500 via-yellow-500 to-amber-600"
-                          : "bg-gradient-to-br from-indigo-500 to-purple-600"
-                      )}>
-                        <User className="h-5 w-5 text-white" />
-                      </div>
-                      <div>
-                        <h4 className="font-semibold text-gray-800 text-lg">{selectedCustomer.name}</h4>
-                        <p className="text-sm text-gray-600">{selectedCustomer.phone}</p>
-                        {selectedCustomer.email && (
-                          <p className="text-sm text-gray-600">{selectedCustomer.email}</p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <div className="flex items-center gap-2">
-                        {membershipData?.subscription && (
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              "text-xs",
-                              membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                                ? "bg-amber-50 text-amber-800 border-amber-300"
-                                : "bg-emerald-50 text-emerald-700 border-emerald-200"
-                            )}
-                          >
-                            {membershipData?.plan?.planName || "Membership Applied"}
-                          </Badge>
-                        )}
-                        <Badge variant={selectedCustomer.status === "active" ? "default" : "secondary"} className="px-3 py-1">
-                          {selectedCustomer.status}
-                        </Badge>
-                      </div>
-                      {membershipData?.subscription?.expiryDate && (
-                        <p className="text-xs text-gray-500">
-                          Valid Till: {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
-                        </p>
-                      )}
-                    </div>
-                    {(selectedCustomer.totalDues || 0) > 0 && (
-                      <div 
-                        className="text-center p-3 bg-red-50/80 rounded-lg border border-red-200/50 cursor-pointer hover:bg-red-100/80 hover:border-red-300 transition-all duration-200"
-                        onClick={async () => {
-                          if (selectedCustomer) {
-                            await fetchUnpaidBills(selectedCustomer.phone || '')
-                            setShowDuesDialog(true)
-                          }
-                        }}
-                      >
-                        <div className="flex items-center justify-center gap-2 mb-2">
-                          <CreditCard className="h-4 w-4 text-red-600" />
-                          <span className="text-xs font-medium text-red-700">Dues</span>
-                        </div>
-                        <p className="text-lg font-bold text-red-700">₹{Number(selectedCustomer.totalDues || 0).toFixed(2)}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className={`grid ${(selectedCustomer.totalDues || 0) > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-4 mb-4`}>
-                    <div className={cn(
-                      "text-center p-3 rounded-lg border",
-                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                        ? "bg-amber-50/60 border-amber-200/50"
-                        : "bg-white/60 border-white/50"
-                    )}>
-                      <div className="flex items-center justify-center gap-2 mb-2">
-                        <CalendarDays className={cn(
-                          "h-4 w-4",
-                          membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-indigo-600"
-                        )} />
-                        <span className="text-xs font-medium text-gray-700">Visits</span>
-                      </div>
-                      <p className={cn(
-                        "text-lg font-bold",
-                        membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-indigo-700"
-                      )}>{selectedCustomer.totalVisits || 0}</p>
-                    </div>
-                    <div className={cn(
-                      "text-center p-3 rounded-lg border",
-                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                        ? "bg-amber-50/60 border-amber-200/50"
-                        : "bg-white/60 border-white/50"
-                    )}>
-                      <div className="flex items-center justify-center gap-2 mb-2">
-                        <TrendingUp className={cn(
-                          "h-4 w-4",
-                          membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-emerald-600"
-                        )} />
-                        <span className="text-xs font-medium text-gray-700">Revenue</span>
-                      </div>
-                      <p className={cn(
-                        "text-lg font-bold",
-                        membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-emerald-700"
-                      )}>₹{Number(selectedCustomer.totalSpent || 0).toFixed(2)}</p>
-                    </div>
-                    <div className={cn(
-                      "text-center p-3 rounded-lg border",
-                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                        ? "bg-amber-50/60 border-amber-200/50"
-                        : "bg-white/60 border-white/50"
-                    )}>
-                      <div className="flex items-center justify-center gap-2 mb-2">
-                        <CalendarIcon className={cn(
-                          "h-4 w-4",
-                          membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-purple-600"
-                        )} />
-                        <span className="text-xs font-medium text-gray-700">Last Visit</span>
-                      </div>
-                      <p className={cn(
-                        "text-sm font-semibold",
-                        membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-purple-700"
-                      )}>
-                        {selectedCustomer.lastVisit ? format(new Date(selectedCustomer.lastVisit), "dd MMM") : "Never"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleViewBillActivity}
-                    className={cn(
-                      "w-full h-10 text-sm transition-all duration-300",
-                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                        ? "bg-amber-50/80 hover:bg-amber-50 border-amber-200 text-amber-800 hover:text-amber-900 hover:border-amber-300"
-                        : "bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300"
-                    )}
-                  >
-                    <FileText className="h-4 w-4 mr-2" />
-                    Bill Activity
-                  </Button>
-                </div>
-              )}
             </div>
 
             <div className="space-y-3">
@@ -4141,6 +3995,165 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             </div>
           </div>
 
+          {/* Full-width below Customer + Date row */}
+          {selectedCustomer && (
+            <div
+              className={cn(
+                "w-full p-6 rounded-xl shadow-sm",
+                membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                  ? "bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100/80 border border-amber-200/60"
+                  : "bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 border border-indigo-100/50"
+              )}
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className={cn(
+                    "p-3 rounded-xl shadow-md",
+                    membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                      ? "bg-gradient-to-br from-amber-500 via-yellow-500 to-amber-600"
+                      : "bg-gradient-to-br from-indigo-500 to-purple-600"
+                  )}>
+                    <User className="h-5 w-5 text-white" />
+                  </div>
+                  <div>
+                    <h4 className="font-semibold text-gray-800 text-lg">{selectedCustomer.name}</h4>
+                    <p className="text-sm text-gray-600">{selectedCustomer.phone}</p>
+                    {selectedCustomer.email && (
+                      <p className="text-sm text-gray-600">{selectedCustomer.email}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <div className="flex items-center gap-2">
+                    {membershipData?.subscription && (
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-xs",
+                          membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                            ? "bg-amber-50 text-amber-800 border-amber-300"
+                            : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                        )}
+                      >
+                        {membershipData?.plan?.planName || "Membership Applied"}
+                      </Badge>
+                    )}
+                    <Badge variant={selectedCustomer.status === "active" ? "default" : "secondary"} className="px-3 py-1">
+                      {selectedCustomer.status}
+                    </Badge>
+                  </div>
+                  {membershipData?.subscription?.expiryDate && (
+                    <p className="text-xs text-gray-500">
+                      Valid Till: {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div
+                className={cn(
+                  "grid gap-4 mb-4",
+                  (selectedCustomer.totalDues || 0) > 0
+                    ? "grid-cols-2 sm:grid-cols-4"
+                    : "grid-cols-1 sm:grid-cols-3"
+                )}
+              >
+                <div className={cn(
+                  "text-center p-3 rounded-lg border",
+                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                    ? "bg-amber-50/60 border-amber-200/50"
+                    : "bg-white/60 border-white/50"
+                )}>
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <CalendarDays className={cn(
+                      "h-4 w-4",
+                      membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-indigo-600"
+                    )} />
+                    <span className="text-xs font-medium text-gray-700">Visits</span>
+                  </div>
+                  <p className={cn(
+                    "text-lg font-bold",
+                    membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-indigo-700"
+                  )}>{selectedCustomer.totalVisits || 0}</p>
+                </div>
+                <div className={cn(
+                  "text-center p-3 rounded-lg border",
+                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                    ? "bg-amber-50/60 border-amber-200/50"
+                    : "bg-white/60 border-white/50"
+                )}>
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <TrendingUp className={cn(
+                      "h-4 w-4",
+                      membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-emerald-600"
+                    )} />
+                    <span className="text-xs font-medium text-gray-700">Revenue</span>
+                  </div>
+                  <p className={cn(
+                    "text-lg font-bold",
+                    membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-emerald-700"
+                  )}>₹{Number(selectedCustomer.totalSpent || 0).toFixed(2)}</p>
+                </div>
+                <div className={cn(
+                  "text-center p-3 rounded-lg border",
+                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                    ? "bg-amber-50/60 border-amber-200/50"
+                    : "bg-white/60 border-white/50"
+                )}>
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <CalendarIcon className={cn(
+                      "h-4 w-4",
+                      membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-purple-600"
+                    )} />
+                    <span className="text-xs font-medium text-gray-700">Last Visit</span>
+                  </div>
+                  <p className={cn(
+                    "text-sm font-semibold",
+                    membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-purple-700"
+                  )}>
+                    {selectedCustomer.lastVisit ? format(new Date(selectedCustomer.lastVisit), "dd MMM") : "Never"}
+                  </p>
+                </div>
+                {(selectedCustomer.totalDues || 0) > 0 && (
+                  <div
+                    className={cn(
+                      "text-center p-3 rounded-lg border cursor-pointer transition-all duration-200",
+                      "bg-red-50/90 border-red-200/70 hover:bg-red-100/90 hover:border-red-300"
+                    )}
+                    onClick={async () => {
+                      if (selectedCustomer) {
+                        await fetchUnpaidBills(selectedCustomer.phone || "")
+                        setShowDuesDialog(true)
+                      }
+                    }}
+                  >
+                    <div className="flex items-center justify-center gap-2 mb-2">
+                      <CreditCard className="h-4 w-4 text-red-600" />
+                      <span className="text-xs font-medium text-red-800">Dues</span>
+                    </div>
+                    <p className="text-lg font-bold text-red-700">
+                      ₹{Number(selectedCustomer.totalDues || 0).toFixed(2)}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleViewBillActivity}
+                className={cn(
+                  "w-full h-10 text-sm transition-all duration-300",
+                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                    ? "bg-amber-50/80 hover:bg-amber-50 border-amber-200 text-amber-800 hover:text-amber-900 hover:border-amber-300"
+                    : "bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300"
+                )}
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Bill Activity
+              </Button>
+            </div>
+          )}
 
           {/* Services Section */}
           <div className="space-y-6">
