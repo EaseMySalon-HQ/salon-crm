@@ -532,14 +532,13 @@ export const AppointmentsCalendarGrid = forwardRef<
     if (!selectedDate) return
     const load = async () => {
       try {
-        const res = await SalesAPI.getAll({
+        const sales = await SalesAPI.getAllMergePages({
           dateFrom: selectedDate,
           dateTo: selectedDate,
-          limit: 5000,
+          batchSize: 400,
         })
         if (cancelled) return
-        if (res?.success && Array.isArray(res?.data)) {
-          const sales = res.data
+        if (Array.isArray(sales)) {
           const dateNorm = selectedDate?.slice(0, 10) || ""
           let walkIns = sales.filter((s: any) => {
             if (!s.items?.some((i: any) => i.type === "service")) return false

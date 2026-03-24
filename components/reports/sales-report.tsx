@@ -428,11 +428,10 @@ export function SalesReport() {
       return
     }
     let cancelled = false
-    SalesAPI.getAll({ ...base, page: 1, limit: 5000 })
-      .then((res) => {
+    SalesAPI.getAllMergePages({ ...base, batchSize: 500 })
+      .then((rows) => {
         if (cancelled) return
-        const rows = (res.data || []).map(mapApiSaleToRecord)
-        setStaffTipData(rows)
+        setStaffTipData((rows || []).map(mapApiSaleToRecord))
       })
       .catch(() => {
         if (!cancelled) setStaffTipData([])

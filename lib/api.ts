@@ -820,6 +820,50 @@ export class SalesAPI {
     return response.data
   }
 
+  /**
+   * Loads all rows matching the same filters as getAll by paging (default batch 500).
+   * Prefer this over a single huge limit=10000 request to avoid slow DB/response times.
+   *
+   * Note: pages are fetched sequentially (N round-trips for large datasets). Screens that only
+   * need aggregates (e.g. YTD revenue by month, staff performance totals) should eventually use
+   * dedicated server-side aggregation endpoints instead of pulling every sale row.
+   */
+  static async getAllMergePages(params?: {
+    batchSize?: number
+    search?: string
+    dateFrom?: string
+    dateTo?: string
+    date?: string
+    status?: string
+    paymentMode?: string
+    tipStaffId?: string
+  }): Promise<any[]> {
+    const batchSize = Math.min(Math.max(params?.batchSize ?? 500, 1), 1000)
+    const { batchSize: _omit, ...rest } = { ...(params || {}) }
+    const first = await SalesAPI.getAll({
+      ...rest,
+      page: 1,
+      limit: batchSize,
+    })
+    const rows: any[] = Array.isArray(first.data) ? [...first.data] : []
+    const total = typeof first.total === 'number' ? first.total : rows.length
+    if (total === 0) return rows
+    const totalPages =
+      typeof first.totalPages === 'number' && first.totalPages > 0
+        ? first.totalPages
+        : Math.ceil(total / batchSize)
+
+    for (let page = 2; page <= totalPages; page++) {
+      const res = await SalesAPI.getAll({
+        ...rest,
+        page,
+        limit: batchSize,
+      })
+      if (Array.isArray(res.data) && res.data.length) rows.push(...res.data)
+    }
+    return rows
+  }
+
   /** Aggregate totals for filters (no row payload). Same query params as getAll except page/limit are ignored. */
   static async getSummary(params?: {
     search?: string

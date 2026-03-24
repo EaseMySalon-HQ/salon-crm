@@ -80,12 +80,12 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
     async function fetchData() {
       setLoading(true)
       try {
-        const [salesRes, servicesRes, staffRes] = await Promise.all([
-          SalesAPI.getAll({ limit: 5000 }),
+        const [salesRows, servicesRes, staffRes] = await Promise.all([
+          SalesAPI.getAllMergePages({ batchSize: 500 }),
           ServicesAPI.getAll({ limit: 500 }),
           StaffDirectoryAPI.getAll()
         ])
-        setSalesData((salesRes?.data && Array.isArray(salesRes.data)) ? salesRes.data : [])
+        setSalesData(Array.isArray(salesRows) ? salesRows : [])
         setServicesList((servicesRes?.data && Array.isArray(servicesRes.data)) ? servicesRes.data : [])
         const staffData = staffRes?.data && Array.isArray(staffRes.data) ? staffRes.data : []
         setStaffList(staffData.map((s: any) => ({ _id: s._id, name: s.name || s.firstName || "—" })))
