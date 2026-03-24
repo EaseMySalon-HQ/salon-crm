@@ -61,9 +61,9 @@ export function DashboardStatsCards() {
         const todayStr = getTodayIST()
 
         // Fetch dashboard counts, sales (today only — bounded query), and today's appointments concurrently
-        const [dashboardRes, salesRes, todaysAppointmentsRes] = await Promise.all([
+        const [dashboardRes, salesRows, todaysAppointmentsRes] = await Promise.all([
           ReportsAPI.getDashboardStats(),
-          SalesAPI.getAll({ dateFrom: todayStr, dateTo: todayStr, limit: 2000 }),
+          SalesAPI.getAllMergePages({ dateFrom: todayStr, dateTo: todayStr, batchSize: 500 }),
           AppointmentsAPI.getAll({ limit: 200, date: todayStr }),
         ])
 
@@ -80,7 +80,7 @@ export function DashboardStatsCards() {
 
         // Today's revenue: sales list is already date-bounded (IST) from the API
         let todaysRevenue = 0
-        const sales = (salesRes && salesRes.data) ? salesRes.data : []
+        const sales = Array.isArray(salesRows) ? salesRows : []
         if (Array.isArray(sales)) {
           todaysRevenue = sales.reduce((sum: number, sale: any) => {
             const isCompleted = String(sale.status || '').toLowerCase() === 'completed'

@@ -509,12 +509,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         params.dateFrom = dateFrom
         params.dateTo = dateTo
       }
-      const response = await SalesAPI.getAll(params)
-      if (response.success && response.data) {
-        setSalesData(response.data)
-      } else {
-        setSalesData([])
-      }
+      const rows = await SalesAPI.getAllMergePages({ ...params, batchSize: 500 })
+      setSalesData(Array.isArray(rows) ? rows : [])
     } catch (error) {
       console.error("Failed to fetch sales:", error)
       setSalesData([])

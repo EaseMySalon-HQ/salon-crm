@@ -18,12 +18,11 @@ export function useTodayOnlineSales(enabled: boolean) {
     try {
       const today = new Date()
       const todayString = toDateStringIST(today)
-      const response = await SalesAPI.getAll({
+      const sales = await SalesAPI.getAllMergePages({
         dateFrom: todayString,
         dateTo: todayString,
-        limit: 1000,
+        batchSize: 400,
       })
-      const sales = response?.data ?? []
       const result = sales.reduce((sum: number, sale: any) => {
         const saleDate = toDateStringIST(sale.date)
         if (saleDate === todayString) {

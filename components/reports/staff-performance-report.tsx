@@ -302,10 +302,9 @@ export function StaffPerformanceReport() {
         }
 
 
-        // Fetch sales data
-        const salesResponse = await SalesAPI.getAll({ limit: 10000 })
-        if (salesResponse.success) {
-          const allSales = salesResponse.data
+        // Fetch sales data (paged — avoids a single 10k-row request)
+        const allSales = await SalesAPI.getAllMergePages({ batchSize: 500 })
+        if (Array.isArray(allSales)) {
           
           // Filter sales by date range
           const filteredSales = allSales.filter((sale: any) => {

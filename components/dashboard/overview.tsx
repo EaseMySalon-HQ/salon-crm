@@ -27,9 +27,9 @@ export function Overview() {
         const y = new Date().getFullYear()
         const yearStart = `${y}-01-01`
         const today = getTodayIST()
-        const [appointmentsRes, salesRes] = await Promise.all([
+        const [appointmentsRes, salesRows] = await Promise.all([
           AppointmentsAPI.getAll({ limit: 500 }),
-          SalesAPI.getAll({ dateFrom: yearStart, dateTo: today, limit: 10000 }),
+          SalesAPI.getAllMergePages({ dateFrom: yearStart, dateTo: today, batchSize: 500 }),
         ])
 
         // Aggregate appointments by month
@@ -44,8 +44,8 @@ export function Overview() {
         }
 
         // Aggregate revenue by month from sales (grossTotal)
-        if (salesRes?.data && Array.isArray(salesRes.data)) {
-          for (const sale of salesRes.data as any[]) {
+        if (Array.isArray(salesRows)) {
+          for (const sale of salesRows as any[]) {
             const dt = new Date(sale?.date)
             const m = dt.getMonth()
             if (m >= 0 && m < 12) base[m].revenue += Number(sale?.grossTotal || 0)
