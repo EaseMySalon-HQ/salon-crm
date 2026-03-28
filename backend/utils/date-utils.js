@@ -19,29 +19,48 @@ function parseDateIST(dateStr) {
 }
 
 /**
+ * Get YYYY-MM-DD string in IST for a Date, ISO string, or YYYY-MM-DD (interpreted as IST midnight).
+ * @param {Date|string} date - Value to convert
+ * @returns {string} YYYY-MM-DD in IST
+ */
+function toDateStringIST(date) {
+  const d = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? parseDateIST(date)
+    : new Date(date);
+  const parts = d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).split('/');
+  const [dd, mm, yyyy] = parts.map(p => p.trim().padStart(2, '0'));
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
  * Get start of day in IST for a given date
  * @param {Date|string} date - Date or YYYY-MM-DD string
  * @returns {Date} Start of day IST (00:00:00.000)
  */
 function getStartOfDayIST(date) {
-  const d = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? parseDateIST(date)
-    : new Date(date);
-  return new Date(d.getTime());
+  const ymd =
+    typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? date
+      : toDateStringIST(date);
+  return parseDateIST(ymd);
 }
 
 /**
  * Get end of day in IST for a given date
  * @param {Date|string} date - Date or YYYY-MM-DD string
  * @returns {Date} End of day IST (23:59:59.999)
+ *
+ * Important: query params often pass full ISO strings (e.g. …T23:59:59.999+05:30).
+ * We must normalize to the IST calendar day first; adding 24h to that instant would
+ * incorrectly include the next calendar day.
  */
 function getEndOfDayIST(date) {
-  const d = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? parseDateIST(date)
-    : new Date(date);
-  const start = new Date(d.getTime());
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
-  return end;
+  const ymd =
+    typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? date
+      : toDateStringIST(date);
+  const start = parseDateIST(ymd);
+  return new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
 }
 
 /**
@@ -55,18 +74,6 @@ function formatInIST(date, options = {}) {
     timeZone: 'Asia/Kolkata',
     ...options
   });
-}
-
-/**
- * Get YYYY-MM-DD string in IST for a date
- * @param {Date} date - Date to convert
- * @returns {string} YYYY-MM-DD in IST
- */
-function toDateStringIST(date) {
-  const d = new Date(date);
-  const parts = d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).split('/');
-  const [dd, mm, yyyy] = parts.map(p => p.trim().padStart(2, '0'));
-  return `${yyyy}-${mm}-${dd}`;
 }
 
 /**
