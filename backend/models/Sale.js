@@ -9,7 +9,7 @@ const staffContributionSchema = new mongoose.Schema({
 
 const itemSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  type: { type: String, enum: ['service', 'product'], required: true },
+  type: { type: String, enum: ['service', 'product', 'membership', 'package'], required: true },
   quantity: { type: Number, required: true },
   price: { type: Number, required: true },
   total: { type: Number, required: true },

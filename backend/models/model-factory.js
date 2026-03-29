@@ -126,7 +126,15 @@ class ModelFactory {
       // Membership models
       MembershipPlan: this.getModel('MembershipPlan', require('./MembershipPlan').schema, connection),
       MembershipSubscription: this.getModel('MembershipSubscription', require('./MembershipSubscription').schema, connection),
-      MembershipUsage: this.getModel('MembershipUsage', require('./MembershipUsage').schema, connection)
+      MembershipUsage: this.getModel('MembershipUsage', require('./MembershipUsage').schema, connection),
+
+      // Package models
+      Package: this.getModel('Package', require('./Package').schema, connection),
+      PackageService: this.getModel('PackageService', require('./PackageService').schema, connection),
+      ClientPackage: this.getModel('ClientPackage', require('./ClientPackage').schema, connection),
+      PackageRedemption: this.getModel('PackageRedemption', require('./PackageRedemption').schema, connection),
+      PackageNotification: this.getModel('PackageNotification', require('./PackageNotification').schema, connection),
+      PackageAuditLog: this.getModel('PackageAuditLog', require('./PackageAuditLog').schema, connection)
     };
   }
 

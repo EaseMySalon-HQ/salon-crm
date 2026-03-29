@@ -17,6 +17,7 @@ import { NotificationSettings } from "./notification-settings"
 import { POSSettings } from "./pos-settings"
 import { PlanBilling } from "./plan-billing"
 import { MembershipPlansTable } from "@/components/membership/membership-plans-table"
+import { PackagesSettingsPanel } from "@/components/packages/PackagesSettingsPanel"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { ProductsTable } from "@/components/products/products-table"
@@ -24,7 +25,7 @@ import { ProductStatsCards } from "@/components/dashboard/stats-cards"
 import { CategoryManagement } from "@/components/categories/category-management"
 import { SuppliersAndOrdersTab } from "@/components/suppliers/suppliers-and-orders-tab"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Scissors, FolderTree, Truck } from "lucide-react"
+import { Scissors, FolderTree, Truck, Layers } from "lucide-react"
 
 import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
 
@@ -41,6 +42,7 @@ const settingsCategories = [
   { id: "membership", title: "Membership", description: "Create tier-based plans and assign memberships to customers", icon: CreditCard },
   { id: "services", title: "Services", description: "Manage salon services, pricing, and categories", icon: Wrench },
   { id: "products", title: "Products", description: "Product inventory, stock levels, and suppliers", icon: Package },
+  { id: "packages", title: "Packages", description: "Bundle services into sellable packages, track sittings and redemptions", icon: Layers },
 ]
 
 export function SettingsPage() {
@@ -52,7 +54,7 @@ export function SettingsPage() {
 
   // Sync activeSection from URL when section param changes
   useEffect(() => {
-    if (sectionParam && ["general", "business", "appointments", "currency", "tax", "payments", "pos", "notifications", "plan-billing", "membership", "services", "products"].includes(sectionParam)) {
+    if (sectionParam && ["general", "business", "appointments", "currency", "tax", "payments", "pos", "notifications", "plan-billing", "membership", "services", "products", "packages"].includes(sectionParam)) {
       setActiveSection(sectionParam)
     }
   }, [sectionParam])
@@ -171,6 +173,8 @@ export function SettingsPage() {
             </TabsContent>
           </Tabs>
         )
+      case "packages":
+        return <PackagesSettingsPanel />
       default:
         return null
     }

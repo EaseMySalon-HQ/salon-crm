@@ -26,13 +26,11 @@ class ClientStore {
   private listeners: (() => void)[] = []
   private isLoading = false
 
-  constructor() {
-    this.loadClients()
-  }
-
   async loadClients() {
+    // localStorage + API auth only exist in the browser; skip SSR to avoid 401s
+    if (typeof window === "undefined") return
     if (this.isLoading) return
-    
+
     this.isLoading = true
     try {
       // Fetch ALL clients from paginated API

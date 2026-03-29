@@ -43,6 +43,8 @@ export function TaxSettings() {
     sgstRate: "9",
     igstRate: "18",
     serviceTaxRate: "5",
+    membershipTaxRate: "5",
+    packageTaxRate: "5",
     productTaxRate: "18",
   })
 
@@ -84,6 +86,12 @@ export function TaxSettings() {
           sgstRate: response.data.sgstRate?.toString() || "9",
           igstRate: response.data.igstRate?.toString() || "18",
           serviceTaxRate: response.data.serviceTaxRate?.toString() || "5",
+          membershipTaxRate: String(
+            response.data.membershipTaxRate ?? response.data.serviceTaxRate ?? 5
+          ),
+          packageTaxRate: String(
+            response.data.packageTaxRate ?? response.data.serviceTaxRate ?? 5
+          ),
           productTaxRate: response.data.productTaxRate?.toString() || "18",
         })
         
@@ -121,6 +129,8 @@ export function TaxSettings() {
         sgstRate: parseFloat(settings.sgstRate),
         igstRate: parseFloat(settings.igstRate),
         serviceTaxRate: parseFloat(settings.serviceTaxRate),
+        membershipTaxRate: parseFloat(settings.membershipTaxRate),
+        packageTaxRate: parseFloat(settings.packageTaxRate),
         productTaxRate: parseFloat(settings.productTaxRate),
         taxCategories: taxCategories,
         ...categoryRates,
@@ -394,6 +404,50 @@ export function TaxSettings() {
                         </div>
                         <p className="text-xs text-slate-500 text-right">Turn ON &quot;Tax Applicable&quot; for all services</p>
                       </div>
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                    <div className="space-y-2 max-w-md">
+                      <Label htmlFor="membershipTaxRate" className="text-sm font-medium text-slate-700">
+                        Membership Tax Rate (%)
+                      </Label>
+                      <Input
+                        id="membershipTaxRate"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={settings.membershipTaxRate ?? ""}
+                        onChange={(e) => setSettings({ ...settings, membershipTaxRate: e.target.value })}
+                        placeholder="Membership plan GST"
+                        className="mt-2"
+                      />
+                      <p className="text-sm text-slate-500 mt-1">
+                        Applied when selling membership plans on Quick Sale (uses the same Included / Excluded price mode as above)
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mb-6">
+                    <div className="space-y-2 max-w-md">
+                      <Label htmlFor="packageTaxRate" className="text-sm font-medium text-slate-700">
+                        Package Tax Rate (%)
+                      </Label>
+                      <Input
+                        id="packageTaxRate"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={settings.packageTaxRate ?? ""}
+                        onChange={(e) => setSettings({ ...settings, packageTaxRate: e.target.value })}
+                        placeholder="Package GST"
+                        className="mt-2"
+                      />
+                      <p className="text-sm text-slate-500 mt-1">
+                        Applied when selling packages on Quick Sale (uses the same Included / Excluded price mode as above)
+                      </p>
                     </div>
                   </div>
 

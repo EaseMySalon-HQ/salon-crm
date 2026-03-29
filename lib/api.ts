@@ -5,10 +5,158 @@ import { handleSessionExpired } from './auth-utils'
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
+/** Plain axios for refresh — must not use apiClient interceptors (avoids loops). */
+let refreshInFlight: Promise<string | null> | null = null
+
+async function refreshAuthTokenOnce(): Promise<string | null> {
+  if (typeof window === 'undefined') return null
+  if (refreshInFlight) return refreshInFlight
+  refreshInFlight = (async () => {
+    try {
+      const token = localStorage.getItem('salon-auth-token')
+      if (!token) return null
+      const res = await axios.post<{ success?: boolean; data?: { token?: string } }>(
+        `${API_BASE_URL}/auth/refresh`,
+        {},
+        {
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          timeout: 25000,
+        }
+      )
+      const newToken = res.data?.data?.token
+      if (newToken && typeof newToken === 'string') {
+        localStorage.setItem('salon-auth-token', newToken)
+        return newToken
+      }
+    } catch {
+      /* refresh failed — caller will fall through to logout or surface error */
+    } finally {
+      refreshInFlight = null
+    }
+    return null
+  })()
+  return refreshInFlight
+}
+
+function normalizeApiErrorMessage(data: unknown): string {
+  if (!data || typeof data !== 'object') return ''
+  const d = data as { error?: unknown; message?: unknown }
+  if (typeof d.error === 'string') return d.error
+  if (typeof d.message === 'string') return d.message
+  return ''
+}
+
+/** True when 401/403 indicates invalid/expired session (not business-rule or RBAC). */
+function isTokenAuthFailure(status: number | undefined, errorMsg: string): boolean {
+  const m = errorMsg.toLowerCase()
+  if (status === 401) return true
+  if (status !== 403) return false
+  return (
+    (m.includes('invalid') && m.includes('token')) ||
+    m.includes('expired') ||
+    m.includes('access token') ||
+    m.includes('authentication required') ||
+    m.includes('user not found')
+  )
+}
+
+function logApiResponseError(error: AxiosError | any) {
+  try {
+    const errorInfo: any = {
+      message: 'Unknown error',
+      errorType: typeof error,
+    }
+
+    if (error?.message) {
+      errorInfo.message = String(error.message)
+    } else if (typeof error === 'string') {
+      errorInfo.message = error
+    } else if (error?.toString && typeof error.toString === 'function') {
+      try {
+        errorInfo.message = String(error.toString())
+      } catch {
+        errorInfo.message = 'Error converting to string'
+      }
+    }
+
+    if (error?.config) {
+      errorInfo.url = String(error.config.url || 'Unknown URL')
+      errorInfo.method = String(error.config.method?.toUpperCase() || 'Unknown method')
+    }
+
+    if (error?.response) {
+      errorInfo.status = Number(error.response.status)
+      errorInfo.statusText = String(error.response.statusText || '')
+      errorInfo.data = error.response.data
+      errorInfo.type = 'HTTP Error'
+
+      if (error.response.data) {
+        if (typeof error.response.data === 'string') {
+          errorInfo.error = error.response.data
+          errorInfo.message = error.response.data
+        } else if (typeof error.response.data === 'object') {
+          errorInfo.error =
+            error.response.data.error ||
+            error.response.data.message ||
+            error.response.data.details ||
+            JSON.stringify(error.response.data)
+          errorInfo.message = errorInfo.error
+        }
+      }
+
+      if (!errorInfo.error && errorInfo.statusText) {
+        errorInfo.error = errorInfo.statusText
+        errorInfo.message = errorInfo.statusText
+      }
+    } else if (error?.request) {
+      errorInfo.type = 'Network Error'
+      errorInfo.code = String(error?.code || 'NETWORK_ERROR')
+    } else {
+      errorInfo.type = 'Request Setup Error'
+      errorInfo.code = String(error?.code || 'SETUP_ERROR')
+    }
+
+    if (errorInfo.status === 404) {
+      if (errorInfo.url && errorInfo.url !== 'Unknown URL') {
+        console.warn(`⚠️ API 404: ${errorInfo.method} ${errorInfo.url} - ${errorInfo.message || 'Not Found'}`)
+      }
+    } else if (errorInfo.status === 0 || errorInfo.type === 'Network Error') {
+      const url = error?.config?.url || errorInfo.url
+      const baseUrl = error?.config?.baseURL || ''
+      console.warn(
+        `⚠️ API Network Error: Cannot reach backend. Ensure the server is running on ${baseUrl || 'port 3001'}.`,
+        url ? `Request: ${url}` : ''
+      )
+    } else {
+      const status = errorInfo.status ?? error?.response?.status
+      const data = errorInfo.data ?? error?.response?.data
+      const errMsg =
+        typeof data === 'object' && data !== null
+          ? (data as any).error || (data as any).errorDetail || (data as any).message || (data as any).details
+          : typeof data === 'string'
+            ? data
+            : null
+      const message =
+        typeof errMsg === 'string' && errMsg.trim()
+          ? errMsg
+          : errorInfo.error || errorInfo.message || errorInfo.statusText || `Request failed with status ${status}`
+
+      const url = error?.config?.url
+      const method = error?.config?.method?.toUpperCase()
+      const logFn = status >= 400 && status < 500 ? console.warn : console.error
+      logFn(`API ${status || ''} ${method || ''} ${url || ''}:`, message)
+    }
+  } catch (logError) {
+    console.error('❌ API Response Interceptor: Failed to process error:', logError)
+    console.error('❌ API Response Interceptor: Original error object:', error)
+    console.error('❌ API Response Interceptor: Error keys:', error ? Object.keys(error) : 'null')
+  }
+}
+
 // Create axios instance with default config
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -31,150 +179,86 @@ apiClient.interceptors.request.use(
   }
 )
 
-// Response interceptor for error handling
+// Response interceptor: network retry → token refresh + retry → log → session / reject
 apiClient.interceptors.response.use(
-  (response: AxiosResponse) => {
-    return response
-  },
-  (error: AxiosError | any) => {
-    // Check if error exists
+  (response: AxiosResponse) => response,
+  async (error: AxiosError | any) => {
     if (!error) {
       console.error('❌ API Response Interceptor: Error is null or undefined')
       return Promise.reject(error)
     }
-    
-    try {
-      // Safely extract error information with fallbacks
-      const errorInfo: any = {
-        message: 'Unknown error', // Always start with a default
-        errorType: typeof error,
-      }
-      
-      // Always include a message
-      if (error?.message) {
-        errorInfo.message = String(error.message)
-      } else if (typeof error === 'string') {
-        errorInfo.message = error
-      } else if (error?.toString && typeof error.toString === 'function') {
-        try {
-          errorInfo.message = String(error.toString())
-        } catch (e) {
-          errorInfo.message = 'Error converting to string'
-        }
-      }
-      
-      // Extract request config if available
-      if (error?.config) {
-        errorInfo.url = String(error.config.url || 'Unknown URL')
-        errorInfo.method = String(error.config.method?.toUpperCase() || 'Unknown method')
-      }
-      
-      // Extract response data if available (HTTP error)
-      if (error?.response) {
-        errorInfo.status = Number(error.response.status)
-        errorInfo.statusText = String(error.response.statusText || '')
-        errorInfo.data = error.response.data
-        errorInfo.type = 'HTTP Error'
-        
-        // Extract error message from response data if available
-        if (error.response.data) {
-          if (typeof error.response.data === 'string') {
-            errorInfo.error = error.response.data
-            errorInfo.message = error.response.data
-          } else if (typeof error.response.data === 'object') {
-            // Try multiple possible error message fields
-            errorInfo.error = error.response.data.error || 
-                             error.response.data.message || 
-                             error.response.data.details ||
-                             JSON.stringify(error.response.data)
-            errorInfo.message = errorInfo.error
-          }
-        }
-        
-        // If still no error message, use status text
-        if (!errorInfo.error && errorInfo.statusText) {
-          errorInfo.error = errorInfo.statusText
-          errorInfo.message = errorInfo.statusText
-        }
-      } else if (error?.request) {
-        // Request was made but no response received (network error)
-        errorInfo.type = 'Network Error'
-        errorInfo.code = String(error?.code || 'NETWORK_ERROR')
-      } else {
-        // Error setting up the request
-        errorInfo.type = 'Request Setup Error'
-        errorInfo.code = String(error?.code || 'SETUP_ERROR')
-      }
-      
-      // Log error info (skip empty objects for 404s to reduce noise)
-      if (errorInfo.status === 404) {
-        // For 404s, only log if there's meaningful info beyond status
-        if (errorInfo.url && errorInfo.url !== 'Unknown URL') {
-          console.warn(`⚠️ API 404: ${errorInfo.method} ${errorInfo.url} - ${errorInfo.message || 'Not Found'}`)
-        }
-      } else if (errorInfo.status === 0 || errorInfo.type === 'Network Error') {
-        // Status 0 = network error (backend unreachable, CORS, connection refused)
-        const url = error?.config?.url || errorInfo.url
-        const baseUrl = error?.config?.baseURL || ''
-        console.warn(`⚠️ API Network Error: Cannot reach backend. Ensure the server is running on ${baseUrl || 'port 3001'}.`, url ? `Request: ${url}` : '')
-      } else {
-        // For 4xx, extract error message from response - ensure we never log empty {}
-        const status = errorInfo.status ?? error?.response?.status
-        const data = errorInfo.data ?? error?.response?.data
-        const errMsg = (typeof data === 'object' && data !== null)
-          ? (data.error || data.errorDetail || data.message || data.details)
-          : (typeof data === 'string' ? data : null)
-        const message = (typeof errMsg === 'string' && errMsg.trim())
-          ? errMsg
-          : (errorInfo.error || errorInfo.message || errorInfo.statusText || `Request failed with status ${status}`)
 
-        const url = error?.config?.url
-        const method = error?.config?.method?.toUpperCase()
-        // Use warn for 4xx (validation/business logic) - expected user feedback, not a bug
-        const logFn = status >= 400 && status < 500 ? console.warn : console.error
-        logFn(`API ${status || ''} ${method || ''} ${url || ''}:`, message)
+    const config = error.config as any
+
+    // Retry transient network / timeout (common after tab sleep or first request after idle)
+    if (config && !error.response) {
+      const code = error.code
+      const msg = String(error.message || '')
+      const retryable =
+        code === 'ECONNABORTED' || code === 'ERR_NETWORK' || msg === 'Network Error'
+      if (retryable && (config.__networkRetryCount || 0) < 2) {
+        config.__networkRetryCount = (config.__networkRetryCount || 0) + 1
+        await new Promise((r) => setTimeout(r, 500 * config.__networkRetryCount))
+        return apiClient(config)
       }
-    } catch (logError) {
-      // If error logging itself fails, log the raw error
-      console.error('❌ API Response Interceptor: Failed to process error:', logError)
-      console.error('❌ API Response Interceptor: Original error object:', error)
-      console.error('❌ API Response Interceptor: Error keys:', error ? Object.keys(error) : 'null')
     }
-    
-    // Ensure error response data is accessible
-    if (error?.response?.data) {
-      // Attach response data to error for easier access in catch blocks
-      error.responseData = error.response.data;
-    }
-    
-    // Handle 401 (Unauthorized) and 403 (Forbidden)
+
     const status = error?.response?.status
-    const errorMsg = (error?.response?.data?.error || '').toLowerCase()
-    if (status === 401 || status === 403) {
-      const isPublicRoute = typeof window !== 'undefined' &&
+    const errBody = error?.response?.data
+    const errorMsg = normalizeApiErrorMessage(errBody)
+
+    if (typeof window !== 'undefined' && config && !config.__retryAfterRefresh) {
+      const url = String(config.url || '')
+      const skipRefresh =
+        url.includes('/auth/refresh') ||
+        url.includes('/auth/login') ||
+        url.includes('/auth/staff-login')
+      if (!skipRefresh && isTokenAuthFailure(status, errorMsg)) {
+        config.__retryAfterRefresh = true
+        const newToken = await refreshAuthTokenOnce()
+        if (newToken) {
+          config.headers = config.headers || {}
+          config.headers.Authorization = `Bearer ${newToken}`
+          return apiClient(config)
+        }
+      }
+    }
+
+    if (error?.response?.data) {
+      error.responseData = error.response.data
+    }
+
+    logApiResponseError(error)
+
+    const statusOut = error?.response?.status
+    const errorMsgLower = normalizeApiErrorMessage(error?.response?.data).toLowerCase()
+
+    if (statusOut === 401 || statusOut === 403) {
+      const isPublicRoute =
+        typeof window !== 'undefined' &&
         (window.location.pathname.includes('/receipt/public/') ||
-         window.location.pathname.includes('/public/'))
+          window.location.pathname.includes('/public/'))
       const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
 
       if (typeof window !== 'undefined' && !isPublicRoute && !isLoginPage) {
-        // 403 "Insufficient permissions" = permission denied, NOT session invalid - don't logout
-        const isPermissionDenied = status === 403 && (
-          errorMsg.includes('insufficient permissions') ||
-          errorMsg.includes('insufficient admin permissions') ||
-          errorMsg.includes('feature') && errorMsg.includes('not available')
-        )
+        const isPermissionDenied =
+          statusOut === 403 &&
+          (errorMsgLower.includes('insufficient permissions') ||
+            errorMsgLower.includes('insufficient admin permissions') ||
+            (errorMsgLower.includes('feature') && errorMsgLower.includes('not available')))
+
         if (isPermissionDenied) {
           if (process.env.NODE_ENV === 'development') {
             console.log('🔐 API 403: Permission denied, redirecting to unauthorized')
           }
           window.location.href = '/unauthorized'
-        } else {
-          // 401 or 403 auth-related (invalid/expired token) - session expired, logout
+        } else if (isTokenAuthFailure(statusOut, errorMsgLower)) {
           if (process.env.NODE_ENV === 'development') {
-            console.log('🔐 API Response Interceptor: Session invalid (', status, '), redirecting to login')
+            console.log('🔐 API Response Interceptor: Session invalid (', statusOut, '), redirecting to login')
           }
           handleSessionExpired('/login')
         }
+        // Other 403s (validation, cross-branch, etc.): do not logout — let callers show the error
       }
     }
     return Promise.reject(error)
@@ -1018,6 +1102,10 @@ export class MembershipAPI {
     subscription: any
     plan: any
     usageSummary: Array<{ serviceId: string; serviceName: string; used: number; limit: number; remaining: number }>
+    /** Sum of remaining free included-service uses across the plan */
+    freeServicesRemaining?: number
+    /** Estimated savings from membership-free service lines on bills (list price × qty) */
+    totalSavedViaMembership?: number
   }>> {
     const response = await apiClient.get(`/membership/customer/${customerId}`)
     return response.data
@@ -1795,6 +1883,118 @@ export class WhatsAppAPI {
     if (filters?.limit) params.append('limit', filters.limit.toString());
     
     const response = await apiClient.get(`/whatsapp/logs?${params.toString()}`)
+    return response.data
+  }
+}
+
+// ── Packages API ─────────────────────────────────────────────────────────────
+
+export class PackagesAPI {
+  // Package CRUD
+  static async getAll(params?: { type?: string; status?: string; search?: string; page?: number; limit?: number }): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/packages', { params })
+    return response.data
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/packages/${id}`)
+    return response.data
+  }
+
+  static async create(data: {
+    name: string
+    type: 'FIXED' | 'CUSTOMIZED'
+    total_price: number
+    total_sittings: number
+    services: Array<{ service_id: string; is_optional?: boolean; tag?: string }>
+    description?: string
+    image_url?: string
+    discount_amount?: number
+    discount_type?: 'FLAT' | 'PERCENT'
+    min_service_count?: number
+    max_service_count?: number
+    validity_days?: number | null
+    branch_ids?: string[]
+    cross_branch_redemption?: boolean
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/packages', data)
+    return response.data
+  }
+
+  static async update(id: string, data: Partial<Parameters<typeof PackagesAPI.create>[0]>): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/packages/${id}`, data)
+    return response.data
+  }
+
+  static async updateStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED'): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/packages/${id}/status`, { status })
+    return response.data
+  }
+
+  static async delete(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.delete(`/packages/${id}`)
+    return response.data
+  }
+
+  // Sales
+  static async sell(packageId: string, data: {
+    client_id: string
+    amount_paid?: number
+    purchased_at_branch_id?: string
+    /** Staff who sold the package (defaults server-side from session if omitted). */
+    sold_by_staff_id?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/packages/${packageId}/sell`, data)
+    return response.data
+  }
+
+  static async getClientPackages(clientId: string): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get(`/packages/client/${clientId}`)
+    return response.data
+  }
+
+  static async extendExpiry(clientPackageId: string, data: { new_expiry_date: string; reason: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/packages/client-packages/${clientPackageId}/extend`, data)
+    return response.data
+  }
+
+  // Redemption
+  static async redeem(clientPackageId: string, data: {
+    services: Array<{ service_id: string }>
+    redeemed_at_branch_id?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/packages/client-packages/${clientPackageId}/redeem`, data)
+    return response.data
+  }
+
+  static async reverseRedemption(redemptionId: string, reason: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/packages/redemptions/${redemptionId}/reverse`, { reason })
+    return response.data
+  }
+
+  static async getRedemptionHistory(clientPackageId: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/packages/client-packages/${clientPackageId}/history`)
+    return response.data
+  }
+
+  // Reports
+  static async getSalesReport(params?: { from?: string; to?: string; package_id?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/packages/reports/sales', { params })
+    return response.data
+  }
+
+  static async getUtilizationReport(): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/packages/reports/utilization')
+    return response.data
+  }
+
+  static async getExpiringReport(days?: number): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/packages/reports/expiring', { params: { days } })
+    return response.data
+  }
+
+  static async exportReport(data: { format: 'excel' | 'pdf'; reportType?: string; from?: string; to?: string }): Promise<Blob> {
+    const response = await apiClient.post('/packages/reports/export', data, { responseType: 'blob' })
     return response.data
   }
 }

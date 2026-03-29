@@ -300,6 +300,7 @@ app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/campaigns', require('./routes/campaigns'));
+app.use('/api/packages', require('./routes/packages'));
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
@@ -673,6 +674,100 @@ app.post('/api/auth/logout', authenticateToken, (req, res) => {
     success: true,
     message: 'Logged out successfully'
   });
+});
+
+/** Sliding / grace refresh — allows new JWT after idle expiry without re-login (within grace window). */
+const JWT_REFRESH_GRACE_SEC = 7 * 24 * 60 * 60;
+
+app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token || token.startsWith('mock-token-')) {
+      return res.status(401).json({ success: false, error: 'Access token required' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      if (err.name !== 'TokenExpiredError') {
+        return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+      }
+      decoded = jwt.decode(token);
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (!decoded || !decoded.exp || decoded.exp < nowSec - JWT_REFRESH_GRACE_SEC) {
+        return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+      }
+    }
+
+    if (!decoded.id) {
+      return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+    }
+
+    const mainConnection = await databaseManager.getMainConnection();
+    const UserModel = mainConnection.model('User', require('./models/User').schema);
+    const BusinessModel = mainConnection.model('Business', require('./models/Business').schema);
+
+    const userDoc = await UserModel.findById(decoded.id).select('-password');
+    if (userDoc) {
+      if (userDoc.branchId) {
+        const business = await BusinessModel.findOne({ owner: userDoc._id });
+        if (business?.status === 'suspended') {
+          return res.status(403).json({
+            success: false,
+            error: 'ACCOUNT_SUSPENDED',
+            message: 'Your account has been suspended. Please contact your host for assistance.'
+          });
+        }
+      }
+      const payload = {
+        id: userDoc._id,
+        email: userDoc.email,
+        role: userDoc.role
+      };
+      if (userDoc.branchId) payload.branchId = userDoc.branchId;
+      if (decoded.isImpersonation) {
+        payload.isImpersonation = true;
+        payload.impersonatedBy = decoded.impersonatedBy;
+      }
+      const expiresIn = decoded.isImpersonation ? '1h' : '24h';
+      const newToken = jwt.sign(payload, JWT_SECRET, { expiresIn });
+      return res.json({ success: true, data: { token: newToken } });
+    }
+
+    const businessId = decoded.branchId;
+    if (!businessId) {
+      return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+    }
+
+    const businessDb = await databaseManager.getConnection(businessId, mainConnection);
+    const StaffModel = businessDb.model('Staff', require('./models/Staff').schema);
+    const staff = await StaffModel.findById(decoded.id).select('-password');
+    if (!staff || !staff.isActive || !staff.hasLoginAccess) {
+      return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+    }
+
+    const business = await BusinessModel.findById(businessId);
+    const effectiveBranchId = staff.branchId || business?._id || businessId;
+    const newToken = generateToken({
+      _id: staff._id,
+      email: staff.email,
+      role: staff.role,
+      branchId: effectiveBranchId,
+      firstName: staff.name?.split(' ')[0],
+      lastName: staff.name?.split(' ').slice(1).join(' ') || '',
+      mobile: staff.phone,
+      hasLoginAccess: staff.hasLoginAccess,
+      allowAppointmentScheduling: staff.allowAppointmentScheduling,
+      isActive: staff.isActive
+    });
+
+    return res.json({ success: true, data: { token: newToken } });
+  } catch (error) {
+    logger.error('[auth/refresh]', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
 });
 
 app.get('/api/auth/profile', authenticateToken, async (req, res) => {
@@ -3687,7 +3782,7 @@ app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, 
 
 app.get('/api/membership/customer/:customerId', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const { MembershipPlan, MembershipSubscription, MembershipUsage, Service } = req.businessModels;
+    const { MembershipPlan, MembershipSubscription, MembershipUsage, Service, Sale } = req.businessModels;
     const { customerId } = req.params;
     const branchId = req.user.branchId;
 
@@ -3706,8 +3801,35 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
     if (!subscription) {
       return res.json({
         success: true,
-        data: { subscription: null, usageSummary: [], plan: null }
+        data: {
+          subscription: null,
+          usageSummary: [],
+          plan: null,
+          freeServicesRemaining: 0,
+          totalSavedViaMembership: 0
+        }
       });
+    }
+
+    const usageRows = await MembershipUsage.find({
+      branchId,
+      subscriptionId: subscription._id
+    }).lean();
+
+    let totalSavedViaMembership = 0;
+    for (const u of usageRows) {
+      const sale = await Sale.findById(u.billingId).select('items').lean();
+      if (!sale?.items?.length) continue;
+      const item = sale.items.find(
+        (it) => it.type === 'service' &&
+          String(it.serviceId) === String(u.serviceId) &&
+          it.isMembershipFree
+      );
+      if (item) {
+        const qty = Number(item.quantity) || 1;
+        const price = Number(item.price) || 0;
+        totalSavedViaMembership += price * qty;
+      }
     }
 
     const plan = subscription.planId;
@@ -3717,7 +3839,9 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
         data: {
           subscription,
           plan,
-          usageSummary: []
+          usageSummary: [],
+          freeServicesRemaining: 0,
+          totalSavedViaMembership
         }
       });
     }
@@ -3741,12 +3865,19 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
       });
     }
 
+    const freeServicesRemaining = usageSummary.reduce(
+      (sum, row) => sum + (Number(row.remaining) || 0),
+      0
+    );
+
     res.json({
       success: true,
       data: {
         subscription,
         plan,
-        usageSummary
+        usageSummary,
+        freeServicesRemaining,
+        totalSavedViaMembership
       }
     });
   } catch (error) {
@@ -6535,20 +6666,53 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
         });
 
         const linkedServices = linkedStaffId ? (servicesByStaff.get(linkedStaffId) || []) : [];
+
+        // Booked staff A but sale attributes work to staff B: linkedServices is empty. Move this card to
+        // the performing staff (first invoice line) and apply their lines here — do not leave card under A
+        // nor duplicate a second completed card for B.
+        let servicesToApplyToMain = linkedServices;
+        let reassignedPrimaryStaffId = null;
+        if (linkedServices.length === 0) {
+          const primaryFromSale = getPrimaryStaffFromSaleServiceItems(sale.items);
+          const psid =
+            primaryFromSale?.staffId && mongoose.Types.ObjectId.isValid(primaryFromSale.staffId)
+              ? String(primaryFromSale.staffId)
+              : null;
+          if (psid && (!linkedStaffId || psid !== linkedStaffId)) {
+            const primaryGroup = servicesByStaff.get(psid) || [];
+            if (primaryGroup.length > 0) {
+              servicesToApplyToMain = primaryGroup;
+              reassignedPrimaryStaffId = psid;
+              appointment.staffId = new mongoose.Types.ObjectId(psid);
+              appointment.staffAssignments = [
+                {
+                  staffId: new mongoose.Types.ObjectId(psid),
+                  percentage: 100,
+                  role: 'primary',
+                },
+              ];
+              appointment.markModified('staffAssignments');
+            }
+          }
+        }
+
         const otherStaffServices = [];
         servicesByStaff.forEach((items, sid) => {
           if (sid !== 'unknown' && (!linkedStaffId || sid !== linkedStaffId)) {
+            if (reassignedPrimaryStaffId && sid === reassignedPrimaryStaffId) {
+              return;
+            }
             otherStaffServices.push(...items);
           }
         });
 
-        if (linkedServices.length > 0) {
-          const serviceIds = linkedServices.map((i) => i.serviceId?._id || i.serviceId).filter(Boolean);
+        if (servicesToApplyToMain.length > 0) {
+          const serviceIds = servicesToApplyToMain.map((i) => i.serviceId?._id || i.serviceId).filter(Boolean);
           if (serviceIds.length === 0) {
             logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
           }
           const firstServiceId = serviceIds[0];
-          const firstItem = linkedServices[0];
+          const firstItem = servicesToApplyToMain[0];
           const firstService = firstServiceId ? await Service.findById(firstServiceId).lean() : null;
           if (firstService) {
             appointment.serviceId = firstServiceId;
@@ -8668,7 +8832,11 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
 
     const [total, sales] = await Promise.all([
       Sale.countDocuments(match),
-      Sale.find(match).sort({ date: -1 }).skip(skip).limit(limit).lean(),
+      Sale.find(match)
+        .sort({ date: -1, time: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
     ]);
 
     await mergeEditedFlagsFromHistory(sales, BillEditHistory);
@@ -8777,6 +8945,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
 
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
+      await syncCompletedLinkedAppointmentStaffFromSale(Appointment, savedSale);
     } else if (String(savedSale.status).toLowerCase() === 'completed') {
       // Standalone sale with multiple staff: create walk-in cards for calendar
       await createWalkInCardsForStandaloneSale(savedSale, req.businessModels, req.user.branchId);
@@ -10275,6 +10444,7 @@ app.post('/api/sales/:id/payment', authenticateToken, setupBusinessDatabase, req
 
     if (updatedSale.appointmentId && String(updatedSale.status).toLowerCase() === 'completed') {
       await markAppointmentCompleted(Appointment, updatedSale.appointmentId, updatedSale, req.businessModels);
+      await syncCompletedLinkedAppointmentStaffFromSale(Appointment, updatedSale);
     }
     
     res.json({ 
@@ -11168,6 +11338,8 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         sgstRate: 9,
         igstRate: 18,
         serviceTaxRate: 5,
+        membershipTaxRate: 5,
+        packageTaxRate: 5,
         productTaxRate: 18,
         essentialProductRate: 5,
         intermediateProductRate: 12,
@@ -11240,6 +11412,8 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         sgstRate: settings.sgstRate || 9,
         igstRate: settings.igstRate || 18,
         serviceTaxRate: settings.serviceTaxRate || 5,
+        membershipTaxRate: settings.membershipTaxRate ?? settings.serviceTaxRate ?? 5,
+        packageTaxRate: settings.packageTaxRate ?? settings.serviceTaxRate ?? 5,
         productTaxRate: settings.productTaxRate || 18,
         essentialProductRate: settings.essentialProductRate || 5,
         intermediateProductRate: settings.intermediateProductRate || 12,
@@ -11273,6 +11447,8 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       sgstRate,
       igstRate,
       serviceTaxRate,
+      membershipTaxRate,
+      packageTaxRate,
       productTaxRate,
       essentialProductRate,
       intermediateProductRate,
@@ -11307,6 +11483,8 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
     if (sgstRate !== undefined) settings.sgstRate = sgstRate;
     if (igstRate !== undefined) settings.igstRate = igstRate;
     if (serviceTaxRate !== undefined) settings.serviceTaxRate = serviceTaxRate;
+    if (membershipTaxRate !== undefined) settings.membershipTaxRate = membershipTaxRate;
+    if (packageTaxRate !== undefined) settings.packageTaxRate = packageTaxRate;
     if (productTaxRate !== undefined) settings.productTaxRate = productTaxRate;
     if (essentialProductRate !== undefined) settings.essentialProductRate = essentialProductRate;
     if (intermediateProductRate !== undefined) settings.intermediateProductRate = intermediateProductRate;
@@ -13306,6 +13484,10 @@ app.listen(PORT, '0.0.0.0', async () => {
   // Setup email scheduler jobs
   const { setupEmailScheduler } = require('./jobs/email-scheduler');
   setupEmailScheduler();
+
+  // Setup package expiry cron job (daily midnight UTC)
+  const { startExpiryJob } = require('./services/package-expiry-job');
+  startExpiryJob();
   
   // Initialize email service on server start
   const emailService = require('./services/email-service');
