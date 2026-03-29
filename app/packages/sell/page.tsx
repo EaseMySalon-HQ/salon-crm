@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Search, AlertTriangle, CheckCircle, ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -11,7 +11,7 @@ import { PackagesAPI, ClientsAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
 
-export default function SellPackagePage() {
+function SellPackagePageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const clientIdFromUrl = searchParams.get("clientId")
@@ -264,5 +264,23 @@ export default function SellPackagePage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function SellPackagePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-6 max-w-2xl mx-auto">
+          <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-6" />
+          <div className="space-y-4">
+            <div className="h-40 bg-gray-100 rounded-xl animate-pulse" />
+            <div className="h-32 bg-gray-100 rounded-xl animate-pulse" />
+          </div>
+        </div>
+      }
+    >
+      <SellPackagePageContent />
+    </Suspense>
   )
 }
