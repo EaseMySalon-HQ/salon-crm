@@ -8832,8 +8832,11 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
 
     const [total, sales] = await Promise.all([
       Sale.countDocuments(match),
+      // Newest bills first: `date` is often the calendar day only (same instant for many rows) while
+      // `time` is a separate string — composite date+time sort is unreliable. `createdAt` reflects
+      // actual save order and aligns with sequential invoice numbers (INV-…).
       Sale.find(match)
-        .sort({ date: -1, time: -1, createdAt: -1 })
+        .sort({ createdAt: -1, billNo: -1, _id: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
