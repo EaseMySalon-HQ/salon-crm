@@ -2,6 +2,7 @@
 
 import { useEffect } from "react"
 import type { Receipt } from "@/lib/data"
+import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { Card, CardContent } from "@/components/ui/card"
 import { useCurrency } from "@/hooks/use-currency"
@@ -20,10 +21,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
     console.log('🔍 ReceiptPreview - payments:', receipt.payments)
   }, [receipt])
   
-  const total = (() => {
-    const preRoundTotal = receipt.subtotal - receipt.discount + receipt.tip
-    return Math.round(preRoundTotal)
-  })()
+  const total = getReceiptGrandTotal(receipt)
   const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
   const outstanding = total - totalPaid
   const paymentStatus = outstanding === 0 ? "FULL PAID" : totalPaid > 0 ? "PART PAID" : "UNPAID"
@@ -239,18 +237,10 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
           )}
           <div className="flex justify-between font-bold text-base border-t border-black pt-2 mt-2">
             <span>TOTAL:</span>
-            <span>{formatAmount((() => {
-              // Since items already include tax, total = subtotal - discount + tip (rounded)
-              // Tax breakdown is informational only, not added to total
-              const preRoundTotal = receipt.subtotal - receipt.discount + receipt.tip
-              return Math.round(preRoundTotal)
-            })())}</span>
+            <span>{formatAmount(getReceiptGrandTotal(receipt))}</span>
           </div>
           {(() => {
-            const total = (() => {
-              const preRoundTotal = receipt.subtotal - receipt.discount + receipt.tip
-              return Math.round(preRoundTotal)
-            })()
+            const total = getReceiptGrandTotal(receipt)
             const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
             const outstanding = total - totalPaid
             return (

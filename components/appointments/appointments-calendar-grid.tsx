@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2, List, Calendar } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2, List, Calendar, AlertCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -285,6 +285,8 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [staffList, setStaffList] = useState<StaffMember[]>([])
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [loading, setLoading] = useState(true)
+  const [listFetchError, setListFetchError] = useState(false)
+  const [calendarRetryKey, setCalendarRetryKey] = useState(0)
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date()
     return format(d, "yyyy-MM-dd")
@@ -466,20 +468,31 @@ export const AppointmentsCalendarGrid = forwardRef<
   }, [initialAppointmentId])
 
   const fetchAppointments = useCallback(async () => {
+    setListFetchError(false)
     try {
       setLoading(true)
       const [staffRes, aptRes] = await Promise.all([
         StaffDirectoryAPI.getAll(),
         AppointmentsAPI.getAll({ limit: 200 }),
       ])
-      if (staffRes?.data?.length) setStaffList(staffRes.data)
-      if (aptRes?.success && aptRes?.data) setAppointments(aptRes.data)
-    } catch (e) {
+      if (staffRes?.success && Array.isArray(staffRes.data)) {
+        setStaffList(staffRes.data)
+      } else {
+        setStaffList([])
+      }
+      if (aptRes?.success && aptRes?.data) {
+        setAppointments(aptRes.data)
+      } else {
+        setAppointments([])
+      }
+    } catch (e: any) {
       console.error(e)
+      const st = e?.response?.status
+      if (st !== 401 && st !== 403) setListFetchError(true)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [calendarRetryKey])
 
   useEffect(() => {
     fetchAppointments()
@@ -1546,6 +1559,26 @@ export const AppointmentsCalendarGrid = forwardRef<
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-10 w-10 border-2 border-indigo-600 border-t-transparent" />
+      </div>
+    )
+  }
+
+  if (listFetchError) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 max-w-lg mx-auto my-8">
+        <div className="flex gap-3 text-amber-900 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>Could not load staff or appointments. Check your connection and try again.</span>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 border-amber-300"
+          onClick={() => setCalendarRetryKey((k) => k + 1)}
+        >
+          Retry
+        </Button>
       </div>
     )
   }
