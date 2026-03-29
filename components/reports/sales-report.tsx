@@ -809,7 +809,7 @@ export function SalesReport() {
     setShowPartialUnpaidBreakdown(false)
   }, [debouncedSearchTerm, paymentFilter, statusFilter, staffTipFilter, datePeriod, dateRange])
 
-  // Pagination for the sales table (server-side; order matches API — date desc)
+  // Pagination for the sales table (server-side; order matches API — newest saved bill first)
   const totalSalesRows = salesTotalCount
   const displayTotalPages = Math.max(1, salesTotalPages)
   const safeSalesPageIndex = Math.min(salesPageIndex, displayTotalPages - 1)

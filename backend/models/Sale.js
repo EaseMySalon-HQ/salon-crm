@@ -225,7 +225,8 @@ saleSchema.methods.getAllStaffInvolved = function() {
 // Indexes: branch-scoped lists, status filters, lookups by phone / appointment / token
 saleSchema.index({ branchId: 1, date: -1 });
 saleSchema.index({ branchId: 1, status: 1, date: -1 });
-saleSchema.index({ branchId: 1, createdAt: -1 });
+// GET /api/sales paginated list: filter by branchId (+ status/payment/date/search) then sort newest first
+saleSchema.index({ branchId: 1, createdAt: -1, billNo: -1 });
 // Multikey: $elemMatch on paymentHistory.date (due payments in date range)
 saleSchema.index({ branchId: 1, 'paymentHistory.date': 1 });
 saleSchema.index({ status: 1 });
