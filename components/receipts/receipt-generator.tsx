@@ -1,6 +1,7 @@
 "use client"
 
 import type { Receipt } from "@/lib/data"
+import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
 import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 
@@ -40,15 +41,7 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
       return receipt.tax
     }
 
-    const calculateCorrectTotal = () => {
-      // Since items already include tax, total = subtotal - discount + tip + roundOff
-      // Tax breakdown is informational only, not added to total
-      const preRoundTotal = receipt.subtotal - receipt.discount + receipt.tip
-      const roundedTotal = Math.round(preRoundTotal)
-      // If roundOff is provided, use it; otherwise calculate it
-      const actualRoundOff = receipt.roundOff !== undefined ? receipt.roundOff : (roundedTotal - preRoundTotal)
-      return roundedTotal
-    }
+    const calculateCorrectTotal = () => getReceiptGrandTotal(receipt)
 
     const correctTaxAmount = calculateCorrectTaxAmount()
     const correctTotal = calculateCorrectTotal()

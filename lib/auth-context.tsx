@@ -91,24 +91,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return
         }
         
-        // Validate token with API - only set user on successful validation
-        try {
-          const response = await AuthAPI.getProfile()
-          if (response.success && response.data) {
-            setUser(response.data)
-          } else {
-            clearAuthStorage()
-          }
-        } catch (apiError: any) {
-          // 401/403: clear storage (interceptor may have already done this)
-          if (apiError?.response?.status === 401 || apiError?.response?.status === 403) {
-            clearAuthStorage()
-            setUser(null)
-          } else {
-            // Network/timeout or other errors: do NOT use stored user - require re-validation
-            // Prevents showing dashboard with stale data when token may be expired
-            clearAuthStorage()
-            setUser(null)
+        // Validate token with API — retry transient failures (wake-from-sleep / flaky network)
+        const maxAttempts = 4
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          try {
+            const response = await AuthAPI.getProfile()
+            if (response.success && response.data) {
+              setUser(response.data)
+            } else {
+              clearAuthStorage()
+            }
+            break
+          } catch (apiError: any) {
+            const status = apiError?.response?.status
+            if (status === 401 || status === 403) {
+              clearAuthStorage()
+              setUser(null)
+              break
+            }
+            if (attempt < maxAttempts - 1 && !apiError?.response) {
+              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)))
+              continue
+            }
+            if (!apiError?.response) {
+              try {
+                setUser(JSON.parse(storedUser) as User)
+              } catch {
+                clearAuthStorage()
+                setUser(null)
+              }
+            } else {
+              clearAuthStorage()
+              setUser(null)
+            }
+            break
           }
         }
       } catch (error) {

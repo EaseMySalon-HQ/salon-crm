@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Users, CalendarDays, PieChart, Settings, Package, Clock, DollarSign, CreditCard } from "lucide-react"
+import { Users, CalendarDays, PieChart, Settings, Package, Clock, DollarSign, CreditCard, AlertCircle } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { ReportsAPI, ServicesAPI, ProductsAPI, SalesAPI, AppointmentsAPI, CashRegistryAPI } from "@/lib/api"
 import { getTodayIST } from "@/lib/date-utils"
 import { useAuth } from "@/lib/auth-context"
@@ -47,6 +48,8 @@ export function DashboardStatsCards() {
     totalServices: 0
   })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
 
   // Safe currency formatting utility
   const safeFormatAmount = (amount: number) => {
@@ -55,8 +58,10 @@ export function DashboardStatsCards() {
   }
 
   useEffect(() => {
-    let isAuthError = false
+    let cancelled = false
     const fetchStats = async () => {
+      setLoading(true)
+      setLoadError(false)
       try {
         const todayStr = getTodayIST()
 
@@ -66,6 +71,8 @@ export function DashboardStatsCards() {
           SalesAPI.getAllMergePages({ dateFrom: todayStr, dateTo: todayStr, batchSize: 500 }),
           AppointmentsAPI.getAll({ limit: 200, date: todayStr }),
         ])
+
+        if (cancelled) return
 
         // Base stats from dashboard API (clients, appointments, services)
         let base: DashboardStats = {
@@ -101,18 +108,20 @@ export function DashboardStatsCards() {
         })
       } catch (error: any) {
         const status = error?.response?.status
-        if (status === 401 || status === 403) {
-          isAuthError = true
-          return
+        if (status !== 401 && status !== 403) {
+          console.error("Failed to fetch dashboard stats:", error)
+          if (!cancelled) setLoadError(true)
         }
-        console.error("Failed to fetch dashboard stats:", error)
       } finally {
-        if (!isAuthError) setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
 
     fetchStats()
-  }, [])
+    return () => {
+      cancelled = true
+    }
+  }, [retryKey])
 
   if (loading) {
     return (
@@ -129,6 +138,20 @@ export function DashboardStatsCards() {
             </CardContent>
           </Card>
         ))}
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex gap-2 text-amber-900 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>Could not load dashboard figures. Check your connection, then try again.</span>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => setRetryKey((k) => k + 1)}>
+          Retry
+        </Button>
       </div>
     )
   }
@@ -197,14 +220,19 @@ export function MembershipStatsCards() {
     membersExpiringIn30Days: 0
   })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
 
   const safeFormatAmount = (amount: number) => `₹${amount.toFixed(2)}`
 
   useEffect(() => {
-    let isAuthError = false
+    let cancelled = false
     const fetchStats = async () => {
+      setLoading(true)
+      setLoadError(false)
       try {
         const res = await ReportsAPI.getDashboardStats()
+        if (cancelled) return
         if (res?.success && res.data) {
           setStats({
             totalActiveMembers: res.data.totalActiveMembers ?? 0,
@@ -213,14 +241,19 @@ export function MembershipStatsCards() {
           })
         }
       } catch (error: any) {
-        if (error?.response?.status === 401 || error?.response?.status === 403) isAuthError = true
-        console.error("Failed to fetch membership stats:", error)
+        if (error?.response?.status !== 401 && error?.response?.status !== 403) {
+          console.error("Failed to fetch membership stats:", error)
+          if (!cancelled) setLoadError(true)
+        }
       } finally {
-        if (!isAuthError) setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
     fetchStats()
-  }, [])
+    return () => {
+      cancelled = true
+    }
+  }, [retryKey])
 
   if (loading) {
     return (
@@ -237,6 +270,20 @@ export function MembershipStatsCards() {
             </CardContent>
           </Card>
         ))}
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex gap-2 text-amber-900 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>Could not load membership stats. Try again.</span>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => setRetryKey((k) => k + 1)}>
+          Retry
+        </Button>
       </div>
     )
   }
@@ -290,6 +337,8 @@ export function ServiceStatsCards() {
     averageDuration: 0
   })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
 
   // Safe currency formatting utility
   const safeFormatAmount = (amount: number) => {
@@ -298,7 +347,8 @@ export function ServiceStatsCards() {
   }
 
   const fetchServiceStats = async () => {
-    let isAuthError = false
+    setLoading(true)
+    setLoadError(false)
     try {
       const response = await ServicesAPI.getAll({ limit: 1000 }) // Fetch up to 1000 services
       if (response.success) {
@@ -319,19 +369,18 @@ export function ServiceStatsCards() {
         })
       }
     } catch (error: any) {
-      if (error?.response?.status === 401 || error?.response?.status === 403) {
-        isAuthError = true
-        return
+      if (error?.response?.status !== 401 && error?.response?.status !== 403) {
+        console.error("Failed to fetch service stats:", error)
+        setLoadError(true)
       }
-      console.error("Failed to fetch service stats:", error)
     } finally {
-      if (!isAuthError) setLoading(false)
+      setLoading(false)
     }
   }
 
   useEffect(() => {
     fetchServiceStats()
-  }, [])
+  }, [retryKey])
 
   // Listen for custom events to refresh stats
   useEffect(() => {
@@ -358,6 +407,20 @@ export function ServiceStatsCards() {
             </CardContent>
           </Card>
         ))}
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex gap-2 text-amber-900 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>Could not load service stats. Try again.</span>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => setRetryKey((k) => k + 1)}>
+          Retry
+        </Button>
       </div>
     )
   }
@@ -435,6 +498,8 @@ export function ProductStatsCards({ productTypeFilter = "all", onLowStockClick, 
     categories: 0
   })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
 
   // Safe currency formatting utility
   const safeFormatAmount = (amount: number) => {
@@ -443,7 +508,8 @@ export function ProductStatsCards({ productTypeFilter = "all", onLowStockClick, 
   }
 
   const fetchProductStats = async () => {
-    let isAuthError = false
+    setLoading(true)
+    setLoadError(false)
     try {
       const response = await ProductsAPI.getAll({ limit: 1000 }) // Fetch up to 1000 products
       if (response.success) {
@@ -475,19 +541,18 @@ export function ProductStatsCards({ productTypeFilter = "all", onLowStockClick, 
         })
       }
     } catch (error: any) {
-      if (error?.response?.status === 401 || error?.response?.status === 403) {
-        isAuthError = true
-        return
+      if (error?.response?.status !== 401 && error?.response?.status !== 403) {
+        console.error("Failed to fetch product stats:", error)
+        setLoadError(true)
       }
-      console.error("Failed to fetch product stats:", error)
     } finally {
-      if (!isAuthError) setLoading(false)
+      setLoading(false)
     }
   }
 
   useEffect(() => {
     fetchProductStats()
-  }, [productTypeFilter])
+  }, [productTypeFilter, retryKey])
 
   // Listen for custom events to refresh stats
   useEffect(() => {
@@ -515,6 +580,20 @@ export function ProductStatsCards({ productTypeFilter = "all", onLowStockClick, 
             </CardContent>
           </Card>
         ))}
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex gap-2 text-amber-900 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>Could not load product stats. Try again.</span>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => setRetryKey((k) => k + 1)}>
+          Retry
+        </Button>
       </div>
     )
   }

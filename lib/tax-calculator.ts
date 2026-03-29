@@ -7,6 +7,10 @@ export interface TaxSettings {
   enableTax: boolean
   taxType: 'single' | 'gst' | 'vat' | 'sales'
   serviceTaxRate: number
+  /** GST % for membership plan lines (Quick Sale); defaults to serviceTaxRate if unset */
+  membershipTaxRate?: number
+  /** GST % for package lines (Quick Sale); defaults to serviceTaxRate if unset */
+  packageTaxRate?: number
   essentialProductRate: number
   intermediateProductRate: number
   standardProductRate: number
@@ -231,6 +235,8 @@ export function createTaxCalculator(settings: Partial<TaxSettings> = {}): TaxCal
     enableTax: true,
     taxType: 'gst',
     serviceTaxRate: 5,
+    membershipTaxRate: 5,
+    packageTaxRate: 5,
     essentialProductRate: 5,
     intermediateProductRate: 12,
     standardProductRate: 18,

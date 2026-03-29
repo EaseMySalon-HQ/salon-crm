@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
@@ -11,8 +11,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
-import { CalendarIcon } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { Calendar } from "lucide-react"
+import {
+  type DatePeriod,
+  getPerformanceFilterBounds,
+} from "@/lib/staff-performance-period"
 import { SalesAPI, CommissionProfileAPI, StaffDirectoryAPI } from "@/lib/api"
 import { toDateStringIST, getStartOfDayIST, getEndOfDayIST } from "@/lib/date-utils"
 import { CommissionProfileCalculator } from "@/lib/commission-profile-calculator"
@@ -29,7 +32,10 @@ interface StaffServiceDetailDrawerProps {
   staffId: string
   staffName: string
   staffRole?: string
-  dateRange: DateRange | undefined
+  /** Matches Staff Performance report period dropdown */
+  datePeriod: DatePeriod
+  /** When period is custom range, parent’s from/to */
+  parentCustomDateRange?: DateRange | undefined
   currencySymbol: string
 }
 
@@ -39,6 +45,14 @@ interface AggregatedRow {
   netTotal: number
   taxAmount: number
   grossTotal: number
+}
+
+/** Qty is staff-attributed (fractional when a line is split); strip float noise for display. */
+function formatAttributedQtyForDisplay(n: number): string {
+  const x = Number(n.toFixed(6))
+  if (Number.isInteger(x)) return String(x)
+  const y = Number(x.toFixed(4))
+  return y % 1 === 0 ? String(y) : y.toFixed(2).replace(/\.?0+$/, "") || "0"
 }
 
 function toSale(sale: any): Sale {
@@ -84,10 +98,12 @@ export function StaffServiceDetailDrawer({
   staffId,
   staffName,
   staffRole,
-  dateRange,
+  datePeriod: parentDatePeriod,
+  parentCustomDateRange,
   currencySymbol: currencySym
 }: StaffServiceDetailDrawerProps) {
-  const [drawerDateRange, setDrawerDateRange] = useState<DateRange | undefined>(dateRange)
+  const [localPeriod, setLocalPeriod] = useState<DatePeriod>(parentDatePeriod)
+  const [localCustomRange, setLocalCustomRange] = useState<DateRange | undefined>(parentCustomDateRange)
   const [sales, setSales] = useState<any[]>([])
   const [commissionProfiles, setCommissionProfiles] = useState<CommissionProfile[]>([])
   const [staffMembers, setStaffMembers] = useState<any[]>([])
@@ -95,17 +111,21 @@ export function StaffServiceDetailDrawer({
   const [showServices, setShowServices] = useState(true)
   const [showProducts, setShowProducts] = useState(true)
   const [showMemberships, setShowMemberships] = useState(true)
+  const [showPackages, setShowPackages] = useState(true)
   const [selectedServiceFilter, setSelectedServiceFilter] = useState<string>("all")
   const [selectedProductFilter, setSelectedProductFilter] = useState<string>("all")
-  // Sync drawer date range from parent when it changes
+  const [selectedPackageFilter, setSelectedPackageFilter] = useState<string>("all")
   useEffect(() => {
-    if (dateRange) setDrawerDateRange(dateRange)
-  }, [dateRange, open])
+    if (open) {
+      setLocalPeriod(parentDatePeriod)
+      setLocalCustomRange(parentCustomDateRange)
+    }
+  }, [open, parentDatePeriod, parentCustomDateRange])
 
-  const from = drawerDateRange?.from
-  const to = drawerDateRange?.to
-  const startDate = from ? new Date(from.getFullYear(), from.getMonth(), from.getDate()) : null
-  const endDate = to ? new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999) : null
+  const { startDate, endDate } = useMemo(
+    () => getPerformanceFilterBounds(localPeriod, localCustomRange),
+    [localPeriod, localCustomRange]
+  )
 
   useEffect(() => {
     if (!open || !staffId) return
@@ -113,9 +133,9 @@ export function StaffServiceDetailDrawer({
       setLoading(true)
       try {
         const salesParams: Parameters<typeof SalesAPI.getAllMergePages>[0] = { batchSize: 500 }
-        if (from && to) {
-          salesParams.dateFrom = getStartOfDayIST(toDateStringIST(from))
-          salesParams.dateTo = getEndOfDayIST(toDateStringIST(to))
+        if (localPeriod !== "all") {
+          salesParams.dateFrom = getStartOfDayIST(toDateStringIST(startDate))
+          salesParams.dateTo = getEndOfDayIST(toDateStringIST(endDate))
         }
         const [salesRows, profilesRes, staffRes] = await Promise.all([
           SalesAPI.getAllMergePages(salesParams),
@@ -132,7 +152,7 @@ export function StaffServiceDetailDrawer({
       }
     }
     load()
-  }, [open, staffId, from?.getTime(), to?.getTime()])
+  }, [open, staffId, localPeriod, startDate.getTime(), endDate.getTime()])
 
   const staff = staffMembers.find((s: any) => (s._id || s.id) === staffId)
   const staffProfileIds = staff?.commissionProfileIds || []
@@ -144,7 +164,7 @@ export function StaffServiceDetailDrawer({
   const filteredSales = (sales as any[])
     .filter((sale: any) => {
       const d = sale.date ? new Date(sale.date) : null
-      if (!d || !startDate || !endDate) return false
+      if (!d) return false
       return d >= startDate && d <= endDate
     })
     .filter((sale: any) => {
@@ -182,18 +202,21 @@ export function StaffServiceDetailDrawer({
     const svc = aggregateByType("service")
     const prod = aggregateByType("product")
     const memb = aggregateByType("membership")
+    const pkg = aggregateByType("package")
     return {
       serviceRevenue: svc.reduce((s, r) => s + r.grossTotal, 0),
       productRevenue: prod.reduce((s, r) => s + r.grossTotal, 0),
       membershipRevenue: memb.reduce((s, r) => s + r.grossTotal, 0),
+      packageRevenue: pkg.reduce((s, r) => s + r.grossTotal, 0),
       serviceCount: svc.reduce((s, r) => s + r.quantitySold, 0),
       productCount: prod.reduce((s, r) => s + r.quantitySold, 0),
-      membershipCount: memb.reduce((s, r) => s + r.quantitySold, 0)
+      membershipCount: memb.reduce((s, r) => s + r.quantitySold, 0),
+      packageCount: pkg.reduce((s, r) => s + r.quantitySold, 0)
     }
   }
   const fallback = commissionResult == null ? fallbackFromAggregates() : null
 
-  const totalRevenue = commissionResult?.totalRevenue ?? (fallback ? fallback.serviceRevenue + fallback.productRevenue + fallback.membershipRevenue : 0)
+  const totalRevenue = commissionResult?.totalRevenue ?? (fallback ? fallback.serviceRevenue + fallback.productRevenue + fallback.membershipRevenue + fallback.packageRevenue : 0)
   const serviceRevenueForStaff = commissionResult?.serviceRevenue ?? fallback?.serviceRevenue ?? 0
   const productRevenueForStaff = commissionResult?.productRevenue ?? fallback?.productRevenue ?? 0
   const totalCommission = commissionResult?.totalCommission ?? 0
@@ -204,18 +227,23 @@ export function StaffServiceDetailDrawer({
   const averageServiceValue =
     totalServicesPerformed > 0 ? serviceRevenueForStaff / totalServicesPerformed : 0
 
-  function aggregateByType(type: "service" | "product" | "membership"): AggregatedRow[] {
+  function aggregateByType(type: "service" | "product" | "membership" | "package"): AggregatedRow[] {
     const map = new Map<string, AggregatedRow>()
     filteredSales.forEach((sale: any) => {
       const saleTotal = sale.total || 0
       const saleTax = sale.tax || 0
       const ratio = saleTotal > 0 ? saleTax / saleTotal : 0
       ;(sale.items || []).forEach((item: any) => {
-        const isService = (item.type || "").toLowerCase() === "service"
-        const isProduct = (item.type || "").toLowerCase() === "product"
-        const isMembership = (item.type || "").toLowerCase() === "membership"
+        const t = (item.type || "").toLowerCase()
+        const isService = t === "service"
+        const isProduct = t === "product"
+        const isMembership = t === "membership"
+        const isPackage = t === "package"
         const match =
-          (type === "service" && isService) || (type === "product" && isProduct) || (type === "membership" && isMembership)
+          (type === "service" && isService) ||
+          (type === "product" && isProduct) ||
+          (type === "membership" && isMembership) ||
+          (type === "package" && isPackage)
         if (!match) return
         const saleFallback = { staffId: sale.staffId, staffName: sale.staffName }
         const gross = getAttributedRevenueForStaff(item, staffId, staffName, saleFallback)
@@ -224,7 +252,7 @@ export function StaffServiceDetailDrawer({
         const qty = item.quantity ?? 1
         const share =
           lineGross > 0 ? gross / lineGross : 1 / Math.max(1, item.staffContributions?.length ?? 1)
-        const qtySold = qty * share
+        const qtySold = Number((qty * share).toFixed(6))
         const tax = saleTotal > 0 ? (saleTax / saleTotal) * gross : 0
         const net = gross - tax
         const name = item.name || "—"
@@ -245,10 +273,14 @@ export function StaffServiceDetailDrawer({
   const serviceRows = aggregateByType("service")
   const productRows = aggregateByType("product")
   const membershipRows = aggregateByType("membership")
+  const packageRows = aggregateByType("package")
   const membershipRevenue = membershipRows.reduce((s, r) => s + r.grossTotal, 0)
   const membershipCount = membershipRows.reduce((s, r) => s + r.quantitySold, 0)
+  const packageRevenue = packageRows.reduce((s, r) => s + r.grossTotal, 0)
+  const packageCount = packageRows.reduce((s, r) => s + r.quantitySold, 0)
   const serviceNames = [...new Set(serviceRows.map((r) => r.name))]
   const productNames = [...new Set(productRows.map((r) => r.name))]
+  const packageNames = [...new Set(packageRows.map((r) => r.name))]
 
   const filteredServiceRows =
     selectedServiceFilter === "all"
@@ -258,9 +290,17 @@ export function StaffServiceDetailDrawer({
     selectedProductFilter === "all"
       ? productRows
       : productRows.filter((r) => r.name === selectedProductFilter)
+  const filteredPackageRows =
+    selectedPackageFilter === "all"
+      ? packageRows
+      : packageRows.filter((r) => r.name === selectedPackageFilter)
 
-  // Card values filtered by Service/Product/Membership checkboxes
-  const displayTotalRevenue = (showServices ? serviceRevenueForStaff : 0) + (showProducts ? productRevenueForStaff : 0) + (showMemberships ? membershipRevenue : 0)
+  // Card values filtered by Service/Product/Membership/Package checkboxes
+  const displayTotalRevenue =
+    (showServices ? serviceRevenueForStaff : 0) +
+    (showProducts ? productRevenueForStaff : 0) +
+    (showMemberships ? membershipRevenue : 0) +
+    (showPackages ? packageRevenue : 0)
   const displayTotalServicesPerformed = showServices ? totalServicesPerformed : 0
   const displayTotalProductsSold = showProducts ? totalProductCount : 0
   const displayServiceRevenue = showServices ? serviceRevenueForStaff : 0
@@ -269,6 +309,10 @@ export function StaffServiceDetailDrawer({
   const displayServiceCommission = showServices ? serviceCommission : 0
   const displayProductCommission = showProducts ? productCommissionAmount : 0
   const displayAverageServiceValue = showServices && totalServicesPerformed > 0 ? serviceRevenueForStaff / totalServicesPerformed : 0
+  const displayMembershipRevenue = showMemberships ? membershipRevenue : 0
+  const displayPackageRevenue = showPackages ? packageRevenue : 0
+  const displayMembershipCount = showMemberships ? membershipCount : 0
+  const displayPackageCount = showPackages ? packageCount : 0
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -282,42 +326,88 @@ export function StaffServiceDetailDrawer({
           </SheetTitle>
         </SheetHeader>
         <div className="mt-5 space-y-5">
-          {/* Date range */}
+          {/* Period — same control pattern as Staff Performance report */}
           <section className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Date range</label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    "h-9 w-full justify-start text-left font-normal",
-                    !drawerDateRange?.from && "text-muted-foreground"
-                  )}
-                >
-                  <CalendarIcon className="mr-2 h-3.5 w-3.5" />
-                  {drawerDateRange?.from ? (
-                    drawerDateRange.to ? (
-                      <>
-                        {format(drawerDateRange.from, "MMM d, yyyy")} – {format(drawerDateRange.to, "MMM d, yyyy")}
-                      </>
-                    ) : (
-                      format(drawerDateRange.from, "MMM d, yyyy")
-                    )
-                  ) : (
-                    "Pick dates"
-                  )}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <CalendarComponent
-                  mode="range"
-                  selected={drawerDateRange}
-                  onSelect={setDrawerDateRange}
-                  numberOfMonths={2}
-                />
-              </PopoverContent>
-            </Popover>
+            <label className="text-xs font-medium text-muted-foreground">Period</label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={localPeriod}
+                onValueChange={(value: DatePeriod) => {
+                  setLocalPeriod(value)
+                  if (value !== "customRange") {
+                    setLocalCustomRange(undefined)
+                  }
+                }}
+              >
+                <SelectTrigger className="h-10 w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                  <SelectValue placeholder="Select period" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="today">Today</SelectItem>
+                  <SelectItem value="yesterday">Yesterday</SelectItem>
+                  <SelectItem value="last7days">Last 7 days</SelectItem>
+                  <SelectItem value="last30days">Last 30 days</SelectItem>
+                  <SelectItem value="currentMonth">Current month</SelectItem>
+                  <SelectItem value="previousMonth">Previous month</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                  <SelectItem value="customRange">Custom range</SelectItem>
+                </SelectContent>
+              </Select>
+              {localPeriod === "customRange" && (
+                <div className="flex flex-wrap gap-2 items-center">
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-10 w-36 justify-start text-left font-normal border-slate-200"
+                      >
+                        <Calendar className="mr-2 h-4 w-4 shrink-0" />
+                        {localCustomRange?.from ? format(localCustomRange.from, "MMM dd, yyyy") : "From"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarComponent
+                        initialFocus
+                        mode="single"
+                        selected={localCustomRange?.from}
+                        onSelect={(date) =>
+                          setLocalCustomRange((prev) => ({ from: date, to: prev?.to }))
+                        }
+                        disabled={(date) =>
+                          date > new Date() || (localCustomRange?.to ? date > localCustomRange.to : false)
+                        }
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-10 w-36 justify-start text-left font-normal border-slate-200"
+                      >
+                        <Calendar className="mr-2 h-4 w-4 shrink-0" />
+                        {localCustomRange?.to ? format(localCustomRange.to, "MMM dd, yyyy") : "To"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarComponent
+                        initialFocus
+                        mode="single"
+                        selected={localCustomRange?.to}
+                        onSelect={(date) =>
+                          setLocalCustomRange((prev) => ({ from: prev?.from, to: date }))
+                        }
+                        disabled={(date) =>
+                          date > new Date() || (localCustomRange?.from ? date < localCustomRange.from : false)
+                        }
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              )}
+            </div>
           </section>
 
           {loading ? (
@@ -409,6 +499,38 @@ export function StaffServiceDetailDrawer({
                   <Card className="border-border/60">
                     <CardHeader className="p-3 pb-0">
                       <CardTitle className="text-xs font-medium text-muted-foreground">
+                        Membership Revenue
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-3 pt-1.5">
+                      <p className="text-lg font-semibold tabular-nums text-right">
+                        {currencySym}{displayMembershipRevenue.toFixed(2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground text-right tabular-nums mt-0.5">
+                        {displayMembershipCount} sold
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/60">
+                    <CardHeader className="p-3 pb-0">
+                      <CardTitle className="text-xs font-medium text-muted-foreground">
+                        Package Revenue
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-3 pt-1.5">
+                      <p className="text-lg font-semibold tabular-nums text-right">
+                        {currencySym}{displayPackageRevenue.toFixed(2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground text-right tabular-nums mt-0.5">
+                        {displayPackageCount} sold
+                      </p>
+                    </CardContent>
+                  </Card>
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <Card className="border-border/60">
+                    <CardHeader className="p-3 pb-0">
+                      <CardTitle className="text-xs font-medium text-muted-foreground">
                         Total Services Performed
                       </CardTitle>
                     </CardHeader>
@@ -454,7 +576,14 @@ export function StaffServiceDetailDrawer({
                     />
                     <span className="text-sm text-foreground">Memberships</span>
                   </label>
-                  <div className="flex items-center gap-2 flex-nowrap">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <Checkbox
+                      checked={showPackages}
+                      onCheckedChange={(c) => setShowPackages(!!c)}
+                    />
+                    <span className="text-sm text-foreground">Packages</span>
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
                     <Select
                       value={selectedServiceFilter}
                       onValueChange={setSelectedServiceFilter}
@@ -487,6 +616,22 @@ export function StaffServiceDetailDrawer({
                         ))}
                       </SelectContent>
                     </Select>
+                    <Select
+                      value={selectedPackageFilter}
+                      onValueChange={setSelectedPackageFilter}
+                    >
+                      <SelectTrigger className="h-8 w-[160px]" disabled={!showPackages}>
+                        <SelectValue placeholder="All packages" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All packages</SelectItem>
+                        {packageNames.map((name) => (
+                          <SelectItem key={name} value={name}>
+                            {name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </section>
@@ -499,7 +644,12 @@ export function StaffServiceDetailDrawer({
                       <TableHeader>
                         <TableRow className="hover:bg-transparent">
                           <TableHead className="text-xs font-medium text-muted-foreground">Service Name</TableHead>
-                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Qty</TableHead>
+                          <TableHead
+                            className="text-right text-xs font-medium text-muted-foreground"
+                            title="Staff share of quantity (can be fractional when multiple staff split a line)"
+                          >
+                            Qty
+                          </TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Net Total</TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Tax</TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Gross Total</TableHead>
@@ -516,7 +666,9 @@ export function StaffServiceDetailDrawer({
                           filteredServiceRows.map((row) => (
                             <TableRow key={row.name} className="border-border/60">
                               <TableCell className="text-sm font-medium py-2">{row.name}</TableCell>
-                              <TableCell className="text-right text-sm tabular-nums py-2">{row.quantitySold}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">
+                                {formatAttributedQtyForDisplay(row.quantitySold)}
+                              </TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.netTotal.toFixed(2)}</TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.taxAmount.toFixed(2)}</TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.grossTotal.toFixed(2)}</TableCell>
@@ -537,7 +689,12 @@ export function StaffServiceDetailDrawer({
                       <TableHeader>
                         <TableRow className="hover:bg-transparent">
                           <TableHead className="text-xs font-medium text-muted-foreground">Product Name</TableHead>
-                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Qty</TableHead>
+                          <TableHead
+                            className="text-right text-xs font-medium text-muted-foreground"
+                            title="Staff share of quantity (can be fractional when multiple staff split a line)"
+                          >
+                            Qty
+                          </TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Net Total</TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Tax</TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Gross Total</TableHead>
@@ -554,7 +711,9 @@ export function StaffServiceDetailDrawer({
                           filteredProductRows.map((row) => (
                             <TableRow key={row.name} className="border-border/60">
                               <TableCell className="text-sm font-medium py-2">{row.name}</TableCell>
-                              <TableCell className="text-right text-sm tabular-nums py-2">{row.quantitySold}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">
+                                {formatAttributedQtyForDisplay(row.quantitySold)}
+                              </TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.netTotal.toFixed(2)}</TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.taxAmount.toFixed(2)}</TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.grossTotal.toFixed(2)}</TableCell>
@@ -575,7 +734,12 @@ export function StaffServiceDetailDrawer({
                       <TableHeader>
                         <TableRow className="hover:bg-transparent">
                           <TableHead className="text-xs font-medium text-muted-foreground">Plan Name</TableHead>
-                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Qty</TableHead>
+                          <TableHead
+                            className="text-right text-xs font-medium text-muted-foreground"
+                            title="Staff share of quantity (can be fractional when multiple staff split a line)"
+                          >
+                            Qty
+                          </TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Net Total</TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Tax</TableHead>
                           <TableHead className="text-right text-xs font-medium text-muted-foreground">Gross Total</TableHead>
@@ -592,7 +756,54 @@ export function StaffServiceDetailDrawer({
                           membershipRows.map((row) => (
                             <TableRow key={row.name} className="border-border/60">
                               <TableCell className="text-sm font-medium py-2">{row.name}</TableCell>
-                              <TableCell className="text-right text-sm tabular-nums py-2">{row.quantitySold}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">
+                                {formatAttributedQtyForDisplay(row.quantitySold)}
+                              </TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.netTotal.toFixed(2)}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.taxAmount.toFixed(2)}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.grossTotal.toFixed(2)}</TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </section>
+              )}
+
+              {showPackages && (
+                <section className="space-y-2">
+                  <h3 className="text-xs font-medium text-muted-foreground">Packages</h3>
+                  <div className="rounded-lg border border-border/60 overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="text-xs font-medium text-muted-foreground">Package Name</TableHead>
+                          <TableHead
+                            className="text-right text-xs font-medium text-muted-foreground"
+                            title="Staff share of quantity (can be fractional when multiple staff split a line)"
+                          >
+                            Qty
+                          </TableHead>
+                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Net Total</TableHead>
+                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Tax</TableHead>
+                          <TableHead className="text-right text-xs font-medium text-muted-foreground">Gross Total</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredPackageRows.length === 0 ? (
+                          <TableRow className="hover:bg-transparent">
+                            <TableCell colSpan={5} className="h-20 text-center text-sm text-muted-foreground">
+                              No packages
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          filteredPackageRows.map((row) => (
+                            <TableRow key={row.name} className="border-border/60">
+                              <TableCell className="text-sm font-medium py-2">{row.name}</TableCell>
+                              <TableCell className="text-right text-sm tabular-nums py-2">
+                                {formatAttributedQtyForDisplay(row.quantitySold)}
+                              </TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.netTotal.toFixed(2)}</TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.taxAmount.toFixed(2)}</TableCell>
                               <TableCell className="text-right text-sm tabular-nums py-2">{currencySym}{row.grossTotal.toFixed(2)}</TableCell>

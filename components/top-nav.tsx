@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
-import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock } from "lucide-react"
+import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -21,11 +21,27 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
-import { SettingsAPI } from "@/lib/api"
+import { SettingsAPI, ClientsAPI } from "@/lib/api"
+import { Input } from "@/components/ui/input"
 import { useTodayOnlineSales } from "@/hooks/use-today-online-sales"
 import { ExpenseForm } from "@/components/expenses/expense-form"
 import { CashRegistryModal } from "@/components/cash-registry/cash-registry-modal"
 import { SessionStatus } from "@/components/auth/session-status"
+import { ClientDetailsDrawer } from "@/components/clients/client-details-drawer"
+import type { Client } from "@/lib/client-store"
+
+function searchHitToClient(c: any): Client {
+  const id = String(c._id || c.id || "")
+  return {
+    ...c,
+    id,
+    _id: id,
+    name: c.name || "",
+    phone: c.phone || "",
+    email: c.email,
+    birthdate: c.birthdate || c.dob || undefined,
+  }
+}
 
 interface TopNavProps {
   showQuickAdd?: boolean
@@ -40,6 +56,13 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const { amount: todayOnlineSales } = useTodayOnlineSales(showCashRegistryModal)
   const [businessName, setBusinessName] = useState<string>("EaseMySalon")
   const [isLoadingBusinessName, setIsLoadingBusinessName] = useState(true)
+
+  const [clientSearch, setClientSearch] = useState("")
+  const [clientResults, setClientResults] = useState<any[]>([])
+  const [clientSearchOpen, setClientSearchOpen] = useState(false)
+  const clientSearchRef = useRef<HTMLDivElement>(null)
+  const [clientDetailsDrawerOpen, setClientDetailsDrawerOpen] = useState(false)
+  const [clientDetailsDrawerClient, setClientDetailsDrawerClient] = useState<Client | null>(null)
 
   // Fetch business settings to get the business name
   useEffect(() => {
@@ -83,6 +106,31 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
     }
   }, [])
 
+  useEffect(() => {
+    const q = clientSearch.trim()
+    if (q.length < 2) {
+      setClientResults([])
+      return
+    }
+    const t = setTimeout(() => {
+      ClientsAPI.search(q)
+        .then((res) => {
+          if (res.success && Array.isArray(res.data)) setClientResults(res.data)
+          else setClientResults([])
+        })
+        .catch(() => setClientResults([]))
+    }, 280)
+    return () => clearTimeout(t)
+  }, [clientSearch])
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (!clientSearchRef.current?.contains(e.target as Node)) setClientSearchOpen(false)
+    }
+    document.addEventListener("mousedown", onDown)
+    return () => document.removeEventListener("mousedown", onDown)
+  }, [])
+
   const handleQuickAdd = (path: string) => {
     if (path === "/expenses/new") {
       setShowExpenseDialog(true)
@@ -101,6 +149,13 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
 
   const isAdmin = () => {
     return user?.role === "admin"
+  }
+
+  const onClientDetailsDrawerOpenChange = (open: boolean) => {
+    setClientDetailsDrawerOpen(open)
+    if (!open) {
+      window.setTimeout(() => setClientDetailsDrawerClient(null), 350)
+    }
   }
 
   return (
@@ -137,9 +192,60 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
         </div>
 
         {/* Right side - Quick Add, Notifications, and User */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           {/* Session Status */}
           <SessionStatus showAlways={false} />
+
+          {/* Client search — opens client details drawer on select */}
+          <div ref={clientSearchRef} className="relative w-36 shrink-0 sm:w-48 lg:w-56 z-40">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 sm:h-4 sm:w-4" />
+            <Input
+              type="search"
+              value={clientSearch}
+              onChange={(e) => {
+                setClientSearch(e.target.value)
+                setClientSearchOpen(true)
+              }}
+              onFocus={() => setClientSearchOpen(true)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setClientSearchOpen(false)
+              }}
+              placeholder="Search clients…"
+              autoComplete="off"
+              className="h-9 pl-8 pr-2 text-xs sm:text-sm border-slate-200/80 bg-white/90 shadow-sm"
+            />
+            {clientSearchOpen && clientResults.length > 0 && (
+              <ul
+                role="listbox"
+                className="absolute left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+              >
+                {clientResults.map((c) => {
+                  const id = c._id || c.id
+                  if (!id) return null
+                  return (
+                    <li key={String(id)} role="option">
+                      <button
+                        type="button"
+                        className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                        onClick={() => {
+                          setClientDetailsDrawerClient(searchHitToClient(c))
+                          setClientDetailsDrawerOpen(true)
+                          setClientSearch("")
+                          setClientResults([])
+                          setClientSearchOpen(false)
+                        }}
+                      >
+                        <span className="font-medium text-slate-800">{c.name || "Client"}</span>
+                        {c.phone && (
+                          <span className="text-xs text-slate-500 tabular-nums">{c.phone}</span>
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
 
           {/* Quick Add */}
           {showQuickAdd && (
@@ -296,6 +402,13 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
         </DialogContent>
       </Dialog>
 
+      <ClientDetailsDrawer
+        open={clientDetailsDrawerOpen}
+        onOpenChange={onClientDetailsDrawerOpenChange}
+        client={clientDetailsDrawerClient}
+        initialExpandProfile={false}
+        initialEditMode={false}
+      />
     </header>
   )
 }

@@ -29,7 +29,8 @@ import {
   ChevronUp,
   Edit,
   RefreshCw,
-  Package,
+  Package as PackageIcon,
+  AlertCircle,
 } from "lucide-react"
 import { Calendar as DatePicker } from "@/components/ui/calendar"
 import { Button } from "@/components/ui/button"
@@ -61,11 +62,13 @@ import {
   type PaymentMethod,
   getAllReceipts,
 } from "@/lib/data"
-import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI, BlockTimeAPI, MembershipAPI } from "@/lib/api"
+import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI, BlockTimeAPI, MembershipAPI, PackagesAPI } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
+import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
+import { computePackageLineTotal } from "@/lib/package-tax"
 import { useRouter } from "next/navigation"
 
 // Mock data for customers
@@ -171,6 +174,8 @@ interface ServiceItem {
   total: number
   isMembershipFree?: boolean
   membershipDiscountPercent?: number
+  /** Covered by prepaid package — show 100% discount, not ₹0 list price with 0% off */
+  isPackageRedemption?: boolean
 }
 
 interface ProductItem {
@@ -194,7 +199,22 @@ interface MembershipItem {
   staffId: string
 }
 
+interface PackageItem {
+  id: string
+  packageId: string
+  packageName: string
+  totalSittings: number
+  price: number
+  quantity: number
+  total: number
+  staffId: string
+}
+
 type BillingMode = "create" | "edit" | "exchange"
+
+function isLikelyMongoObjectId(id: string | null | undefined): boolean {
+  return !!id && /^[a-f\d]{24}$/i.test(String(id))
+}
 
 /** Parse time string (e.g. "HH:mm", "9:00am") to minutes since midnight */
 function parseTimeToMinutes(time: string): number {
@@ -345,11 +365,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // Plans for membership section (fetched when customer selected)
   const [plans, setPlans] = useState<Array<{ _id: string; id?: string; planName: string; price: number; durationInDays: number }>>([])
 
-  // Add Items section: membership | gift-voucher | prepaid (none selected by default)
-  const [addItemSection, setAddItemSection] = useState<'membership' | 'gift-voucher' | 'prepaid' | null>(null)
+  // Add Items section: membership | package | gift-voucher | prepaid (none selected by default)
+  const [addItemSection, setAddItemSection] = useState<'gift-voucher' | 'prepaid' | null>(null)
 
   // Membership items (rows added from Membership section)
   const [membershipItems, setMembershipItems] = useState<MembershipItem[]>([])
+  const [packageItems, setPackageItems] = useState<PackageItem[]>([])
+  const [packagesCatalog, setPackagesCatalog] = useState<any[]>([])
+  /** Set when opening Quick Sale from client panel package redemption; triggers post-checkout redeem API. */
+  const [pendingPackageRedemption, setPendingPackageRedemption] = useState<{
+    clientPackageId: string
+    serviceIds: string[]
+  } | null>(null)
 
   // State for services and products from API
   const [services, setServices] = useState<any[]>([])
@@ -493,6 +520,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [loadingProducts, setLoadingProducts] = useState(true)
   const [loadingStaff, setLoadingStaff] = useState(true)
   const [loadingClients, setLoadingClients] = useState(true)
+  const [catalogLoadError, setCatalogLoadError] = useState(false)
+  const [catalogRetryKey, setCatalogRetryKey] = useState(0)
   const [appointmentsForDate, setAppointmentsForDate] = useState<any[]>([])
   const [blockTimesForDate, setBlockTimesForDate] = useState<any[]>([])
   const [, setTimeTick] = useState(0)
@@ -579,6 +608,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
   // Fetch services, products, staff, clients, and business settings from API
   useEffect(() => {
+    setCatalogLoadError(false)
+
     const fetchServices = async () => {
       try {
         console.log('Fetching services from API...')
@@ -588,8 +619,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           setServices(response.data || [])
           console.log('Services loaded:', response.data?.length || 0)
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to fetch services:', error)
+        const st = error?.response?.status
+        if (st !== 401 && st !== 403) setCatalogLoadError(true)
       } finally {
         setLoadingServices(false)
       }
@@ -642,8 +675,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         } else {
           console.error('Staff API returned error:', response.error)
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to fetch staff:', error)
+        const st = error?.response?.status
+        if (st !== 401 && st !== 403) setCatalogLoadError(true)
       } finally {
         setLoadingStaff(false)
       }
@@ -706,6 +741,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             enableTax: response.data.enableTax !== false,
             taxType: response.data.taxType || 'gst',
             serviceTaxRate: response.data.serviceTaxRate || 5,
+            membershipTaxRate:
+              response.data.membershipTaxRate ?? response.data.serviceTaxRate ?? 5,
+            packageTaxRate: response.data.packageTaxRate ?? response.data.serviceTaxRate ?? 5,
             essentialProductRate: response.data.essentialProductRate || 5,
             intermediateProductRate: response.data.intermediateProductRate || 12,
             standardProductRate: response.data.standardProductRate || 18,
@@ -739,15 +777,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       }
     }
 
+    const fetchPackagesCatalog = async () => {
+      try {
+        const response = await PackagesAPI.getAll({ status: "ACTIVE", limit: 500 })
+        if (response.success) {
+          setPackagesCatalog(response.data?.packages || [])
+        }
+      } catch (error) {
+        console.error('Failed to fetch packages:', error)
+      }
+    }
+
     fetchServices()
     fetchProducts()
+    fetchPackagesCatalog()
     fetchStaff()
     fetchBusinessSettings()
     fetchPOSSettings()
     fetchPaymentSettings()
     fetchTaxSettings()
     fetchClients()
-  }, [])
+  }, [catalogRetryKey])
 
   // Fetch appointments and block times for selected date (for staff availability)
   useEffect(() => {
@@ -1157,18 +1207,125 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     prefillLeadData()
   }, [searchParams, services, clients, staff])
 
+  // Pre-fill from client panel: package service redemption (₹0 — prepaid with package)
+  useEffect(() => {
+    const raw = searchParams.get("packageRedeem")
+    if (!raw || services.length === 0 || clients.length === 0 || staff.length === 0) return
+
+    const prefillPackageRedeem = async () => {
+      try {
+        const data = JSON.parse(atob(decodeURIComponent(raw))) as {
+          clientId: string
+          clientPackageId: string
+          serviceIds: string[]
+          staffId?: string | null
+          packageName?: string
+        }
+        if (!data.clientId || !data.clientPackageId || !Array.isArray(data.serviceIds)) return
+
+        const client = clients.find(
+          c => String(c._id || c.id) === String(data.clientId)
+        )
+        if (client) {
+          setSelectedCustomer(client)
+          setCustomerSearch(client.name)
+          const customerId = client._id || client.id
+          if (customerId) await fetchCustomerStats(String(customerId))
+        }
+
+        const staffIdStr = data.staffId ? String(data.staffId) : ""
+        const staffMember = staffIdStr
+          ? staff.find(s => String(s._id || s.id) === staffIdStr)
+          : null
+        const firstStaff = staff[0]
+        const staffToUse = staffMember
+          ? staffIdStr
+          : firstStaff
+            ? String(firstStaff._id || firstStaff.id)
+            : ""
+
+        const serviceItemsToAdd: ServiceItem[] = []
+        for (const sid of data.serviceIds) {
+          const service = services.find(s => String(s._id || s.id) === String(sid))
+          if (!service) continue
+          const sidFinal = String(service._id || service.id)
+          const basePrice = Number(service.price) || 0
+          serviceItemsToAdd.push({
+            id: `${Date.now()}-${Math.random()}`,
+            serviceId: sidFinal,
+            staffId: staffToUse,
+            quantity: 1,
+            price: basePrice,
+            discount: 100,
+            total: 0,
+            isPackageRedemption: true,
+            staffContributions:
+              staffToUse && staffMember
+                ? [
+                    {
+                      staffId: staffToUse,
+                      staffName: staffMember.name || "",
+                      percentage: 100,
+                      amount: 0,
+                    },
+                  ]
+                : staffToUse && firstStaff && String(firstStaff._id || firstStaff.id) === staffToUse
+                  ? [
+                      {
+                        staffId: staffToUse,
+                        staffName: firstStaff.name || "",
+                        percentage: 100,
+                        amount: 0,
+                      },
+                    ]
+                  : [],
+          })
+        }
+
+        if (serviceItemsToAdd.length > 0) {
+          setServiceItems(serviceItemsToAdd)
+          setRemarks(
+            `Package redemption — ${data.packageName?.trim() || "Package"} (prepaid)`
+          )
+          setPendingPackageRedemption({
+            clientPackageId: String(data.clientPackageId),
+            serviceIds: data.serviceIds.map(s => String(s)),
+          })
+          setCashAmount(0)
+          setCardAmount(0)
+          setOnlineAmount(0)
+          setTip(0)
+          setTipStaffId(null)
+        }
+
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href)
+          url.searchParams.delete("packageRedeem")
+          window.history.replaceState({}, "", url.toString())
+        }
+      } catch (error) {
+        console.error("Failed to parse packageRedeem data:", error)
+      }
+    }
+
+    prefillPackageRedeem()
+  }, [searchParams, services, clients, staff])
+
   // In production, prefill data should come from URL params or API
   // No localStorage dependency for critical business functionality
 
-  // Once services load, if we have a prefilled serviceId, trigger price autofill
+  // Once services load, trigger price/total autofill (package redemption: every row; else legacy: first row only)
   useEffect(() => {
     if (services.length === 0 || serviceItems.length === 0) return
+    for (const row of serviceItems) {
+      if (!row.serviceId || !row.isPackageRedemption) continue
+      const svc = services.find((s) => s._id === row.serviceId || s.id === row.serviceId)
+      if (svc) updateServiceItem(row.id, "serviceId" as any, row.serviceId)
+    }
     const first = serviceItems[0]
-    if (!first.serviceId) return
-    const svc = services.find((s) => s._id === first.serviceId || s.id === first.serviceId)
-    if (svc) {
-      // Reuse existing update logic to compute price/total
-      updateServiceItem(first.id, 'serviceId' as any, first.serviceId)
+    if (first?.serviceId && !first.isPackageRedemption) {
+      const svc = services.find((s) => s._id === first.serviceId || s.id === first.serviceId)
+      if (svc) updateServiceItem(first.id, "serviceId" as any, first.serviceId)
     }
   }, [services])
 
@@ -1518,6 +1675,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       // When no membership, reset any membership-applied discounts to base price
       setServiceItems((items) =>
         items.map((item) => {
+          if (item.isPackageRedemption) {
+            const service = services.find((s) => (s._id || s.id) === item.serviceId)
+            const basePrice = service?.price ?? item.price
+            const baseAmount = basePrice * item.quantity
+            const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+            const applyTax = isServiceTaxable(item)
+            const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
+            return {
+              ...item,
+              price: basePrice,
+              discount: 100,
+              total,
+              isMembershipFree: false,
+              membershipDiscountPercent: 0,
+            }
+          }
           if (!item.serviceId || (!item.isMembershipFree && (item.membershipDiscountPercent ?? 0) === 0)) return item
           const service = services.find((s) => (s._id || s.id) === item.serviceId)
           const basePrice = service?.price ?? item.price
@@ -1540,6 +1713,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
       return items.map((item) => {
         if (!item.serviceId) return item
+        if (item.isPackageRedemption) {
+          const service = services.find((s) => (s._id || s.id) === item.serviceId)
+          const basePrice = service?.price ?? item.price
+          const baseAmount = basePrice * item.quantity
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+          const applyTax = isServiceTaxable(item)
+          const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
+          return {
+            ...item,
+            price: basePrice,
+            discount: 100,
+            total,
+            isMembershipFree: false,
+            membershipDiscountPercent: 0,
+          }
+        }
         const sid = String(item.serviceId)
         const u = usageMap.get(sid)
         const service = services.find((s) => (s._id || s.id) === item.serviceId)
@@ -1559,7 +1748,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         return item
       })
     })
-  }, [membershipData, paymentSettings?.priceInclusiveOfTax])
+  }, [membershipData, paymentSettings?.priceInclusiveOfTax, services, taxSettings])
 
   // Fetch customer statistics including visits, revenue, and last visit
   const fetchCustomerStats = async (customerId: string) => {
@@ -1875,6 +2064,52 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     recalculateDiscounts()
   }, [discountValue, discountPercentage, taxSettings, paymentSettings?.priceInclusiveOfTax])
 
+  // Recompute membership line totals when tax mode or membership rate changes
+  useEffect(() => {
+    if (!taxSettings) return
+    setMembershipItems((items) =>
+      items.map((m) => {
+        if (!m.planId) return m
+        const base = m.price * m.quantity
+        const mRate = taxSettings.membershipTaxRate ?? taxSettings.serviceTaxRate ?? 5
+        const { total } = computeMembershipPlanLineTotal(base, {
+          membershipTaxRate: mRate,
+          enableTax: taxSettings.enableTax !== false,
+          priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+        })
+        return { ...m, total }
+      })
+    )
+  }, [
+    taxSettings?.enableTax,
+    taxSettings?.membershipTaxRate,
+    taxSettings?.serviceTaxRate,
+    paymentSettings?.priceInclusiveOfTax,
+  ])
+
+  // Recompute package line totals when tax mode or package rate changes
+  useEffect(() => {
+    if (!taxSettings) return
+    setPackageItems((items) =>
+      items.map((p) => {
+        if (!p.packageId) return p
+        const base = p.price * p.quantity
+        const pRate = taxSettings.packageTaxRate ?? taxSettings.serviceTaxRate ?? 5
+        const { total } = computePackageLineTotal(base, {
+          packageTaxRate: pRate,
+          enableTax: taxSettings.enableTax !== false,
+          priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+        })
+        return { ...p, total }
+      })
+    )
+  }, [
+    taxSettings?.enableTax,
+    taxSettings?.packageTaxRate,
+    taxSettings?.serviceTaxRate,
+    paymentSettings?.priceInclusiveOfTax,
+  ])
+
   // Log when service items change
   useEffect(() => {
     console.log('🔄 Service items state changed:', serviceItems.map(item => ({
@@ -1997,10 +2232,85 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.planName = plan.planName
             updated.price = plan.price ?? 0
             updated.durationInDays = plan.durationInDays ?? 0
-            updated.total = updated.price * updated.quantity
+            const base = updated.price * updated.quantity
+            const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { total } = computeMembershipPlanLineTotal(base, {
+              membershipTaxRate: mRate,
+              enableTax: taxSettings?.enableTax !== false,
+              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+            })
+            updated.total = total
           }
         } else if (field === "quantity") {
-          updated.total = updated.price * updated.quantity
+          const base = updated.price * updated.quantity
+          const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const { total } = computeMembershipPlanLineTotal(base, {
+            membershipTaxRate: mRate,
+            enableTax: taxSettings?.enableTax !== false,
+            priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+          })
+          updated.total = total
+        }
+        return updated
+      })
+    )
+  }
+
+  const addPackageItem = () => {
+    if (packagesCatalog.length === 0) {
+      toast({
+        title: "No Packages Available",
+        description: "Create active packages under Packages, or check your connection.",
+        variant: "destructive",
+      })
+      return
+    }
+    const newItem: PackageItem = {
+      id: Date.now().toString(),
+      packageId: "",
+      packageName: "",
+      totalSittings: 0,
+      price: 0,
+      quantity: 1,
+      total: 0,
+      staffId: "",
+    }
+    setPackageItems([...packageItems, newItem])
+  }
+
+  const removePackageItem = (id: string) => {
+    setPackageItems((items) => items.filter((item) => item.id !== id))
+  }
+
+  const updatePackageItem = (id: string, field: keyof PackageItem, value: any) => {
+    setPackageItems((items) =>
+      items.map((item) => {
+        if (item.id !== id) return item
+        const updated = { ...item, [field]: value }
+        if (field === "packageId" && value) {
+          const pkg = packagesCatalog.find((p) => (p._id || p.id) === value)
+          if (pkg) {
+            updated.packageName = pkg.name || ""
+            updated.totalSittings = pkg.total_sittings ?? 0
+            updated.price = Number(pkg.total_price) || 0
+            const base = updated.price * updated.quantity
+            const pRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { total } = computePackageLineTotal(base, {
+              packageTaxRate: pRate,
+              enableTax: taxSettings?.enableTax !== false,
+              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+            })
+            updated.total = total
+          }
+        } else if (field === "quantity") {
+          const base = updated.price * updated.quantity
+          const pRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const { total } = computePackageLineTotal(base, {
+            packageTaxRate: pRate,
+            enableTax: taxSettings?.enableTax !== false,
+            priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+          })
+          updated.total = total
         }
         return updated
       })
@@ -2027,7 +2337,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               let isMembershipFree = false
               let membershipDiscountPercent = 0
 
-              if (membershipData?.plan && membershipData?.usageSummary) {
+              if (item.isPackageRedemption) {
+                updatedItem.price = basePrice
+                updatedItem.discount = 100
+                updatedItem.isMembershipFree = false
+                updatedItem.membershipDiscountPercent = 0
+                const baseAmount = updatedItem.price * updatedItem.quantity
+                const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+                const applyTax = isServiceTaxable(updatedItem)
+                const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
+                updatedItem.total = total
+              } else if (membershipData?.plan && membershipData?.usageSummary) {
                 const usage = membershipData.usageSummary.find((u: any) => String(u.serviceId || u.serviceId?._id) === String(value))
                 const plan = membershipData.plan
                 if (usage && usage.remaining > 0) {
@@ -2040,10 +2360,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 }
               }
 
-              updatedItem.price = basePrice
-              updatedItem.discount = discount
-              updatedItem.isMembershipFree = isMembershipFree
-              updatedItem.membershipDiscountPercent = membershipDiscountPercent
+              if (!item.isPackageRedemption) {
+                updatedItem.price = basePrice
+                updatedItem.discount = discount
+                updatedItem.isMembershipFree = isMembershipFree
+                updatedItem.membershipDiscountPercent = membershipDiscountPercent
+              }
             }
           }
 
@@ -2256,12 +2578,43 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     return sum + taxAmount
   }, 0) : 0
 
-  const totalTax = serviceTax + productTax
+  const membershipTax =
+    taxSettings?.enableTax !== false
+      ? membershipItems
+          .filter((m) => m.planId)
+          .reduce((sum, m) => {
+            const baseAmount = m.price * m.quantity
+            const membershipTaxRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, membershipTaxRate, membershipTaxRate > 0)
+            return sum + taxAmount
+          }, 0)
+      : 0
+
+  const packageTax =
+    taxSettings?.enableTax !== false
+      ? packageItems
+          .filter((p) => p.packageId)
+          .reduce((sum, p) => {
+            const baseAmount = p.price * p.quantity
+            const packageTaxRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, packageTaxRate > 0)
+            return sum + taxAmount
+          }, 0)
+      : 0
+
+  const totalTax = serviceTax + productTax + membershipTax + packageTax
   
   // Service Total (for billing display) = sum of (price × qty) for services only
   const billingServiceTotal = serviceItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
   // Product Total (for billing display) = sum of (price × qty) for products only
   const billingProductTotal = productItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  // Membership / Package list totals (price × qty before line tax), same basis as service & product rows
+  const billingMembershipTotal = membershipItems
+    .filter((m) => m.planId)
+    .reduce((sum, m) => sum + m.price * m.quantity, 0)
+  const billingPackageTotal = packageItems
+    .filter((p) => p.packageId)
+    .reduce((sum, p) => sum + p.price * p.quantity, 0)
   // Item Total = Service Total + Product Total (before discounts)
   const billingItemTotal = billingServiceTotal + billingProductTotal
   // Discounts = Manual + Global (both line-level and global discount)
@@ -2398,11 +2751,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     })
   }
 
-  // Base bill (services/products) total = subtotal + membership items
+  // Base bill (services/products) total = subtotal + membership items + package items
   // Note: When value/percentage discount is active, item.total already has the proportional discount baked in,
   // so we must NOT subtract globalDiscount again (that would double-apply the discount).
   const membershipTotal = membershipItems.reduce((sum, item) => sum + item.total, 0)
-  const baseTotal = subtotal + membershipTotal
+  const packageTotal = packageItems.reduce((sum, item) => sum + item.total, 0)
+  const baseTotal = subtotal + membershipTotal + packageTotal
   const baseRounded = Math.round(baseTotal)
   const roundOff = baseRounded - baseTotal
   // Amount payable by customer = baseRounded + tip (tip is separate, non-taxable)
@@ -2410,6 +2764,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const roundedTotal = grandTotal
   const totalPaid = cashAmount + cardAmount + onlineAmount
   const change = totalPaid - roundedTotal
+  const validServiceForCheckout = serviceItems.filter((item) => item.serviceId)
+  const allowZeroTotalCheckout =
+    pendingPackageRedemption != null && roundedTotal === 0 && validServiceForCheckout.length > 0
 
   // Generate receipt number with proper increment.
   // No fallback to cached number - if the API fails after retries, we surface the error
@@ -2494,18 +2851,40 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
     const validServiceItems = serviceItems.filter((item) => item.serviceId)
     const validProductItems = productItems.filter((item) => item.productId)
+    const validPackageItems = packageItems.filter((p) => p.packageId)
 
-    if (validServiceItems.length === 0 && validProductItems.length === 0 && membershipItems.filter((m) => m.planId).length === 0) {
+    if (
+      validServiceItems.length === 0 &&
+      validProductItems.length === 0 &&
+      membershipItems.filter((m) => m.planId).length === 0 &&
+      validPackageItems.length === 0
+    ) {
       toast({
         title: "No Items",
-        description: "Please add at least one service, product, or membership plan",
+        description: "Please add at least one service, product, membership plan, or package",
         variant: "destructive",
       })
       return
     }
 
-    // Validate that we have a valid total amount
-    if (roundedTotal <= 0) {
+    if (validPackageItems.length > 0) {
+      const cid = getCustomerId(selectedCustomer)
+      if (!isLikelyMongoObjectId(cid || undefined)) {
+        toast({
+          title: "Customer Required",
+          description: "Select an existing customer from search to sell packages on this bill.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
+    // Validate that we have a valid total amount (₹0 allowed for package redemption — prepaid)
+    const allowZeroForPackageRedeem =
+      pendingPackageRedemption != null &&
+      roundedTotal === 0 &&
+      validServiceItems.length > 0
+    if (roundedTotal <= 0 && !allowZeroForPackageRedeem) {
       toast({
         title: "Invalid Amount",
         description: "Total amount must be greater than 0",
@@ -2542,6 +2921,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       toast({
         title: "Staff Required",
         description: "Please select staff for all membership plans before checkout",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const packageWithoutStaff = validPackageItems.filter((p) => !p.staffId)
+    if (validPackageItems.length > 0 && packageWithoutStaff.length > 0) {
+      toast({
+        title: "Staff Required",
+        description: "Please select staff for all package lines before checkout",
         variant: "destructive",
       })
       return
@@ -2712,6 +3101,25 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             sgst: 0,
             totalWithTax: m.total,
           })),
+        ...packageItems
+          .filter((p) => p.packageId)
+          .map((p) => ({
+            id: p.id,
+            name: `${p.packageName} (${p.totalSittings} sittings)`,
+            type: "package" as const,
+            quantity: p.quantity,
+            price: p.price,
+            discount: 0,
+            discountType: "percentage" as const,
+            hsnSacCode: "",
+            staffId: p.staffId || staff[0]?._id || staff[0]?.id || "",
+            staffName: (p.staffId ? staff.find((s) => (s._id || s.id) === p.staffId)?.name : null) || staff[0]?.name || "Unassigned Staff",
+            total: p.total,
+            taxAmount: 0,
+            cgst: 0,
+            sgst: 0,
+            totalWithTax: p.total,
+          })),
       ]
 
       // Create payments array
@@ -2738,8 +3146,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       
       // Calculate tax breakdown from individual items (uses Inclusive/Excluded logic via computeLineTotalAndTax)
       let calculatedTax = 0
-      // Base bill amount (for sales/revenue) = subtotal + membership plan (discount already baked into item totals)
-      const baseTotalForSale = subtotal + membershipTotal
+      // Base bill amount (for sales/revenue) = subtotal + membership + packages (discount already baked into item totals)
+      const baseTotalForSale = subtotal + membershipTotal + packageTotal
       const roundedBaseTotalForSale = Math.round(baseTotalForSale)
       const roundOff = roundedBaseTotalForSale - baseTotalForSale
       // calculatedTotal = bill amount used for sales/grossTotal (EXCLUDES tip)
@@ -2779,12 +3187,40 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         return sum + taxAmount
       }, 0) : 0
 
-      calculatedTax = serviceTax + productTax
+      const membershipTaxCheckout =
+        (taxSettings?.enableTax !== false)
+          ? membershipItems
+              .filter((m) => m.planId)
+              .reduce((sum, m) => {
+                const baseAmount = m.price * m.quantity
+                const membershipTaxRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, membershipTaxRate, membershipTaxRate > 0)
+                return sum + taxAmount
+              }, 0)
+          : 0
+
+      const packageTaxCheckout =
+        (taxSettings?.enableTax !== false)
+          ? packageItems
+              .filter((p) => p.packageId)
+              .reduce((sum, p) => {
+                const baseAmount = p.price * p.quantity
+                const packageTaxRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, packageTaxRate > 0)
+                return sum + taxAmount
+              }, 0)
+          : 0
+
+      calculatedTax = serviceTax + productTax + membershipTaxCheckout + packageTaxCheckout
         taxBreakdown = {
           cgst: calculatedTax / 2,
           sgst: calculatedTax / 2,
           igst: 0,
           serviceTax: serviceTax,
+          membershipTax: membershipTaxCheckout,
+          membershipRate: taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5,
+          packageTax: packageTaxCheckout,
+          packageRate: taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5,
           serviceRate: taxSettings?.serviceTaxRate || 5,
           productTaxByRate
         } as any
@@ -2826,8 +3262,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
           item.taxRate = applyTax ? productTaxRate : 0
         } else if (item.type === 'membership') {
-          item.priceExcludingGST = (item.total || 0) / (item.quantity || 1)
-          item.taxRate = 0
+          const membershipTaxRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const applyTax = (taxSettings?.enableTax !== false) && membershipTaxRate > 0
+          const baseAmount = item.price * item.quantity
+          const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, membershipTaxRate, applyTax)
+          item.taxAmount = taxAmount
+          item.cgst = taxAmount / 2
+          item.sgst = taxAmount / 2
+          item.totalWithTax = item.total
+          item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
+          item.taxRate = applyTax ? membershipTaxRate : 0
+        } else if (item.type === 'package') {
+          const packageTaxRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const applyTax = (taxSettings?.enableTax !== false) && packageTaxRate > 0
+          const baseAmount = item.price * item.quantity
+          const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, applyTax)
+          item.taxAmount = taxAmount
+          item.cgst = taxAmount / 2
+          item.sgst = taxAmount / 2
+          item.totalWithTax = item.total
+          item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
+          item.taxRate = applyTax ? packageTaxRate : 0
         }
       })
       
@@ -2924,7 +3379,51 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 hsnSacCode: (product as any)?.hsnSacCode || '',
                 taxRate: (receiptItem as any)?.taxRate ?? 0
               }
-            })
+            }),
+            ...membershipItems
+              .filter((m) => m.planId)
+              .map((m) => {
+                const receiptItem = receiptItems.find((r) => r.id === m.id)
+                const itemTax = receiptItem?.taxAmount ?? 0
+                const staffMember = staff.find((s) => s._id === m.staffId || s.id === m.staffId)
+                return {
+                  serviceId: null,
+                  productId: null,
+                  name: `${m.planName} (${m.durationInDays} days)`,
+                  type: "membership" as const,
+                  quantity: m.quantity,
+                  price: m.price,
+                  priceExcludingGST: (m.total - itemTax) / (m.quantity || 1),
+                  total: m.total,
+                  discount: 0,
+                  staffId: m.staffId || "",
+                  staffName: staffMember?.name || staff[0]?.name || "",
+                  staffContributions: [],
+                  hsnSacCode: "",
+                  taxRate: (receiptItem as any)?.taxRate ?? 0,
+                }
+              }),
+            ...validPackageItems.map((p) => {
+              const receiptItem = receiptItems.find((r) => r.id === p.id)
+              const itemTax = receiptItem?.taxAmount ?? 0
+              const staffMember = staff.find((s) => s._id === p.staffId || s.id === p.staffId)
+              return {
+                serviceId: null,
+                productId: null,
+                name: `${p.packageName} (${p.totalSittings} sittings)`,
+                type: "package" as const,
+                quantity: p.quantity,
+                price: p.price,
+                priceExcludingGST: (p.total - itemTax) / (p.quantity || 1),
+                total: p.total,
+                discount: 0,
+                staffId: p.staffId || "",
+                staffName: staffMember?.name || staff[0]?.name || "",
+                staffContributions: [],
+                hsnSacCode: "",
+                taxRate: (receiptItem as any)?.taxRate ?? 0,
+              }
+            }),
           ],
           // Sale model required fields
           // Net Total = bill + tip (including tip); Gross Total = bill only (excluding tip)
@@ -2944,7 +3443,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             remainingAmount: calculatedTotal + tip - totalPaid,
             dueDate: new Date()
           },
-          status: totalPaid === 0 ? 'unpaid' : (totalPaid < calculatedTotal + tip ? 'partial' : 'completed'),
+          status:
+            calculatedTotal + tip <= 0
+              ? 'completed'
+              : totalPaid === 0
+                ? 'unpaid'
+                : totalPaid < calculatedTotal + tip
+                  ? 'partial'
+                  : 'completed',
           paymentMode: payments.map(p => {
             const capitalized = p.type.charAt(0).toUpperCase() + p.type.slice(1);
             return capitalized;
@@ -3105,6 +3611,81 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             // Refresh calendar so new walk-in cards (multi-staff services) appear - for both linked and standalone sales
             if (typeof window !== "undefined" && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
               window.dispatchEvent(new CustomEvent("appointments-refresh"))
+            }
+
+            // Activate client packages (separate from Sale.items — backend package sell API)
+            if (mode === "create" && validPackageItems.length > 0) {
+              const clientOid = getCustomerId(selectedCustomer)
+              if (isLikelyMongoObjectId(clientOid || undefined)) {
+                const paidForBill = Math.min(totalPaid, calculatedTotal)
+                try {
+                  for (const row of validPackageItems) {
+                    const qty = Math.max(1, Math.floor(row.quantity || 1))
+                    const unitTotal = qty > 0 ? row.total / qty : row.total
+                    for (let q = 0; q < qty; q++) {
+                      const ap =
+                        calculatedTotal > 0 ? (unitTotal / calculatedTotal) * paidForBill : 0
+                      const res = await PackagesAPI.sell(row.packageId, {
+                        client_id: clientOid!,
+                        amount_paid: Math.round(ap * 100) / 100,
+                        ...(row.staffId ? { sold_by_staff_id: String(row.staffId) } : {}),
+                      })
+                      if (!res.success) {
+                        toast({
+                          title: "Package not activated",
+                          description: res.message || "Check Packages or the client profile to complete the sale.",
+                          variant: "destructive",
+                        })
+                      }
+                    }
+                  }
+                } catch (pkgErr) {
+                  console.error("[QuickSale] Package sell after bill:", pkgErr)
+                  toast({
+                    title: "Package activation error",
+                    description: "The bill was saved. You can sell the package from the client’s Packages tab if needed.",
+                    variant: "destructive",
+                  })
+                }
+              }
+            }
+
+            // Redeem package sitting (opened from client panel → Quick Sale with ₹0 package lines)
+            if (mode === "create" && pendingPackageRedemption) {
+              const pr = pendingPackageRedemption
+              const idSet = new Set(validServiceItems.map((i) => String(i.serviceId)))
+              const allPresent = pr.serviceIds.every((sid) => idSet.has(String(sid)))
+              if (!allPresent) {
+                toast({
+                  title: "Package not redeemed",
+                  description:
+                    "Bill was saved. Keep all package services on the bill, or redeem from the client profile.",
+                  variant: "destructive",
+                })
+              } else {
+                try {
+                  const r = await PackagesAPI.redeem(pr.clientPackageId, {
+                    services: pr.serviceIds.map((service_id) => ({ service_id })),
+                  })
+                  if (r.success) {
+                    toast({ title: "Package sitting redeemed" })
+                  } else {
+                    toast({
+                      title: "Bill saved — redemption failed",
+                      description: r.message || "Complete redemption from the client’s Packages tab.",
+                      variant: "destructive",
+                    })
+                  }
+                } catch (redeemErr) {
+                  console.error("[QuickSale] Package redeem after bill:", redeemErr)
+                  toast({
+                    title: "Bill saved — redemption failed",
+                    description: "Complete redemption from the client’s Packages tab.",
+                    variant: "destructive",
+                  })
+                }
+              }
+              setPendingPackageRedemption(null)
             }
             
             // Now that backend sale is successful, create and store the receipt locally
@@ -3284,7 +3865,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setShowEditReasonModal(false)
     setTempEditReason("")
     setMembershipItems([])
+    setPackageItems([])
     setAddItemSection(null)
+    setPendingPackageRedemption(null)
   }
 
   // Tip modal handlers
@@ -3831,6 +4414,25 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             </div>
           ) : (
           <>
+          {catalogLoadError && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/95 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex gap-2 text-amber-900 text-sm">
+                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                <span>
+                  Services or staff list did not load (connection may have dropped after idle). Retry to refresh catalogs.
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0 border-amber-300"
+                onClick={() => setCatalogRetryKey((k) => k + 1)}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
           {/* Header */}
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-2">
@@ -4464,7 +5066,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                               setActiveProductDropdown(null)
                                             }}
                                           >
-                                            <Package className="h-4 w-4 text-slate-400 shrink-0" />
+                                            <PackageIcon className="h-4 w-4 text-slate-400 shrink-0" />
                                             <span className="flex-1 min-w-0">
                                               <span className="font-medium text-slate-800 truncate block">{product.name}</span>
                                               <span className="text-xs text-slate-500">Stock: {product.stock ?? 0}</span>
@@ -4608,20 +5210,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
           {/* Add Items Section */}
           <div className="space-y-4">
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={addItemSection === 'membership' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => {
-                  const next = addItemSection === 'membership' ? null : 'membership'
-                  setAddItemSection(next)
-                  if (next === 'membership' && membershipItems.length === 0 && selectedCustomer && !membershipData?.subscription && plans.length > 0) {
-                    addMembershipItem()
-                  }
-                }}
-              >
+            <div className="flex gap-2 flex-wrap">
+              <Button type="button" variant="outline" size="sm" onClick={() => addMembershipItem()}>
                 Add Membership
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => addPackageItem()}>
+                Add Package
               </Button>
               <Button
                 type="button"
@@ -4640,8 +5234,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 Add Prepaid Plans
               </Button>
             </div>
-            <div className="mt-4">
-              {addItemSection === 'membership' && (
+            <div className="mt-4 space-y-6">
+              {membershipItems.length > 0 && (
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
                     {selectedCustomer
@@ -4650,93 +5244,191 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         : "Add a membership plan to assign on checkout."
                       : "Select a customer above to add membership."}
                   </p>
-                  {membershipItems.length > 0 && (
-                    <div className="border border-gray-200 rounded-xl shadow-sm bg-white">
-                      <div className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-indigo-50 to-purple-50 font-semibold text-sm text-gray-700 border-b">
-                        <div>Plan *</div>
-                        <div>Staff *</div>
-                        <div>Qty</div>
-                        <div>Price (₹)</div>
-                        <div>Total (₹)</div>
-                        <div></div>
-                      </div>
-                      {membershipItems.map((item) => (
-                        <div
-                          key={item.id}
-                          className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-indigo-50/30 transition-all duration-200"
+                  <div className="border border-gray-200 rounded-xl shadow-sm bg-white">
+                    <div className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-indigo-50 to-purple-50 font-semibold text-sm text-gray-700 border-b">
+                      <div>Plan *</div>
+                      <div>Staff *</div>
+                      <div>Qty</div>
+                      <div>Price (₹)</div>
+                      <div>Total (₹)</div>
+                      <div></div>
+                    </div>
+                    {membershipItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-indigo-50/30 transition-all duration-200"
+                      >
+                        <Select
+                          value={item.planId || "__none__"}
+                          onValueChange={(v) => updateMembershipItem(item.id, "planId", v === "__none__" ? "" : v)}
                         >
-                          <Select
-                            value={item.planId || "__none__"}
-                            onValueChange={(v) => updateMembershipItem(item.id, "planId", v === "__none__" ? "" : v)}
-                          >
-                            <SelectTrigger className="h-8">
-                              <SelectValue placeholder="Select plan" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">Select plan</SelectItem>
-                              {plans.map((p) => (
-                                <SelectItem key={p._id} value={p._id}>
-                                  {p.planName} — ₹{Number(p.price || 0).toFixed(2)} ({p.durationInDays} days)
+                          <SelectTrigger className="h-8">
+                            <SelectValue placeholder="Select plan" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">Select plan</SelectItem>
+                            {plans.map((p) => (
+                              <SelectItem key={p._id} value={p._id}>
+                                {p.planName} — ₹{Number(p.price || 0).toFixed(2)} ({p.durationInDays} days)
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Select
+                          value={item.staffId || "__none__"}
+                          onValueChange={(v) => updateMembershipItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                        >
+                          <SelectTrigger className="h-8">
+                            <SelectValue placeholder="Select staff" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">Select staff</SelectItem>
+                            {getAvailableStaffList(15, item.staffId ? [item.staffId] : undefined).map((member) => {
+                              const staffId = member._id || member.id
+                              return (
+                                <SelectItem key={staffId} value={staffId}>
+                                  {member.name}
                                 </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Select
-                            value={item.staffId || "__none__"}
-                            onValueChange={(v) => updateMembershipItem(item.id, "staffId", v === "__none__" ? "" : v)}
-                          >
-                            <SelectTrigger className="h-8">
-                              <SelectValue placeholder="Select staff" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">Select staff</SelectItem>
-                              {getAvailableStaffList(15, item.staffId ? [item.staffId] : undefined).map((member) => {
-                                const staffId = member._id || member.id
-                                return (
-                                  <SelectItem key={staffId} value={staffId}>
-                                    {member.name}
-                                  </SelectItem>
-                                )
-                              })}
-                            </SelectContent>
-                          </Select>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-8 w-8 p-0"
-                              onClick={() => updateMembershipItem(item.id, "quantity", Math.max(1, item.quantity - 1))}
-                            >
-                              <Minus className="h-3 w-3" />
-                            </Button>
-                            <div className="w-8 text-center text-sm font-medium">{item.quantity}</div>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-8 w-8 p-0"
-                              onClick={() => updateMembershipItem(item.id, "quantity", item.quantity + 1)}
-                            >
-                              <Plus className="h-3 w-3" />
-                            </Button>
-                          </div>
-                          <Input
-                            type="number"
-                            value={item.price}
-                            readOnly
-                            className="h-8 bg-muted"
-                          />
-                          <div className="text-sm font-medium">₹{getDisplayTotal(item).toFixed(2)}</div>
+                              )
+                            })}
+                          </SelectContent>
+                        </Select>
+                        <div className="flex items-center gap-1">
                           <Button
-                            variant="ghost"
+                            variant="outline"
                             size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={() => removeMembershipItem(item.id)}
+                            className="h-8 w-8 p-0"
+                            onClick={() => updateMembershipItem(item.id, "quantity", Math.max(1, item.quantity - 1))}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Minus className="h-3 w-3" />
+                          </Button>
+                          <div className="w-8 text-center text-sm font-medium">{item.quantity}</div>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 p-0"
+                            onClick={() => updateMembershipItem(item.id, "quantity", item.quantity + 1)}
+                          >
+                            <Plus className="h-3 w-3" />
                           </Button>
                         </div>
-                      ))}
+                        <Input
+                          type="number"
+                          value={item.price}
+                          readOnly
+                          className="h-8 bg-muted"
+                        />
+                        <div className="text-sm font-medium">₹{item.total.toFixed(2)}</div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeMembershipItem(item.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  {plans.length > 0 && (
+                    <Button type="button" variant="outline" size="sm" onClick={addMembershipItem}>
+                      Add another membership
+                    </Button>
+                  )}
+                </div>
+              )}
+              {packageItems.length > 0 && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    {selectedCustomer && isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined)
+                      ? "Package price is added to this bill; the client’s package is activated when checkout completes."
+                      : "Select an existing customer from search to sell packages on this bill."}
+                  </p>
+                  <div className="border border-gray-200 rounded-xl shadow-sm bg-white">
+                    <div className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-cyan-50 to-sky-50 font-semibold text-sm text-gray-700 border-b">
+                      <div>Package *</div>
+                      <div>Staff *</div>
+                      <div>Qty</div>
+                      <div>Price (₹)</div>
+                      <div>Total (₹)</div>
+                      <div></div>
                     </div>
+                    {packageItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-cyan-50/30 transition-all duration-200"
+                      >
+                        <Select
+                          value={item.packageId || "__none__"}
+                          onValueChange={(v) => updatePackageItem(item.id, "packageId", v === "__none__" ? "" : v)}
+                        >
+                          <SelectTrigger className="h-8">
+                            <SelectValue placeholder="Select package" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">Select package</SelectItem>
+                            {packagesCatalog.map((p) => (
+                              <SelectItem key={p._id} value={p._id}>
+                                {p.name} — ₹{Number(p.total_price || 0).toFixed(2)} ({p.total_sittings} sittings)
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Select
+                          value={item.staffId || "__none__"}
+                          onValueChange={(v) => updatePackageItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                        >
+                          <SelectTrigger className="h-8">
+                            <SelectValue placeholder="Select staff" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">Select staff</SelectItem>
+                            {getAvailableStaffList(15, item.staffId ? [item.staffId] : undefined).map((member) => {
+                              const staffId = member._id || member.id
+                              return (
+                                <SelectItem key={staffId} value={staffId}>
+                                  {member.name}
+                                </SelectItem>
+                              )
+                            })}
+                          </SelectContent>
+                        </Select>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 p-0"
+                            onClick={() => updatePackageItem(item.id, "quantity", Math.max(1, item.quantity - 1))}
+                          >
+                            <Minus className="h-3 w-3" />
+                          </Button>
+                          <div className="w-8 text-center text-sm font-medium">{item.quantity}</div>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 p-0"
+                            onClick={() => updatePackageItem(item.id, "quantity", item.quantity + 1)}
+                          >
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <Input type="number" value={item.price} readOnly className="h-8 bg-muted" />
+                        <div className="text-sm font-medium">₹{getDisplayTotal(item).toFixed(2)}</div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => removePackageItem(item.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  {packagesCatalog.length > 0 && (
+                    <Button type="button" variant="outline" size="sm" onClick={addPackageItem}>
+                      Add another package
+                    </Button>
                   )}
                 </div>
               )}
@@ -4829,6 +5521,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 <div className="flex justify-between items-center py-1">
                   <span className="text-sm text-gray-600">Product Total</span>
                   <span className="text-sm font-medium text-gray-900">{formatCurrency(billingProductTotal)}</span>
+                </div>
+              )}
+
+              {membershipItems.some((m) => m.planId) && (
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-sm text-gray-600">Membership Total</span>
+                  <span className="text-sm font-medium text-gray-900">{formatCurrency(billingMembershipTotal)}</span>
+                </div>
+              )}
+
+              {packageItems.some((p) => p.packageId) && (
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-sm text-gray-600">Package Total</span>
+                  <span className="text-sm font-medium text-gray-900">{formatCurrency(billingPackageTotal)}</span>
                 </div>
               )}
 
@@ -5105,7 +5811,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   return
                 }
                 
-                if (roundedTotal <= 0) {
+                if (roundedTotal <= 0 && !allowZeroTotalCheckout) {
                   toast({
                     title: "Invalid Amount",
                     description: "Total amount must be greater than 0",
@@ -5129,7 +5835,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   handleCheckout()
                 }
               }} 
-              disabled={isProcessing || roundedTotal <= 0} 
+              disabled={isProcessing || (roundedTotal <= 0 && !allowZeroTotalCheckout)} 
               className="flex-1 h-10 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isProcessing ? (
@@ -5140,7 +5846,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               ) : (
                 <>
                   <Receipt className="h-4 w-4 mr-2" />
-                  {mode === "edit" ? "Save Changes" : mode === "exchange" ? "Complete Exchange" : `Checkout - ${formatCurrency(roundedTotal)}`}
+                  {mode === "edit" ? "Save Changes" : mode === "exchange" ? "Complete Exchange" : allowZeroTotalCheckout ? `Complete — ${formatCurrency(roundedTotal)}` : `Checkout - ${formatCurrency(roundedTotal)}`}
                 </>
               )}
             </Button>

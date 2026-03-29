@@ -19,6 +19,10 @@ import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfile
 import { CommissionProfileCalculator, StaffCommissionResult } from "@/lib/commission-profile-calculator"
 import { CommissionProfile } from "@/lib/commission-profile-types"
 import { splitLineRevenueByStaff } from "@/lib/staff-line-revenue"
+import {
+  type DatePeriod,
+  getPerformanceFilterBounds,
+} from "@/lib/staff-performance-period"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
 
@@ -47,8 +51,12 @@ interface StaffPerformanceData {
   totalRevenue: number
   serviceRevenue: number
   productRevenue: number
+  membershipRevenue: number
+  packageRevenue: number
   serviceCount: number
   productCount: number
+  membershipCount: number
+  packageCount: number
   totalTransactions: number
   serviceCommission: number
   productCommission: number
@@ -86,8 +94,6 @@ interface SalesRecord {
   }>
 }
 
-type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "previousMonth" | "all" | "customRange"
-
 // Utility function to format currency
 const formatCurrency = (amount: number, symbol: string) => {
   return `${symbol}${amount.toFixed(2)}`
@@ -112,6 +118,8 @@ function applySaleToStaffPerformanceMaps(
   performanceMap: Map<string, StaffPerformanceData>,
   staffServiceRevenue: Map<string, number>,
   staffProductRevenue: Map<string, number>,
+  staffMembershipRevenue: Map<string, number>,
+  staffPackageRevenue: Map<string, number>,
   staffCustomers: Map<string, Set<string>>,
   customerStaffMap: Map<string, Set<string>>
 ) {
@@ -128,6 +136,8 @@ function applySaleToStaffPerformanceMaps(
     const n = Math.max(1, splits.length)
     const customerId = sale.customerId || sale.customerName
 
+    const lineType = String(item.type || "").toLowerCase()
+
     for (const { staffId, revenue } of splits) {
       if (!staffId || revenue <= 0) continue
       const staffData = performanceMap.get(staffId)
@@ -141,14 +151,22 @@ function applySaleToStaffPerformanceMaps(
         }
       }
 
-      if (item.type === "service") {
+      if (lineType === "service") {
         staffData.serviceCount += qty / n
         staffData.totalRevenue += revenue
         staffServiceRevenue.set(staffId, (staffServiceRevenue.get(staffId) || 0) + revenue)
-      } else if (item.type === "product") {
+      } else if (lineType === "product") {
         staffData.productCount += qty / n
         staffData.totalRevenue += revenue
         staffProductRevenue.set(staffId, (staffProductRevenue.get(staffId) || 0) + revenue)
+      } else if (lineType === "membership") {
+        staffData.membershipCount += qty / n
+        staffData.totalRevenue += revenue
+        staffMembershipRevenue.set(staffId, (staffMembershipRevenue.get(staffId) || 0) + revenue)
+      } else if (lineType === "package") {
+        staffData.packageCount += qty / n
+        staffData.totalRevenue += revenue
+        staffPackageRevenue.set(staffId, (staffPackageRevenue.get(staffId) || 0) + revenue)
       }
 
       if (customerId) {
@@ -242,65 +260,7 @@ export function StaffPerformanceReport() {
     const loadPerformanceData = async () => {
       setIsLoading(true)
       try {
-        // Calculate date range based on period
-        const now = new Date()
-        let startDate: Date
-        let endDate: Date = now
-
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-        switch (datePeriod) {
-          case "today":
-            startDate = new Date(today)
-            endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
-            break
-          case "yesterday": {
-            const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
-            startDate = yesterday
-            endDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1)
-            break
-          }
-          case "last7days":
-            startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
-            endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
-            break
-          case "last30days":
-            startDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
-            endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
-            break
-          case "currentMonth":
-            startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-            endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0) // Last day of current month
-            break
-          case "previousMonth":
-            startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-            endDate = new Date(now.getFullYear(), now.getMonth(), 0) // Last day of previous month
-            break
-          case "all":
-            startDate = new Date(0) // Beginning of time
-            endDate = new Date()
-            break
-          case "customRange":
-            // Use custom date range if set, otherwise default to current month
-            if (dateRange?.from && dateRange?.to) {
-              startDate = new Date(dateRange.from)
-              startDate.setHours(0, 0, 0, 0)
-              endDate = new Date(dateRange.to)
-              endDate.setHours(23, 59, 59, 999)
-            } else if (dateRange?.from) {
-              startDate = new Date(dateRange.from)
-              startDate.setHours(0, 0, 0, 0)
-              endDate = new Date(dateRange.from)
-              endDate.setHours(23, 59, 59, 999)
-            } else {
-              startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-              endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-            }
-            break
-          default: // fallback to current month
-            startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-            endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-        }
-
+        const { startDate, endDate } = getPerformanceFilterBounds(datePeriod, dateRange)
 
         // Paged fetch avoids one huge response; N sequential calls for large DBs. Long-term: server aggregates by staff/range.
         const allSales = await SalesAPI.getAllMergePages({ batchSize: 500 })
@@ -344,8 +304,12 @@ export function StaffPerformanceReport() {
               totalRevenue: 0,
               serviceRevenue: 0,
               productRevenue: 0,
+              membershipRevenue: 0,
+              packageRevenue: 0,
               serviceCount: 0,
               productCount: 0,
+              membershipCount: 0,
+              packageCount: 0,
               totalTransactions: 0,
               serviceCommission: 0,
               productCommission: 0,
@@ -364,6 +328,8 @@ export function StaffPerformanceReport() {
           const staffCustomers = new Map<string, Set<string>>() // staff -> customer set
           const staffServiceRevenue = new Map<string, number>() // staff -> service revenue
           const staffProductRevenue = new Map<string, number>() // staff -> product revenue
+          const staffMembershipRevenue = new Map<string, number>()
+          const staffPackageRevenue = new Map<string, number>()
 
           filteredSales.forEach((sale: any) => {
             applySaleToStaffPerformanceMaps(
@@ -371,6 +337,8 @@ export function StaffPerformanceReport() {
               performanceMap,
               staffServiceRevenue,
               staffProductRevenue,
+              staffMembershipRevenue,
+              staffPackageRevenue,
               staffCustomers,
               customerStaffMap
             )
@@ -399,12 +367,16 @@ export function StaffPerformanceReport() {
               (data.customerCount * 5) + // Customer component
               (data.repeatCustomers * 10) + // Repeat customer component
               (data.serviceCount * 0.5) + // Service component
-              (data.productCount * 0.3) // Product component
+              (data.productCount * 0.3) + // Product component
+              (data.membershipCount * 0.4) +
+              (data.packageCount * 0.4)
             )
 
-            // Set service and product revenue
+            // Set revenue by line type
             data.serviceRevenue = staffServiceRevenue.get(staffId) || 0
             data.productRevenue = staffProductRevenue.get(staffId) || 0
+            data.membershipRevenue = staffMembershipRevenue.get(staffId) || 0
+            data.packageRevenue = staffPackageRevenue.get(staffId) || 0
 
             // Calculate commission using commission profiles
             const staff = staffMembers.find(s => (s._id || s.id) === staffId)
@@ -477,8 +449,12 @@ export function StaffPerformanceReport() {
                 totalRevenue: 0,
                 serviceRevenue: 0,
                 productRevenue: 0,
+                membershipRevenue: 0,
+                packageRevenue: 0,
                 serviceCount: 0,
                 productCount: 0,
+                membershipCount: 0,
+                packageCount: 0,
                 totalTransactions: 0,
                 serviceCommission: 0,
                 productCommission: 0,
@@ -497,6 +473,8 @@ export function StaffPerformanceReport() {
             const prevCustomerStaffMap = new Map<string, Set<string>>()
             const prevStaffServiceRevenue = new Map<string, number>()
             const prevStaffProductRevenue = new Map<string, number>()
+            const prevStaffMembershipRevenue = new Map<string, number>()
+            const prevStaffPackageRevenue = new Map<string, number>()
 
             previousMonthSales.forEach((sale: any) => {
               applySaleToStaffPerformanceMaps(
@@ -504,6 +482,8 @@ export function StaffPerformanceReport() {
                 prevPerformanceMap,
                 prevStaffServiceRevenue,
                 prevStaffProductRevenue,
+                prevStaffMembershipRevenue,
+                prevStaffPackageRevenue,
                 prevStaffCustomers,
                 prevCustomerStaffMap
               )
@@ -529,11 +509,15 @@ export function StaffPerformanceReport() {
                 (data.customerCount * 5) +
                 (data.repeatCustomers * 10) +
                 (data.serviceCount * 0.5) +
-                (data.productCount * 0.3)
+                (data.productCount * 0.3) +
+                (data.membershipCount * 0.4) +
+                (data.packageCount * 0.4)
               )
 
               data.serviceRevenue = prevStaffServiceRevenue.get(staffId) || 0
               data.productRevenue = prevStaffProductRevenue.get(staffId) || 0
+              data.membershipRevenue = prevStaffMembershipRevenue.get(staffId) || 0
+              data.packageRevenue = prevStaffPackageRevenue.get(staffId) || 0
             })
 
             previousMonthPerformance = Array.from(prevPerformanceMap.values())
@@ -715,27 +699,6 @@ export function StaffPerformanceReport() {
         variant: "destructive"
       })
     }
-  }
-
-  // Effective date range for drawer (derived from report filters)
-  const getEffectiveDrawerDateRange = (): DateRange | undefined => {
-    const now = new Date()
-    if (datePeriod === "customRange" && dateRange?.from && dateRange?.to) {
-      return dateRange
-    }
-    if (datePeriod === "currentMonth") {
-      return {
-        from: new Date(now.getFullYear(), now.getMonth(), 1),
-        to: new Date(now.getFullYear(), now.getMonth() + 1, 0)
-      }
-    }
-    if (datePeriod === "previousMonth") {
-      return {
-        from: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-        to: new Date(now.getFullYear(), now.getMonth(), 0)
-      }
-    }
-    return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0) }
   }
 
   const openStaffDetailDrawer = (staffId: string, staffName: string) => {
@@ -972,6 +935,8 @@ export function StaffPerformanceReport() {
                 <TableHead className="font-semibold text-slate-800 text-right">Total Revenue</TableHead>
                 <TableHead className="font-semibold text-slate-800 text-right">Service Revenue</TableHead>
                 <TableHead className="font-semibold text-slate-800 text-right">Product Revenue</TableHead>
+                <TableHead className="font-semibold text-slate-800 text-right">Membership Revenue</TableHead>
+                <TableHead className="font-semibold text-slate-800 text-right">Package Revenue</TableHead>
                 <TableHead className="font-semibold text-slate-800">Transactions</TableHead>
                 <TableHead className="font-semibold text-slate-800">Services</TableHead>
                 <TableHead className="font-semibold text-slate-800">Products</TableHead>
@@ -986,7 +951,7 @@ export function StaffPerformanceReport() {
             <TableBody>
               {filteredPerformanceData.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={13} className="text-center py-12 text-slate-500">
+                  <TableCell colSpan={15} className="text-center py-12 text-slate-500">
                     No staff performance data found for the selected filters.
                   </TableCell>
                 </TableRow>
@@ -1010,6 +975,12 @@ export function StaffPerformanceReport() {
                     </TableCell>
                     <TableCell className="text-purple-600 font-medium text-right">
                       {formatCurrency(data.productRevenue, currencySymbol)}
+                    </TableCell>
+                    <TableCell className="text-teal-700 font-medium text-right">
+                      {formatCurrency(data.membershipRevenue, currencySymbol)}
+                    </TableCell>
+                    <TableCell className="text-indigo-700 font-medium text-right">
+                      {formatCurrency(data.packageRevenue, currencySymbol)}
                     </TableCell>
                     <TableCell className="text-center">
                       <Badge variant="outline" className="font-medium">
@@ -1157,7 +1128,8 @@ export function StaffPerformanceReport() {
         staffId={drawerStaffId ?? ""}
         staffName={drawerStaffName}
         staffRole={drawerStaffRole}
-        dateRange={getEffectiveDrawerDateRange()}
+        datePeriod={datePeriod}
+        parentCustomDateRange={dateRange}
         currencySymbol={currencySymbol}
       />
     </div>

@@ -1578,6 +1578,8 @@ async function exportStaffPerformanceReport({ branchId, format = 'xlsx', filters
         'Total Revenue': r.totalRevenue,
         'Service Revenue': r.serviceRevenue,
         'Product Revenue': r.productRevenue,
+        'Membership Revenue': r.membershipRevenue,
+        'Package Revenue': r.packageRevenue,
         'Total Transactions': r.totalTransactions,
         'Service Count': r.serviceCount,
         'Product Count': r.productCount,
@@ -1619,12 +1621,14 @@ async function exportStaffPerformanceReport({ branchId, format = 'xlsx', filters
       y += 16;
       doc.text(`Average Performance Score: ${avgScore.toFixed(1)}`, 50, y);
       y += 24;
-      const headers = ['Staff', 'Total Revenue', 'Service Rev', 'Product Rev', 'Txns', 'Services', 'Products', 'Commission', 'Customers', 'Score'];
+      const headers = ['Staff', 'Total Rev', 'Svc Rev', 'Prod Rev', 'Mem Rev', 'Pkg Rev', 'Txns', 'Svc', 'Prod', 'Comm', 'Cust', 'Score'];
       const tableRows = data.map((r) => [
         r.staffName || '—',
         fmt(r.totalRevenue),
         fmt(r.serviceRevenue),
         fmt(r.productRevenue),
+        fmt(r.membershipRevenue),
+        fmt(r.packageRevenue),
         String(r.totalTransactions ?? 0),
         String(r.serviceCount ?? 0),
         String(r.productCount ?? 0),
@@ -1632,7 +1636,7 @@ async function exportStaffPerformanceReport({ branchId, format = 'xlsx', filters
         String(r.customerCount ?? 0),
         (r.performanceScore != null ? r.performanceScore.toFixed(1) : '—')
       ]);
-      const colWidths = [50, 42, 38, 38, 28, 32, 32, 42, 32, 28];
+      const colWidths = [44, 36, 32, 32, 32, 32, 24, 22, 22, 36, 26, 24];
       y = addTable(doc, y, headers, tableRows, { colWidths });
       doc.end();
       await new Promise((resolve) => { doc.on('end', resolve); });
