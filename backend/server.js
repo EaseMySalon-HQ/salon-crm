@@ -491,33 +491,26 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
       });
     }
 
+    let ownerBusiness = null;
     // If user is a business owner, check business status
     if (user.branchId) {
       const databaseManager = require('./config/database-manager');
       const mainConnection = await databaseManager.getMainConnection();
       const Business = mainConnection.model('Business', require('./models/Business').schema);
-      
-      // Find the business owned by this user
-      const business = await Business.findOne({ owner: user._id });
-      
-      if (!business) {
+
+      ownerBusiness = await Business.findOne({ owner: user._id });
+
+      if (!ownerBusiness) {
         return res.status(403).json({
           success: false,
           error: 'Business not found for this user'
         });
       }
-      
-      // Check if business is suspended
-      if (business.status === 'suspended') {
-        return res.status(403).json({
-          success: false,
-          error: 'ACCOUNT_SUSPENDED',
-          message: 'Your account has been suspended. Please contact your host for assistance.'
-        });
-      }
-      
+
+      // Suspended businesses may sign in; tenant APIs are blocked in auth middleware (except auth routes)
+
       // Reactivate inactive businesses (but not suspended ones)
-      if (business.status === 'inactive') {
+      if (ownerBusiness.status === 'inactive') {
         await Business.updateMany(
           { owner: user._id, status: 'inactive' },
           { status: 'active', updatedAt: new Date() }
@@ -535,10 +528,23 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
     const token = generateToken(user);
     const { password: _, ...userWithoutPassword } = user.toObject();
 
+    const nextBill =
+      ownerBusiness?.plan?.renewalDate || ownerBusiness?.plan?.trialEndsAt || null;
+    const suspensionMeta =
+      user.branchId && ownerBusiness
+        ? {
+            businessSuspended: ownerBusiness.status === 'suspended',
+            nextBillingDate: nextBill ? new Date(nextBill).toISOString() : null,
+            suspensionSupportEmail:
+              process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
+            suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
+          }
+        : {};
+
     res.json({
       success: true,
       data: {
-        user: userWithoutPassword,
+        user: { ...userWithoutPassword, ...suspensionMeta },
         token
       }
     });
@@ -634,6 +640,16 @@ app.post('/api/auth/staff-login', async (req, res) => {
       staffPermissions = roleDefinitions[staff.role]?.permissions || [];
     }
 
+    const staffNextBill =
+      business.plan?.renewalDate || business.plan?.trialEndsAt || null;
+    const staffSuspensionMeta = {
+      businessSuspended: business.status === 'suspended',
+      nextBillingDate: staffNextBill ? new Date(staffNextBill).toISOString() : null,
+      suspensionSupportEmail:
+        process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
+      suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
+    };
+
     res.json({
       success: true,
       data: {
@@ -655,7 +671,8 @@ app.post('/api/auth/staff-login', async (req, res) => {
           commissionProfileIds: staff.commissionProfileIds,
           notes: staff.notes,
           createdAt: staff.createdAt,
-          updatedAt: staff.updatedAt
+          updatedAt: staff.updatedAt,
+          ...staffSuspensionMeta,
         },
         token
       }
@@ -711,16 +728,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
 
     const userDoc = await UserModel.findById(decoded.id).select('-password');
     if (userDoc) {
-      if (userDoc.branchId) {
-        const business = await BusinessModel.findOne({ owner: userDoc._id });
-        if (business?.status === 'suspended') {
-          return res.status(403).json({
-            success: false,
-            error: 'ACCOUNT_SUSPENDED',
-            message: 'Your account has been suspended. Please contact your host for assistance.'
-          });
-        }
-      }
+      // Suspended tenants may refresh tokens; auth middleware blocks non-auth APIs
       const payload = {
         id: userDoc._id,
         email: userDoc.email,
@@ -800,7 +808,12 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           notes: req.user.notes,
           createdAt: req.user.createdAt,
           updatedAt: req.user.updatedAt,
-          ...(req.user.isImpersonation && { isImpersonation: true, impersonatedBy: req.user.impersonatedBy })
+          ...(req.user.isImpersonation && { isImpersonation: true, impersonatedBy: req.user.impersonatedBy }),
+          businessSuspended: !!req.businessSuspended,
+          nextBillingDate: req.businessNextBillingDate ?? null,
+          suspensionSupportEmail:
+            process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
+          suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
         }
       });
     } else {
@@ -3531,12 +3544,40 @@ app.get('/api/membership/plans', authenticateToken, setupBusinessDatabase, requi
 app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { MembershipSubscription, Client, MembershipPlan } = req.businessModels;
-    const { planId, search, status = 'ACTIVE' } = req.query;
+    const { planId, search, status = 'ACTIVE', dateFrom, dateTo } = req.query;
     const branchId = req.user.branchId;
 
     const query = { branchId };
-    if (status) query.status = status;
     if (planId && mongoose.Types.ObjectId.isValid(planId)) query.planId = new mongoose.Types.ObjectId(planId);
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Status: ALL | ACTIVE (valid) | EXPIRED (incl. ACTIVE but past expiry) | CANCELLED
+    const statusUpper = String(status || 'ACTIVE').toUpperCase();
+    if (statusUpper === 'ALL') {
+      // no status / expiry constraint
+    } else if (statusUpper === 'ACTIVE') {
+      query.status = 'ACTIVE';
+      query.expiryDate = { $gte: today };
+    } else if (statusUpper === 'EXPIRED') {
+      query.$or = [
+        { status: 'EXPIRED' },
+        { status: 'ACTIVE', expiryDate: { $lt: today } },
+      ];
+    } else if (statusUpper === 'CANCELLED') {
+      query.status = 'CANCELLED';
+    } else {
+      query.status = statusUpper;
+    }
+
+    if (dateFrom && dateTo) {
+      const from = new Date(String(dateFrom));
+      const to = new Date(String(dateTo));
+      if (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())) {
+        query.startDate = { $gte: from, $lte: to };
+      }
+    }
 
     let subs = await MembershipSubscription.find(query)
       .populate('customerId', 'name phone email')
@@ -3744,10 +3785,13 @@ app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, 
       return res.status(404).json({ success: false, error: 'Customer not found' });
     }
 
+    const todaySubscribe = new Date();
+    todaySubscribe.setHours(0, 0, 0, 0);
     const existingActive = await MembershipSubscription.findOne({
       branchId,
       customerId: new mongoose.Types.ObjectId(customerId),
-      status: 'ACTIVE'
+      status: 'ACTIVE',
+      expiryDate: { $gte: todaySubscribe },
     });
     if (existingActive) {
       return res.status(400).json({
@@ -3784,16 +3828,24 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
   try {
     const { MembershipPlan, MembershipSubscription, MembershipUsage, Service, Sale } = req.businessModels;
     const { customerId } = req.params;
+    const { asOfDate } = req.query;
     const branchId = req.user.branchId;
 
     if (!mongoose.Types.ObjectId.isValid(customerId)) {
       return res.status(400).json({ success: false, error: 'Invalid customer ID' });
     }
 
+    const ref = asOfDate ? new Date(String(asOfDate)) : new Date();
+    if (Number.isNaN(ref.getTime())) {
+      return res.status(400).json({ success: false, error: 'Invalid asOfDate' });
+    }
+    const startOfRef = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+
     const subscription = await MembershipSubscription.findOne({
       branchId,
       customerId: new mongoose.Types.ObjectId(customerId),
-      status: 'ACTIVE'
+      status: 'ACTIVE',
+      expiryDate: { $gte: startOfRef },
     })
       .populate('planId')
       .lean();
@@ -3816,6 +3868,12 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
       subscriptionId: subscription._id
     }).lean();
 
+    const usageCountByBillService = new Map();
+    for (const u of usageRows) {
+      const key = `${u.billingId}:${u.serviceId}`;
+      usageCountByBillService.set(key, (usageCountByBillService.get(key) || 0) + 1);
+    }
+
     let totalSavedViaMembership = 0;
     for (const u of usageRows) {
       const sale = await Sale.findById(u.billingId).select('items').lean();
@@ -3828,7 +3886,9 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
       if (item) {
         const qty = Number(item.quantity) || 1;
         const price = Number(item.price) || 0;
-        totalSavedViaMembership += price * qty;
+        const key = `${u.billingId}:${u.serviceId}`;
+        const nRowsForLine = usageCountByBillService.get(key) || 1;
+        totalSavedViaMembership += (price * qty) / nRowsForLine;
       }
     }
 
@@ -8593,17 +8653,23 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
     const totalRevenue = receipts.reduce((sum, receipt) => sum + receipt.total, 0);
     logger.debug('Total revenue:', totalRevenue);
 
-    // Membership metrics
-    const totalActiveMembers = await MembershipSubscription.countDocuments({ status: 'ACTIVE' });
-    const activeSubscriptions = await MembershipSubscription.find({ status: 'ACTIVE' }).populate('planId', 'price').lean();
-    const membershipRevenue = activeSubscriptions.reduce((sum, sub) => sum + (sub.planId?.price || 0), 0);
+    // Membership metrics — only count subscriptions not past expiry (aligns with UI Active vs Inactive by date)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const membershipActiveFilter = {
+      status: 'ACTIVE',
+      expiryDate: { $gte: today },
+    };
+    const totalActiveMembers = await MembershipSubscription.countDocuments(membershipActiveFilter);
+    const activeSubscriptions = await MembershipSubscription.find(membershipActiveFilter)
+      .populate('planId', 'price')
+      .lean();
+    const membershipRevenue = activeSubscriptions.reduce((sum, sub) => sum + (sub.planId?.price || 0), 0);
     const in30Days = new Date(today);
     in30Days.setDate(in30Days.getDate() + 30);
     const membersExpiringIn30Days = await MembershipSubscription.countDocuments({
       status: 'ACTIVE',
-      expiryDate: { $gte: today, $lte: in30Days }
+      expiryDate: { $gte: today, $lte: in30Days },
     });
 
     logger.debug('✅ Dashboard stats calculated for business:', req.user?.branchId);
@@ -8995,12 +9061,18 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                 s => (s.serviceId?._id || s.serviceId)?.toString() === item.serviceId.toString()
               );
               if (included) {
+                const qtyRaw = Number(item.quantity);
+                const lineQty =
+                  Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.floor(qtyRaw) : 1;
                 const used = await MembershipUsage.countDocuments({
                   branchId: req.user.branchId,
                   subscriptionId: subscription._id,
                   serviceId: item.serviceId
                 });
-                if (used < (included.usageLimit ?? 0)) {
+                const usageLimit = included.usageLimit ?? 0;
+                const remaining = Math.max(0, usageLimit - used);
+                const toRedeem = Math.min(lineQty, remaining);
+                for (let i = 0; i < toRedeem; i++) {
                   try {
                     const usage = new MembershipUsage({
                       branchId: req.user.branchId,
@@ -9011,7 +9083,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                       billingId: savedSale._id
                     });
                     await usage.save();
-                    logger.debug('[Membership] Redeemed service for bill:', savedSale.billNo);
+                    logger.debug('[Membership] Redeemed service unit for bill:', savedSale.billNo);
                   } catch (membershipErr) {
                     logger.error('[Membership] Redeem failed for item:', item.name, membershipErr);
                   }
@@ -10304,13 +10376,31 @@ app.get('/api/sales/by-phone/:phone', authenticateToken, setupBusinessDatabase, 
   }
 });
 
-// Get sales by bill number
+// Get sales by bill number (includes archived/deleted bills so receipts show Cancelled, not missing)
 app.get('/api/sales/bill/:billNo', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    const { Sale } = req.businessModels;
-    const sale = await Sale.findOne({ billNo: req.params.billNo });
-    if (!sale) return res.status(404).json({ success: false, error: 'Sale not found' });
-    res.json({ success: true, data: sale });
+    const { Sale, BillArchive } = req.businessModels;
+    const billNo = req.params.billNo;
+    const sale = await Sale.findOne({ billNo });
+    if (sale) {
+      return res.json({ success: true, data: sale });
+    }
+    if (!BillArchive) {
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+    const arch = await BillArchive.findOne({ billNo }).sort({ archivedAt: -1 }).lean();
+    if (!arch || !arch.originalBill) {
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+    const ob = arch.originalBill;
+    const merged = {
+      ...ob,
+      _id: arch._id,
+      billNo: ob.billNo || billNo,
+      status: 'cancelled',
+      invoiceDeleted: true,
+    };
+    return res.json({ success: true, data: merged });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -12647,6 +12737,29 @@ app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDat
   }
 });
 
+// Export product list report (emailed to admin)
+app.post('/api/reports/export/product-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+    const { exportProductListReport } = require('./utils/report-exporter');
+    const result = await exportProductListReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+    res.json({
+      success: true,
+      message: result.message || 'Product list report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    logger.error('Error exporting product list report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export product list report'
+    });
+  }
+});
+
 // Get appointment list for report (with filters)
 app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
@@ -12853,22 +12966,13 @@ app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabas
 // Get deleted invoices (archived bills) for report
 app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
+    const { archivedAtRangeFromParams } = require('./utils/archived-date-query');
     const { BillArchive } = req.businessModels;
     const { date, dateFrom, dateTo } = req.query;
     const query = {};
-    if (dateFrom && dateTo) {
-      const fromStr = String(dateFrom).split('T')[0];
-      const toStr = String(dateTo).split('T')[0];
-      query.archivedAt = {
-        $gte: new Date(fromStr + 'T00:00:00.000Z'),
-        $lte: new Date(toStr + 'T23:59:59.999Z')
-      };
-    } else if (date) {
-      const dateStr = String(date).split('T')[0];
-      query.archivedAt = {
-        $gte: new Date(dateStr + 'T00:00:00.000Z'),
-        $lte: new Date(dateStr + 'T23:59:59.999Z')
-      };
+    const range = archivedAtRangeFromParams({ dateFrom, dateTo, date });
+    if (range) {
+      query.archivedAt = range;
     }
     const archives = await BillArchive.find(query).sort({ archivedAt: -1 }).limit(5000).lean();
     const rows = archives.map((a) => ({

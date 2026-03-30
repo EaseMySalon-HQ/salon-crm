@@ -21,12 +21,27 @@ export interface User {
   updatedAt?: string
   isImpersonation?: boolean
   impersonatedBy?: string
+  branchId?: string
+  /** Tenant billing suspension — user may sign in but cannot use salon APIs until resolved */
+  businessSuspended?: boolean
+  nextBillingDate?: string | null
+  suspensionSupportEmail?: string
+  suspensionSupportPhone?: string
 }
 
 interface AuthContextType {
   user: User | null
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; message?: string }>
-  staffLogin: (email: string, password: string, businessCode: string) => Promise<boolean>
+  login: (email: string, password: string) => Promise<{
+    success: boolean
+    businessSuspended?: boolean
+    error?: string
+    message?: string
+  }>
+  staffLogin: (
+    email: string,
+    password: string,
+    businessCode: string
+  ) => Promise<{ success: boolean; businessSuspended?: boolean }>
   logout: () => void
   exitImpersonation: () => void
   updateUser: (userData: Partial<User>) => void
@@ -155,7 +170,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         
         setIsLoading(false)
-        return { success: true }
+        return {
+          success: true,
+          businessSuspended: !!(userData as User).businessSuspended,
+        }
       } else {
         setIsLoading(false)
         return { 
@@ -167,16 +185,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       console.error("API login error:", error)
       setIsLoading(false)
-      
-      // Check if it's a suspension error
-      if (error.response?.data?.error === 'ACCOUNT_SUSPENDED') {
-        return { 
-          success: false, 
-          error: 'ACCOUNT_SUSPENDED',
-          message: error.response.data.message 
-        }
-      }
-      
       return { 
         success: false, 
         error: 'LOGIN_FAILED',
@@ -185,7 +193,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const staffLogin = async (email: string, password: string, businessCode: string): Promise<boolean> => {
+  const staffLogin = async (
+    email: string,
+    password: string,
+    businessCode: string
+  ): Promise<{ success: boolean; businessSuspended?: boolean }> => {
     setIsLoading(true)
 
     try {
@@ -202,15 +214,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         
         setIsLoading(false)
-        return true
+        return {
+          success: true,
+          businessSuspended: !!(userData as User).businessSuspended,
+        }
       } else {
         setIsLoading(false)
-        return false
+        return { success: false }
       }
     } catch (error) {
       console.error("Staff API login error:", error)
       setIsLoading(false)
-      return false
+      return { success: false }
     }
   }
 

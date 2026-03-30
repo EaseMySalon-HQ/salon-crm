@@ -172,6 +172,46 @@ const authenticateToken = (req, res, next) => {
         branchId: req.user.branchId,
         role: req.user.role
       });
+
+      // Platform admin impersonation: full app access (not subject to tenant suspension)
+      if (decoded.isImpersonation) {
+        req.businessSuspended = false;
+        req.businessNextBillingDate = null;
+        return next();
+      }
+
+      // Tenant billing suspension: allow auth endpoints only (login already issued a token)
+      if (req.user.branchId) {
+        const Business = mainConnection.model('Business', require('../models/Business').schema);
+        const business = await Business.findById(req.user.branchId).select('status plan').lean();
+        req.businessStatus = business?.status;
+        if (!business) {
+          req.businessSuspended = false;
+          req.businessNextBillingDate = null;
+        } else {
+          req.businessSuspended = business.status === 'suspended';
+          const plan = business.plan;
+          const rawNext = plan?.renewalDate || plan?.trialEndsAt;
+          req.businessNextBillingDate =
+            rawNext != null ? new Date(rawNext).toISOString() : null;
+        }
+
+        const normalizedPath = `${req.baseUrl || ''}${req.path || ''}`.split('?')[0];
+        const authOnlyPaths = new Set(['/api/auth/profile', '/api/auth/logout', '/api/auth/refresh']);
+        if (req.businessSuspended && !authOnlyPaths.has(normalizedPath)) {
+          const supportEmail = process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in';
+          return res.status(403).json({
+            success: false,
+            error: 'BUSINESS_SUSPENDED',
+            message:
+              'Your account is suspended. Contact support to renew billing and restore access.',
+            nextBillingDate: req.businessNextBillingDate,
+            suspensionSupportEmail: supportEmail,
+            suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
+          });
+        }
+      }
+
       next();
     } catch (error) {
       logger.error('Error in auth middleware:', error);

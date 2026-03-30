@@ -2,6 +2,7 @@
 
 import type { Receipt } from "@/lib/data"
 import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
+import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 
@@ -373,12 +374,8 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
           </div>
         </div>
         ${(() => {
-          const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0);
-          const outstanding = correctTotal - totalPaid;
-          const status = outstanding === 0 ? "FULL PAID" : totalPaid > 0 ? "PART PAID" : "UNPAID";
-          const color = status === "FULL PAID" ? "#16a34a" : status === "PART PAID" ? "#f97316" : "#dc2626";
-          const check = status === "FULL PAID" ? "✓ " : "";
-          return `<div class="payment-stamp" style="border: 2px solid ${color}; color: ${color};">${check}${status}</div>`;
+          const stamp = getReceiptPaymentStamp(receipt as any, correctTotal);
+          return `<div class="payment-stamp" style="border: 2px solid ${stamp.color}; color: ${stamp.color};">${stamp.checkPrefix}${stamp.label}</div>`;
         })()}
       </body>
       </html>

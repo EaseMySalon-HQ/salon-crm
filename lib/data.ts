@@ -94,6 +94,9 @@ export interface Receipt {
     serviceRate: number
     productTaxByRate: { [rate: string]: number }
   }
+  /** Sale/bill status; cancelled + deleted archived bills show Cancelled stamp instead of payment state */
+  status?: string
+  invoiceDeleted?: boolean
 }
 
 export interface ReceiptStaffContribution {
