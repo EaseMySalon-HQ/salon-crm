@@ -49,6 +49,7 @@ function normalizeApiErrorMessage(data: unknown): string {
 /** True when 401/403 indicates invalid/expired session (not business-rule or RBAC). */
 function isTokenAuthFailure(status: number | undefined, errorMsg: string): boolean {
   const m = errorMsg.toLowerCase()
+  if (m.includes('business_suspended')) return false
   if (status === 401) return true
   if (status !== 403) return false
   return (
@@ -241,6 +242,13 @@ apiClient.interceptors.response.use(
       const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
 
       if (typeof window !== 'undefined' && !isPublicRoute && !isLoginPage) {
+        if (statusOut === 403 && errorMsgLower.includes('business_suspended')) {
+          if (!window.location.pathname.includes('/account-suspended')) {
+            window.location.href = '/account-suspended'
+          }
+          return Promise.reject(error)
+        }
+
         const isPermissionDenied =
           statusOut === 403 &&
           (errorMsgLower.includes('insufficient permissions') ||
@@ -1059,7 +1067,15 @@ export class MembershipAPI {
     return response.data
   }
 
-  static async getSubscriptions(params?: { planId?: string; search?: string; status?: string }): Promise<ApiResponse<any[]>> {
+  static async getSubscriptions(params?: {
+    planId?: string
+    search?: string
+    /** ALL | ACTIVE (valid) | EXPIRED | CANCELLED */
+    status?: string
+    /** ISO range — filters by membership startDate */
+    dateFrom?: string
+    dateTo?: string
+  }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/membership/subscriptions', { params })
     return response.data
   }
@@ -1098,7 +1114,10 @@ export class MembershipAPI {
     return response.data
   }
 
-  static async getByCustomer(customerId: string): Promise<ApiResponse<{
+  static async getByCustomer(
+    customerId: string,
+    params?: { asOfDate?: string }
+  ): Promise<ApiResponse<{
     subscription: any
     plan: any
     usageSummary: Array<{ serviceId: string; serviceName: string; used: number; limit: number; remaining: number }>
@@ -1107,7 +1126,7 @@ export class MembershipAPI {
     /** Estimated savings from membership-free service lines on bills (list price × qty) */
     totalSavedViaMembership?: number
   }>> {
-    const response = await apiClient.get(`/membership/customer/${customerId}`)
+    const response = await apiClient.get(`/membership/customer/${customerId}`, { params })
     return response.data
   }
 
@@ -1215,6 +1234,14 @@ export class ReportsAPI {
 
   static async exportServiceList(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/reports/export/service-list', {
+      format,
+      filters
+    });
+    return response.data;
+  }
+
+  static async exportProductList(format: 'pdf' | 'xlsx', filters?: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/reports/export/product-list', {
       format,
       filters
     });

@@ -17,10 +17,11 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { CursorTooltip } from "@/components/ui/cursor-tooltip"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
-import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, type SalesSummaryData } from "@/lib/api"
+import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, ProductsAPI, type SalesSummaryData } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
+import { ProductListReport } from "@/components/reports/product-list-report"
 import { useToast } from "@/hooks/use-toast"
-import { useRouter } from "next/navigation"
+import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
 
 /** Sale.time is typically "HH:mm" (24h). Returns "hh:mm AM/PM" with zero-padded hour. */
@@ -118,11 +119,49 @@ type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentM
 
 const SALES_SEARCH_DEBOUNCE_MS = 400
 
+const REPORT_TYPES = [
+  "sales",
+  "staff-tip",
+  "summary",
+  "service-list",
+  "product-list",
+  "appointment-list",
+  "deleted-invoice",
+  "unpaid-part-paid",
+] as const
+
 export function SalesReport() {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const { toast } = useToast()
   const { hasAccess: canExport } = useFeature("data_export")
-  const [reportType, setReportType] = useState("sales")
+  const [reportType, setReportTypeState] = useState("sales")
+
+  useEffect(() => {
+    const p = searchParams.get("reportType")
+    if (p && REPORT_TYPES.includes(p as (typeof REPORT_TYPES)[number])) {
+      setReportTypeState(p)
+    }
+  }, [searchParams])
+
+  const setReportType = useCallback(
+    (value: string) => {
+      setReportTypeState(value)
+      const params = new URLSearchParams(searchParams.toString())
+      params.set("tab", "sales")
+      params.set("reportType", value)
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+    },
+    [pathname, router, searchParams]
+  )
+
+  const buildReportsReturnPath = useCallback(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", "sales")
+    params.set("reportType", reportType)
+    return `/reports?${params.toString()}`
+  }, [searchParams, reportType])
   const [searchTerm, setSearchTerm] = useState("")
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({})
@@ -162,6 +201,15 @@ export function SalesReport() {
   const [serviceListModeFilter, setServiceListModeFilter] = useState<string>("all")
   const [serviceListServices, setServiceListServices] = useState<{ _id: string; name: string; duration?: number }[]>([])
   const [serviceListStaff, setServiceListStaff] = useState<{ _id: string; name: string }[]>([])
+
+  const [productListDatePeriod, setProductListDatePeriod] = useState<ServiceListDatePeriod>("today")
+  const [productListDateRange, setProductListDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [productListProductFilter, setProductListProductFilter] = useState<string>("all")
+  const [productListStaffFilter, setProductListStaffFilter] = useState<string>("all")
+  const [productListStatusFilter, setProductListStatusFilter] = useState<string>("all")
+  const [productListModeFilter, setProductListModeFilter] = useState<string>("all")
+  const [productListProducts, setProductListProducts] = useState<{ _id: string; name: string }[]>([])
+  const [productListStaff, setProductListStaff] = useState<{ _id: string; name: string }[]>([])
 
   // Appointment List filters
   const [appointmentListDateFilterType, setAppointmentListDateFilterType] = useState<"appointment_date" | "created_date">("appointment_date")
@@ -216,9 +264,9 @@ export function SalesReport() {
   /** Ref for sales list: reset page when filter key changes (avoids stale page + fetch race). */
   const prevSalesFilterKeyRef = useRef<string | null>(null)
 
-  // Function to navigate to receipt page
+  // Function to navigate to receipt page (Back restores tab + report type, e.g. Deleted Invoice)
   const handleViewReceipt = (sale: SalesRecord) => {
-    router.push(`/receipt/${sale.billNo}?returnTo=/reports`)
+    router.push(`/receipt/${sale.billNo}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
   }
 
   const handleEditBill = (sale: SalesRecord) => {
@@ -471,6 +519,15 @@ export function SalesReport() {
     }
   }
 
+  const handleProductListDatePeriodChange = (period: ServiceListDatePeriod) => {
+    setProductListDatePeriod(period)
+    if (period !== "all" && period !== "custom") {
+      setProductListDateRange(getServiceListDateRangeFromPeriod(period))
+    } else {
+      setProductListDateRange({})
+    }
+  }
+
   const handleAppointmentListDatePeriodChange = (period: DatePeriod) => {
     setAppointmentListDatePeriod(period)
     if (period === "custom") {
@@ -528,6 +585,31 @@ export function SalesReport() {
       }
     }
     fetchServiceListOptions()
+    return () => { cancelled = true }
+  }, [reportType])
+
+  useEffect(() => {
+    if (reportType !== "product-list") return
+    let cancelled = false
+    async function fetchProductListOptions() {
+      try {
+        const [productsRes, staffRes] = await Promise.all([
+          ProductsAPI.getAll({ limit: 500 }),
+          StaffDirectoryAPI.getAll()
+        ])
+        if (cancelled) return
+        const pdata = (productsRes as any)?.data
+        setProductListProducts(Array.isArray(pdata) ? pdata : [])
+        const staffData = staffRes?.data && Array.isArray(staffRes.data) ? staffRes.data : []
+        setProductListStaff(staffData.map((s: any) => ({ _id: s._id, name: s.name || s.firstName || "—" })))
+      } catch {
+        if (!cancelled) {
+          setProductListProducts([])
+          setProductListStaff([])
+        }
+      }
+    }
+    fetchProductListOptions()
     return () => { cancelled = true }
   }, [reportType])
 
@@ -1014,6 +1096,15 @@ export function SalesReport() {
     return getEffectiveDateParams(range.from, range.to)
   }
 
+  function getProductListExportDateRange(): { dateFrom?: string; dateTo?: string } {
+    if (productListDatePeriod === "all") return {}
+    const range = productListDateRange.from && productListDateRange.to
+      ? productListDateRange
+      : getServiceListDateRangeFromPeriod(productListDatePeriod)
+    if (!range.from || !range.to) return {}
+    return getEffectiveDateParams(range.from, range.to)
+  }
+
   function getSummaryExportDateRange(): { dateFrom?: string; dateTo?: string } {
     if (dateRange?.from && dateRange?.to) {
       return getEffectiveDateParams(dateRange.from, dateRange.to)
@@ -1088,6 +1179,42 @@ export function SalesReport() {
       const result = await ReportsAPI.exportServiceList("xlsx", filters)
       if (result?.success) {
         toast({ title: "Export successful", description: result.message || "Service list report sent to admin email(s)." })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error?.message || "Failed to export Excel.", variant: "destructive" })
+    }
+  }
+
+  const handleExportProductListPDF = async () => {
+    toast({ title: "Export requested", description: "Generating product list PDF...", duration: 3000 })
+    try {
+      const { ReportsAPI } = await import("@/lib/api")
+      const filters: any = getProductListExportDateRange()
+      if (productListStatusFilter !== "all") filters.status = productListStatusFilter
+      if (productListModeFilter !== "all") filters.paymentMode = productListModeFilter
+      if (productListProductFilter !== "all") filters.productId = productListProductFilter
+      if (productListStaffFilter !== "all") filters.staffId = productListStaffFilter
+      const result = await ReportsAPI.exportProductList("pdf", filters)
+      if (result?.success) {
+        toast({ title: "Export successful", description: result.message || "Product list report sent to admin email(s)." })
+      } else throw new Error(result?.error || "Export failed")
+    } catch (error: any) {
+      toast({ title: "Export failed", description: error?.message || "Failed to export PDF.", variant: "destructive" })
+    }
+  }
+
+  const handleExportProductListXLS = async () => {
+    toast({ title: "Export requested", description: "Generating product list Excel...", duration: 3000 })
+    try {
+      const { ReportsAPI } = await import("@/lib/api")
+      const filters: any = getProductListExportDateRange()
+      if (productListStatusFilter !== "all") filters.status = productListStatusFilter
+      if (productListModeFilter !== "all") filters.paymentMode = productListModeFilter
+      if (productListProductFilter !== "all") filters.productId = productListProductFilter
+      if (productListStaffFilter !== "all") filters.staffId = productListStaffFilter
+      const result = await ReportsAPI.exportProductList("xlsx", filters)
+      if (result?.success) {
+        toast({ title: "Export successful", description: result.message || "Product list report sent to admin email(s)." })
       } else throw new Error(result?.error || "Export failed")
     } catch (error: any) {
       toast({ title: "Export failed", description: error?.message || "Failed to export Excel.", variant: "destructive" })
@@ -1353,6 +1480,7 @@ export function SalesReport() {
                   <SelectItem value="staff-tip">Staff Tip</SelectItem>
                   <SelectItem value="summary">Summary Reports</SelectItem>
                   <SelectItem value="service-list">Service List</SelectItem>
+                  <SelectItem value="product-list">Product List</SelectItem>
                   <SelectItem value="appointment-list">Appointment List</SelectItem>
                   <SelectItem value="deleted-invoice">Deleted Invoice</SelectItem>
                   <SelectItem value="unpaid-part-paid">Unpaid/Part-Paid</SelectItem>
@@ -1675,6 +1803,109 @@ export function SalesReport() {
                   </Select>
                 </>
               )}
+              {reportType === "product-list" && (
+                <>
+                  <Select value={productListProductFilter} onValueChange={setProductListProductFilter}>
+                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Product" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All products</SelectItem>
+                      {productListProducts.map((p) => (
+                        <SelectItem key={p._id} value={p._id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={productListDatePeriod} onValueChange={handleProductListDatePeriodChange}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="last7days">Last 7 days</SelectItem>
+                      <SelectItem value="last30days">Last 30 days</SelectItem>
+                      <SelectItem value="currentMonth">Current month</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {productListDatePeriod === "custom" && (
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {productListDateRange?.from ? format(productListDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={productListDateRange?.from}
+                            onSelect={(d) => setProductListDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (productListDateRange?.to ? d > productListDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {productListDateRange?.to ? format(productListDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={productListDateRange?.to}
+                            onSelect={(d) => setProductListDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (productListDateRange?.from ? d < productListDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                  <Select value={productListStaffFilter} onValueChange={setProductListStaffFilter}>
+                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Staff" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All staff</SelectItem>
+                      {productListStaff.map((s) => (
+                        <SelectItem key={s._id} value={s._id}>{s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={productListStatusFilter} onValueChange={setProductListStatusFilter}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All status</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="partial">Partial</SelectItem>
+                      <SelectItem value="unpaid">Unpaid</SelectItem>
+                      <SelectItem value="cancelled">Cancelled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={productListModeFilter} onValueChange={setProductListModeFilter}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All modes</SelectItem>
+                      <SelectItem value="Cash">Cash</SelectItem>
+                      <SelectItem value="Card">Card</SelectItem>
+                      <SelectItem value="Online">Online</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </>
+              )}
               {reportType === "appointment-list" && (
                 <>
                   <Select value={appointmentListDateFilterType} onValueChange={(v: "appointment_date" | "created_date") => setAppointmentListDateFilterType(v)}>
@@ -1901,7 +2132,7 @@ export function SalesReport() {
                   View Unpaid Bills
                 </Button>
               )}
-              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid") && (
+              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid") && (
                 canExport ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -1947,6 +2178,18 @@ export function SalesReport() {
                             Export as PDF
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={handleExportServiceListXLS} className="cursor-pointer">
+                            <FileSpreadsheet className="h-4 w-4 mr-2" />
+                            Export as Excel
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {reportType === "product-list" && (
+                        <>
+                          <DropdownMenuItem onClick={handleExportProductListPDF} className="cursor-pointer">
+                            <FileText className="h-4 w-4 mr-2" />
+                            Export as PDF
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={handleExportProductListXLS} className="cursor-pointer">
                             <FileSpreadsheet className="h-4 w-4 mr-2" />
                             Export as Excel
                           </DropdownMenuItem>
@@ -2159,7 +2402,9 @@ export function SalesReport() {
                           tipStaffName: bill.tipStaffName,
                           payments: (bill.payments || []).map((p: any) => ({ type: (p.mode || p.type || "cash").toLowerCase(), amount: p.amount })),
                           staffName: bill.staffName,
-                          taxBreakdown: bill.taxBreakdown
+                          taxBreakdown: bill.taxBreakdown,
+                          status: "cancelled",
+                          invoiceDeleted: true,
                         } : null
                         return (
                           <TableRow key={row.id} className="border-slate-50">
@@ -2169,7 +2414,9 @@ export function SalesReport() {
                                   type="button"
                                   onClick={() => {
                                     const dataStr = encodeURIComponent(JSON.stringify(receiptData))
-                                    router.push(`/receipt/${encodeURIComponent(row.billNo || bill.billNo)}?data=${dataStr}&returnTo=/reports`)
+                                    router.push(
+                                      `/receipt/${encodeURIComponent(row.billNo || bill.billNo)}?data=${dataStr}&returnTo=${encodeURIComponent(buildReportsReturnPath())}`
+                                    )
                                   }}
                                   className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium text-left"
                                   title="View receipt"
@@ -2302,6 +2549,23 @@ export function SalesReport() {
             setStatusFilter: setServiceListStatusFilter,
             modeFilter: serviceListModeFilter,
             setModeFilter: setServiceListModeFilter,
+          }}
+        />
+      ) : reportType === "product-list" ? (
+        <ProductListReport
+          controlledFilters={{
+            datePeriod: productListDatePeriod,
+            setDatePeriod: setProductListDatePeriod,
+            dateRange: productListDateRange,
+            setDateRange: setProductListDateRange,
+            productFilter: productListProductFilter,
+            setProductFilter: setProductListProductFilter,
+            staffFilter: productListStaffFilter,
+            setStaffFilter: setProductListStaffFilter,
+            statusFilter: productListStatusFilter,
+            setStatusFilter: setProductListStatusFilter,
+            modeFilter: productListModeFilter,
+            setModeFilter: setProductListModeFilter,
           }}
         />
       ) : reportType === "summary" ? (

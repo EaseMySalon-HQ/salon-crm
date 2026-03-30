@@ -2,6 +2,7 @@
 
 import { Receipt } from "@/lib/data"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 
 interface ThermalReceiptGeneratorProps {
   receipt: Receipt
@@ -285,12 +286,8 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             </div>
           </div>
           ${(() => {
-            const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
-            const outstanding = receipt.total - totalPaid
-            const status = outstanding === 0 ? "FULL PAID" : totalPaid > 0 ? "PART PAID" : "UNPAID"
-            const color = status === "FULL PAID" ? "#16a34a" : status === "PART PAID" ? "#f97316" : "#dc2626"
-            const check = status === "FULL PAID" ? "✓ " : ""
-            return `<div class="payment-stamp" style="border: 2px solid ${color}; color: ${color};">${check}${status}</div>`
+            const stamp = getReceiptPaymentStamp(receipt as any, receipt.total)
+            return `<div class="payment-stamp" style="border: 2px solid ${stamp.color}; color: ${stamp.color};">${stamp.checkPrefix}${stamp.label}</div>`
           })()}
         </body>
         </html>
@@ -583,12 +580,8 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           </div>
         </div>
         ${(() => {
-          const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
-          const outstanding = receipt.total - totalPaid
-          const status = outstanding === 0 ? "FULL PAID" : totalPaid > 0 ? "PART PAID" : "UNPAID"
-          const color = status === "FULL PAID" ? "#16a34a" : status === "PART PAID" ? "#f97316" : "#dc2626"
-          const check = status === "FULL PAID" ? "✓ " : ""
-          return `<div class="payment-stamp" style="border: 2px solid ${color}; color: ${color};">${check}${status}</div>`
+          const stamp = getReceiptPaymentStamp(receipt as any, receipt.total)
+          return `<div class="payment-stamp" style="border: 2px solid ${stamp.color}; color: ${stamp.color};">${stamp.checkPrefix}${stamp.label}</div>`
         })()}
       </body>
       </html>

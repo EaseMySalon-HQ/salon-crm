@@ -114,4 +114,64 @@ async function attachMetricsToBusinesses(businesses, mainConnection) {
   });
 }
 
-module.exports = { getBusinessMetrics, attachMetricsToBusinesses };
+const IST_ZONE = 'Asia/Kolkata';
+
+const istCalendarDayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: IST_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function getNextBillingFromPlan(plan) {
+  if (!plan) return null;
+  return plan.renewalDate || plan.trialEndsAt || null;
+}
+
+/**
+ * True when the next-billing calendar day in IST is strictly before today's calendar day in IST.
+ * Matches how "Next billing" is shown as a date (not a precise instant).
+ */
+function isNextBillingCalendarDayBeforeTodayInIST(nextBillingDate) {
+  if (!nextBillingDate) return false;
+  const billDay = istCalendarDayFormatter.format(new Date(nextBillingDate));
+  const today = istCalendarDayFormatter.format(new Date());
+  return billDay < today;
+}
+
+/**
+ * Set status to suspended when still "active" but next billing date has passed (IST calendar days).
+ * No next billing date = leave as-is (manual / unmanaged billing).
+ */
+async function syncOverdueBillingSuspensions(businesses, BusinessModel) {
+  if (!Array.isArray(businesses) || businesses.length === 0 || !BusinessModel) return;
+
+  const idsToSuspend = [];
+  for (const b of businesses) {
+    if (b.status !== 'active') continue;
+    const next = getNextBillingFromPlan(b.plan);
+    if (!next) continue;
+    if (!isNextBillingCalendarDayBeforeTodayInIST(next)) continue;
+    idsToSuspend.push(b._id);
+    b.status = 'suspended';
+  }
+  if (idsToSuspend.length === 0) return;
+
+  await BusinessModel.updateMany(
+    { _id: { $in: idsToSuspend }, status: 'active' },
+    { $set: { status: 'suspended', updatedAt: new Date() } }
+  ).exec();
+}
+
+async function syncAllOverdueBillingSuspensions(BusinessModel) {
+  if (!BusinessModel) return;
+  const active = await BusinessModel.find({ status: 'active' }).select('_id plan status').lean();
+  await syncOverdueBillingSuspensions(active, BusinessModel);
+}
+
+module.exports = {
+  getBusinessMetrics,
+  attachMetricsToBusinesses,
+  syncOverdueBillingSuspensions,
+  syncAllOverdueBillingSuspensions,
+};

@@ -20,6 +20,8 @@ import {
   LogIn,
   Key,
   FileText,
+  Copy,
+  Check,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -32,6 +34,14 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { PlanEditDialog } from "./plan-edit-dialog"
 import { BusinessActivityLogsDialog } from "./business-activity-logs-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 import { cn } from "@/lib/utils"
 
@@ -141,6 +151,13 @@ export function BusinessManagement() {
   const [isPlanDialogOpen, setIsPlanDialogOpen] = useState(false)
   const [activityLogsBusiness, setActivityLogsBusiness] = useState<Business | null>(null)
   const [isActivityLogsOpen, setIsActivityLogsOpen] = useState(false)
+  const [ownerPasswordResetDialog, setOwnerPasswordResetDialog] = useState<{
+    password: string
+    businessName: string
+    ownerEmail?: string
+    emailSent: boolean
+  } | null>(null)
+  const [resetPasswordCopyButtonDone, setResetPasswordCopyButtonDone] = useState(false)
   const limit = 20
   const { toast } = useToast()
   const router = useRouter()
@@ -313,6 +330,28 @@ export function BusinessManagement() {
     }
   }
 
+  const copyTextToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      try {
+        const ta = document.createElement("textarea")
+        ta.value = text
+        ta.style.position = "fixed"
+        ta.style.left = "-9999px"
+        document.body.appendChild(ta)
+        ta.focus()
+        ta.select()
+        const ok = document.execCommand("copy")
+        document.body.removeChild(ta)
+        return ok
+      } catch {
+        return false
+      }
+    }
+  }
+
   const handleResetOwnerPassword = async (business: Business) => {
     if (!confirm(`Reset password for owner of "${business.name}"? A temporary password will be generated.`)) return
     try {
@@ -320,19 +359,47 @@ export function BusinessManagement() {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
       })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || "Reset failed")
+        throw new Error((data as { error?: string }).error || "Reset failed")
       }
-      const data = await res.json()
-      if (data.success && data.data?.tempPassword) {
+      const tempPassword =
+        typeof (data as { data?: { tempPassword?: string } }).data?.tempPassword === "string"
+          ? (data as { data: { tempPassword: string } }).data.tempPassword
+          : typeof (data as { tempPassword?: string }).tempPassword === "string"
+            ? (data as { tempPassword: string }).tempPassword
+            : ""
+      const emailSent = Boolean((data as { data?: { emailSent?: boolean } }).data?.emailSent)
+      if (!(data as { success?: boolean }).success || !tempPassword) {
         toast({
-          title: "Password reset",
-          description: `Temporary password: ${data.data.tempPassword}. Share securely with the owner.`,
+          title: "Error",
+          description: (data as { error?: string }).error || "No temporary password returned from the server.",
+          variant: "destructive",
         })
-      } else {
-        toast({ title: "Success", description: data.data?.message || "Password reset." })
+        return
       }
+      const copied = await copyTextToClipboard(tempPassword)
+      const ownerEmailAddr = (business.owner as { email?: string } | null)?.email
+      setResetPasswordCopyButtonDone(false)
+      setOwnerPasswordResetDialog({
+        password: tempPassword,
+        businessName: business.name,
+        ownerEmail: ownerEmailAddr,
+        emailSent,
+      })
+      const emailPart = emailSent
+        ? ownerEmailAddr
+          ? `Email sent to ${ownerEmailAddr}.`
+          : "Email sent to the owner."
+        : ownerEmailAddr
+          ? "Email could not be sent (check admin email settings)."
+          : "Owner has no email on file; share the password manually."
+      toast({
+        title: "Password reset",
+        description: [copied ? "Temporary password copied to clipboard." : "Use Copy in the dialog to copy the password.", emailPart]
+          .filter(Boolean)
+          .join(" "),
+      })
     } catch (e: unknown) {
       toast({ title: "Error", description: e instanceof Error ? e.message : "Reset failed", variant: "destructive" })
     }
@@ -750,6 +817,81 @@ export function BusinessManagement() {
           }}
         />
       )}
+
+      <Dialog
+        open={ownerPasswordResetDialog != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setOwnerPasswordResetDialog(null)
+            setResetPasswordCopyButtonDone(false)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Temporary owner password</DialogTitle>
+            <DialogDescription>
+              {ownerPasswordResetDialog
+                ? `For "${ownerPasswordResetDialog.businessName}". Share this only with the business owner.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {ownerPasswordResetDialog && (
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <Input
+                  readOnly
+                  className="font-mono text-sm"
+                  value={ownerPasswordResetDialog.password}
+                  onFocus={(e) => e.target.select()}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-w-[99px] shrink-0"
+                  onClick={async () => {
+                    const ok = await copyTextToClipboard(ownerPasswordResetDialog.password)
+                    if (ok) setResetPasswordCopyButtonDone(true)
+                    toast({
+                      title: ok ? "Copied" : "Copy failed",
+                      description: ok ? "Password copied to clipboard." : "Select the field and copy manually.",
+                      variant: ok ? "default" : "destructive",
+                    })
+                  }}
+                >
+                  {resetPasswordCopyButtonDone ? (
+                    <>
+                      <Check className="h-4 w-4 mr-1.5 text-emerald-600" />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4 mr-1.5" />
+                      Copy
+                    </>
+                  )}
+                </Button>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {ownerPasswordResetDialog.emailSent
+                  ? `A message with this password was sent${ownerPasswordResetDialog.ownerEmail ? ` to ${ownerPasswordResetDialog.ownerEmail}` : ""}.`
+                  : "No email was delivered. Give this password to the owner through a secure channel."}
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => {
+                setOwnerPasswordResetDialog(null)
+                setResetPasswordCopyButtonDone(false)
+              }}
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
