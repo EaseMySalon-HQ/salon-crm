@@ -7,12 +7,27 @@ const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateToken } = require('../middleware/auth');
 const { authenticateAdmin, checkAdminPermission, requireAdminRole } = require('../middleware/admin-auth');
 const { logAdminActivity, getClientIp } = require('../utils/admin-logger');
-const { getBusinessMetrics, attachMetricsToBusinesses } = require('../lib/business-metrics');
+const {
+  getBusinessMetrics,
+  attachMetricsToBusinesses,
+  syncOverdueBillingSuspensions,
+  syncAllOverdueBillingSuspensions,
+} = require('../lib/business-metrics');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const crypto = require('crypto');
+const emailService = require('../services/email-service');
 
 const router = express.Router();
+
+function escapeHtml(str) {
+  if (str == null || str === '') return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 // Admin Login
 router.post('/login', setupMainDatabase, async (req, res) => {
@@ -133,6 +148,7 @@ router.get('/profile', setupMainDatabase, authenticateAdmin, async (req, res) =>
 router.get('/businesses/stats', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
   try {
     const { Business } = req.mainModels;
+    await syncAllOverdueBillingSuspensions(Business);
     const [row] = await Business.aggregate([
       {
         $facet: {
@@ -166,6 +182,8 @@ router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermis
   try {
     const { page = 1, limit = 10, search, status, plan, includeDeleted = true } = req.query;
     const { Business } = req.mainModels;
+
+    await syncAllOverdueBillingSuspensions(Business);
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
@@ -240,6 +258,8 @@ router.get('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPe
     if (!business) {
       return res.status(404).json({ success: false, error: 'Business not found' });
     }
+
+    await syncOverdueBillingSuspensions([business], Business);
 
     const metrics = await getBusinessMetrics(business.code || req.params.id, req.mainConnection);
     const owner = business.owner;
@@ -346,13 +366,43 @@ router.post('/businesses/:id/reset-owner-password', setupMainDatabase, authentic
     const hashed = await bcrypt.hash(tempPassword, 10);
     await User.findByIdAndUpdate(owner._id, { password: hashed, updatedAt: new Date() });
 
+    let emailSent = false;
+    if (owner.email) {
+      try {
+        await emailService.initialize();
+        if (emailService.enabled) {
+          const ownerName = [owner.firstName, owner.lastName].filter(Boolean).join(' ') || 'there';
+          const bizName = escapeHtml(business.name);
+          const safeOwner = escapeHtml(ownerName);
+          const html = `<p>Hello ${safeOwner},</p>
+<p>An administrator reset your password for <strong>${bizName}</strong>.</p>
+<p>Your temporary password is:</p>
+<p style="font-family:ui-monospace,monospace;font-size:16px;font-weight:600;letter-spacing:0.04em;">${escapeHtml(tempPassword)}</p>
+<p>Please sign in and change your password as soon as possible.</p>`;
+          const text = `Hello ${ownerName},\n\nAn administrator reset your password for ${business.name}.\n\nYour temporary password is: ${tempPassword}\n\nPlease sign in and change your password as soon as possible.`;
+          const mailResult = await emailService.sendEmail({
+            to: owner.email,
+            subject: `Your ${business.name} account password was reset`,
+            html,
+            text,
+          });
+          emailSent = mailResult.success === true;
+          if (!emailSent) {
+            logger.warn('Owner password reset: email not sent:', mailResult.error || mailResult);
+          }
+        }
+      } catch (mailErr) {
+        logger.error('Owner password reset email error:', mailErr);
+      }
+    }
+
     await logAdminActivity({
       adminId: req.admin,
       action: 'admin_password_reset',
       module: 'businesses',
       resourceId: businessId,
       resourceType: 'Business',
-      details: { businessName: business.name, ownerEmail: owner.email },
+      details: { businessName: business.name, ownerEmail: owner.email, emailSent },
       ipAddress: getClientIp(req),
       userAgent: req.headers['user-agent'],
     });
@@ -362,6 +412,7 @@ router.post('/businesses/:id/reset-owner-password', setupMainDatabase, authentic
       data: {
         message: 'Password reset successfully. Share the temporary password with the owner securely.',
         tempPassword,
+        emailSent,
       },
     });
   } catch (error) {

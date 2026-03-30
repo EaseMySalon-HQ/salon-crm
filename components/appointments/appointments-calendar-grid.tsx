@@ -124,6 +124,15 @@ const SLOTS_PER_HOUR = 4
 const DEFAULT_START_HOUR = 9
 const DEFAULT_END_HOUR = 21
 
+/** Snap to 15-min grid so slot rows always land on :00, :15, :30, :45 — otherwise labels that rely on minute-of-hour % 30 vanish (e.g. range starting at 4:16). */
+function alignMinutesDownToSlotGrid(totalMinutes: number): number {
+  return Math.floor(totalMinutes / SLOT_MINUTES) * SLOT_MINUTES
+}
+
+function alignMinutesUpToSlotGrid(totalMinutes: number): number {
+  return Math.ceil(totalMinutes / SLOT_MINUTES) * SLOT_MINUTES
+}
+
 function parseHHMMToMinutes(time?: string | null): number | null {
   if (!time) return null
   const parts = time.split(":")
@@ -704,14 +713,27 @@ export const AppointmentsCalendarGrid = forwardRef<
       if (startM < extStart) extStart = startM
       if (checkoutEndM > extEnd) extEnd = checkoutEndM
     })
-    const span = Math.max(extEnd - extStart, SLOT_MINUTES)
+    // Bills/appointments outside staff hours must widen the grid (walk-in logic alone misses appointment-only sales)
+    filteredAppointments.forEach((apt) => {
+      const startM = parseTimeToMinutes(apt.time)
+      const dur = getTotalDuration(apt as any)
+      if (dur <= 0) return
+      const endM = startM + dur
+      if (startM < extStart) extStart = startM
+      if (endM > extEnd) extEnd = endM
+    })
+    // Align to slot grid so row times hit :00 / :30 and time labels stay visible
+    const alignedStart = alignMinutesDownToSlotGrid(extStart)
+    let alignedEnd = alignMinutesUpToSlotGrid(extEnd)
+    if (alignedEnd <= alignedStart) alignedEnd = alignedStart + SLOT_MINUTES
+    const span = Math.max(alignedEnd - alignedStart, SLOT_MINUTES)
     const slots = Math.ceil(span / SLOT_MINUTES)
     return {
-      extendedStartMinutes: extStart,
-      extendedEndMinutes: extEnd,
+      extendedStartMinutes: alignedStart,
+      extendedEndMinutes: alignedEnd,
       totalSlots: slots,
     }
-  }, [startMinutes, endMinutes, effectiveWalkInSales])
+  }, [startMinutes, endMinutes, effectiveWalkInSales, filteredAppointments])
 
   const timeSlots = useMemo(() => {
     const slots: { label: string; minutes: number; isHourStart: boolean; showTimeLabel: boolean }[] = []
@@ -719,8 +741,9 @@ export const AppointmentsCalendarGrid = forwardRef<
       const h = Math.floor(minutes / 60)
       const m = ((minutes % 60) + 60) % 60 // Handle negative minutes correctly
       const isHourStart = m === 0
-      // Show label at :00, :30, and first slot so time column is never empty when walk-in extends range outside staff hours
-      const showTimeLabel = m % 30 === 0 || minutes === extendedStartMinutes || minutes === extendedEndMinutes - SLOT_MINUTES
+      // Show label at :00, :30, and first/last slot (range is aligned to 15-min grid so :00/:30 repeat reliably)
+      const showTimeLabel =
+        m % 30 === 0 || minutes === extendedStartMinutes || minutes === extendedEndMinutes - SLOT_MINUTES
       const label = format(new Date(2000, 0, 1, h, m), "h:mma").toLowerCase()
       slots.push({ label, minutes, isHourStart, showTimeLabel })
     }

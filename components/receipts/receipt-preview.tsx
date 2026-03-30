@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import type { Receipt } from "@/lib/data"
 import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
+import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { Card, CardContent } from "@/components/ui/card"
 import { useCurrency } from "@/hooks/use-currency"
@@ -24,8 +25,9 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
   const total = getReceiptGrandTotal(receipt)
   const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
   const outstanding = total - totalPaid
-  const paymentStatus = outstanding === 0 ? "FULL PAID" : totalPaid > 0 ? "PART PAID" : "UNPAID"
-  const stampColor = paymentStatus === "FULL PAID" ? "#16a34a" : paymentStatus === "PART PAID" ? "#f97316" : "#dc2626"
+  const stamp = getReceiptPaymentStamp(receipt as any, total)
+  const paymentStatus = stamp.label
+  const stampColor = stamp.color
 
   return (
     <Card className="max-w-2xl w-full mx-auto bg-white relative">
@@ -317,7 +319,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
             WebkitPrintColorAdjust: "exact",
           }}
         >
-          {paymentStatus === "FULL PAID" && "✓ "}
+          {stamp.checkPrefix}
           {paymentStatus}
         </div>
       </CardContent>

@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useMemo } from "react"
 import { useSearchParams } from "next/navigation"
 import {
   Search,
@@ -307,6 +307,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   const [selectedDate, setSelectedDate] = useState<Date>(new Date())
   const [serviceItems, setServiceItems] = useState<ServiceItem[]>([])
+  /** Set after computeLineTotalAndTax each render; membership effect reads .current after paint. */
+  const applyMembershipPricingRef = useRef<(items: ServiceItem[]) => ServiceItem[]>((items) => items)
   const [productItems, setProductItems] = useState<ProductItem[]>([])
   const [discountValue, setDiscountValue] = useState(0)
   const [discountPercentage, setDiscountPercentage] = useState(0)
@@ -1639,20 +1641,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setShowDuesDialog(true)
   }
 
-  // Fetch membership when customer is selected
+  // Fetch membership when customer or bill date changes (expiry is evaluated against bill date)
   useEffect(() => {
     const customerId = getCustomerId(selectedCustomer)
     if (!customerId) {
       setMembershipData(null)
       return
     }
-    MembershipAPI.getByCustomer(customerId)
+    const asOfDate = format(selectedDate, "yyyy-MM-dd")
+    MembershipAPI.getByCustomer(customerId, { asOfDate })
       .then((res) => {
         if (res.success && res.data) setMembershipData(res.data as any)
         else setMembershipData(null)
       })
       .catch(() => setMembershipData(null))
-  }, [selectedCustomer])
+  }, [selectedCustomer, selectedDate])
 
   // Fetch plans when customer is selected (for Membership section)
   useEffect(() => {
@@ -1668,11 +1671,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       .catch(() => setPlans([]))
   }, [selectedCustomer])
 
-  // Apply membership pricing to service items when membership loads or changes
-  // Price = base cost, Disc(%) = membership discount, Total = price after discount
+  const membershipServiceSnapshot = useMemo(
+    () =>
+      serviceItems.map((i) => `${i.id}:${String(i.serviceId)}:${i.quantity}`).join("|"),
+    [serviceItems]
+  )
+
+  // Apply membership pricing when membership loads, catalog changes, or line qty/service changes.
+  // Included services: free units use plan balance first; extra qty is charged at plan discount %.
   useEffect(() => {
     if (!membershipData?.plan) {
-      // When no membership, reset any membership-applied discounts to base price
       setServiceItems((items) =>
         items.map((item) => {
           if (item.isPackageRedemption) {
@@ -1703,52 +1711,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       )
       return
     }
-    const usageMap = new Map(membershipData.usageSummary.map((u: any) => [u.serviceId, u]))
-    const plan = membershipData.plan
-    const discountPct = plan?.discountPercentage || 0
-
-    setServiceItems((items) => {
-      const remaining: Record<string, number> = {}
-      usageMap.forEach((u: any, sid: string) => { remaining[sid] = u.remaining })
-
-      return items.map((item) => {
-        if (!item.serviceId) return item
-        if (item.isPackageRedemption) {
-          const service = services.find((s) => (s._id || s.id) === item.serviceId)
-          const basePrice = service?.price ?? item.price
-          const baseAmount = basePrice * item.quantity
-          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-          const applyTax = isServiceTaxable(item)
-          const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
-          return {
-            ...item,
-            price: basePrice,
-            discount: 100,
-            total,
-            isMembershipFree: false,
-            membershipDiscountPercent: 0,
-          }
-        }
-        const sid = String(item.serviceId)
-        const u = usageMap.get(sid)
-        const service = services.find((s) => (s._id || s.id) === item.serviceId)
-        const basePrice = service?.price ?? item.price
-
-        if (u && remaining[sid] > 0 && item.quantity <= remaining[sid]) {
-          remaining[sid] -= item.quantity
-          return { ...item, price: basePrice, total: 0, discount: 100, isMembershipFree: true, membershipDiscountPercent: 100 }
-        }
-        if (discountPct > 0 && !item.isMembershipFree) {
-          const baseAmount = basePrice * item.quantity
-          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-          const applyTax = service?.taxApplicable && taxSettings?.enableTax !== false
-          const { total } = computeLineTotalAndTax(baseAmount, discountPct, serviceTaxRate, applyTax)
-          return { ...item, price: basePrice, total, discount: discountPct, membershipDiscountPercent: discountPct }
-        }
-        return item
-      })
-    })
-  }, [membershipData, paymentSettings?.priceInclusiveOfTax, services, taxSettings])
+    setServiceItems((prev) => applyMembershipPricingRef.current(prev))
+  }, [membershipData, paymentSettings?.priceInclusiveOfTax, services, taxSettings, membershipServiceSnapshot])
 
   // Fetch customer statistics including visits, revenue, and last visit
   const fetchCustomerStats = async (customerId: string) => {
@@ -2450,6 +2414,35 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setProductItems((items) => items.filter((item) => item.id !== id))
   }
 
+  /** Per included service: plan remaining minus *free* units allocated on this bill (same order as applyMembershipPricingRef). */
+  const membershipFreeRemainingAfterBillByServiceId = useMemo(() => {
+    const map = new Map<string, number>()
+    if (!membershipData?.usageSummary?.length) return map
+
+    const usageMap = new Map(
+      membershipData.usageSummary.map((u: any) => [String(u.serviceId || u.serviceId?._id), u])
+    )
+    const remaining: Record<string, number> = {}
+    usageMap.forEach((u: any, sid: string) => {
+      remaining[sid] = u.remaining
+    })
+
+    for (const item of serviceItems) {
+      if (!item.serviceId || !item.isMembershipFree) continue
+      const sid = String(item.serviceId)
+      if (remaining[sid] === undefined) continue
+      const q = Number(item.quantity)
+      const n = Number.isFinite(q) && q > 0 ? Math.floor(q) : 1
+      const freeUnits = Math.min(n, remaining[sid])
+      remaining[sid] -= freeUnits
+    }
+
+    for (const sid of Object.keys(remaining)) {
+      map.set(sid, Math.max(0, remaining[sid]))
+    }
+    return map
+  }, [membershipData?.usageSummary, serviceItems])
+
   // Calculate totals (now includes GST in individual items)
   const serviceTotal = serviceItems.reduce((sum, item) => sum + item.total, 0)
   const productTotal = productItems.reduce((sum, item) => sum + item.total, 0)
@@ -2541,6 +2534,141 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       const taxAmount = (discountedAmount * taxRate) / 100
       return { total: discountedAmount + taxAmount, taxAmount }
     }
+  }
+
+  applyMembershipPricingRef.current = (items: ServiceItem[]): ServiceItem[] => {
+    if (!membershipData?.plan) return items
+
+    const usageMap = new Map(
+      membershipData.usageSummary.map((u: any) => [String(u.serviceId || u.serviceId?._id), u])
+    )
+    const plan = membershipData.plan
+    const discountPct = plan?.discountPercentage || 0
+
+    const remaining: Record<string, number> = {}
+    usageMap.forEach((u: any, sid: string) => {
+      remaining[sid] = u.remaining
+    })
+
+    return items.map((item) => {
+      if (!item.serviceId) return item
+      if (item.isPackageRedemption) {
+        const service = services.find((s) => (s._id || s.id) === item.serviceId)
+        const basePrice = service?.price ?? item.price
+        const qty = Number(item.quantity)
+        const q = Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 1
+        const baseAmount = basePrice * q
+        const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+        const applyTax = isServiceTaxable(item)
+        const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
+        return {
+          ...item,
+          price: basePrice,
+          quantity: q,
+          discount: 100,
+          total,
+          isMembershipFree: false,
+          membershipDiscountPercent: 0,
+        }
+      }
+
+      const sid = String(item.serviceId)
+      const u = usageMap.get(sid)
+      const service = services.find((s) => (s._id || s.id) === item.serviceId)
+      const basePrice = service?.price ?? item.price
+      const qty = Number(item.quantity)
+      const q = Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 1
+
+      const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+      const applyTax = isServiceTaxable(item)
+
+      if (!u) {
+        if (discountPct > 0) {
+          const baseAmount = basePrice * q
+          const { total } = computeLineTotalAndTax(baseAmount, discountPct, serviceTaxRate, applyTax)
+          return {
+            ...item,
+            price: basePrice,
+            quantity: q,
+            total,
+            discount: discountPct,
+            membershipDiscountPercent: discountPct,
+            isMembershipFree: false,
+          }
+        }
+        const baseAmount = basePrice * q
+        const { total } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax)
+        return {
+          ...item,
+          price: basePrice,
+          quantity: q,
+          total,
+          discount: 0,
+          membershipDiscountPercent: 0,
+          isMembershipFree: false,
+        }
+      }
+
+      if (remaining[sid] <= 0) {
+        if (discountPct > 0) {
+          const baseAmount = basePrice * q
+          const { total } = computeLineTotalAndTax(baseAmount, discountPct, serviceTaxRate, applyTax)
+          return {
+            ...item,
+            price: basePrice,
+            quantity: q,
+            total,
+            discount: discountPct,
+            membershipDiscountPercent: discountPct,
+            isMembershipFree: false,
+          }
+        }
+        const baseAmount = basePrice * q
+        const { total } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax)
+        return {
+          ...item,
+          price: basePrice,
+          quantity: q,
+          total,
+          discount: 0,
+          membershipDiscountPercent: 0,
+          isMembershipFree: false,
+        }
+      }
+
+      const freeUnits = Math.min(q, remaining[sid])
+      remaining[sid] -= freeUnits
+      const paidUnits = q - freeUnits
+
+      if (paidUnits === 0) {
+        const baseAmount = basePrice * freeUnits
+        const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
+        return {
+          ...item,
+          price: basePrice,
+          quantity: q,
+          total,
+          discount: 100,
+          isMembershipFree: true,
+          membershipDiscountPercent: 100,
+        }
+      }
+
+      const { total: tFree } = computeLineTotalAndTax(basePrice * freeUnits, 100, serviceTaxRate, applyTax)
+      const { total: tPaid } = computeLineTotalAndTax(basePrice * paidUnits, discountPct, serviceTaxRate, applyTax)
+      const total = tFree + tPaid
+      const avgDiscount = (freeUnits * 100 + paidUnits * discountPct) / q
+
+      return {
+        ...item,
+        price: basePrice,
+        quantity: q,
+        total,
+        discount: Math.round(avgDiscount * 100) / 100,
+        isMembershipFree: true,
+        membershipDiscountPercent: discountPct,
+      }
+    })
   }
 
   // Total column display: price - discount (excludes tax)
@@ -2765,8 +2893,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const totalPaid = cashAmount + cardAmount + onlineAmount
   const change = totalPaid - roundedTotal
   const validServiceForCheckout = serviceItems.filter((item) => item.serviceId)
+  const validProductForCheckout = productItems.filter((item) => item.productId)
+  const validMembershipSaleLines = membershipItems.filter((m) => m.planId)
+  const validPackageForCheckout = packageItems.filter((p) => p.packageId)
+  const membershipFreeServicesOnly =
+    validServiceForCheckout.length > 0 &&
+    validProductForCheckout.length === 0 &&
+    validMembershipSaleLines.length === 0 &&
+    validPackageForCheckout.length === 0 &&
+    validServiceForCheckout.every(
+      (item) => item.isMembershipFree === true && Math.abs(item.total) < 0.005
+    )
+
   const allowZeroTotalCheckout =
-    pendingPackageRedemption != null && roundedTotal === 0 && validServiceForCheckout.length > 0
+    roundedTotal <= 0 &&
+    validServiceForCheckout.length > 0 &&
+    (pendingPackageRedemption != null || membershipFreeServicesOnly)
 
   // Generate receipt number with proper increment.
   // No fallback to cached number - if the API fails after retries, we surface the error
@@ -2879,12 +3021,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       }
     }
 
-    // Validate that we have a valid total amount (₹0 allowed for package redemption — prepaid)
-    const allowZeroForPackageRedeem =
-      pendingPackageRedemption != null &&
-      roundedTotal === 0 &&
-      validServiceItems.length > 0
-    if (roundedTotal <= 0 && !allowZeroForPackageRedeem) {
+    // ₹0 allowed for package redemption (prepaid) or membership-included–only services (see allowZeroTotalCheckout)
+    if (roundedTotal <= 0 && !allowZeroTotalCheckout) {
       toast({
         title: "Invalid Amount",
         description: "Total amount must be greater than 0",
@@ -4803,8 +4941,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             </button>
                           </div>
                           {(item.isMembershipFree || (item.membershipDiscountPercent ?? 0) > 0) && (
-                            <span className="text-xs text-emerald-600">
-                              {item.isMembershipFree ? "Free via Membership" : `${item.membershipDiscountPercent}% Membership Discount`}
+                            <span
+                              className={`text-xs ${item.isMembershipFree && (membershipFreeRemainingAfterBillByServiceId.get(String(item.serviceId)) ?? 0) < 0 ? "text-amber-600" : "text-emerald-600"}`}
+                            >
+                              {item.isMembershipFree ? (
+                                (() => {
+                                  const rem = membershipFreeRemainingAfterBillByServiceId.get(String(item.serviceId))
+                                  const q = Number(item.quantity)
+                                  const usedQty =
+                                    Number.isFinite(q) && q > 0 ? Math.floor(q) : 1
+                                  const avail =
+                                    rem === undefined ? "—" : String(rem)
+                                  return `Available Free Services: ${avail}, Used Service: ${usedQty}`
+                                })()
+                              ) : (
+                                `${item.membershipDiscountPercent}% Membership Discount`
+                              )}
                             </span>
                           )}
                         </div>

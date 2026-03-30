@@ -48,6 +48,7 @@ interface ReceiptData {
   }>
   staffName: string
   status: string
+  invoiceDeleted?: boolean
   taxBreakdown?: {
     serviceTax: number
     serviceRate: number
@@ -141,7 +142,13 @@ export default function ReceiptPage() {
               paymentMode: frontendData.payments?.[0]?.type || 'Cash',
               payments: frontendData.payments || [{ type: 'Cash', amount: frontendData.total }],
               staffName: frontendData.staffName,
-              status: 'completed',
+              status:
+                typeof frontendData.status === "string"
+                  ? frontendData.status
+                  : frontendData.invoiceDeleted
+                    ? "cancelled"
+                    : "completed",
+              invoiceDeleted: frontendData.invoiceDeleted === true,
               // Include taxBreakdown for correct tax display
               taxBreakdown: frontendData.taxBreakdown,
               shareToken: frontendData.shareToken
@@ -176,7 +183,7 @@ export default function ReceiptPage() {
               customerPhone: saleData.customerPhone || 'N/A',
               date: saleData.date,
               time: new Date(saleData.date).toLocaleTimeString(),
-              items: saleData.items.map((item: any) => ({
+              items: (saleData.items || []).map((item: any) => ({
                 name: item.name,
                 type: item.type,
                 quantity: item.quantity,
@@ -211,7 +218,8 @@ export default function ReceiptPage() {
                 }
               }) : [{ type: (saleData.paymentMode?.toLowerCase() || 'unknown'), amount: saleData.grossTotal }],
               staffName: saleData.staffName,
-              status: saleData.status,
+              status: typeof saleData.status === "string" ? saleData.status : saleData.invoiceDeleted ? "cancelled" : "completed",
+              invoiceDeleted: saleData.invoiceDeleted === true,
               taxBreakdown: saleData.taxBreakdown ? {
                 serviceTax: saleData.taxBreakdown.serviceTax ?? 0,
                 serviceRate: saleData.taxBreakdown.serviceRate ?? 5,
@@ -241,6 +249,31 @@ export default function ReceiptPage() {
 
     loadReceipt()
   }, [params.billNo])
+
+  // Past deleted invoices: old ?data= URLs lacked status flags; resolve via API (archived bill) and show Cancelled
+  useEffect(() => {
+    if (!searchParams.get("data")) return
+    const billNo = params.billNo as string
+    if (!billNo || !receipt) return
+    if (receipt.invoiceDeleted || String(receipt.status).toLowerCase() === "cancelled") return
+
+    let unmounted = false
+    const id = setTimeout(() => {
+      SalesAPI.getByBillNo(billNo)
+        .then((res) => {
+          if (unmounted || !res?.success || !res.data) return
+          const d = res.data as { invoiceDeleted?: boolean; status?: string }
+          if (d.invoiceDeleted || String(d.status).toLowerCase() === "cancelled") {
+            setReceipt((prev) => (prev ? { ...prev, status: "cancelled", invoiceDeleted: true } : null))
+          }
+        })
+        .catch(() => {})
+    }, 0)
+    return () => {
+      unmounted = true
+      clearTimeout(id)
+    }
+  }, [receipt, params.billNo, searchParams])
 
   const handlePrint = () => {
     window.print()
@@ -318,6 +351,8 @@ ${publicUrl}`
       subtotal: receipt.netTotal,
       tip: receipt.tip || 0,
       tipStaffName: receipt.tipStaffName,
+      status: receipt.status,
+      invoiceDeleted: receipt.invoiceDeleted,
       discount: 0,
       tax: receipt.taxAmount,
       roundOff: 0,
@@ -374,11 +409,19 @@ ${publicUrl}`
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Link href={(() => {
-              const returnTo = searchParams.get('returnTo')
-              if (!returnTo) return '/quick-sale'
-              return returnTo.startsWith('/') ? returnTo : `/${returnTo}`
-            })()}>
+            <Link
+              href={(() => {
+                const raw = searchParams.get("returnTo")
+                if (!raw) return "/quick-sale"
+                try {
+                  const decoded = decodeURIComponent(raw)
+                  if (decoded.startsWith("/")) return decoded
+                } catch {
+                  /* ignore */
+                }
+                return raw.startsWith("/") ? raw : `/${raw}`
+              })()}
+            >
               <Button variant="outline">
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back
@@ -443,7 +486,9 @@ ${publicUrl}`
               staffId: receipt.id,
               staffName: receipt.staffName,
               notes: '',
-              taxBreakdown: receipt.taxBreakdown
+              taxBreakdown: receipt.taxBreakdown,
+              status: receipt.status,
+              invoiceDeleted: receipt.invoiceDeleted,
             }} 
             businessSettings={businessSettings} 
           />
