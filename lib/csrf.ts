@@ -7,6 +7,12 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/a
 
 let csrfBootstrapInFlight: Promise<void> | null = null
 
+/** When we last stored a CSRF value from login or GET /auth/csrf (cross-origin only). */
+let csrfSyncedAt = 0
+
+/** Re-fetch CSRF from API if session mirror is older than this (avoids stale sessionStorage vs browser cookie). */
+const CSRF_CROSS_ORIGIN_TTL_MS = 90_000
+
 /** When the API is on another origin, `document.cookie` does not include the API host’s cookie; login / GET /api/auth/csrf return the token in JSON — we mirror it here for the X-CSRF-Token header. */
 const CSRF_SESSION_STORAGE_KEY = 'salon-ems-csrf'
 
@@ -42,8 +48,10 @@ export function setCsrfTokenPersisted(token: string | null | undefined): void {
   try {
     if (token && String(token).trim()) {
       sessionStorage.setItem(CSRF_SESSION_STORAGE_KEY, String(token).trim())
+      csrfSyncedAt = Date.now()
     } else {
       sessionStorage.removeItem(CSRF_SESSION_STORAGE_KEY)
+      csrfSyncedAt = 0
     }
   } catch {
     /* ignore quota / private mode */
@@ -60,24 +68,44 @@ export function csrfHeadersObject(): Record<string, string> {
   return t ? { [CSRF_HEADER_NAME]: t } : {}
 }
 
+async function fetchCsrfTokenFromServer(): Promise<void> {
+  const res = await axios.get<{ success?: boolean; csrfToken?: string }>(`${API_BASE_URL}/auth/csrf`, {
+    withCredentials: true,
+    timeout: 15000,
+  })
+  const t = res.data?.csrfToken
+  if (t && typeof t === 'string') {
+    setCsrfTokenPersisted(t)
+  }
+}
+
 /**
- * Ensures a CSRF value exists for mutating API calls (cookie readable on same origin, or JSON from bootstrap).
+ * Ensures a CSRF value exists for mutating API calls.
+ * If the API cookie is readable on this origin, use it (always matches the cookie the browser sends).
+ * Otherwise do not trust sessionStorage forever — it can drift from the cookie; refresh on a TTL or when force=true.
  * Uses plain axios — not apiClient — to avoid interceptor recursion.
  */
-export async function ensureCsrfToken(): Promise<void> {
+export async function ensureCsrfToken(force = false): Promise<void> {
   if (typeof window === 'undefined') return
-  if (getCsrfToken()) return
+  if (getCsrfTokenFromCookie()) return
+
+  if (
+    !force &&
+    getCsrfTokenFromSessionStorage() &&
+    Date.now() - csrfSyncedAt < CSRF_CROSS_ORIGIN_TTL_MS
+  ) {
+    return
+  }
+
+  if (force) {
+    await fetchCsrfTokenFromServer()
+    return
+  }
+
   if (!csrfBootstrapInFlight) {
     csrfBootstrapInFlight = (async () => {
       try {
-        const res = await axios.get<{ success?: boolean; csrfToken?: string }>(`${API_BASE_URL}/auth/csrf`, {
-          withCredentials: true,
-          timeout: 15000,
-        })
-        const t = res.data?.csrfToken
-        if (t && typeof t === 'string') {
-          setCsrfTokenPersisted(t)
-        }
+        await fetchCsrfTokenFromServer()
       } finally {
         csrfBootstrapInFlight = null
       }
