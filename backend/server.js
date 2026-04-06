@@ -161,8 +161,8 @@ app.options('*', cors());
 
 /** Public: set `ems_csrf` cookie for double-submit CSRF (safe before login; no auth). */
 app.get('/api/auth/csrf', (req, res) => {
-  setCsrfCookie(res);
-  res.json({ success: true });
+  const csrfToken = setCsrfCookie(res);
+  res.json({ success: true, csrfToken });
 });
 
 // Helper function to apply WhatsApp settings defaults
