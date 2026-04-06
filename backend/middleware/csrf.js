@@ -53,11 +53,23 @@ function generateToken() {
 
 function csrfCookieOptions() {
   const secure = process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === '1';
-  const v = (process.env.COOKIE_SAME_SITE || 'lax').toLowerCase();
+  /**
+   * Cross-site credentialed XHR (SPA origin ≠ API origin): SameSite=Lax cookies are NOT sent on
+   * cross-site POST/PUT/PATCH/DELETE, so the double-submit check always fails. Use None+Secure in
+   * production unless overridden (e.g. same-origin API behind one host).
+   * @see https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie/SameSite
+   */
+  const raw =
+    process.env.CSRF_COOKIE_SAME_SITE ||
+    process.env.COOKIE_SAME_SITE ||
+    (secure ? 'none' : 'lax');
+  const v = String(raw).toLowerCase();
   const sameSite = v === 'none' || v === 'strict' || v === 'lax' ? v : 'lax';
+  /** SameSite=None requires Secure; browsers reject None without it. */
+  const cookieSecure = sameSite === 'none' ? true : secure;
   return {
     httpOnly: false,
-    secure,
+    secure: cookieSecure,
     sameSite,
     path: '/',
     maxAge: 7 * 24 * 60 * 60 * 1000,
