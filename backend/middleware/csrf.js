@@ -89,6 +89,19 @@ function csrfProtection(req, res, next) {
   if (!isCsrfEnabled()) return next();
   if (shouldSkip(req)) return next();
 
+  /*
+   * Bearer-token auth is inherently CSRF-safe: an attacker on another origin
+   * cannot read localStorage to forge the Authorization header.  When the SPA
+   * and API live on different hosts, the ems_csrf cookie is often blocked by
+   * third-party cookie policies (ITP, Chrome partitioning) even with
+   * SameSite=None, so the double-submit check always fails.  Skip CSRF for
+   * requests that already carry a Bearer token.
+   */
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ') && authHeader.length > 10) {
+    return next();
+  }
+
   const cookieToken = req.cookies && req.cookies[CSRF_COOKIE];
   let headerToken;
   for (const h of HEADER_NAMES) {

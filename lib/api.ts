@@ -1,25 +1,6 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
-import { CSRF_HEADER_NAME, getCsrfToken, ensureCsrfToken, clearCsrfTokenPersisted } from './csrf'
-
-/** Paths under /api where backend skips CSRF (see backend/middleware/csrf.js SKIP_PREFIXES). */
-const CSRF_AXIOS_SKIP_SUBSTRINGS = [
-  'auth/login',
-  'auth/staff-login',
-  'auth/forgot-password',
-  'auth/reset-password',
-  'auth/refresh',
-  'admin/login',
-]
-
-function axiosShouldAttachCsrf(config: { url?: string; method?: string }): boolean {
-  const method = (config.method || 'get').toUpperCase()
-  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return false
-  const u = String(config.url || '')
-  return !CSRF_AXIOS_SKIP_SUBSTRINGS.some((s) => u.includes(s))
-}
-
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
@@ -187,25 +168,13 @@ const apiClient: AxiosInstance = axios.create({
   },
 })
 
-// Request interceptor to add auth token + CSRF (cookie and/or session mirror for cross-origin API hosts)
+// Request interceptor to add auth token (Bearer skip on backend makes CSRF unnecessary for apiClient)
 apiClient.interceptors.request.use(
-  async (config) => {
+  (config) => {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('salon-auth-token')
       if (token) {
         config.headers.Authorization = `Bearer ${token}`
-      }
-      if (axiosShouldAttachCsrf(config)) {
-        await ensureCsrfToken()
-        const csrf = getCsrfToken()
-        if (csrf) {
-          const h = config.headers
-          if (h && typeof (h as { set?: (k: string, v: string) => void }).set === 'function') {
-            ;(h as { set: (k: string, v: string) => void }).set(CSRF_HEADER_NAME, csrf)
-          } else if (h) {
-            ;(h as Record<string, string>)[CSRF_HEADER_NAME] = csrf
-          }
-        }
       }
     }
     return config
@@ -243,20 +212,6 @@ apiClient.interceptors.response.use(
     const status = error?.response?.status
     const errBody = error?.response?.data
     const errorMsg = normalizeApiErrorMessage(errBody)
-
-    // Stale sessionStorage vs ems_csrf cookie (cross-origin): clear, re-fetch CSRF, retry once
-    if (
-      typeof window !== 'undefined' &&
-      config &&
-      !config.__csrfRetry &&
-      status === 403 &&
-      errorMsg.toLowerCase().includes('csrf')
-    ) {
-      config.__csrfRetry = true
-      clearCsrfTokenPersisted()
-      await ensureCsrfToken(true)
-      return apiClient(config)
-    }
 
     if (typeof window !== 'undefined' && config && !config.__retryAfterRefresh) {
       const url = String(config.url || '')

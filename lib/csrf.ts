@@ -1,23 +1,22 @@
-import axios from 'axios'
+/**
+ * CSRF helpers — double-submit cookie mirror.
+ *
+ * For requests that carry `Authorization: Bearer <token>`, the backend skips
+ * CSRF entirely (Bearer tokens are inherently un-forgeable cross-origin).
+ *
+ * These helpers only matter for cookie-only sessions (e.g. admin `fetch()`
+ * calls that don't use apiClient).  They read the `ems_csrf` cookie if
+ * available, or fall back to a value stored in sessionStorage at login.
+ */
 
 /** Matches backend `backend/middleware/csrf.js` — double-submit cookie name. */
 const CSRF_COOKIE = 'ems_csrf'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-
-let csrfBootstrapInFlight: Promise<void> | null = null
-
-/** When we last stored a CSRF value from login or GET /auth/csrf (cross-origin only). */
-let csrfSyncedAt = 0
-
-/** Re-fetch CSRF from API if session mirror is older than this (avoids stale sessionStorage vs browser cookie). */
-const CSRF_CROSS_ORIGIN_TTL_MS = 90_000
-
-/** When the API is on another origin, `document.cookie` does not include the API host’s cookie; login / GET /api/auth/csrf return the token in JSON — we mirror it here for the X-CSRF-Token header. */
 const CSRF_SESSION_STORAGE_KEY = 'salon-ems-csrf'
 
 export const CSRF_HEADER_NAME = 'X-CSRF-Token' as const
 
+/** Read the CSRF token from `document.cookie` (works on same-origin only). */
 export function getCsrfTokenFromCookie(): string | null {
   if (typeof document === 'undefined') return null
   const m = document.cookie.match(
@@ -28,6 +27,7 @@ export function getCsrfTokenFromCookie(): string | null {
   return m ? decodeURIComponent(m[1]) : null
 }
 
+/** Read the CSRF token persisted at login (cross-origin fallback). */
 function getCsrfTokenFromSessionStorage(): string | null {
   if (typeof sessionStorage === 'undefined') return null
   try {
@@ -38,20 +38,19 @@ function getCsrfTokenFromSessionStorage(): string | null {
   }
 }
 
-/** Token for double-submit header: same-origin cookie (if readable) or value from login / bootstrap. */
+/** Best-effort CSRF token: same-origin cookie first, then session mirror. */
 export function getCsrfToken(): string | null {
   return getCsrfTokenFromCookie() ?? getCsrfTokenFromSessionStorage()
 }
 
+/** Store the token returned by login / GET /api/auth/csrf for cross-origin use. */
 export function setCsrfTokenPersisted(token: string | null | undefined): void {
   if (typeof sessionStorage === 'undefined') return
   try {
     if (token && String(token).trim()) {
       sessionStorage.setItem(CSRF_SESSION_STORAGE_KEY, String(token).trim())
-      csrfSyncedAt = Date.now()
     } else {
       sessionStorage.removeItem(CSRF_SESSION_STORAGE_KEY)
-      csrfSyncedAt = 0
     }
   } catch {
     /* ignore quota / private mode */
@@ -62,54 +61,8 @@ export function clearCsrfTokenPersisted(): void {
   setCsrfTokenPersisted(null)
 }
 
-/** Use on mutating requests when the CSRF cookie is present (set at login or via GET /api/auth/csrf). */
+/** Header object for mutating `fetch()` calls that need CSRF (admin panel). */
 export function csrfHeadersObject(): Record<string, string> {
   const t = getCsrfToken()
   return t ? { [CSRF_HEADER_NAME]: t } : {}
-}
-
-async function fetchCsrfTokenFromServer(): Promise<void> {
-  const res = await axios.get<{ success?: boolean; csrfToken?: string }>(`${API_BASE_URL}/auth/csrf`, {
-    withCredentials: true,
-    timeout: 15000,
-  })
-  const t = res.data?.csrfToken
-  if (t && typeof t === 'string') {
-    setCsrfTokenPersisted(t)
-  }
-}
-
-/**
- * Ensures a CSRF value exists for mutating API calls.
- * If the API cookie is readable on this origin, use it (always matches the cookie the browser sends).
- * Otherwise do not trust sessionStorage forever — it can drift from the cookie; refresh on a TTL or when force=true.
- * Uses plain axios — not apiClient — to avoid interceptor recursion.
- */
-export async function ensureCsrfToken(force = false): Promise<void> {
-  if (typeof window === 'undefined') return
-  if (getCsrfTokenFromCookie()) return
-
-  if (
-    !force &&
-    getCsrfTokenFromSessionStorage() &&
-    Date.now() - csrfSyncedAt < CSRF_CROSS_ORIGIN_TTL_MS
-  ) {
-    return
-  }
-
-  if (force) {
-    await fetchCsrfTokenFromServer()
-    return
-  }
-
-  if (!csrfBootstrapInFlight) {
-    csrfBootstrapInFlight = (async () => {
-      try {
-        await fetchCsrfTokenFromServer()
-      } finally {
-        csrfBootstrapInFlight = null
-      }
-    })()
-  }
-  await csrfBootstrapInFlight
 }
