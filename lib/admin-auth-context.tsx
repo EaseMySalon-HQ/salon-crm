@@ -9,6 +9,7 @@ import {
   clearAdminAuthSession
 } from "@/lib/admin-auth-storage"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import { setCsrfTokenPersisted, clearCsrfTokenPersisted } from "@/lib/csrf"
 
 export interface Admin {
   id: string
@@ -115,7 +116,10 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       const data = await response.json()
       
       if (data.success) {
-        const { admin: adminData, token } = data.data
+        const { admin: adminData, token, csrfToken } = data.data
+        if (csrfToken && typeof csrfToken === 'string') {
+          setCsrfTokenPersisted(csrfToken)
+        }
         setAdmin(adminData)
         
         if (typeof window !== 'undefined') {
@@ -150,6 +154,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
 
     if (typeof window !== 'undefined') {
       clearAdminAuthSession()
+      clearCsrfTokenPersisted()
     }
 
     router.push('/admin/login')
