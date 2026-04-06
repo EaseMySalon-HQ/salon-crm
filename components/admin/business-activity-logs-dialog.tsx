@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { FileText, Loader2, Filter } from "lucide-react"
 
 interface ActivityLog {
@@ -31,11 +31,6 @@ interface BusinessActivityLogsDialogProps {
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
-
-function authHeaders() {
-  const token = getAdminAuthToken()
-  return { Authorization: `Bearer ${token}` }
-}
 
 function formatDate(d: string) {
   try {
@@ -75,7 +70,7 @@ export function BusinessActivityLogsDialog({
         ...(endDate && { endDate }),
       })
       const res = await fetch(`${API_URL}/admin/businesses/${businessId}/logs?${params}`, {
-        headers: authHeaders(),
+        headers: adminRequestHeaders(),
       })
       if (res.ok) {
         const data = await res.json()

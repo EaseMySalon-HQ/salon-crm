@@ -17,13 +17,15 @@ import {
   Bell,
   Info
 } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 interface SystemSettingsProps {
   settings?: any
   onSettingsChange: (settings: any) => void
+  jwtSecretConfigured?: boolean | null
 }
 
-export function SystemSettings({ settings: propSettings, onSettingsChange }: SystemSettingsProps) {
+export function SystemSettings({ settings: propSettings, onSettingsChange, jwtSecretConfigured }: SystemSettingsProps) {
   const [settings, setSettings] = useState(propSettings || {
     // Inactive Business Monitoring
     inactiveBusiness: {
@@ -42,9 +44,8 @@ export function SystemSettings({ settings: propSettings, onSettingsChange }: Sys
       maxConcurrentSessions: 3
     },
     
-    // Security Settings
+    // Security Settings (JWT signing uses server JWT_SECRET — not stored here)
     security: {
-      jwtSecret: "your-super-secret-jwt-key-change-this-in-production",
       passwordMinLength: 8,
       passwordRequireSpecialChars: true,
       maxLoginAttempts: 5,
@@ -272,19 +273,22 @@ export function SystemSettings({ settings: propSettings, onSettingsChange }: Sys
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <Label htmlFor="jwtSecret">JWT Secret Key</Label>
-            <Input
-              id="jwtSecret"
-              type="password"
-              value={settings.security?.jwtSecret || ''}
-              onChange={(e) => handleSettingChange('security.jwtSecret', e.target.value)}
-              className="w-full"
-            />
-            <p className="text-xs text-gray-500">
-              Secret key for JWT token generation (change in production)
-            </p>
-          </div>
+          <Alert className="border-blue-200 bg-blue-50/50">
+            <Info className="h-4 w-4 text-blue-700" />
+            <AlertTitle className="text-blue-900">JWT signing secret</AlertTitle>
+            <AlertDescription className="text-blue-900/90 text-sm space-y-1">
+              <p>
+                Session tokens are signed with <code className="rounded bg-blue-100/80 px-1 py-0.5 text-xs">JWT_SECRET</code> on the API server only — not in this panel.
+              </p>
+              <p className="font-medium">
+                {jwtSecretConfigured === null
+                  ? 'Checking server configuration…'
+                  : jwtSecretConfigured
+                    ? 'Server reports JWT_SECRET is configured.'
+                    : 'Server reports JWT_SECRET is not set — configure it in the API environment for production.'}
+              </p>
+            </AlertDescription>
+          </Alert>
 
           <div className="space-y-2">
             <Label htmlFor="adminEmail">Admin Email</Label>

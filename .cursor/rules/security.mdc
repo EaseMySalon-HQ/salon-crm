@@ -1,0 +1,30 @@
+---
+description: Security-first development — secrets, input handling, auth, and architecture flags
+alwaysApply: true
+---
+
+# Security
+
+## Secrets
+
+- Never commit API keys, tokens, passwords, or private keys. Use environment variables or the host’s secret mechanism; document required vars in `.env.example` without real values.
+- Never ship server-only secrets to client bundles. Treat anything in frontend code as public.
+
+## Input and output
+
+- Validate and sanitize on the **server** for every trust boundary (API routes, webhooks, file uploads). Client validation is UX only.
+- Use parameterized queries / the ORM/driver correctly; never build SQL with string concatenation from user input.
+- Encode or escape output by context (HTML, URLs, JSON) when rendering user-controlled data.
+
+## Authentication and authorization
+
+- Prefer established managed auth (Supabase Auth, Firebase Auth, Auth0, Clerk, etc.) over custom password/session/crypto.
+- Every sensitive action must check **authorization** (who is allowed), not only authentication (who they are). Do not trust role or user id from the client alone.
+
+## Architecture
+
+- Before implementing, flag risky patterns: trusting client-only checks, missing authz on admin/mutation routes, logging tokens or PII, overly broad CORS, security by obscurity, or storing secrets in code or public config.
+
+## When security conflicts with speed
+
+- Default to the safer approach; briefly note the tradeoff (latency, complexity) so maintainers can decide.

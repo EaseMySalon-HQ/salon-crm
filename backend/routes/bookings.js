@@ -8,6 +8,12 @@ const { authenticateToken } = require('../middleware/auth');
 const { setupBusinessDatabase } = require('../middleware/business-db');
 const { logger } = require('../utils/logger');
 const bookingService = require('../services/scheduling/booking-service');
+const { validate, validateAll } = require('../middleware/validate');
+const {
+  bookingCreateBodySchema,
+  bookingSlotHoldBodySchema,
+  bookingIdParamSchema,
+} = require('../validation/schemas');
 
 const auth = [authenticateToken, setupBusinessDatabase];
 
@@ -17,7 +23,7 @@ async function loadBusinessDoc(branchId) {
   return Business.findById(branchId).lean();
 }
 
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, validate(bookingCreateBodySchema), async (req, res) => {
   try {
     const businessDoc = await loadBusinessDoc(req.user.branchId);
     if (!businessDoc) {
@@ -53,12 +59,9 @@ router.post('/', auth, async (req, res) => {
 });
 
 /** Soft slot holds (TTL) — intended for future online booking; staff app uses POST / without holds. */
-router.post('/holds', auth, async (req, res) => {
+router.post('/holds', auth, validate(bookingSlotHoldBodySchema), async (req, res) => {
   try {
     const { staffId, startAt, endAt, ttlMinutes, clientId, bookingId } = req.body;
-    if (!clientId || !staffId || !startAt || !endAt) {
-      return res.status(400).json({ success: false, error: 'clientId, staffId, startAt, endAt required' });
-    }
     const hold = await bookingService.createSlotHold(req.businessModels, {
       branchId: req.user.branchId,
       clientId,
@@ -80,12 +83,18 @@ router.post('/holds', auth, async (req, res) => {
   }
 });
 
-router.post('/:bookingId/holds', auth, async (req, res) => {
+router.post(
+  '/:bookingId/holds',
+  auth,
+  validateAll(
+    [
+      { schema: bookingIdParamSchema, source: 'params' },
+      { schema: bookingSlotHoldBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { staffId, startAt, endAt, ttlMinutes, clientId } = req.body;
-    if (!clientId || !staffId || !startAt || !endAt) {
-      return res.status(400).json({ success: false, error: 'clientId, staffId, startAt, endAt required' });
-    }
     const hold = await bookingService.createSlotHold(req.businessModels, {
       branchId: req.user.branchId,
       clientId,

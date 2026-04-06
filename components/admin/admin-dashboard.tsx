@@ -30,7 +30,7 @@ import { Input } from "@/components/ui/input"
 import { useRouter } from "next/navigation"
 import { format } from "date-fns"
 import { useToast } from "@/hooks/use-toast"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { cn } from "@/lib/utils"
 
 interface DashboardStats {
@@ -75,11 +75,6 @@ interface User {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
 
-function authHeaders(extra: HeadersInit = {}) {
-  const token = getAdminAuthToken()
-  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra }
-}
-
 export function AdminDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [activity, setActivity] = useState<ActivityLog[]>([])
@@ -102,7 +97,7 @@ export function AdminDashboard() {
 
   const fetchDashboardStats = async () => {
     try {
-      const res = await fetch(`${API_URL}/admin/dashboard/stats`, { headers: authHeaders({ "Content-Type": "application/json" }) })
+      const res = await fetch(`${API_URL}/admin/dashboard/stats`, { headers: adminRequestHeaders({ "Content-Type": "application/json" }) })
       if (res.ok) {
         const data = await res.json()
         if (data.success) setStats(data.data)
@@ -117,7 +112,7 @@ export function AdminDashboard() {
   const fetchRecentActivity = async () => {
     setActivityLoading(true)
     try {
-      const res = await fetch(`${API_URL}/admin/logs?limit=8&sortBy=timestamp&sortOrder=desc`, { headers: authHeaders() })
+      const res = await fetch(`${API_URL}/admin/logs?limit=8&sortBy=timestamp&sortOrder=desc`, { headers: adminRequestHeaders() })
       if (res.ok) {
         const data = await res.json()
         if (data.success && Array.isArray(data.data)) setActivity(data.data)
@@ -132,7 +127,7 @@ export function AdminDashboard() {
   const fetchAllUsers = async () => {
     setUsersLoading(true)
     try {
-      const res = await fetch(`${API_URL}/admin/users`, { headers: authHeaders({ "Content-Type": "application/json" }) })
+      const res = await fetch(`${API_URL}/admin/users`, { headers: adminRequestHeaders({ "Content-Type": "application/json" }) })
       const text = await res.text()
       if (res.ok) {
         const data = JSON.parse(text)
@@ -160,7 +155,7 @@ export function AdminDashboard() {
     const isSoft = status !== "deleted"
     if (!confirm(isSoft ? `Delete "${businessName}"? It will be marked as deleted.` : `Permanently delete "${businessName}"?`)) return
     try {
-      const res = await fetch(`${API_URL}/admin/businesses/${businessId}`, { method: "DELETE", headers: authHeaders({ "Content-Type": "application/json" }) })
+      const res = await fetch(`${API_URL}/admin/businesses/${businessId}`, { method: "DELETE", headers: adminRequestHeaders({ "Content-Type": "application/json" }) })
       if (res.ok) {
         toast({ title: "Business deleted", description: isSoft ? `"${businessName}" marked as deleted.` : `"${businessName}" permanently deleted.` })
         fetchDashboardStats()

@@ -50,9 +50,28 @@ const cashRegistryRoutes = require('./routes/cashRegistry');
 const adminRoutes = require('./routes/admin');
 
 require('dotenv').config();
+/** Fail fast in production if JWT_SECRET missing */
+const { JWT_SECRET } = require('./config/jwt');
+
+const cookieParser = require('cookie-parser');
+const {
+  configureTrustProxy,
+  validateProductionRateLimitConfig,
+  generalApiLimiter,
+  authClusterLimiter,
+  reportsExportLimiter,
+  aiIntegrationLimiter,
+  AUTH_PATH_PREFIXES,
+  shutdownRateLimitInfrastructure,
+  getRateLimitHealthPayload,
+} = require('./middleware/rate-limit');
+const { apiV1AliasMiddleware } = require('./middleware/api-v1-alias');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+configureTrustProxy(app);
+validateProductionRateLimitConfig(app);
 
 // Connect to MongoDB and initialize admin access defaults
 const dbPromise = connectDB();
@@ -90,19 +109,58 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'X-XSRF-Token'],
   preflightContinue: false,
   optionsSuccessStatus: 200
 }));
+
+// Body + cookies before rate limiters so auth routes can key off JSON (email, etc.)
+app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
+
+// /api/v1/* is an alias for /api/* (same handlers; no duplicated route tables)
+app.use(apiV1AliasMiddleware);
+
+// Health checks before /api rate limiters (load balancers / k8s probes)
+app.get('/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'EaseMySalon API is running',
+    timestamp: new Date().toISOString(),
+    ...getRateLimitHealthPayload(),
+  });
+});
+app.get('/api/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'EaseMySalon API is running',
+    timestamp: new Date().toISOString(),
+    ...getRateLimitHealthPayload(),
+  });
+});
+
+// Rate limits: global API + stricter auth + heavy exports + reserved AI prefix (see middleware/rate-limit.js)
+app.use('/api', generalApiLimiter);
+AUTH_PATH_PREFIXES.forEach((p) => app.use(p, authClusterLimiter));
+app.use('/api/reports/export', reportsExportLimiter);
+app.use('/api/integrations/ai', aiIntegrationLimiter);
 
 // Per-request HTTP log (dev only). Set HTTP_LOG=0 to disable morgan during local profiling.
 if (process.env.NODE_ENV !== 'production' && process.env.HTTP_LOG !== '0') {
   app.use(morgan('short'));
 }
-app.use(express.json({ limit: '10mb' }));
+
+const { csrfProtection, setCsrfCookie } = require('./middleware/csrf');
+app.use(csrfProtection);
 
 // Handle CORS preflight for all routes
 app.options('*', cors());
+
+/** Public: set `ems_csrf` cookie for double-submit CSRF (safe before login; no auth). */
+app.get('/api/auth/csrf', (req, res) => {
+  setCsrfCookie(res);
+  res.json({ success: true });
+});
 
 // Helper function to apply WhatsApp settings defaults
 // This ensures that even if settings don't exist in DB, we use schema defaults
@@ -304,8 +362,35 @@ app.use('/api/packages', require('./routes/packages'));
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
+const {
+  signTenantAccess,
+  setTenantAuthCookies,
+  clearTenantAuthCookies,
+  COOKIE,
+  TOKEN_USE,
+} = require('./lib/auth-tokens');
+const { createRefreshSession, rotateRefreshSession } = require('./lib/refresh-session');
+const { validate, validateAll } = require('./middleware/validate');
+const {
+  tenantLoginSchema,
+  staffLoginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+  mongoIdParamSchema,
+  createClientBodySchema,
+  updateClientBodySchema,
+  createStaffBodySchema,
+  staffUpdateBodySchema,
+  staffChangePasswordBodySchema,
+  salePaymentBodySchema,
+  saleExchangeBodySchema,
+  createUserBodySchema,
+  updateUserBodySchema,
+  userChangePasswordBodySchema,
+  verifyAdminPasswordBodySchema,
+  createExpenseBodySchema,
+  updateExpenseBodySchema,
+} = require('./validation/schemas');
 
 // Initialize default users if they don't exist
 const initializeDefaultUsers = async () => {
@@ -432,21 +517,24 @@ const checkPermission = (module, feature) => {
   };
 };
 
-// Helper function to generate JWT token
-const generateToken = (user) => {
-  const payload = {
-    id: user._id || user.id,
-    email: user.email,
-    role: user.role
-  };
-  
-  // Include branchId for staff users
-  if (user.branchId) {
-    payload.branchId = user.branchId;
-  }
-  
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
-};
+/**
+ * Issue tenant session: short-lived access + rotated refresh (DB-backed jti) in HttpOnly cookies.
+ * JSON access token retained for clients still using Authorization + localStorage (migration).
+ * @param {'user'|'staff'} subjectType
+ * @param {string} [accessExpiresOverride] — e.g. '1h' for impersonation sessions
+ */
+async function issueTenantSession(res, user, accessExpiresOverride, subjectType = 'user') {
+  const mainConnection = await databaseManager.getMainConnection();
+  const { refreshToken } = await createRefreshSession(mainConnection, {
+    subjectType,
+    userId: subjectType === 'user' ? user._id || user.id : undefined,
+    staffId: subjectType === 'staff' ? user._id || user.id : undefined,
+    branchId: user.branchId,
+  });
+  const accessToken = signTenantAccess(user, accessExpiresOverride);
+  setTenantAuthCookies(res, { accessToken, refreshToken });
+  return accessToken;
+}
 
 // Helper function to hash password
 const hashPassword = async (password) => {
@@ -461,16 +549,9 @@ const comparePassword = async (password, hash) => {
 // Routes
 
 // Authentication routes
-app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
+app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email and password are required'
-      });
-    }
 
     // Use main database User model
     const { User } = req.mainModels;
@@ -526,8 +607,8 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
       updatedAt: new Date()
     });
 
-    // Generate token
-    const token = generateToken(user);
+    const token = await issueTenantSession(res, user);
+    const csrfToken = setCsrfCookie(res);
     const { password: _, ...userWithoutPassword } = user.toObject();
 
     const nextBill =
@@ -547,7 +628,8 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
       success: true,
       data: {
         user: { ...userWithoutPassword, ...suspensionMeta },
-        token
+        token,
+        csrfToken,
       }
     });
   } catch (error) {
@@ -560,16 +642,9 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
 });
 
 // Staff login endpoint
-app.post('/api/auth/staff-login', async (req, res) => {
+app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) => {
   try {
     const { email, password, businessCode } = req.body;
-
-    if (!email || !password || !businessCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email, password, and business code are required'
-      });
-    }
 
     // Get business ID from business code
     const databaseManager = require('./config/database-manager');
@@ -620,18 +695,24 @@ app.post('/api/auth/staff-login', async (req, res) => {
 
     // Generate token with staff info - ensure branchId is set (fallback to business._id for legacy staff)
     const effectiveBranchId = staff.branchId || business._id;
-    const token = generateToken({
-      _id: staff._id,
-      email: staff.email,
-      role: staff.role,
-      branchId: effectiveBranchId,
-      firstName: staff.name.split(' ')[0],
-      lastName: staff.name.split(' ').slice(1).join(' ') || '',
-      mobile: staff.phone,
-      hasLoginAccess: staff.hasLoginAccess,
-      allowAppointmentScheduling: staff.allowAppointmentScheduling,
-      isActive: staff.isActive
-    });
+    const token = await issueTenantSession(
+      res,
+      {
+        _id: staff._id,
+        email: staff.email,
+        role: staff.role,
+        branchId: effectiveBranchId,
+        firstName: staff.name.split(' ')[0],
+        lastName: staff.name.split(' ').slice(1).join(' ') || '',
+        mobile: staff.phone,
+        hasLoginAccess: staff.hasLoginAccess,
+        allowAppointmentScheduling: staff.allowAppointmentScheduling,
+        isActive: staff.isActive
+      },
+      undefined,
+      'staff'
+    );
+    const csrfToken = setCsrfCookie(res);
 
     const { password: _, ...staffWithoutPassword } = staff.toObject();
 
@@ -676,7 +757,8 @@ app.post('/api/auth/staff-login', async (req, res) => {
           updatedAt: staff.updatedAt,
           ...staffSuspensionMeta,
         },
-        token
+        token,
+        csrfToken,
       }
     });
   } catch (error) {
@@ -689,6 +771,7 @@ app.post('/api/auth/staff-login', async (req, res) => {
 });
 
 app.post('/api/auth/logout', authenticateToken, (req, res) => {
+  clearTenantAuthCookies(res);
   res.json({
     success: true,
     message: 'Logged out successfully'
@@ -700,6 +783,102 @@ const JWT_REFRESH_GRACE_SEC = 7 * 24 * 60 * 60;
 
 app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
   try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const UserModel = mainConnection.model('User', require('./models/User').schema);
+    const BusinessModel = mainConnection.model('Business', require('./models/Business').schema);
+
+    const refreshCookie = req.cookies && req.cookies[COOKIE.tenantRefresh];
+    if (refreshCookie) {
+      let rdecoded;
+      try {
+        rdecoded = jwt.verify(refreshCookie, JWT_SECRET);
+      } catch (e) {
+        return res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+      }
+      if (rdecoded.tokenUse !== TOKEN_USE.tenantRefresh || !rdecoded.id) {
+        return res.status(403).json({ success: false, error: 'Invalid refresh token' });
+      }
+
+      let newRefreshToken = refreshCookie;
+      if (rdecoded.jti && rdecoded.familyId) {
+        const rotated = await rotateRefreshSession(mainConnection, rdecoded);
+        if (!rotated.ok) {
+          return res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+        }
+        newRefreshToken = rotated.refreshToken;
+      } else {
+        const userTry = await UserModel.findById(rdecoded.id).select('-password');
+        if (userTry) {
+          const created = await createRefreshSession(mainConnection, {
+            subjectType: 'user',
+            userId: userTry._id,
+            branchId: userTry.branchId,
+          });
+          newRefreshToken = created.refreshToken;
+        } else {
+          const bid = rdecoded.branchId;
+          if (!bid) {
+            return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+          }
+          const businessDb = await databaseManager.getConnection(bid, mainConnection);
+          const StaffModel = businessDb.model('Staff', require('./models/Staff').schema);
+          const staffTry = await StaffModel.findById(rdecoded.id).select('-password');
+          if (!staffTry || !staffTry.isActive || !staffTry.hasLoginAccess) {
+            return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+          }
+          const business = await BusinessModel.findById(bid);
+          const effectiveBranchId = staffTry.branchId || business?._id || bid;
+          const created = await createRefreshSession(mainConnection, {
+            subjectType: 'staff',
+            staffId: staffTry._id,
+            branchId: effectiveBranchId,
+          });
+          newRefreshToken = created.refreshToken;
+        }
+      }
+
+      const userDoc = await UserModel.findById(rdecoded.id).select('-password');
+      if (userDoc) {
+        const userForToken = {
+          _id: userDoc._id,
+          email: userDoc.email,
+          role: userDoc.role,
+          branchId: userDoc.branchId,
+        };
+        const newToken = signTenantAccess(userForToken);
+        setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
+        return res.json({ success: true, data: { token: newToken } });
+      }
+
+      const businessId = rdecoded.branchId;
+      if (!businessId) {
+        return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+      }
+      const businessDb = await databaseManager.getConnection(businessId, mainConnection);
+      const StaffModel = businessDb.model('Staff', require('./models/Staff').schema);
+      const staff = await StaffModel.findById(rdecoded.id).select('-password');
+      if (!staff || !staff.isActive || !staff.hasLoginAccess) {
+        return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+      }
+      const business = await BusinessModel.findById(businessId);
+      const effectiveBranchId = staff.branchId || business?._id || businessId;
+      const newToken = signTenantAccess({
+        _id: staff._id,
+        email: staff.email,
+        role: staff.role,
+        branchId: effectiveBranchId,
+        firstName: staff.name?.split(' ')[0],
+        lastName: staff.name?.split(' ').slice(1).join(' ') || '',
+        mobile: staff.phone,
+        hasLoginAccess: staff.hasLoginAccess,
+        allowAppointmentScheduling: staff.allowAppointmentScheduling,
+        isActive: staff.isActive,
+      });
+      setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
+      return res.json({ success: true, data: { token: newToken } });
+    }
+
+    /** Legacy: sliding refresh using access token (Bearer) within grace window */
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.split(' ')[1];
     if (!token || token.startsWith('mock-token-')) {
@@ -720,29 +899,34 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       }
     }
 
+    if (decoded.tokenUse === TOKEN_USE.tenantRefresh) {
+      return res.status(403).json({ success: false, error: 'Use refresh token cookie or legacy access token' });
+    }
+
     if (!decoded.id) {
       return res.status(403).json({ success: false, error: 'Invalid or expired token' });
     }
 
-    const mainConnection = await databaseManager.getMainConnection();
-    const UserModel = mainConnection.model('User', require('./models/User').schema);
-    const BusinessModel = mainConnection.model('Business', require('./models/Business').schema);
-
     const userDoc = await UserModel.findById(decoded.id).select('-password');
     if (userDoc) {
-      // Suspended tenants may refresh tokens; auth middleware blocks non-auth APIs
-      const payload = {
-        id: userDoc._id,
+      const userForToken = {
+        _id: userDoc._id,
         email: userDoc.email,
-        role: userDoc.role
+        role: userDoc.role,
+        branchId: userDoc.branchId,
       };
-      if (userDoc.branchId) payload.branchId = userDoc.branchId;
       if (decoded.isImpersonation) {
-        payload.isImpersonation = true;
-        payload.impersonatedBy = decoded.impersonatedBy;
+        userForToken.isImpersonation = true;
+        userForToken.impersonatedBy = decoded.impersonatedBy;
       }
-      const expiresIn = decoded.isImpersonation ? '1h' : '24h';
-      const newToken = jwt.sign(payload, JWT_SECRET, { expiresIn });
+      const accessTtl = decoded.isImpersonation ? '1h' : undefined;
+      const newToken = signTenantAccess(userForToken, accessTtl);
+      const created = await createRefreshSession(mainConnection, {
+        subjectType: 'user',
+        userId: userDoc._id,
+        branchId: userDoc.branchId,
+      });
+      setTenantAuthCookies(res, { accessToken: newToken, refreshToken: created.refreshToken });
       return res.json({ success: true, data: { token: newToken } });
     }
 
@@ -760,7 +944,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
 
     const business = await BusinessModel.findById(businessId);
     const effectiveBranchId = staff.branchId || business?._id || businessId;
-    const newToken = generateToken({
+    const newToken = signTenantAccess({
       _id: staff._id,
       email: staff.email,
       role: staff.role,
@@ -770,9 +954,14 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       mobile: staff.phone,
       hasLoginAccess: staff.hasLoginAccess,
       allowAppointmentScheduling: staff.allowAppointmentScheduling,
-      isActive: staff.isActive
+      isActive: staff.isActive,
     });
-
+    const created = await createRefreshSession(mainConnection, {
+      subjectType: 'staff',
+      staffId: staff._id,
+      branchId: effectiveBranchId,
+    });
+    setTenantAuthCookies(res, { accessToken: newToken, refreshToken: created.refreshToken });
     return res.json({ success: true, data: { token: newToken } });
   } catch (error) {
     logger.error('[auth/refresh]', error);
@@ -1001,16 +1190,9 @@ app.get('/api/business/plans', authenticateToken, setupMainDatabase, async (req,
 });
 
 // Password Reset Routes
-app.post('/api/auth/forgot-password', async (req, res) => {
+app.post('/api/auth/forgot-password', validate(forgotPasswordSchema), async (req, res) => {
   try {
     const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email is required'
-      });
-    }
 
     // Find user by email
     const user = await User.findOne({ email: email.toLowerCase() });
@@ -1064,16 +1246,9 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 });
 
-app.post('/api/auth/reset-password', async (req, res) => {
+app.post('/api/auth/reset-password', validate(resetPasswordSchema), async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-
-    if (!token || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        error: 'Token and new password are required'
-      });
-    }
 
     // Find the reset token
     const resetToken = await PasswordResetToken.findOne({ token });
@@ -1214,7 +1389,13 @@ app.get('/api/users', authenticateToken, setupMainDatabase, requireAdmin, async 
   }
 });
 
-app.post('/api/users', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.post(
+  '/api/users',
+  authenticateToken,
+  setupMainDatabase,
+  requireAdmin,
+  validate(createUserBodySchema),
+  async (req, res) => {
   try {
     const { User } = req.mainModels;
     const {
@@ -1376,7 +1557,17 @@ app.get('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res)
   }
 });
 
-app.put('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res) => {
+app.put(
+  '/api/users/:id',
+  authenticateToken,
+  setupMainDatabase,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: updateUserBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { User } = req.mainModels;
     const {
@@ -1516,7 +1707,13 @@ app.put('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res)
   }
 });
 
-app.delete('/api/users/:id', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.delete(
+  '/api/users/:id',
+  authenticateToken,
+  setupMainDatabase,
+  requireAdmin,
+  validate(mongoIdParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { User } = req.mainModels;
     // First check if the user exists and is admin
@@ -1611,7 +1808,18 @@ app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requ
 });
 
 // Change user password (no current password required; admin or self can reset)
-app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.post(
+  '/api/users/:id/change-password',
+  authenticateToken,
+  setupMainDatabase,
+  requireAdmin,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: userChangePasswordBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { newPassword } = req.body;
     const { User } = req.mainModels;
@@ -1656,7 +1864,18 @@ app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase,
 });
 
 // Verify admin password for editing admin details
-app.post('/api/users/:id/verify-admin-password', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.post(
+  '/api/users/:id/verify-admin-password',
+  authenticateToken,
+  setupMainDatabase,
+  requireAdmin,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: verifyAdminPasswordBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { password } = req.body;
     const { User } = req.mainModels;
@@ -1803,7 +2022,13 @@ app.get('/api/clients/:id', authenticateToken, setupBusinessDatabase, async (req
   }
 });
 
-app.post('/api/clients', authenticateToken, requireManager, setupBusinessDatabase, async (req, res) => {
+app.post(
+  '/api/clients',
+  authenticateToken,
+  requireManager,
+  setupBusinessDatabase,
+  validate(createClientBodySchema),
+  async (req, res) => {
   try {
     const { name, email, phone, address, notes } = req.body;
 
@@ -1850,7 +2075,18 @@ app.post('/api/clients', authenticateToken, requireManager, setupBusinessDatabas
   }
 });
 
-app.put('/api/clients/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put(
+  '/api/clients/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireManager,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: updateClientBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { Client } = req.businessModels;
     const { phone } = req.body;
@@ -1892,7 +2128,13 @@ app.put('/api/clients/:id', authenticateToken, setupBusinessDatabase, requireMan
   }
 });
 
-app.delete('/api/clients/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete(
+  '/api/clients/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireAdmin,
+  validate(mongoIdParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { Client } = req.businessModels;
     const deletedClient = await Client.findByIdAndDelete(req.params.id);
@@ -6102,7 +6344,13 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
   }
 });
 
-app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.post(
+  '/api/staff',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireAdmin,
+  validate(createStaffBodySchema),
+  async (req, res) => {
   try {
     const { Staff } = req.businessModels;
     const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, workSchedule } = req.body;
@@ -6181,7 +6429,17 @@ app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, a
   }
 });
 
-app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put(
+  '/api/staff/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: staffUpdateBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { Staff } = req.businessModels;
     const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive } = req.body;
@@ -6368,7 +6626,13 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
   }
 });
 
-app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete(
+  '/api/staff/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireAdmin,
+  validate(mongoIdParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { Staff } = req.businessModels;
     const staffToDelete = await Staff.findById(req.params.id);
@@ -6407,7 +6671,18 @@ app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAd
 });
 
 // Change staff password (admin or manager can reset)
-app.post('/api/staff/:id/change-password', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post(
+  '/api/staff/:id/change-password',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireManager,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: staffChangePasswordBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { newPassword } = req.body;
     const { Staff } = req.businessModels;
@@ -10480,7 +10755,18 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
 });
 
 // Add payment to a sale
-app.post('/api/sales/:id/payment', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post(
+  '/api/sales/:id/payment',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireStaff,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: salePaymentBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { id } = req.params;
     const { amount, method, notes, collectedBy } = req.body;
@@ -10561,7 +10847,18 @@ app.get('/api/sales/:id/payment-summary', authenticateToken, setupBusinessDataba
 });
 
 // Exchange products within a sale (bill)
-app.post('/api/sales/:id/exchange', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post(
+  '/api/sales/:id/exchange',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireStaff,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: saleExchangeBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   const { Sale } = req.businessModels;
   const session = await Sale.startSession();
   session.startTransaction();
@@ -10892,7 +11189,13 @@ app.get('/api/expenses', authenticateToken, setupBusinessDatabase, requireManage
   }
 });
 
-app.post('/api/expenses', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post(
+  '/api/expenses',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireStaff,
+  validate(createExpenseBodySchema),
+  async (req, res) => {
   try {
     const { Expense } = req.businessModels;
     const { category, paymentMode, description, amount, date, status, vendor, notes, approvedBy } = req.body;
@@ -10930,7 +11233,18 @@ app.get('/api/expenses/:id', authenticateToken, setupBusinessDatabase, async (re
   }
 });
 
-app.put('/api/expenses/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put(
+  '/api/expenses/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireManager,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: updateExpenseBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { Expense } = req.businessModels;
     const expense = await Expense.findByIdAndUpdate(req.params.id, req.body, { new: true });
@@ -10941,7 +11255,13 @@ app.put('/api/expenses/:id', authenticateToken, setupBusinessDatabase, requireMa
   }
 });
 
-app.delete('/api/expenses/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.delete(
+  '/api/expenses/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireManager,
+  validate(mongoIdParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { Expense } = req.businessModels;
     const expense = await Expense.findByIdAndDelete(req.params.id);
@@ -13461,15 +13781,6 @@ app.post('/api/gdpr/consent/:userId', authenticateToken, setupBusinessDatabase, 
   }
 })
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    success: true,
-    message: 'EaseMySalon API is running',
-    timestamp: new Date().toISOString()
-  });
-});
-
 // Email service status check
 app.get('/api/email-service/status', authenticateToken, async (req, res) => {
   try {
@@ -13516,10 +13827,10 @@ app.use('*', (req, res) => {
 
 // Start server
 
-app.listen(PORT, '0.0.0.0', async () => {
+const server = app.listen(PORT, '0.0.0.0', async () => {
   logger.debug(`🚀 EaseMySalon Backend running on port ${PORT}`);
-  logger.debug(`📊 Health check: http://localhost:${PORT}/api/health`);
-  logger.debug(`🔐 API Base: http://localhost:${PORT}/api`);
+  logger.debug(`📊 Health check: http://localhost:${PORT}/health / http://localhost:${PORT}/api/health (also /api/v1/health)`);
+  logger.debug(`🔐 API base: http://localhost:${PORT}/api — versioned alias: http://localhost:${PORT}/api/v1`);
   // Old initialization functions disabled for multi-tenant architecture
   // Admin users should be created via create-admin.js script
   // await initializeDefaultUsers();
@@ -13542,6 +13853,11 @@ app.listen(PORT, '0.0.0.0', async () => {
     logger.error('⚠️  Failed to initialize email service:', err.message);
   });
 });
+
+const { registerGracefulShutdown } = require('./utils/shutdown');
+registerGracefulShutdown(server, [
+  { name: 'rate-limit-redis', close: shutdownRateLimitInfrastructure },
+]);
 
 // Setup inactivity checker cron job
 function setupInactivityChecker() {

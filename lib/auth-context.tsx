@@ -90,11 +90,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return
         }
         
-        // Check if we have a stored token
+        // Prefer localStorage; also try HttpOnly cookie session (no token visible in JS)
         const storedToken = localStorage.getItem("salon-auth-token")
         const storedUser = localStorage.getItem("salon-auth-user")
-        
+
         if (!storedToken || !storedUser) {
+          try {
+            const response = await AuthAPI.getProfile()
+            if (response.success && response.data) {
+              setUser(response.data as User)
+            }
+          } catch {
+            /* no session */
+          }
           setIsLoading(false)
           return
         }

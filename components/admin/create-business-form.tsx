@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 
 // Create schema factory function
 const createBusinessSchema = (isEditMode: boolean) => z.object({
@@ -63,14 +63,6 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
   // Define API_URL at component level
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
-  const authHeaders = (extra: HeadersInit = {}) => {
-    const token = getAdminAuthToken()
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...extra,
-    }
-  }
-
   const form = useForm<BusinessFormData>({
     resolver: zodResolver(createBusinessSchema(isEditMode)) as any,
     defaultValues: {
@@ -105,7 +97,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
   const fetchPlans = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/plans/config`, {
-        headers: authHeaders(),
+        headers: adminRequestHeaders(),
       })
 
       if (response.ok) {
@@ -123,7 +115,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
     setIsLoading(true)
     try {
       const response = await fetch(`${API_URL}/admin/businesses/${currentBusinessId}`, {
-        headers: authHeaders({
+        headers: adminRequestHeaders({
           'Content-Type': 'application/json'
         })
       })
@@ -249,7 +241,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
         // Update existing business
         response = await fetch(`${API_URL}/admin/businesses/${currentBusinessId}`, {
           method: 'PUT',
-          headers: authHeaders({
+          headers: adminRequestHeaders({
             'Content-Type': 'application/json',
           }),
           body: JSON.stringify(filteredBusinessData)
@@ -258,7 +250,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
         // Create new business
         response = await fetch(`${API_URL}/admin/businesses`, {
           method: 'POST',
-          headers: authHeaders({
+          headers: adminRequestHeaders({
             'Content-Type': 'application/json',
           }),
           body: JSON.stringify(businessData)

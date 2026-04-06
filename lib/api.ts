@@ -1,6 +1,24 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
+import { CSRF_HEADER_NAME, getCsrfTokenFromCookie } from './csrf'
+
+/** Paths under /api where backend skips CSRF (see backend/middleware/csrf.js SKIP_PREFIXES). */
+const CSRF_AXIOS_SKIP_SUBSTRINGS = [
+  'auth/login',
+  'auth/staff-login',
+  'auth/forgot-password',
+  'auth/reset-password',
+  'auth/refresh',
+  'admin/login',
+]
+
+function axiosShouldAttachCsrf(config: { url?: string; method?: string }): boolean {
+  const method = (config.method || 'get').toUpperCase()
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return false
+  const u = String(config.url || '')
+  return !CSRF_AXIOS_SKIP_SUBSTRINGS.some((s) => u.includes(s))
+}
 
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
@@ -15,11 +33,14 @@ async function refreshAuthTokenOnce(): Promise<string | null> {
     try {
       const token = localStorage.getItem('salon-auth-token')
       if (!token) return null
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (token) headers.Authorization = `Bearer ${token}`
       const res = await axios.post<{ success?: boolean; data?: { token?: string } }>(
         `${API_BASE_URL}/auth/refresh`,
         {},
         {
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          headers,
+          withCredentials: true,
           timeout: 25000,
         }
       )
@@ -158,6 +179,7 @@ function logApiResponseError(error: AxiosError | any) {
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -170,6 +192,17 @@ apiClient.interceptors.request.use(
       const token = localStorage.getItem('salon-auth-token')
       if (token) {
         config.headers.Authorization = `Bearer ${token}`
+      }
+      if (axiosShouldAttachCsrf(config)) {
+        const csrf = getCsrfTokenFromCookie()
+        if (csrf) {
+          const h = config.headers
+          if (h && typeof (h as { set?: (k: string, v: string) => void }).set === 'function') {
+            ;(h as { set: (k: string, v: string) => void }).set(CSRF_HEADER_NAME, csrf)
+          } else if (h) {
+            ;(h as Record<string, string>)[CSRF_HEADER_NAME] = csrf
+          }
+        }
       }
     }
     return config

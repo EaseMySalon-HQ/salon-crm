@@ -5,20 +5,43 @@ const {
   applyPermissionOverrides,
   normalizePermissionOverrides
 } = require('../utils/permission-helpers');
+const { JWT_SECRET } = require('../config/jwt');
+const { COOKIE, TOKEN_USE } = require('../lib/auth-tokens');
 
 require('dotenv').config();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
+/**
+ * Bearer first, then HttpOnly admin cookie (credentialed admin UI requests).
+ */
+function getPlatformAdminToken(req) {
+  const fromHeader = req.header('Authorization')?.replace('Bearer ', '');
+  if (fromHeader) return fromHeader;
+  if (req.cookies && req.cookies[COOKIE.adminAccess]) {
+    return req.cookies[COOKIE.adminAccess];
+  }
+  return null;
+}
 
 const authenticateAdmin = async (req, res, next) => {
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
+    const token = getPlatformAdminToken(req);
 
     if (!token) {
       return res.status(401).json({ success: false, error: 'Access token required' });
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+
+    // Reject tenant tokens on platform admin API
+    if (
+      decoded.tokenUse === TOKEN_USE.tenantAccess ||
+      decoded.tokenUse === TOKEN_USE.tenantRefresh
+    ) {
+      return res.status(403).json({ success: false, error: 'Invalid admin token' });
+    }
+    if (decoded.tokenUse && decoded.tokenUse !== TOKEN_USE.platformAdmin) {
+      return res.status(403).json({ success: false, error: 'Invalid admin token' });
+    }
     const mainConnection = await databaseManager.getMainConnection();
     const Admin = mainConnection.model('Admin', require('../models/Admin').schema);
     const AdminRole = mainConnection.model('AdminRole', require('../models/AdminRole').schema);

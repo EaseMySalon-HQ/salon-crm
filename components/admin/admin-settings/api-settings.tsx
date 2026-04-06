@@ -18,15 +18,19 @@ import {
   Trash2,
   Edit,
   Key,
-  Link
+  Link,
+  Info
 } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 interface APISettingsProps {
   settings?: any
   onSettingsChange: (settings: any) => void
+  /** From GET /api/admin/settings/meta/security — never a secret value */
+  jwtSecretConfigured?: boolean | null
 }
 
-export function APISettings({ settings: propSettings, onSettingsChange }: APISettingsProps) {
+export function APISettings({ settings: propSettings, onSettingsChange, jwtSecretConfigured }: APISettingsProps) {
   const [settings, setSettings] = useState(propSettings || {
     // API Configuration
     api: {
@@ -54,9 +58,8 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
       statusCode: 429
     },
     
-    // Authentication
+    // Authentication (JWT signing uses server JWT_SECRET — not stored in UI)
     authentication: {
-      jwtSecret: "your-super-secret-jwt-key-change-this-in-production",
       jwtExpiration: "24h",
       refreshTokenExpiration: "7d",
       enableRefreshTokens: true,
@@ -71,9 +74,9 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
       {
         id: 1,
         name: "Business Created",
-        url: "https://webhook.site/unique-id",
+        url: "",
         events: ["business.created"],
-        secret: "webhook-secret-key",
+        secret: "",
         enabled: true,
         retryCount: 3,
         timeout: 5000
@@ -81,9 +84,9 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
       {
         id: 2,
         name: "User Created",
-        url: "https://webhook.site/unique-id-2",
+        url: "",
         events: ["user.created", "user.updated"],
-        secret: "webhook-secret-key-2",
+        secret: "",
         enabled: false,
         retryCount: 3,
         timeout: 5000
@@ -148,7 +151,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
         const next = { ...prev, ...propSettings }
         if (!next.api || typeof next.api !== 'object') next.api = { version: 'v1', baseUrl: 'https://api.easemysalon.com', timeout: 30000, maxRequestsPerMinute: 100, enableCORS: true, allowedOrigins: [], enableRateLimiting: true, enableLogging: true, enableMetrics: true, ...(prev?.api || {}), ...(propSettings?.api || {}) }
         if (!next.rateLimiting || typeof next.rateLimiting !== 'object') next.rateLimiting = prev?.rateLimiting || {}
-        const defaultAuth = { jwtSecret: '', jwtExpiration: '24h', refreshTokenExpiration: '7d', enableRefreshTokens: true, enableApiKeys: true, apiKeyLength: 32, enableOAuth: false, oauthProviders: [] }
+        const defaultAuth = { jwtExpiration: '24h', refreshTokenExpiration: '7d', enableRefreshTokens: true, enableApiKeys: true, apiKeyLength: 32, enableOAuth: false, oauthProviders: [] }
         if (!next.authentication || typeof next.authentication !== 'object') next.authentication = { ...defaultAuth, ...(prev?.authentication || {}), ...(propSettings?.authentication || {}) }
         if (!Array.isArray(next.webhooks)) next.webhooks = prev?.webhooks ?? []
         const defaultIntegrations = { paymentGateway: { enabled: false, provider: 'stripe' }, emailService: { enabled: true, provider: 'smtp' }, smsService: { enabled: false }, analytics: {} }
@@ -512,19 +515,25 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="jwtSecret">JWT Secret</Label>
-              <Input
-                id="jwtSecret"
-                type="password"
-                value={settings.authentication?.jwtSecret ?? ''}
-                onChange={(e) => handleSettingChange('authentication.jwtSecret', e.target.value)}
-                className="w-full"
-                placeholder="your-super-secret-jwt-key"
-              />
-            </div>
+          <Alert className="border-blue-200 bg-blue-50/50">
+            <Info className="h-4 w-4 text-blue-700" />
+            <AlertTitle className="text-blue-900">JWT signing secret</AlertTitle>
+            <AlertDescription className="text-blue-900/90 text-sm space-y-1">
+              <p>
+                Access tokens are signed on the API server using the <code className="rounded bg-blue-100/80 px-1 py-0.5 text-xs">JWT_SECRET</code> environment variable.
+                It is never sent to the browser or stored in these settings.
+              </p>
+              <p className="font-medium">
+                {jwtSecretConfigured === null
+                  ? 'Checking server configuration…'
+                  : jwtSecretConfigured
+                    ? 'Server reports JWT_SECRET is configured.'
+                    : 'Server reports JWT_SECRET is not set — set it in your API environment before production.'}
+              </p>
+            </AlertDescription>
+          </Alert>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="jwtExpiration">JWT Expiration</Label>
               <Input
@@ -680,7 +689,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                       value={webhook.url}
                       onChange={(e) => handleWebhookChange(webhook.id, 'url', e.target.value)}
                       className="w-full"
-                      placeholder="https://webhook.site/unique-id"
+                      placeholder="https://your-server.example/webhooks/salon"
                     />
                   </div>
 
@@ -692,7 +701,7 @@ export function APISettings({ settings: propSettings, onSettingsChange }: APISet
                       value={webhook.secret}
                       onChange={(e) => handleWebhookChange(webhook.id, 'secret', e.target.value)}
                       className="w-full"
-                      placeholder="webhook-secret-key"
+                      placeholder="Enter a strong signing secret"
                     />
                   </div>
 

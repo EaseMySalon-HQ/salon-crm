@@ -5,15 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Save, RotateCcw } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { NotificationSettings } from "./admin-settings/notification-settings"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
-
-function authHeaders(extra: HeadersInit = {}) {
-  const token = getAdminAuthToken()
-  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra }
-}
 
 export function AdminNotificationsPage() {
   const [settings, setSettings] = useState({})
@@ -27,7 +22,7 @@ export function AdminNotificationsPage() {
 
   const loadSettings = async () => {
     try {
-      const res = await fetch(`${API_URL}/admin/settings/notifications`, { headers: authHeaders() })
+      const res = await fetch(`${API_URL}/admin/settings/notifications`, { headers: adminRequestHeaders() })
       if (res.ok) {
         const data = await res.json()
         setSettings(data.data ?? {})
@@ -48,7 +43,7 @@ export function AdminNotificationsPage() {
     try {
       const res = await fetch(`${API_URL}/admin/settings/notifications`, {
         method: "PUT",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(settings),
       })
       if (res.ok) {
