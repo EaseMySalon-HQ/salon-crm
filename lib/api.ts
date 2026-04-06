@@ -1,7 +1,7 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
-import { CSRF_HEADER_NAME, getCsrfToken, ensureCsrfToken } from './csrf'
+import { CSRF_HEADER_NAME, getCsrfToken, ensureCsrfToken, clearCsrfTokenPersisted } from './csrf'
 
 /** Paths under /api where backend skips CSRF (see backend/middleware/csrf.js SKIP_PREFIXES). */
 const CSRF_AXIOS_SKIP_SUBSTRINGS = [
@@ -243,6 +243,20 @@ apiClient.interceptors.response.use(
     const status = error?.response?.status
     const errBody = error?.response?.data
     const errorMsg = normalizeApiErrorMessage(errBody)
+
+    // Stale sessionStorage vs ems_csrf cookie (cross-origin): clear, re-fetch CSRF, retry once
+    if (
+      typeof window !== 'undefined' &&
+      config &&
+      !config.__csrfRetry &&
+      status === 403 &&
+      errorMsg.toLowerCase().includes('csrf')
+    ) {
+      config.__csrfRetry = true
+      clearCsrfTokenPersisted()
+      await ensureCsrfToken(true)
+      return apiClient(config)
+    }
 
     if (typeof window !== 'undefined' && config && !config.__retryAfterRefresh) {
       const url = String(config.url || '')
