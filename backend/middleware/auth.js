@@ -161,6 +161,8 @@ const authenticateToken = (req, res, next) => {
       req.user = {
         _id: user._id,
         id: user._id,
+        /** @type {'staff'|'user'} — main User vs business Staff document */
+        authSubject: staffUser ? 'staff' : 'user',
         email: user.email,
         branchId: user.branchId,
         role: user.role,
