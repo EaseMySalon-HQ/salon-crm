@@ -16,7 +16,7 @@ import {
   RotateCcw
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { SystemSettings } from "./admin-settings/system-settings"
 import { BusinessSettings } from "./admin-settings/business-settings"
 import { UserSettings } from "./admin-settings/user-settings"
@@ -80,28 +80,49 @@ export function AdminSettingsPage() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [settings, setSettings] = useState({})
+  /** From GET /api/admin/settings/meta/security — never contains a secret */
+  const [jwtSecretConfigured, setJwtSecretConfigured] = useState<boolean | null>(null)
   const { toast } = useToast()
   
   // Define API_URL at component level
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-
-  const authHeaders = (extra: HeadersInit = {}) => {
-    const token = getAdminAuthToken()
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...extra,
-    }
-  }
 
   // Load settings on component mount
   useEffect(() => {
     loadSettings()
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_URL}/admin/settings/meta/security`, {
+          credentials: "include",
+          headers: adminRequestHeaders(),
+        })
+        if (!res.ok) {
+          if (!cancelled) setJwtSecretConfigured(false)
+          return
+        }
+        const json = await res.json()
+        const configured = json?.data?.jwtSecretConfigured
+        if (!cancelled && typeof configured === "boolean") {
+          setJwtSecretConfigured(configured)
+        }
+      } catch {
+        if (!cancelled) setJwtSecretConfigured(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [API_URL])
+
   const loadSettings = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/settings`, {
-        headers: authHeaders(),
+        credentials: "include",
+        headers: adminRequestHeaders(),
       })
 
       if (response.ok) {
@@ -123,6 +144,21 @@ export function AdminSettingsPage() {
     setHasUnsavedChanges(false)
   }
 
+  /** Defense in depth: JWT signing material must only live in server env (JWT_SECRET) */
+  const stripJwtSecretFromCategoryPayload = (category: string, payload: Record<string, unknown>) => {
+    if (!payload || typeof payload !== "object") return payload ?? {}
+    const clone = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>
+    if (category === "api") {
+      const auth = clone.authentication as Record<string, unknown> | undefined
+      if (auth && "jwtSecret" in auth) delete auth.jwtSecret
+    }
+    if (category === "system") {
+      const sec = clone.security as Record<string, unknown> | undefined
+      if (sec && "jwtSecret" in sec) delete sec.jwtSecret
+    }
+    return clone
+  }
+
   const handleSave = async () => {
     setIsLoading(true)
     try {
@@ -139,10 +175,13 @@ export function AdminSettingsPage() {
       
       const response = await fetch(`${API_URL}/admin/settings/${activeCategory}`, {
         method: 'PUT',
-        headers: authHeaders({
+        credentials: "include",
+        headers: adminRequestHeaders({
           'Content-Type': 'application/json'
         }),
-        body: JSON.stringify(settings[activeCategory])
+        body: JSON.stringify(
+          stripJwtSecretFromCategoryPayload(activeCategory, settings[activeCategory] as Record<string, unknown>)
+        )
       })
 
       if (response.ok) {
@@ -229,7 +268,13 @@ export function AdminSettingsPage() {
 
     switch (categoryId) {
       case "system":
-        return <SystemSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
+        return (
+          <SystemSettings
+            settings={categorySettings}
+            onSettingsChange={handleCategorySettingsChange}
+            jwtSecretConfigured={jwtSecretConfigured}
+          />
+        )
       case "business":
         return <BusinessSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       case "users":
@@ -239,9 +284,21 @@ export function AdminSettingsPage() {
       case "notifications":
         return <NotificationSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       case "api":
-        return <APISettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
+        return (
+          <APISettings
+            settings={categorySettings}
+            onSettingsChange={handleCategorySettingsChange}
+            jwtSecretConfigured={jwtSecretConfigured}
+          />
+        )
       default:
-        return <SystemSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
+        return (
+          <SystemSettings
+            settings={categorySettings}
+            onSettingsChange={handleCategorySettingsChange}
+            jwtSecretConfigured={jwtSecretConfigured}
+          />
+        )
     }
   }
 

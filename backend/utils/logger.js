@@ -56,6 +56,30 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && value.constructor === Object;
 }
 
+const SENSITIVE_KEY_SUBSTR = ['password', 'secret', 'token', 'authorization', 'cookie', 'apikey', 'api_key'];
+
+function redactSensitive(value) {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(redactSensitive);
+  if (typeof value !== 'object') return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    const lower = k.toLowerCase();
+    const sensitive =
+      SENSITIVE_KEY_SUBSTR.some((s) => lower.includes(s)) ||
+      lower === 'jwt' ||
+      lower === 'bearer';
+    if (sensitive) {
+      out[k] = '[REDACTED]';
+    } else if (typeof v === 'object' && v !== null) {
+      out[k] = redactSensitive(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 function serializeArg(arg) {
   if (arg instanceof Error) {
     return { type: 'Error', name: arg.name, message: arg.message, stack: arg.stack };
@@ -70,7 +94,8 @@ function serializeArg(arg) {
     return arg;
   }
   try {
-    return JSON.parse(safeStringify(arg));
+    const parsed = JSON.parse(safeStringify(arg));
+    return redactSensitive(parsed);
   } catch {
     return { _: String(arg) };
   }

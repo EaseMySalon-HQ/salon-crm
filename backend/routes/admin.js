@@ -1,7 +1,6 @@
 const express = require('express');
 const { logger } = require('../utils/logger');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateToken } = require('../middleware/auth');
@@ -17,6 +16,15 @@ const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const crypto = require('crypto');
 const emailService = require('../services/email-service');
+const {
+  signPlatformAdminAccess,
+  setAdminAuthCookies,
+  clearAdminAuthCookies,
+  signTenantAccess,
+} = require('../lib/auth-tokens');
+const { validate } = require('../middleware/validate');
+const { adminLoginSchema } = require('../validation/schemas');
+const { setCsrfCookie } = require('../middleware/csrf');
 
 const router = express.Router();
 
@@ -29,18 +37,13 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-// Admin Login
-router.post('/login', setupMainDatabase, async (req, res) => {
+// Admin Login — role/permissions come from DB after verify; never trust client-supplied role
+router.post('/login', setupMainDatabase, validate(adminLoginSchema), async (req, res) => {
   try {
     const { email, password } = req.body;
     const { Admin } = req.mainModels;
 
     logger.debug('🔍 Admin login attempt:', { email: email ? email.toLowerCase() : 'missing' });
-
-    if (!email || !password) {
-      logger.debug('❌ Admin login failed: Missing email or password');
-      return res.status(400).json({ success: false, error: 'Email and password are required' });
-    }
 
     // Find admin by email (case-insensitive)
     const emailLower = email.toLowerCase();
@@ -67,11 +70,9 @@ router.post('/login', setupMainDatabase, async (req, res) => {
 
     logger.debug('✅ Password validated successfully');
 
-    const token = jwt.sign(
-      { id: admin._id, role: 'admin' },
-      process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production',
-      { expiresIn: '24h' }
-    );
+    const token = signPlatformAdminAccess(admin);
+    setAdminAuthCookies(res, { accessToken: token });
+    const csrfToken = setCsrfCookie(res);
 
     // Update last login
     admin.lastLogin = new Date();
@@ -100,13 +101,19 @@ router.post('/login', setupMainDatabase, async (req, res) => {
           role: admin.role,
           permissions: admin.permissions
         },
-        token
+        token,
+        csrfToken
       }
     });
   } catch (error) {
     logger.error('Admin login error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
+});
+
+router.post('/logout', setupMainDatabase, authenticateAdmin, (req, res) => {
+  clearAdminAuthCookies(res);
+  res.json({ success: true, message: 'Logged out' });
 });
 
 // Get Admin Profile
@@ -309,7 +316,6 @@ router.get('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPe
 });
 
 // --- Platform Admin Only (super_admin) Business Actions ---
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
 
 // POST /businesses/:id/impersonate - Impersonate business owner
 router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin, requireAdminRole('super_admin'), async (req, res) => {
@@ -323,15 +329,17 @@ router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin,
     if (business.status === 'suspended') return res.status(403).json({ success: false, error: 'Cannot impersonate suspended business' });
 
     const owner = business.owner;
-    const payload = {
-      id: owner._id,
-      email: owner.email,
-      role: owner.role || 'admin',
-      branchId: business._id,
-      impersonatedBy: req.admin._id.toString(),
-      isImpersonation: true,
-    };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
+    const token = signTenantAccess(
+      {
+        _id: owner._id,
+        email: owner.email,
+        role: owner.role || 'admin',
+        branchId: business._id,
+        impersonatedBy: req.admin._id.toString(),
+        isImpersonation: true,
+      },
+      '1h'
+    );
 
     await logAdminActivity({
       adminId: req.admin,

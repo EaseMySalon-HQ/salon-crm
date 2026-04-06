@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { Badge } from "@/components/ui/badge"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 
 interface PlanEditDialogProps {
   businessId: string
@@ -33,14 +33,6 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
   const { toast } = useToast()
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-
-  const authHeaders = (extra: HeadersInit = {}) => {
-    const token = getAdminAuthToken()
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...extra,
-    }
-  }
 
   const [formData, setFormData] = useState({
     planId: 'starter',
@@ -69,7 +61,7 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
   const fetchConfig = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/plans/config`, {
-        headers: authHeaders(),
+        headers: adminRequestHeaders(),
       })
 
       if (response.ok) {
@@ -88,7 +80,7 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
     try {
       setLoading(true)
       const response = await fetch(`${API_URL}/admin/plans/business/${businessId}`, {
-        headers: authHeaders(),
+        headers: adminRequestHeaders(),
       })
 
       if (response.ok) {
@@ -137,7 +129,7 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
   const handleViewHistory = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/plans/business/${businessId}/history`, {
-        headers: authHeaders(),
+        headers: adminRequestHeaders(),
       })
 
       if (response.ok) {
@@ -157,7 +149,7 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
       setLoading(true)
       const response = await fetch(`${API_URL}/admin/plans/business/${businessId}`, {
         method: 'PUT',
-        headers: authHeaders({
+        headers: adminRequestHeaders({
           'Content-Type': 'application/json',
         }),
         body: JSON.stringify({

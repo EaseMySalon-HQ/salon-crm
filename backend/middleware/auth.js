@@ -1,16 +1,27 @@
 const jwt = require('jsonwebtoken');
 const databaseManager = require('../config/database-manager');
 const { logger } = require('../utils/logger');
+const { JWT_SECRET } = require('../config/jwt');
+const { COOKIE, TOKEN_USE } = require('../lib/auth-tokens');
 
-// Use the same JWT_SECRET as server.js
-// Ensure dotenv is loaded first
 require('dotenv').config();
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
+
+/**
+ * Prefer Authorization Bearer; fall back to HttpOnly access cookie (same-site / credentialed requests).
+ */
+function getTenantAccessToken(req) {
+  const authHeader = req.headers['authorization'];
+  const fromHeader = authHeader && authHeader.split(' ')[1];
+  if (fromHeader) return fromHeader;
+  if (req.cookies && req.cookies[COOKIE.tenantAccess]) {
+    return req.cookies[COOKIE.tenantAccess];
+  }
+  return null;
+}
 
 const authenticateToken = (req, res, next) => {
   logger.debug('🔍 AuthenticateToken middleware called');
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  const token = getTenantAccessToken(req);
 
   if (!token) {
     logger.debug('🔍 No token found in request');
@@ -26,11 +37,20 @@ const authenticateToken = (req, res, next) => {
   // Regular JWT verification for production tokens
   jwt.verify(token, JWT_SECRET, async (err, decoded) => {
     if (err) {
-      logger.debug('🔍 JWT verification error:', err);
+      logger.debug('🔍 JWT verification error:', err.message);
       return res.status(403).json({ success: false, error: 'Invalid or expired token' });
     }
 
-    logger.debug('🔍 JWT decoded successfully:', decoded);
+    // Wrong token type for tenant API (refresh / platform admin must not be used here)
+    if (
+      decoded.tokenUse === TOKEN_USE.tenantRefresh ||
+      decoded.tokenUse === TOKEN_USE.platformAdmin
+    ) {
+      return res.status(403).json({ success: false, error: 'Invalid token for this endpoint' });
+    }
+    // Legacy tokens have no tokenUse — treated as tenant access
+
+    logger.debug('🔍 JWT decoded (subject id present):', Boolean(decoded && decoded.id));
 
     try {
       // First try to find user in main database
