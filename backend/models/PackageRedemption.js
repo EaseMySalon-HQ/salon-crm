@@ -47,6 +47,12 @@ const packageRedemptionSchema = new mongoose.Schema({
     required: true,
     min: 1
   },
+  /** Links redemption audit row to a scheduled session (optional) */
+  package_session_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PackageSession',
+    default: null
+  },
   services_redeemed: [redeemedServiceSchema],  // sub-documents, NOT raw JSON
   is_reversed: {
     type: Boolean,

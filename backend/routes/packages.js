@@ -15,6 +15,8 @@
  * MIDDLE → PATCH /client-packages/:id/extend   (extendExpiry)
  * MIDDLE → POST  /client-packages/:id/redeem   (redeemPackage)
  * MIDDLE → GET   /client-packages/:id/history  (getRedemptionHistory)
+ * MIDDLE → GET   /client-packages/:id/sessions (list package sessions)
+ * MIDDLE → POST  /client-packages/:id/sessions/schedule (schedule session)
  * MIDDLE → POST  /redemptions/:id/reverse      (reverseRedemption)
  * MIDDLE → GET   /reports/sales                (getSalesReport)
  * MIDDLE → GET   /reports/utilization          (getUtilizationReport)
@@ -36,6 +38,7 @@ const { setupBusinessDatabase } = require('../middleware/business-db');
 const packageSvc = require('../services/package-service');
 const { sendPackageNotification } = require('../services/package-notification-service');
 const databaseManager = require('../config/database-manager');
+const packageSessionSvc = require('../services/scheduling/package-session-service');
 
 // All package routes require auth + business DB setup
 const auth = [authenticateToken, setupBusinessDatabase];
@@ -49,6 +52,12 @@ function ok(res, data, message = 'Success') {
 
 function fail(res, status, message, errors = []) {
   return res.status(status).json({ success: false, data: null, message, errors });
+}
+
+async function loadBusinessDocForScheduling(branchId) {
+  const mainConnection = await databaseManager.getMainConnection();
+  const Business = mainConnection.model('Business', require('../models/Business').schema);
+  return Business.findById(branchId).lean();
 }
 
 async function auditLog(AuditModel, branchId, package_id, action, performed_by, old_value, new_value) {
@@ -400,6 +409,48 @@ router.get('/client-packages/:id/history', auth, async (req, res) => {
   } catch (err) {
     logger.error('[getRedemptionHistory]', err);
     return fail(res, 500, 'Failed to fetch redemption history.');
+  }
+});
+
+/**
+ * GET /api/packages/client-packages/:id/sessions
+ */
+router.get('/client-packages/:id/sessions', auth, async (req, res) => {
+  try {
+    const data = await packageSessionSvc.listSessions(req.businessModels, req.params.id);
+    return ok(res, data);
+  } catch (err) {
+    logger.error('[getPackageSessions]', err);
+    const msg = err.message || 'Failed to list sessions.';
+    const code = err.code;
+    const status = code === 'NOT_FOUND' ? 404 : 500;
+    return fail(res, status, msg, code ? [code] : []);
+  }
+});
+
+/**
+ * POST /api/packages/client-packages/:id/sessions/schedule
+ */
+router.post('/client-packages/:id/sessions/schedule', auth, async (req, res) => {
+  try {
+    const businessDoc = await loadBusinessDocForScheduling(req.user.branchId);
+    if (!businessDoc) return fail(res, 404, 'Business not found.');
+    const data = await packageSessionSvc.schedulePackageSession(req.businessModels, businessDoc, {
+      clientPackageId: req.params.id,
+      ...req.body,
+      createdBy: req.user?.name || req.user?.email || ''
+    });
+    return ok(res, data, 'Session scheduled.');
+  } catch (err) {
+    logger.error('[schedulePackageSession]', err);
+    const code = err.code;
+    const status =
+      code === 'NOT_FOUND' || code === 'SESSION_NOT_FOUND' ? 404
+        : code === 'CONFLICT' ? 409
+          : code === 'PACKAGE_EXPIRED' || code === 'SESSION_EXPIRED' || code === 'OUTSIDE_AVAILABILITY' || code === 'VALIDATION' || code === 'ALREADY_SCHEDULED' ? 400
+            : code === 'PAYMENT_PENDING' ? 400
+              : 500;
+    return fail(res, status, err.message || 'Failed to schedule session.', code ? [code] : []);
   }
 });
 

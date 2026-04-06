@@ -54,7 +54,7 @@ const appointmentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['scheduled', 'confirmed', 'arrived', 'service_started', 'completed', 'cancelled'],
+    enum: ['scheduled', 'confirmed', 'arrived', 'service_started', 'completed', 'cancelled', 'missed'],
     default: 'scheduled'
   },
   notes: {
@@ -83,10 +83,56 @@ const appointmentSchema = new mongoose.Schema({
   bookingGroupId: {
     type: String,
     default: null,
+  },
+  /** Parent booking (canonical multi-day / package grouping) */
+  parentBookingId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Booking',
+    default: null
+  },
+  /** UTC instants — source of truth for overlap & multi-day */
+  startAt: {
+    type: Date,
+    default: null
+  },
+  endAt: {
+    type: Date,
+    default: null
+  },
+  /** Snapshot price at booking time (aligns with price; set together) */
+  priceLockedAtBooking: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  packageSessionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PackageSession',
+    default: null
+  },
+  addOnLineItems: [{
+    serviceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Service'
+    },
+    name: { type: String, default: '' },
+    price: { type: Number, min: 0, default: 0 }
+  }],
+  /** Package multi-day flow: payment collected when booking was created */
+  prepaidAtBooking: {
+    type: Boolean,
+    default: false
+  },
+  /** Dedupes concurrent bookings for same staff + exact window (see pre-save) */
+  slotKey: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true
 });
+
+const ACTIVE_FOR_SLOT = ['scheduled', 'confirmed', 'arrived', 'service_started'];
 
 // Validation middleware to ensure staff percentages add up to 100%
 appointmentSchema.pre('save', function(next) {
@@ -95,6 +141,14 @@ appointmentSchema.pre('save', function(next) {
     if (Math.abs(totalPercentage - 100) > 0.01) { // Allow for small floating point differences
       return next(new Error('Staff assignment percentages must add up to 100%'));
     }
+  }
+  if (this.startAt && this.endAt && ACTIVE_FOR_SLOT.includes(this.status)) {
+    const primary = typeof this.getPrimaryStaff === 'function' ? this.getPrimaryStaff() : this.staffId;
+    if (primary) {
+      this.slotKey = `${String(this.branchId)}:${String(primary)}:${this.startAt.toISOString()}:${this.endAt.toISOString()}`;
+    }
+  } else {
+    this.slotKey = null;
   }
   next();
 });
@@ -123,6 +177,9 @@ appointmentSchema.index({ branchId: 1, createdAt: -1 });
 appointmentSchema.index({ clientId: 1, branchId: 1 });
 appointmentSchema.index({ 'staffAssignments.staffId': 1, branchId: 1 });
 appointmentSchema.index({ bookingGroupId: 1 }, { sparse: true });
+appointmentSchema.index({ branchId: 1, parentBookingId: 1 }, { sparse: true });
+appointmentSchema.index({ branchId: 1, startAt: 1, endAt: 1 }, { sparse: true });
+appointmentSchema.index({ slotKey: 1 }, { unique: true, sparse: true });
 
 // Export both schema and model for flexibility
 module.exports = {

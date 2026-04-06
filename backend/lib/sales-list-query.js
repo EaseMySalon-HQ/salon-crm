@@ -55,6 +55,8 @@ function buildSalesListMatch(branchId, q) {
     paymentMode,
     search,
     tipStaffId,
+    includeDuePaymentDates,
+    forCashRegister,
   } = q;
 
   let df = dateFrom || date;
@@ -89,12 +91,24 @@ function buildSalesListMatch(branchId, q) {
     const dateRange = {};
     if (df) dateRange.$gte = getStartOfDayIST(df);
     if (dt) dateRange.$lte = getEndOfDayIST(dt);
-    parts.push({
-      $or: [
-        { date: dateRange },
-        { paymentHistory: { $elemMatch: { date: dateRange } } },
-      ],
-    });
+    const includeDues =
+      includeDuePaymentDates === '1' ||
+      includeDuePaymentDates === 'true' ||
+      forCashRegister === '1' ||
+      forCashRegister === 'true';
+    if (includeDues) {
+      // Cash register / payment-day analytics: include sales with due collections in range
+      // (paymentHistory.date), not only invoice date.
+      parts.push({
+        $or: [
+          { date: dateRange },
+          { paymentHistory: { $elemMatch: { date: dateRange } } },
+        ],
+      });
+    } else {
+      // Default (Sales report list): invoice date only — no extra rows when a due is paid later.
+      parts.push({ date: dateRange });
+    }
   }
 
   const pm = buildPaymentModeCondition(paymentMode);

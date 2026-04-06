@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import type { Receipt } from "@/lib/data"
 import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
+import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { Card, CardContent } from "@/components/ui/card"
@@ -282,9 +283,13 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
             if (payment.type === 'online') displayName = 'Online'
             if (payment.type === 'unknown') displayName = 'Unknown'
             
+            const dateLabel = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
             return (
               <div key={index} className="flex justify-between">
-                <span>{displayName}:</span>
+                <span>
+                  {displayName}
+                  {dateLabel ? ` (${dateLabel})` : ""}:
+                </span>
                 <span>{formatAmount(payment.amount)}</span>
               </div>
             )
