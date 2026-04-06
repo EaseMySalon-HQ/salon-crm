@@ -6,6 +6,7 @@ import { AuthAPI } from "@/lib/api"
 import { SETTINGS_MODULES } from "@/lib/permission-mappings"
 import { SessionTimeoutManager } from "@/components/auth/session-timeout-manager"
 import { AUTH_LOGOUT_EVENT, clearAuthStorage } from "@/lib/auth-utils"
+import { setCsrfTokenPersisted } from "@/lib/csrf"
 
 export interface User {
   _id: string
@@ -168,7 +169,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await AuthAPI.login(email, password)
       
       if (response.success) {
-        const { user: userData, token } = response.data
+        const { user: userData, token, csrfToken } = response.data
+        if (csrfToken && typeof csrfToken === 'string') {
+          setCsrfTokenPersisted(csrfToken)
+        }
         setUser(userData)
         
         // Only use localStorage in browser environment
@@ -212,7 +216,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await AuthAPI.staffLogin(email, password, businessCode)
       
       if (response.success) {
-        const { user: userData, token } = response.data
+        const { user: userData, token, csrfToken } = response.data
+        if (csrfToken && typeof csrfToken === 'string') {
+          setCsrfTokenPersisted(csrfToken)
+        }
         setUser(userData)
         
         // Only use localStorage in browser environment

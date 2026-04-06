@@ -1,7 +1,7 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
-import { CSRF_HEADER_NAME, getCsrfTokenFromCookie } from './csrf'
+import { CSRF_HEADER_NAME, getCsrfToken, ensureCsrfToken } from './csrf'
 
 /** Paths under /api where backend skips CSRF (see backend/middleware/csrf.js SKIP_PREFIXES). */
 const CSRF_AXIOS_SKIP_SUBSTRINGS = [
@@ -71,6 +71,8 @@ function normalizeApiErrorMessage(data: unknown): string {
 function isTokenAuthFailure(status: number | undefined, errorMsg: string): boolean {
   const m = errorMsg.toLowerCase()
   if (m.includes('business_suspended')) return false
+  /** Backend CSRF failures use "Invalid CSRF token" — must not trigger JWT logout. */
+  if (m.includes('csrf')) return false
   if (status === 401) return true
   if (status !== 403) return false
   return (
@@ -185,16 +187,17 @@ const apiClient: AxiosInstance = axios.create({
   },
 })
 
-// Request interceptor to add auth token
+// Request interceptor to add auth token + CSRF (cookie and/or session mirror for cross-origin API hosts)
 apiClient.interceptors.request.use(
-  (config) => {
+  async (config) => {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('salon-auth-token')
       if (token) {
         config.headers.Authorization = `Bearer ${token}`
       }
       if (axiosShouldAttachCsrf(config)) {
-        const csrf = getCsrfTokenFromCookie()
+        await ensureCsrfToken()
+        const csrf = getCsrfToken()
         if (csrf) {
           const h = config.headers
           if (h && typeof (h as { set?: (k: string, v: string) => void }).set === 'function') {
@@ -332,7 +335,7 @@ export interface PaginatedResponse<T> extends ApiResponse<T[]> {
 
 // API Service Classes
 export class AuthAPI {
-  static async login(email: string, password: string): Promise<ApiResponse<{ user: any; token: string }>> {
+  static async login(email: string, password: string): Promise<ApiResponse<{ user: any; token: string; csrfToken?: string }>> {
     const response = await apiClient.post('/auth/login', { email, password })
     return response.data
   }
@@ -367,7 +370,7 @@ export class AuthAPI {
     return response.data
   }
 
-  static async staffLogin(email: string, password: string, businessCode: string): Promise<ApiResponse<{ user: any; token: string }>> {
+  static async staffLogin(email: string, password: string, businessCode: string): Promise<ApiResponse<{ user: any; token: string; csrfToken?: string }>> {
     const response = await apiClient.post('/auth/staff-login', { email, password, businessCode })
     return response.data
   }
