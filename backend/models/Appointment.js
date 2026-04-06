@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { syncUtcFromLegacy } = require('../services/scheduling/scheduling-utils');
 
 const appointmentSchema = new mongoose.Schema({
   clientId: {
@@ -123,10 +124,10 @@ const appointmentSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  /** Dedupes concurrent bookings for same staff + exact window (see pre-save) */
+  /** Dedupes concurrent bookings for same staff + exact window (see pre-save). Omitted when not applicable (do not set null — unique index). */
   slotKey: {
     type: String,
-    default: null
+    required: false
   }
 }, {
   timestamps: true
@@ -142,13 +143,19 @@ appointmentSchema.pre('save', function(next) {
       return next(new Error('Staff assignment percentages must add up to 100%'));
     }
   }
+  // Legacy POST /appointments sends date+time+duration but not startAt/endAt; slotKey needs UTC window.
+  syncUtcFromLegacy(this);
+
   if (this.startAt && this.endAt && ACTIVE_FOR_SLOT.includes(this.status)) {
     const primary = typeof this.getPrimaryStaff === 'function' ? this.getPrimaryStaff() : this.staffId;
     if (primary) {
       this.slotKey = `${String(this.branchId)}:${String(primary)}:${this.startAt.toISOString()}:${this.endAt.toISOString()}`;
+    } else {
+      // Omit field — unique sparse index still indexes explicit null; multiple nulls violate E11000.
+      this.set('slotKey', undefined);
     }
   } else {
-    this.slotKey = null;
+    this.set('slotKey', undefined);
   }
   next();
 });
@@ -179,7 +186,11 @@ appointmentSchema.index({ 'staffAssignments.staffId': 1, branchId: 1 });
 appointmentSchema.index({ bookingGroupId: 1 }, { sparse: true });
 appointmentSchema.index({ branchId: 1, parentBookingId: 1 }, { sparse: true });
 appointmentSchema.index({ branchId: 1, startAt: 1, endAt: 1 }, { sparse: true });
-appointmentSchema.index({ slotKey: 1 }, { unique: true, sparse: true });
+// Only index real slot strings so legacy rows without a window are not all dup-null.
+appointmentSchema.index(
+  { slotKey: 1 },
+  { unique: true, partialFilterExpression: { slotKey: { $exists: true, $type: 'string' } } }
+);
 
 // Export both schema and model for flexibility
 module.exports = {

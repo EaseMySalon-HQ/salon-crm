@@ -45,6 +45,9 @@ const InventoryTransaction = require('./models/InventoryTransaction').model;
 const BillEditHistory = require('./models/BillEditHistory').model;
 const BillArchive = require('./models/BillArchive').model;
 
+const ACTIVITY_ACTIONS = require('./constants/activity-log-actions');
+const { scheduleActivityLog, tenantActorTypeFromRole } = require('./utils/activity-logger');
+
 // Import Routes
 const cashRegistryRoutes = require('./routes/cashRegistry');
 const adminRoutes = require('./routes/admin');
@@ -624,6 +627,20 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
           }
         : {};
 
+    if (user.branchId) {
+      scheduleActivityLog(
+        {
+          businessId: user.branchId,
+          actorType: tenantActorTypeFromRole(user.role),
+          actorId: user._id,
+          action: ACTIVITY_ACTIONS.USER_LOGIN,
+          entity: 'auth',
+          summary: `User login: ${user.email}`,
+        },
+        req
+      );
+    }
+
     res.json({
       success: true,
       data: {
@@ -732,6 +749,18 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
         process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
       suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
     };
+
+    scheduleActivityLog(
+      {
+        businessId: effectiveBranchId,
+        actorType: tenantActorTypeFromRole(staff.role),
+        actorId: staff._id,
+        action: ACTIVITY_ACTIONS.STAFF_LOGIN,
+        entity: 'auth',
+        summary: `Staff login: ${staff.email}`,
+      },
+      req
+    );
 
     res.json({
       success: true,
@@ -1225,6 +1254,20 @@ app.post('/api/auth/forgot-password', validate(forgotPasswordSchema), async (req
 
     await resetToken.save();
 
+    if (user.branchId) {
+      scheduleActivityLog(
+        {
+          businessId: user.branchId,
+          actorType: 'system',
+          actorId: null,
+          action: ACTIVITY_ACTIONS.PASSWORD_RESET_REQUESTED,
+          entity: 'auth',
+          summary: 'Password reset requested',
+        },
+        req
+      );
+    }
+
     // In a real application, you would send an email here
     // For now, we'll return the token in development
     const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${token}`;
@@ -1289,6 +1332,20 @@ app.post('/api/auth/reset-password', validate(resetPasswordSchema), async (req, 
     // Mark token as used
     resetToken.used = true;
     await resetToken.save();
+
+    if (user.branchId) {
+      scheduleActivityLog(
+        {
+          businessId: user.branchId,
+          actorType: 'system',
+          actorId: null,
+          action: ACTIVITY_ACTIONS.PASSWORD_RESET_COMPLETED,
+          entity: 'auth',
+          summary: `Password reset completed for ${user.email}`,
+        },
+        req
+      );
+    }
 
     res.json({
       success: true,
@@ -1694,6 +1751,25 @@ app.put(
       });
     }
 
+    if (
+      avatar &&
+      user.branchId &&
+      String(existingUser.avatar || '') !== String(user.avatar || '')
+    ) {
+      scheduleActivityLog(
+        {
+          businessId: user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.USER_AVATAR_UPDATED,
+          entity: 'user',
+          entityId: user._id,
+          summary: 'Profile photo updated',
+        },
+        req
+      );
+    }
+
     res.json({
       success: true,
       data: user
@@ -2065,6 +2141,19 @@ app.post(
 
     const savedClient = await newClient.save();
 
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.CREATE_CUSTOMER,
+        entity: 'customer',
+        entityId: savedClient._id,
+        summary: `Customer "${savedClient.name}" created`,
+      },
+      req
+    );
+
     res.status(201).json({
       success: true,
       data: savedClient
@@ -2118,6 +2207,19 @@ app.put(
       });
     }
 
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.UPDATE_CUSTOMER,
+        entity: 'customer',
+        entityId: updatedClient._id,
+        summary: `Customer "${updatedClient.name}" updated`,
+      },
+      req
+    );
+
     res.json({
       success: true,
       data: updatedClient
@@ -2145,6 +2247,19 @@ app.delete(
         error: 'Client not found'
       });
     }
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.DELETE_CUSTOMER,
+        entity: 'customer',
+        entityId: deletedClient._id,
+        summary: `Customer "${deletedClient.name}" deleted`,
+      },
+      req
+    );
 
     res.json({
       success: true,
@@ -6416,6 +6531,19 @@ app.post(
     const newStaff = new Staff(staffData);
     const savedStaff = await newStaff.save();
 
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.CREATE_STAFF,
+        entity: 'staff',
+        entityId: savedStaff._id,
+        summary: `Staff member "${savedStaff.name}" created (${savedStaff.email})`,
+      },
+      req
+    );
+
     res.status(201).json({
       success: true,
       data: savedStaff
@@ -6490,6 +6618,18 @@ app.put(
       if (!updatedStaff) {
         return res.status(404).json({ success: false, error: 'Staff member not found' });
       }
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.UPDATE_STAFF,
+          entity: 'staff',
+          entityId: updatedStaff._id,
+          summary: `Work schedule updated for ${updatedStaff.name}`,
+        },
+        req
+      );
       return res.json({ success: true, data: updatedStaff });
     }
 
@@ -6507,6 +6647,18 @@ app.put(
       if (!updatedStaff) {
         return res.status(404).json({ success: false, error: 'Staff member not found' });
       }
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.UPDATE_STAFF,
+          entity: 'staff',
+          entityId: updatedStaff._id,
+          summary: `Permissions updated for ${updatedStaff.name}`,
+        },
+        req
+      );
       return res.json({ success: true, data: updatedStaff });
     }
 
@@ -6537,6 +6689,19 @@ app.put(
         updateData,
         { new: true }
       ).select('-password');
+
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.UPDATE_STAFF,
+          entity: 'staff',
+          entityId: updatedStaff._id,
+          summary: `Staff profile updated (self): ${updatedStaff.name}`,
+        },
+        req
+      );
 
       return res.json({
         success: true,
@@ -6613,6 +6778,33 @@ app.put(
       });
     }
 
+    if (String(existingStaff.role) !== String(updatedStaff.role)) {
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.STAFF_ROLE_CHANGED,
+          entity: 'staff',
+          entityId: updatedStaff._id,
+          summary: `Role changed for ${updatedStaff.name}: ${existingStaff.role} → ${updatedStaff.role}`,
+        },
+        req
+      );
+    }
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.UPDATE_STAFF,
+        entity: 'staff',
+        entityId: updatedStaff._id,
+        summary: `Staff member "${updatedStaff.name}" updated`,
+      },
+      req
+    );
+
     res.json({
       success: true,
       data: updatedStaff
@@ -6656,6 +6848,19 @@ app.delete(
     }
 
     await Staff.findByIdAndDelete(req.params.id);
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.DELETE_STAFF,
+        entity: 'staff',
+        entityId: staffToDelete._id,
+        summary: `Staff member "${staffToDelete.name}" deleted`,
+      },
+      req
+    );
 
     res.json({
       success: true,
@@ -6707,6 +6912,19 @@ app.post(
       req.params.id,
       { password: hashedPassword },
       { new: true, runValidators: true }
+    );
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.STAFF_PASSWORD_CHANGED,
+        entity: 'staff',
+        entityId: staff._id,
+        summary: `Password changed for staff ${staff.name}`,
+      },
+      req
     );
 
     res.json({
@@ -6963,6 +7181,48 @@ app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
+/** Resolve catalog service ObjectId from a sale line (handles ObjectId, hex string, populated { _id }). */
+function extractSaleLineServiceId(item) {
+  if (!item || item.type !== 'service') return null;
+  const raw = item.serviceId;
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'object' && raw !== null && raw._id != null) {
+    const id = raw._id;
+    if (mongoose.Types.ObjectId.isValid(String(id))) {
+      return new mongoose.Types.ObjectId(String(id));
+    }
+    return null;
+  }
+  if (mongoose.Types.ObjectId.isValid(String(raw))) {
+    return new mongoose.Types.ObjectId(String(raw));
+  }
+  return null;
+}
+
+/** Primary + additional service ids from the booked appointment (fallback when sale lines lack resolvable IDs). */
+function serviceIdsFromBookedAppointment(appointment) {
+  const ids = [];
+  const seen = new Set();
+  const pushId = (v) => {
+    if (v == null || v === '') return;
+    const s = String(v);
+    if (!mongoose.Types.ObjectId.isValid(s)) return;
+    if (seen.has(s)) return;
+    seen.add(s);
+    ids.push(new mongoose.Types.ObjectId(s));
+  };
+  const primary = appointment.serviceId?._id != null ? appointment.serviceId._id : appointment.serviceId;
+  pushId(primary);
+  const addl = appointment.additionalServiceIds;
+  if (Array.isArray(addl)) {
+    for (const a of addl) {
+      const id = a?._id != null ? a._id : a;
+      pushId(id);
+    }
+  }
+  return ids;
+}
+
 const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = null, businessModels = null) => {
   if (!AppointmentModel || !appointmentId) return;
   try {
@@ -6986,7 +7246,14 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
     // Same staff: update this card with primary + additional. Different staff: create new card(s).
     if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
       const serviceItems = sale.items
-        .filter((i) => i.type === 'service' && i.serviceId)
+        .filter((i) => {
+          if (i.type !== 'service') return false;
+          if (extractSaleLineServiceId(i)) return true;
+          const c0 = (i.staffContributions || [])[0];
+          if (c0?.staffId != null) return true;
+          if (i.staffId != null && String(i.staffId).trim() !== '') return true;
+          return false;
+        })
         .map((i) => {
           const contrib = (i.staffContributions || [])[0];
           const staffId = contrib ? String(contrib.staffId) : (i.staffId ? String(i.staffId) : null);
@@ -7044,9 +7311,17 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
         });
 
         if (servicesToApplyToMain.length > 0) {
-          const serviceIds = servicesToApplyToMain.map((i) => i.serviceId?._id || i.serviceId).filter(Boolean);
+          let serviceIds = servicesToApplyToMain.map((i) => extractSaleLineServiceId(i)).filter(Boolean);
           if (serviceIds.length === 0) {
-            logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
+            const fromBooking = serviceIdsFromBookedAppointment(appointment);
+            if (fromBooking.length > 0) {
+              serviceIds = fromBooking;
+              logger.debug(
+                `Appointment ${appointmentId}: sale lines had no resolvable serviceIds; using booked service ids (${serviceIds.length})`
+              );
+            } else {
+              logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
+            }
           }
           const firstServiceId = serviceIds[0];
           const firstItem = servicesToApplyToMain[0];
@@ -7084,20 +7359,26 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
             const contrib = (item.staffContributions || [])[0];
             const staffId = contrib?.staffId || item.staffId;
             if (!staffId || existingGroupStaffIds.has(String(staffId))) continue;
-            const idx = allOrdered.findIndex((o) => (o.serviceId?._id || o.serviceId) === (item.serviceId?._id || item.serviceId));
+            const itemSid = extractSaleLineServiceId(item)?.toString();
+            const idx = allOrdered.findIndex((o) => {
+              const oSid = extractSaleLineServiceId(o)?.toString();
+              return itemSid && oSid && itemSid === oSid;
+            });
             let cumulativeM = 0;
             for (let i = 0; i < idx; i++) {
-              const s = await Service.findById(allOrdered[i].serviceId?._id || allOrdered[i].serviceId).select('duration').lean();
+              const oid = extractSaleLineServiceId(allOrdered[i]);
+              const s = oid ? await Service.findById(oid).select('duration').lean() : null;
               cumulativeM += s?.duration ?? 60;
             }
             const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
-            const service = await Service.findById(item.serviceId?._id || item.serviceId).lean();
+            const lineServiceId = extractSaleLineServiceId(item);
+            const service = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
             if (!service) continue;
 
             existingGroupStaffIds.add(String(staffId));
             const newApt = new AppointmentModel({
               clientId: appointment.clientId,
-              serviceId: item.serviceId?._id || item.serviceId,
+              serviceId: lineServiceId,
               date: appointment.date,
               time: serviceTime,
               duration: service.duration ?? 60,
@@ -9870,6 +10151,20 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     
     logger.debug('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
 
+    const createdSale = savedSale || sale;
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.CREATE_INVOICE,
+        entity: 'sale',
+        entityId: createdSale._id,
+        summary: `Invoice ${createdSale.billNo || createdSale._id} created`,
+      },
+      req
+    );
+
     res.status(201).json({ 
       success: true, 
       data: savedSale || sale,
@@ -9953,6 +10248,8 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
 
     const previousStatus = String(existingSale.status || '').toLowerCase();
     const oldPaidAmount = Number(existingSale.paymentStatus?.paidAmount || 0);
+    const prevDiscount = Number(existingSale.discount || 0);
+    const prevDiscountType = String(existingSale.discountType || '');
 
     // Archive original bill snapshot once per edit
     try {
@@ -10342,6 +10639,35 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       session.endSession();
     } else if (session) {
       session.endSession();
+    }
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.UPDATE_INVOICE,
+        entity: 'sale',
+        entityId: savedSale._id,
+        summary: `Invoice ${savedSale.billNo || savedSale._id} updated`,
+      },
+      req
+    );
+    const newDisc = Number(savedSale.discount || 0);
+    const newType = String(savedSale.discountType || '');
+    if (prevDiscount !== newDisc || prevDiscountType !== newType) {
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.INVOICE_DISCOUNT_CHANGED,
+          entity: 'sale',
+          entityId: savedSale._id,
+          summary: `Invoice ${savedSale.billNo || ''}: discount ${prevDiscount} (${prevDiscountType}) → ${newDisc} (${newType})`,
+        },
+        req
+      );
     }
 
     res.json({ success: true, data: savedSale });
@@ -11359,6 +11685,8 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
       settings = new BusinessSettings();
     }
 
+    const prevLogo = settings.logo || '';
+
     // Update settings
     settings.name = name;
     settings.email = email;
@@ -11374,6 +11702,35 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
     settings.gstNumber = gstNumber || "";
 
     await settings.save();
+
+    const newLogo = settings.logo || '';
+    if (prevLogo !== newLogo) {
+      if (!newLogo) {
+        scheduleActivityLog(
+          {
+            businessId: req.user.branchId,
+            actorType: tenantActorTypeFromRole(req.user.role),
+            actorId: req.user._id,
+            action: ACTIVITY_ACTIONS.BUSINESS_LOGO_REMOVED,
+            entity: 'business_settings',
+            summary: 'Business logo removed',
+          },
+          req
+        );
+      } else {
+        scheduleActivityLog(
+          {
+            businessId: req.user.branchId,
+            actorType: tenantActorTypeFromRole(req.user.role),
+            actorId: req.user._id,
+            action: ACTIVITY_ACTIONS.BUSINESS_LOGO_UPDATED,
+            entity: 'business_settings',
+            summary: 'Business logo updated',
+          },
+          req
+        );
+      }
+    }
 
     logger.debug('✅ Business settings updated for:', settings.name);
     res.json({
@@ -12109,6 +12466,19 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
     if (inventoryChanges.length === 0 && productItems.length > 0) {
       logger.warn('Bill delete: no inventory restored despite product lines; check productId / product records', { billNo: sale.billNo });
     }
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.DELETE_INVOICE,
+        entity: 'sale',
+        entityId: sale._id,
+        summary: `Invoice ${sale.billNo || sale._id} deleted`,
+      },
+      req
+    );
 
     res.json({ 
       success: true, 
