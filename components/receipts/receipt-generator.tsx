@@ -5,6 +5,7 @@ import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 
 interface ReceiptGeneratorProps {
   receipt: Receipt
@@ -339,9 +340,11 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
               (payment) => {
                 // Safely handle payment types with null/undefined checks
                 if (!payment || !payment.type) {
+                  const d = formatPaymentRecordedDateLabelFromIso(payment?.recordedAt)
+                  const left = d ? `Unknown (${d})` : "Unknown"
                   return `
             <div class="payment-line">
-              <span>Unknown:</span>
+              <span>${left}:</span>
               <span>${formatCurrency(payment?.amount || 0, businessSettings)}</span>
             </div>
           `
@@ -353,10 +356,12 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
                 if (payment.type === 'card') displayName = 'Card'
                 if (payment.type === 'online') displayName = 'Online'
                 if (payment.type === 'unknown') displayName = 'Unknown'
+                const dateSuffix = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
+                const labelWithDate = dateSuffix ? `${displayName} (${dateSuffix})` : displayName
                 
                 return `
             <div class="payment-line">
-              <span>${displayName}:</span>
+              <span>${labelWithDate}:</span>
               <span>${formatCurrency(payment.amount, businessSettings)}</span>
             </div>
           `

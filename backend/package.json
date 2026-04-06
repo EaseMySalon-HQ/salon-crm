@@ -7,7 +7,9 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "create-admin": "node create-admin-user.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest --config jest.config.js",
+    "delete:appointments": "node scripts/delete-all-appointments.js",
+    "cleanup:scheduling": "node scripts/cleanup-scheduling-stale.js"
   },
   "keywords": [
     "salon",
@@ -42,6 +44,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
     "mongodb-memory-server": "^10.3.0",
     "nodemon": "^3.0.2",
     "supertest": "^7.1.4"

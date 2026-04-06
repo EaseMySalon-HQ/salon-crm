@@ -503,13 +503,16 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         (dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null)
       const params: { dateFrom?: string; dateTo?: string } = {}
       if (range) {
-        // Match selected period only (same IST bounds as stats). Note: bills invoiced on older
-        // dates but paid today are filtered by sale.date on the server — use a wider range if you add server-side payment-date filtering.
+        // includeDuePaymentDates: server returns sales with invoice date OR paymentHistory in range (dues).
         const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
         params.dateFrom = dateFrom
         params.dateTo = dateTo
       }
-      const rows = await SalesAPI.getAllMergePages({ ...params, batchSize: 500 })
+      const rows = await SalesAPI.getAllMergePages({
+        ...params,
+        batchSize: 500,
+        includeDuePaymentDates: "1",
+      })
       setSalesData(Array.isArray(rows) ? rows : [])
     } catch (error) {
       console.error("Failed to fetch sales:", error)
@@ -690,22 +693,47 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     return total
   }
 
+  /** Card / Online dues use paymentHistory.method; match Sale schema enum Cash | Card | Online */
+  const addOnlineSalesFromPaymentHistory = (
+    sale: any,
+    fromDay: string,
+    toDay: string,
+    add: (amt: number) => void
+  ) => {
+    ;(sale.paymentHistory || []).forEach((ph: any) => {
+      if (!ph) return
+      const method = (ph.method || "").toLowerCase()
+      if (method !== "card" && method !== "online") return
+      const phDay = ph.date ? toDateStringIST(ph.date) : ""
+      if (phDay && phDay >= fromDay && phDay <= toDay) {
+        add(ph.amount || 0)
+      }
+    })
+  }
+
   const getRealTimeOnlineSales = () => {
     if (!activeDateRange) return 0
     const fromDay = toDateStringIST(activeDateRange.from)
     const toDay = toDateStringIST(activeDateRange.to)
-    return salesData.reduce((sum: number, sale: any) => {
+    let total = 0
+    salesData.forEach((sale: any) => {
       const saleDay = toDateStringIST(sale.date)
+      // 1. Card/Online from checkout (invoice date in range)
       if (saleDay >= fromDay && saleDay <= toDay) {
         if (sale.payments && sale.payments.length > 0) {
-          return sum + sale.payments
+          total += sale.payments
             .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
             .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
+        } else if (sale.paymentMode === "Card" || sale.paymentMode === "Online") {
+          total += sale.netTotal || 0
         }
-        return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
       }
-      return sum
-    }, 0)
+      // 2. Card/Online from due collections (payment date in range)
+      addOnlineSalesFromPaymentHistory(sale, fromDay, toDay, (amt) => {
+        total += amt
+      })
+    })
+    return total
   }
 
   const getRealTimeExpenses = () => {
@@ -724,18 +752,23 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   // Get today's online sales specifically for the modal (IST calendar day)
   const getTodayOnlineSales = () => {
     const todayString = getTodayIST()
-    return salesData.reduce((sum: number, sale: any) => {
+    let total = 0
+    salesData.forEach((sale: any) => {
       const saleDate = toDateStringIST(sale.date)
       if (saleDate === todayString) {
         if (sale.payments && sale.payments.length > 0) {
-          return sum + sale.payments
+          total += sale.payments
             .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
             .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
+        } else if (sale.paymentMode === "Card" || sale.paymentMode === "Online") {
+          total += sale.netTotal || 0
         }
-        return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
       }
-      return sum
-    }, 0)
+      addOnlineSalesFromPaymentHistory(sale, todayString, todayString, (amt) => {
+        total += amt
+      })
+    })
+    return total
   }
 
   // Use real-time data for stats
@@ -783,7 +816,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   }
   const cashSalesBreakdown = getCashSalesBreakdown()
 
-  // Online sales breakdown (Card vs Online/UPI)
+  // Online sales breakdown (Card vs Online/UPI), including dues via paymentHistory
   const getOnlineSalesBreakdown = () => {
     if (!activeDateRange) return { fromCard: 0, fromOnline: 0 }
     const fromDay = toDateStringIST(activeDateRange.from)
@@ -806,6 +839,15 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           else if (pm.includes("online") || pm.includes("upi")) fromOnline += sale.netTotal || 0
         }
       }
+      ;(sale.paymentHistory || []).forEach((ph: any) => {
+        if (!ph) return
+        const phDay = ph.date ? toDateStringIST(ph.date) : ""
+        if (!phDay || phDay < fromDay || phDay > toDay) return
+        const method = (ph.method || "").toLowerCase()
+        const amt = ph.amount || 0
+        if (method === "card") fromCard += amt
+        else if (method === "online") fromOnline += amt
+      })
     })
     return { fromCard, fromOnline }
   }
@@ -852,21 +894,24 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
 
   const getEntryOnlineSales = (entryDate: string) => {
-    // Normalize entry date to YYYY-MM-DD format
     const normalizedEntryDate = toDateStringIST(entryDate)
-    
-    return salesData.reduce((sum: number, sale: any) => {
+    let total = 0
+    salesData.forEach((sale: any) => {
       const saleDate = toDateStringIST(sale.date)
       if (saleDate === normalizedEntryDate) {
         if (sale.payments && sale.payments.length > 0) {
-          return sum + sale.payments
+          total += sale.payments
             .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
             .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
+        } else if (sale.paymentMode === "Card" || sale.paymentMode === "Online") {
+          total += sale.netTotal || 0
         }
-        return sum + ((sale.paymentMode === "Card" || sale.paymentMode === "Online") ? sale.netTotal : 0)
       }
-      return sum
-    }, 0)
+      addOnlineSalesFromPaymentHistory(sale, normalizedEntryDate, normalizedEntryDate, (amt) => {
+        total += amt
+      })
+    })
+    return total
   }
 
   const getEntryExpenses = (entryDate: string) => {

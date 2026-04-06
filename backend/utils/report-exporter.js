@@ -1059,6 +1059,16 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
             },
             status: { $nin: ['cancelled', 'Cancelled'] }
           }).lean();
+          const salesWithCardOnlineDuesToday = await Sale.find({
+            branchId,
+            paymentHistory: {
+              $elemMatch: {
+                date: { $gte: dateStart, $lte: dateEnd },
+                method: { $in: ['Card', 'Online'] }
+              }
+            },
+            status: { $nin: ['cancelled', 'Cancelled'] }
+          }).lean();
           let cashFromNewBills = 0;
           salesToday.forEach(s => {
             let cashAmt = 0;
@@ -1091,19 +1101,37 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
             });
           });
           summary.cashCollected = cashFromNewBills + cashFromDueCollected;
-          
-          summary.onlineSales = sales
-            .filter(s => s.paymentMode?.toLowerCase().includes('online') || 
-                       s.paymentMode?.toLowerCase().includes('card') ||
-                       s.payments?.some(p => p.mode?.toLowerCase() === 'online' || p.mode?.toLowerCase() === 'card'))
-            .reduce((sum, s) => {
-              if (s.payments && s.payments.length > 0) {
-                return sum + (s.payments.filter(p => 
-                  p.mode?.toLowerCase() === 'online' || p.mode?.toLowerCase() === 'card')
-                  .reduce((pSum, p) => pSum + (p.amount || 0), 0));
+
+          // Total Online Sales = Card/Online at checkout (invoice date = dateKey) + dues via paymentHistory (Card/Online)
+          let onlineFromCheckout = 0;
+          salesToday.forEach((s) => {
+            if (s.payments && s.payments.length > 0) {
+              onlineFromCheckout += s.payments
+                .filter((p) => {
+                  const mode = (p.mode || '').toLowerCase();
+                  return mode === 'card' || mode === 'online';
+                })
+                .reduce((pSum, p) => pSum + (p.amount || 0), 0);
+            } else {
+              const pm = (s.paymentMode || '').toLowerCase();
+              if (pm.includes('card') || pm.includes('online')) {
+                onlineFromCheckout += s.netTotal || 0;
               }
-              return sum + (s.netTotal || 0);
-            }, 0);
+            }
+          });
+          let onlineFromDues = 0;
+          salesWithCardOnlineDuesToday.forEach((s) => {
+            (s.paymentHistory || []).forEach((ph) => {
+              if (!ph) return;
+              const m = (ph.method || '').toLowerCase();
+              if (m !== 'card' && m !== 'online') return;
+              const phDate = ph.date ? new Date(ph.date) : null;
+              if (phDate && phDate >= dateStart && phDate <= dateEnd) {
+                onlineFromDues += ph.amount || 0;
+              }
+            });
+          });
+          summary.onlineSales = onlineFromCheckout + onlineFromDues;
           
           const expenses = await Expense.find({
             date: { $gte: dateStart, $lte: dateEnd }
@@ -2225,60 +2253,24 @@ async function exportUnpaidPartPaidReport({ branchId, format = 'xlsx', filters =
     }
 
     const { dateFrom, dateTo, status } = filters;
-    const query = {
-      status: { $nin: ['cancelled', 'Cancelled'] },
-      $expr: { $lt: [{ $ifNull: ['$paymentStatus.paidAmount', 0] }, { $ifNull: ['$paymentStatus.totalAmount', 999999999] }] }
-    };
-    if (dateFrom && dateTo) {
-      const fromStr = String(dateFrom).split('T')[0];
-      const toStr = String(dateTo).split('T')[0];
-      query.date = {
-        $gte: new Date(fromStr + 'T00:00:00.000Z'),
-        $lte: new Date(toStr + 'T23:59:59.999Z')
-      };
-    }
-    if (status && status !== 'all') {
-      if (status === 'unpaid') {
-        query['paymentStatus.paidAmount'] = 0;
-      } else if (status === 'part_paid') {
-        query['paymentStatus.paidAmount'] = { $gt: 0 };
-      } else if (status === 'overdue') {
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        query['$and'] = [
-          { 'paymentStatus.dueDate': { $lt: thirtyDaysAgo } },
-          { $or: [
-            { 'paymentStatus.remainingAmount': { $gt: 0 } },
-            { $expr: { $lt: ['$paymentStatus.paidAmount', '$paymentStatus.totalAmount'] } }
-          ]}
-        ];
-      }
-    }
-    const sales = await Sale.find(query).sort({ date: -1 }).limit(5000).lean();
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const rows = sales.map((s) => {
-      const totalAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? 0;
-      const paidAmount = s.paymentStatus?.paidAmount ?? 0;
-      const remainingAmount = s.paymentStatus?.remainingAmount ?? Math.max(0, totalAmount - paidAmount);
-      const dueDate = s.paymentStatus?.dueDate ? new Date(s.paymentStatus.dueDate) : null;
-      const isOverdue = dueDate && dueDate < thirtyDaysAgo && remainingAmount > 0;
-      let statusLabel = 'Unpaid';
-      if (paidAmount >= totalAmount) statusLabel = 'Full Paid';
-      else if (paidAmount > 0) statusLabel = 'Part Paid';
-      else if (isOverdue) statusLabel = 'Overdue';
-      else statusLabel = 'Unpaid';
-      if (!isOverdue && paidAmount < totalAmount && dueDate && dueDate < thirtyDaysAgo) statusLabel = 'Overdue';
-      return {
-        billNo: s.billNo,
-        customerName: s.customerName || '—',
-        customerPhone: s.customerPhone || '',
-        date: s.date ? new Date(s.date).toLocaleDateString() : '—',
-        invoiceAmount: totalAmount,
-        outstandingAmount: remainingAmount,
-        status: statusLabel
-      };
+    const { fetchUnpaidPartPaidReportData } = require('../lib/unpaid-part-paid-report');
+    const { rows: rawRows } = await fetchUnpaidPartPaidReportData({
+      Sale,
+      branchId,
+      dateFrom,
+      dateTo,
+      status: status != null ? String(status) : 'all'
     });
+    const rows = rawRows.map((r) => ({
+      billNo: r.billNo,
+      customerName: r.customerName,
+      customerPhone: r.customerPhone,
+      date: r.date ? new Date(r.date).toLocaleDateString() : '—',
+      invoiceAmount: r.invoiceAmount,
+      outstandingAmount: r.outstandingAmount,
+      duesSettledInPeriod: r.duesSettledInPeriod,
+      status: r.status
+    }));
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
@@ -2304,6 +2296,7 @@ async function exportUnpaidPartPaidReport({ branchId, format = 'xlsx', filters =
         'Phone': r.customerPhone,
         'Date': r.date,
         'Invoice Amount': r.invoiceAmount,
+        'Dues settled (period)': r.duesSettledInPeriod,
         'Outstanding Amount': r.outstandingAmount,
         'Status': r.status
       }));
@@ -2318,18 +2311,19 @@ async function exportUnpaidPartPaidReport({ branchId, format = 'xlsx', filters =
       const chunks = [];
       doc.on('data', (chunk) => chunks.push(chunk));
       doc.on('end', () => {});
-      let y = addPDFHeader(doc, 'Unpaid/Part-Paid Report', `Period: ${periodText} | Generated: ${new Date().toLocaleString()}`);
+      let y = addPDFHeader(doc, exportType, `Period: ${periodText} | Generated: ${new Date().toLocaleString()}`);
       y += 20;
-      const headers = ['Invoice', 'Customer', 'Date', 'Invoice Amt', 'Outstanding', 'Status'];
+      const headers = ['Invoice', 'Customer', 'Date', 'Inv Amt', 'Dues settled', 'Outstanding', 'Status'];
       const tableRows = rows.map((r) => [
         r.billNo,
         r.customerName,
         r.date,
         `₹${Number(r.invoiceAmount).toFixed(2)}`,
+        `₹${Number(r.duesSettledInPeriod).toFixed(2)}`,
         `₹${Number(r.outstandingAmount).toFixed(2)}`,
         r.status
       ]);
-      const colWidths = [80, 100, 80, 80, 90, 70];
+      const colWidths = [68, 84, 68, 64, 68, 64, 56];
       y = addTable(doc, y, headers, tableRows, { colWidths });
       doc.end();
       await new Promise((resolve) => { doc.on('end', resolve); });

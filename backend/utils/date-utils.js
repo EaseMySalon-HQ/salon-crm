@@ -113,6 +113,66 @@ function minutesToTimeString(totalMinutes) {
   return `${hour}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
+/**
+ * ISO 8601 instant with explicit Asia/Kolkata offset (+05:30) for API payloads.
+ * @param {Date|string|number} dateInput
+ * @returns {string|null}
+ */
+function toIsoStringIST(dateInput) {
+  const d = new Date(dateInput);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(d);
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  const y = get('year');
+  const m = get('month');
+  const day = get('day');
+  const h = get('hour');
+  const min = get('minute');
+  const sec = get('second');
+  const frac = d.getMilliseconds();
+  const ms = frac ? `.${String(frac).padStart(3, '0')}` : '';
+  return `${y}-${m}-${day}T${h}:${min}:${sec}${ms}+05:30`;
+}
+
+/**
+ * Parse scheduling API datetimes. Naive `YYYY-MM-DDTHH:mm(:ss)` (no Z / no offset) is **IST wall time**.
+ * Values with `Z` or `±offset` are parsed as standard ISO 8601.
+ * @param {Date|string|number|null|undefined} val
+ * @returns {Date|null}
+ */
+function parseSchedulingInstant(val) {
+  if (val == null || val === '') return null;
+  if (val instanceof Date) return val;
+  const s = String(val).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return parseDateIST(s);
+  }
+  const hasExplicitZone =
+    /Z$/i.test(s) ||
+    /[+-]\d{2}:\d{2}$/.test(s) ||
+    /[+-]\d{4}$/.test(s);
+  if (hasExplicitZone) {
+    const t = new Date(s);
+    return Number.isNaN(t.getTime()) ? null : t;
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) {
+    const t = new Date(`${s}+05:30`);
+    return Number.isNaN(t.getTime()) ? null : t;
+  }
+  const t = new Date(s);
+  return Number.isNaN(t.getTime()) ? null : t;
+}
+
 module.exports = {
   parseDateIST,
   getStartOfDayIST,
@@ -122,5 +182,7 @@ module.exports = {
   getTodayIST,
   parseTimeToMinutes,
   minutesToTimeString,
+  toIsoStringIST,
+  parseSchedulingInstant,
   IST_TIMEZONE: 'Asia/Kolkata'
 };

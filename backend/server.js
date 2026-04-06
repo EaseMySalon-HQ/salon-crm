@@ -301,6 +301,8 @@ app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/packages', require('./routes/packages'));
+app.use('/api/bookings', require('./routes/bookings'));
+app.use('/api/appointments', require('./routes/appointments-scheduling'));
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
@@ -6841,16 +6843,8 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
     await appointment.save();
     logger.debug(`✅ Appointment ${appointmentId} marked as completed after sale.`);
 
-    // Mark all appointments in the same booking group as completed (multi-staff cards)
-    if (appointment.bookingGroupId) {
-      const groupUpdated = await AppointmentModel.updateMany(
-        { bookingGroupId: appointment.bookingGroupId, _id: { $ne: appointmentId } },
-        { $set: { status: 'completed' } }
-      );
-      if (groupUpdated.modifiedCount > 0) {
-        logger.debug(`✅ ${groupUpdated.modifiedCount} related appointment(s) in group marked as completed.`);
-      }
-    }
+    // Do not mark other appointments in bookingGroupId completed here. Multi-day (and separate cards for
+    // same client) share a group but are billed independently; each sale completes only its linked appointment.
   } catch (error) {
     logger.error('❌ Failed to mark appointment as completed:', error);
   }
@@ -8348,17 +8342,8 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     const previousStatus = appointment.status;
     const isBeingCancelled = updateData.status === 'cancelled' && previousStatus !== 'cancelled';
 
-    // Arrival, scheduled, and completed are appointment-level: sync across all cards in the same booking group
-    const appointmentLevelStatuses = ['arrived', 'scheduled', 'completed'];
-    const isAppointmentLevelStatus = updateData.status && appointmentLevelStatuses.includes(updateData.status);
-    const bookingGroupId = appointment.bookingGroupId;
-
-    if (isAppointmentLevelStatus && bookingGroupId) {
-      await Appointment.updateMany(
-        { bookingGroupId },
-        { $set: { status: updateData.status } }
-      );
-    }
+    // Status updates apply only to this appointment. bookingGroupId links multi-day / multi-card bookings;
+    // each visit keeps its own status (do not updateMany across the group).
 
     // Update the appointment
     const updatedAppointment = await Appointment.findByIdAndUpdate(
@@ -12890,69 +12875,24 @@ app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabas
   }
 });
 
-// Get unpaid/part-paid bills for report
+// Get unpaid/part-paid bills for report (includes dues settled column + merged dues-only rows when status=all)
 app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Sale } = req.businessModels;
     const { dateFrom, dateTo, status } = req.query;
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const query = {
-      status: { $nin: ['cancelled', 'Cancelled'] },
-      $expr: { $lt: [{ $ifNull: ['$paymentStatus.paidAmount', 0] }, { $ifNull: ['$paymentStatus.totalAmount', 999999999] }] }
-    };
-    if (dateFrom && dateTo) {
-      const fromStr = String(dateFrom).split('T')[0];
-      const toStr = String(dateTo).split('T')[0];
-      query.date = {
-        $gte: new Date(fromStr + 'T00:00:00.000Z'),
-        $lte: new Date(toStr + 'T23:59:59.999Z')
-      };
-    }
-    if (status && status !== 'all') {
-      if (status === 'unpaid') {
-        query['paymentStatus.paidAmount'] = 0;
-      } else if (status === 'part_paid') {
-        query['paymentStatus.paidAmount'] = { $gt: 0 };
-      } else if (status === 'overdue') {
-        query['$and'] = [
-          { 'paymentStatus.dueDate': { $lt: thirtyDaysAgo } },
-          { $or: [
-            { 'paymentStatus.remainingAmount': { $gt: 0 } },
-            { $expr: { $lt: ['$paymentStatus.paidAmount', '$paymentStatus.totalAmount'] } }
-          ]}
-        ];
-      }
-    }
-    const sales = await Sale.find(query).sort({ date: -1 }).limit(5000).lean();
-    const rows = sales.map((s) => {
-      const totalAmount = s.paymentStatus?.totalAmount ?? s.grossTotal ?? 0;
-      const paidAmount = s.paymentStatus?.paidAmount ?? 0;
-      const remainingAmount = s.paymentStatus?.remainingAmount ?? Math.max(0, totalAmount - paidAmount);
-      const dueDate = s.paymentStatus?.dueDate ? new Date(s.paymentStatus.dueDate) : null;
-      const isOverdue = dueDate && dueDate < thirtyDaysAgo && remainingAmount > 0;
-      let statusLabel = 'Unpaid';
-      if (paidAmount >= totalAmount) statusLabel = 'Full Paid';
-      else if (paidAmount > 0) statusLabel = 'Part Paid';
-      else if (isOverdue) statusLabel = 'Overdue';
-      else statusLabel = 'Unpaid';
-      if (!isOverdue && paidAmount < totalAmount && dueDate && dueDate < thirtyDaysAgo) statusLabel = 'Overdue';
-      return {
-        id: s._id,
-        billNo: s.billNo,
-        customerName: s.customerName || '—',
-        customerPhone: s.customerPhone || '',
-        date: s.date,
-        invoiceAmount: totalAmount,
-        outstandingAmount: remainingAmount,
-        status: statusLabel
-      };
+    const branchId = req.user.branchId;
+    const { fetchUnpaidPartPaidReportData } = require('./lib/unpaid-part-paid-report');
+    const { rows, summary } = await fetchUnpaidPartPaidReportData({
+      Sale,
+      branchId,
+      dateFrom,
+      dateTo,
+      status: status != null ? String(status) : 'all'
     });
-    const totalOutstanding = rows.reduce((sum, r) => sum + (r.outstandingAmount || 0), 0);
     res.json({
       success: true,
       data: rows,
-      summary: { count: rows.length, totalOutstanding }
+      summary
     });
   } catch (error) {
     logger.error('Error fetching unpaid/part-paid:', error);

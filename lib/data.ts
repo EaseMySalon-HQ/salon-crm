@@ -125,6 +125,8 @@ export interface ReceiptItem {
 export interface PaymentMethod {
   type: "cash" | "card" | "online" | "unknown"
   amount: number
+  /** ISO timestamp when this split was recorded (checkout or due collection). */
+  recordedAt?: string
 }
 
 // Sample data

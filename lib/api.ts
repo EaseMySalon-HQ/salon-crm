@@ -708,6 +708,43 @@ export class AppointmentsAPI {
   }
 }
 
+export class BookingsAPI {
+  static async create(data: {
+    clientId: string
+    type: 'single' | 'multi_day' | 'package'
+    paymentMode?: string
+    paymentState?: string
+    /** When true (e.g. multi-day package + payment collected at booking), appointments get prepaidAtBooking */
+    packagePaymentCollected?: boolean
+    packagePurchaseId?: string
+    units: Array<{
+      serviceId: string
+      staffId?: string
+      staffAssignments?: Array<{ staffId: string; percentage: number; role?: string }>
+      startAt: string
+      endAt: string
+      price?: number
+      notes?: string
+      additionalServiceIds?: string[]
+    }>
+  }): Promise<
+    ApiResponse<{
+      bookingId: string
+      appointmentIds: string[]
+      bookingGroupId: string
+      timezone?: string
+    }>
+  > {
+    const response = await apiClient.post('/bookings', data)
+    return response.data
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/bookings/${id}`)
+    return response.data
+  }
+}
+
 export class LeadsAPI {
   static async getAll(params?: { 
     page?: number; 
@@ -907,6 +944,9 @@ export class SalesAPI {
     status?: string
     paymentMode?: string
     tipStaffId?: string
+    /** When "1"/"true", API matches invoice date OR paymentHistory date (cash register / dues). */
+    includeDuePaymentDates?: string | boolean
+    forCashRegister?: string | boolean
   }): Promise<SalesListResponse> {
     const response = await apiClient.get('/sales', { params })
     return response.data
@@ -929,6 +969,8 @@ export class SalesAPI {
     status?: string
     paymentMode?: string
     tipStaffId?: string
+    includeDuePaymentDates?: string | boolean
+    forCashRegister?: string | boolean
   }): Promise<any[]> {
     const batchSize = Math.min(Math.max(params?.batchSize ?? 500, 1), 1000)
     const { batchSize: _omit, ...rest } = { ...(params || {}) }
@@ -965,6 +1007,8 @@ export class SalesAPI {
     status?: string
     paymentMode?: string
     tipStaffId?: string
+    includeDuePaymentDates?: string | boolean
+    forCashRegister?: string | boolean
   }): Promise<ApiResponse<SalesSummaryData>> {
     const response = await apiClient.get('/sales/summary', { params })
     return response.data
@@ -1325,7 +1369,7 @@ export class ReportsAPI {
     return response.data;
   }
 
-  static async getUnpaidPartPaid(params?: { dateFrom?: string; dateTo?: string; status?: string }): Promise<ApiResponse<any> & { data: any[]; summary: { count: number; totalOutstanding: number } }> {
+  static async getUnpaidPartPaid(params?: { dateFrom?: string; dateTo?: string; status?: string }): Promise<ApiResponse<any> & { data: any[]; summary: { count: number; totalOutstanding: number; totalDuesSettled?: number } }> {
     const response = await apiClient.get('/reports/unpaid-part-paid', { params });
     return response.data;
   }
