@@ -34,6 +34,16 @@ function formatCurrency(amount, businessSettings) {
   }
 }
 
+/** Match frontend `formatPaymentRecordedDateLabel` (dd MMM yyyy) for payment lines. */
+function formatPaymentRecordedLabel(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 /**
  * Generate HTML receipt (same as frontend ReceiptGenerator)
  */
@@ -359,10 +369,12 @@ function generateReceiptHTML(receipt, businessSettings) {
           if (payment.type === 'card') displayName = 'Card';
           if (payment.type === 'online') displayName = 'Online';
           if (payment.type === 'unknown') displayName = 'Unknown';
+          const dateSuffix = formatPaymentRecordedLabel(payment.recordedAt);
+          const labelWithDate = dateSuffix ? `${displayName} (${dateSuffix})` : displayName;
           
           return `
             <div class="payment-line">
-              <span>${displayName}:</span>
+              <span>${labelWithDate}:</span>
               <span>${formatCurrency(payment.amount || 0, businessSettings)}</span>
             </div>
           `;

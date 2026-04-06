@@ -70,6 +70,7 @@ import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } f
 import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
 import { computePackageLineTotal } from "@/lib/package-tax"
 import { useRouter } from "next/navigation"
+import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
 
 // Mock data for customers
 // const mockCustomers = [
@@ -1541,6 +1542,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             time: sale.time || '00:00',
             total: sale.grossTotal || sale.netTotal || 0,
             payments: sale.payments || [{ type: sale.paymentMode?.toLowerCase() || 'cash', amount: sale.grossTotal || sale.netTotal || 0 }],
+            paymentHistory: sale.paymentHistory || [],
             items: sale.items || [],
             notes: sale.notes || '',
             clientName: sale.customerName,
@@ -2736,7 +2738,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const billingServiceTotal = serviceItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
   // Product Total (for billing display) = sum of (price × qty) for products only
   const billingProductTotal = productItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
-  // Membership / Package list totals (price × qty before line tax), same basis as service & product rows
+  // Membership / Package sidebar totals: pre-tax (price × qty), same as Plan total / Package total columns
   const billingMembershipTotal = membershipItems
     .filter((m) => m.planId)
     .reduce((sum, m) => sum + m.price * m.quantity, 0)
@@ -2747,8 +2749,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const billingItemTotal = billingServiceTotal + billingProductTotal
   // Discounts = Manual + Global (both line-level and global discount)
   const discounts = totalDiscount
-  // Sub Total = Item Total - Discounts
-  const subTotal = billingItemTotal - discounts
+  // Sub Total (pre-tax): all lines — services, products, membership, package — then discounts (matches Sub Total + GST ≈ Total when tax is exclusive)
+  const subTotal =
+    billingServiceTotal +
+    billingProductTotal +
+    billingMembershipTotal +
+    billingPackageTotal -
+    discounts
   
   // Calculate subtotal excluding tax (discounted amounts)
   const subtotalExcludingTax = serviceItems.reduce((sum, item) => {
@@ -3740,7 +3747,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 window.dispatchEvent(new CustomEvent("appointments-refresh"))
                 toast({
                   title: "Appointment Completed",
-                  description: "Linked appointment(s) have been marked as completed.",
+                  description: "This appointment has been marked as completed.",
                 })
               } catch (error) {
                 console.error("Failed to update appointment status:", error)
@@ -4487,10 +4494,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   <div>
                     <h4 className="font-semibold text-gray-800 mb-3">Payment Methods</h4>
                     <div className="space-y-2">
-                      {selectedBill.payments.map((payment: any, index: number) => (
+                      {getSalePaymentLinesWithDates(selectedBill).map((line, index: number) => (
                         <div key={index} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-200">
-                          <span className="capitalize font-medium text-gray-700">{payment.type}</span>
-                          <span className="font-semibold text-gray-800">₹{payment.amount?.toFixed(2)}</span>
+                          <span className="font-medium text-gray-700">
+                            {line.mode}
+                            <span className="text-gray-500 font-normal"> · {formatPaymentRecordedDateLabel(line.recordedAt)}</span>
+                          </span>
+                          <span className="font-semibold text-gray-800">₹{line.amount.toFixed(2)}</span>
                         </div>
                       ))}
                     </div>
@@ -5402,7 +5412,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       <div>Staff *</div>
                       <div>Qty</div>
                       <div>Price (₹)</div>
-                      <div>Total (₹)</div>
+                      <div>Plan total (₹)</div>
                       <div></div>
                     </div>
                     {membershipItems.map((item) => (
@@ -5470,7 +5480,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           readOnly
                           className="h-8 bg-muted"
                         />
-                        <div className="text-sm font-medium">₹{item.total.toFixed(2)}</div>
+                        <div className="text-sm font-medium">₹{getDisplayTotal(item).toFixed(2)}</div>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -5502,7 +5512,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       <div>Staff *</div>
                       <div>Qty</div>
                       <div>Price (₹)</div>
-                      <div>Total (₹)</div>
+                      <div>Package total (₹)</div>
                       <div></div>
                     </div>
                     {packageItems.map((item) => (
@@ -5698,9 +5708,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </span>
               </div>
 
-              {/* 3. Sub Total */}
+              {/* 3. Sub Total (pre-tax: services + products + membership + package bases, minus discounts) */}
               <div className="flex justify-between items-center py-1">
-                <span className="text-sm text-gray-600">Sub Total</span>
+                <span className="text-sm text-gray-600">Sub total (pre-tax)</span>
                 <span className="text-sm font-medium text-gray-900">{formatCurrency(subTotal)}</span>
               </div>
 
@@ -5747,6 +5757,38 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         </div>
                       </div>
                     ))}
+                    {membershipTax > 0 && (
+                      <>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">
+                            CGST @ {((taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5) / 2).toFixed(1)}% (Membership)
+                          </span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(membershipTax / 2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">
+                            SGST @ {((taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5) / 2).toFixed(1)}% (Membership)
+                          </span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(membershipTax / 2)}</span>
+                        </div>
+                      </>
+                    )}
+                    {packageTax > 0 && (
+                      <>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">
+                            CGST @ {((taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5) / 2).toFixed(1)}% (Package)
+                          </span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(packageTax / 2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">
+                            SGST @ {((taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5) / 2).toFixed(1)}% (Package)
+                          </span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(packageTax / 2)}</span>
+                        </div>
+                      </>
+                    )}
                     {totalTax === 0 && (
                       <div className="text-sm text-gray-500 py-0.5">No tax applied</div>
                     )}
@@ -5998,7 +6040,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               ) : (
                 <>
                   <Receipt className="h-4 w-4 mr-2" />
-                  {mode === "edit" ? "Save Changes" : mode === "exchange" ? "Complete Exchange" : allowZeroTotalCheckout ? `Complete — ${formatCurrency(roundedTotal)}` : `Checkout - ${formatCurrency(roundedTotal)}`}
+                  {mode === "edit"
+                    ? "Save Changes"
+                    : mode === "exchange"
+                      ? "Complete Exchange"
+                      : allowZeroTotalCheckout
+                        ? `Complete — ${formatCurrency(totalPaid)}`
+                        : `Collect - ${formatCurrency(totalPaid)}`}
                 </>
               )}
             </Button>
@@ -6618,7 +6666,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               disabled={!confirmUnpaid || isProcessing}
               className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Confirm & Checkout
+              Confirm & Collect
             </Button>
           </DialogFooter>
         </DialogContent>

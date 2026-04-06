@@ -22,6 +22,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
+import { resolveCreatedByDisplay } from "@/lib/utils"
 import { BlockTimeModal, getBlockReasonIcon } from "@/components/appointments/block-time-modal"
 import { useToast } from "@/hooks/use-toast"
 
@@ -56,6 +58,7 @@ interface Appointment {
   createdBy?: string
   leadSource?: string
   bookingGroupId?: string | null
+  prepaidAtBooking?: boolean
 }
 
 function getServiceDisplayNames(apt: { serviceId?: { name?: string; _id?: unknown }; additionalServices?: Array<{ name?: string }>; bookingGroupId?: string | null }): string[] {
@@ -85,6 +88,7 @@ interface StaffWorkDay {
 interface StaffMember {
   _id: string
   name: string
+  email?: string
   role?: string
   workSchedule?: StaffWorkDay[]
   allowAppointmentScheduling?: boolean
@@ -289,6 +293,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarGridProps
 >(({ initialAppointmentId, onSwitchToList, onOpenAppointmentForm, view = "calendar", onSwitchView }, ref) => {
+  const { user } = useAuth()
   const router = useRouter()
   const { toast } = useToast()
   const [staffList, setStaffList] = useState<StaffMember[]>([])
@@ -1089,7 +1094,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     }
   }
 
-  const handleMarkStatus = async (newStatus: "arrived" | "service_started") => {
+  const handleMarkStatus = async (newStatus: "arrived" | "service_started" | "completed") => {
     if (!selectedAppointment) return
     setUpdatingStatus(true)
     try {
@@ -1098,19 +1103,7 @@ export const AppointmentsCalendarGrid = forwardRef<
         const list = appointments.map((a) =>
           a._id === selectedAppointment._id ? { ...a, status: newStatus } : a
         )
-        if (newStatus === 'arrived') {
-          const groupId = selectedAppointment.bookingGroupId
-          if (groupId) {
-            const updatedList = list.map((a) =>
-              a.bookingGroupId === groupId ? { ...a, status: newStatus } : a
-            )
-            setAppointments(updatedList)
-          } else {
-            setAppointments(list)
-          }
-        } else {
-          setAppointments(list)
-        }
+        setAppointments(list)
         setSelectedAppointment({ ...selectedAppointment, status: newStatus })
         if (newStatus === "arrived") {
           // no alert; user may click "Service Started" next
@@ -2157,6 +2150,11 @@ export const AppointmentsCalendarGrid = forwardRef<
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80">
                               {getTotalDuration(apt as any)} min
                             </span>
+                            {a.prepaidAtBooking && apt.status !== "completed" && apt.status !== "cancelled" && (
+                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">
+                                Paid
+                              </span>
+                            )}
                           </div>
                           {apt.notes && (
                             <div className="text-slate-400 text-[11px] truncate mt-1.5 italic border-t border-slate-100 pt-1.5">
@@ -2547,9 +2545,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                 const price = a?.price ?? 0
                 const timeFrom = a?.time || ""
                 const timeTo = timeFrom ? slotMinutesToTimeString(parseTimeToMinutes(timeFrom) + duration) : ""
+                const prepaid = !!a.prepaidAtBooking
                 const paymentStatus = linkedSale?.paymentStatus
                   ? (linkedSale.paymentStatus.remainingAmount <= 0 ? "Paid" : linkedSale.paymentStatus.paidAmount > 0 ? "Partial" : "Unpaid")
-                  : "—"
+                  : prepaid
+                    ? "Paid"
+                    : "—"
                 const createdDate = a?.createdAt ? format(new Date(a.createdAt), "dd MMM yyyy, h:mm a") : "—"
                 const createdBy = a?.createdBy || "—"
                 const leadSource = a?.leadSource || "—"
@@ -2627,7 +2628,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Created By</div>
-                        <div>{createdBy}</div>
+                        <div>{resolveCreatedByDisplay(createdBy, { staffDirectory: staffList, currentUser: user })}</div>
                       </div>
                     </div>
                     <div>
@@ -2693,74 +2694,68 @@ export const AppointmentsCalendarGrid = forwardRef<
                         <Pencil className="h-4 w-4 mr-2" />
                         Edit
                       </Button>
-                      <Button
-                        onClick={() => {
-                          if (!selectedAppointment) return
-                          const a = selectedAppointment as any
-                          const staffId = a.staffId?._id || a.staffId
-                          const staffName = a.staffId?.name || ""
-                          let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
-                          if (a.bookingGroupId) {
-                            const groupApts = appointments.filter(
-                              (apt) =>
-                                (apt as Appointment).bookingGroupId === a.bookingGroupId &&
-                                (apt as any).status !== "cancelled"
-                            )
-                            for (const apt of groupApts) {
-                              const svc = (apt as any).serviceId
-                              const sid = (apt as any).staffId?._id || (apt as any).staffId
-                              const sname = (apt as any).staffId?.name || ""
+                      {(selectedAppointment as any)?.prepaidAtBooking ? (
+                        <Button
+                          onClick={() => handleMarkStatus("completed")}
+                          disabled={updatingStatus}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                        >
+                          {updatingStatus ? "Updating..." : "Mark Complete"}
+                        </Button>
+                      ) : (
+                        <Button
+                          onClick={() => {
+                            if (!selectedAppointment) return
+                            const a = selectedAppointment as any
+                            const staffId = a.staffId?._id || a.staffId
+                            const staffName = a.staffId?.name || ""
+                            let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
+                            // Only this appointment card's line(s) — not the whole bookingGroupId (multi-day / other dates stay separate)
+                            if (a.additionalServices && a.additionalServices.length > 0) {
+                              const primary = a.serviceId
                               services.push({
-                                serviceId: svc?._id || svc,
-                                staffId: sid || "",
-                                staffName: sname,
-                                price: (apt as any).price ?? (typeof svc === "object" && svc?.price) ?? 0,
-                              })
-                            }
-                          } else if (a.additionalServices && a.additionalServices.length > 0) {
-                            const primary = a.serviceId
-                            services.push({
-                              serviceId: primary?._id || primary,
-                              staffId: staffId || "",
-                              staffName,
-                              price: (typeof primary === "object" && primary?.price) ?? a.price ?? 0,
-                            })
-                            for (const s of a.additionalServices) {
-                              services.push({
-                                serviceId: s._id || s,
+                                serviceId: primary?._id || primary,
                                 staffId: staffId || "",
                                 staffName,
-                                price: s.price ?? 0,
+                                price: (typeof primary === "object" && primary?.price) ?? a.price ?? 0,
                               })
+                              for (const s of a.additionalServices) {
+                                services.push({
+                                  serviceId: s._id || s,
+                                  staffId: staffId || "",
+                                  staffName,
+                                  price: s.price ?? 0,
+                                })
+                              }
+                            } else {
+                              services = [{
+                                serviceId: a.serviceId?._id || a.serviceId,
+                                staffId: staffId || "",
+                                staffName,
+                                price: a.price ?? (typeof a.serviceId === "object" && a.serviceId?.price) ?? 0,
+                              }]
                             }
-                          } else {
-                            services = [{
-                              serviceId: a.serviceId?._id || a.serviceId,
+                            const appointmentData = {
+                              appointmentId: a._id,
+                              clientId: a.clientId?._id || a.clientId,
+                              clientName: a.clientId?.name || "",
+                              date: a.date,
+                              time: a.time,
+                              services: services.length > 0 ? services : undefined,
+                              serviceId: services.length === 1 ? services[0].serviceId : undefined,
+                              serviceName: a.serviceId?.name || "",
+                              servicePrice: a.price || 0,
+                              serviceDuration: a.duration || 0,
                               staffId: staffId || "",
                               staffName,
-                              price: a.price ?? (typeof a.serviceId === "object" && a.serviceId?.price) ?? 0,
-                            }]
-                          }
-                          const appointmentData = {
-                            appointmentId: a._id,
-                            clientId: a.clientId?._id || a.clientId,
-                            clientName: a.clientId?.name || "",
-                            date: a.date,
-                            time: a.time,
-                            services: services.length > 0 ? services : undefined,
-                            serviceId: services.length === 1 ? services[0].serviceId : undefined,
-                            serviceName: a.serviceId?.name || "",
-                            servicePrice: a.price || 0,
-                            serviceDuration: a.duration || 0,
-                            staffId: staffId || "",
-                            staffName,
-                          }
-                          setShowDetails(false)
-                          router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
-                        }}
-                      >
-                        Raise Sale
-                      </Button>
+                            }
+                            setShowDetails(false)
+                            router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                          }}
+                        >
+                          Raise Sale
+                        </Button>
+                      )}
                     </div>
                   </>
                 )}
@@ -2800,11 +2795,23 @@ export const AppointmentsCalendarGrid = forwardRef<
                       }}
                     >
                       <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <Badge className={`text-xs font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
-                            {getStatusText(appointment.status)}
-                          </Badge>
-                          <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50">
+                        <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge className={`text-xs font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
+                              {getStatusText(appointment.status)}
+                            </Badge>
+                            {a.prepaidAtBooking &&
+                              appointment.status !== "completed" &&
+                              appointment.status !== "cancelled" && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs shrink-0 border-emerald-600 text-emerald-800 bg-emerald-50"
+                                >
+                                  Paid
+                                </Badge>
+                              )}
+                          </div>
+                          <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50 shrink-0">
                             {appointment.time}
                           </Badge>
                         </div>

@@ -1,6 +1,6 @@
 "use client"
 
-import { PlusCircle } from "lucide-react"
+import { CalendarRange, PlusCircle } from "lucide-react"
 import { useRef, Suspense, useState, useEffect, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { AppointmentsCalendar } from "@/components/appointments/appointments-calendar"
 import { AppointmentsCalendarGrid } from "@/components/appointments/appointments-calendar-grid"
 import { AppointmentFormDrawer } from "@/components/appointments/appointment-form-drawer"
+import { MultiDayBookingDialog } from "@/components/appointments/multi-day-booking-dialog"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 
@@ -21,6 +22,7 @@ function AppointmentsContent() {
   const selectedAppointmentId = searchParams?.get("appointment") || undefined
 
   const [formDrawerOpen, setFormDrawerOpen] = useState(false)
+  const [multiDayOpen, setMultiDayOpen] = useState(false)
   const [formDrawerParams, setFormDrawerParams] = useState<{
     date?: string
     time?: string
@@ -107,6 +109,14 @@ function AppointmentsContent() {
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               <Button
+                variant="outline"
+                onClick={() => setMultiDayOpen(true)}
+                className="rounded-xl px-5 py-2.5 font-semibold border-slate-200 bg-white hover:bg-slate-50 text-slate-800"
+              >
+                <CalendarRange className="mr-2 h-4 w-4 text-violet-600" />
+                Multi-day booking
+              </Button>
+              <Button
                 onClick={() => openAppointmentForm()}
                 className="bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-5 py-2.5 font-semibold shadow-md shadow-violet-500/20 transition-all hover:shadow-lg"
               >
@@ -137,6 +147,14 @@ function AppointmentsContent() {
           </div>
         </div>
       </div>
+
+      <MultiDayBookingDialog
+        open={multiDayOpen}
+        onOpenChange={setMultiDayOpen}
+        onSuccess={() => {
+          window.dispatchEvent(new CustomEvent("appointments-refresh"))
+        }}
+      />
 
       <AppointmentFormDrawer
         open={formDrawerOpen}

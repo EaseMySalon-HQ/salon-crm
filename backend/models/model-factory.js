@@ -47,6 +47,9 @@ class ModelFactory {
     return {
       // Client model
       Client: this.getModel('Client', require('./Client').schema, connection),
+
+      // Parent booking (register before Appointment — refs Booking)
+      Booking: this.getModel('Booking', require('./Booking').schema, connection),
       
       // Appointment model
       Appointment: this.getModel('Appointment', require('./Appointment').schema, connection),
@@ -134,7 +137,14 @@ class ModelFactory {
       ClientPackage: this.getModel('ClientPackage', require('./ClientPackage').schema, connection),
       PackageRedemption: this.getModel('PackageRedemption', require('./PackageRedemption').schema, connection),
       PackageNotification: this.getModel('PackageNotification', require('./PackageNotification').schema, connection),
-      PackageAuditLog: this.getModel('PackageAuditLog', require('./PackageAuditLog').schema, connection)
+      PackageAuditLog: this.getModel('PackageAuditLog', require('./PackageAuditLog').schema, connection),
+
+      // Scheduling (package sessions + holds + availability)
+      PackageSession: this.getModel('PackageSession', require('./PackageSession').schema, connection),
+      BookingHold: this.getModel('BookingHold', require('./BookingHold').schema, connection),
+      StaffAvailability: this.getModel('StaffAvailability', require('./StaffAvailability').schema, connection),
+      StaffAvailabilityException: this.getModel('StaffAvailabilityException', require('./StaffAvailabilityException').schema, connection),
+      BranchHoliday: this.getModel('BranchHoliday', require('./BranchHoliday').schema, connection)
     };
   }
 

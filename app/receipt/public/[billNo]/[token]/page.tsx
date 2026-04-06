@@ -6,6 +6,7 @@ import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { Button } from "@/components/ui/button"
 import { Download } from "lucide-react"
 import { SalesAPI } from "@/lib/api"
+import { buildReceiptPaymentsFromSale } from "@/lib/sale-payment-lines"
 
 interface ReceiptData {
   id: string
@@ -37,6 +38,7 @@ interface ReceiptData {
   payments: Array<{
     type: string
     amount: number
+    recordedAt?: string
   }>
   staffName: string
   status: string
@@ -112,13 +114,21 @@ export default function PublicReceiptPage() {
                 return sum + base
               }, 0) || (saleData.grossTotal - saleData.taxAmount),
               paymentMode: saleData.paymentMode,
-              payments: saleData.payments?.length > 0 ? saleData.payments.map((payment: any) => {
-                const paymentType = payment.mode || payment.type
-                return {
-                  type: paymentType?.toLowerCase() || 'unknown',
-                  amount: payment.amount || 0
-                }
-              }) : [{ type: (saleData.paymentMode?.toLowerCase() || 'unknown'), amount: saleData.grossTotal }],
+              payments:
+                saleData.payments?.length > 0
+                  ? buildReceiptPaymentsFromSale({
+                      date: saleData.date,
+                      payments: saleData.payments,
+                      paymentHistory: saleData.paymentHistory || [],
+                    })
+                  : [
+                      {
+                        type: (String(saleData.paymentMode || "cash").split(",")[0]?.trim().toLowerCase() ||
+                          "unknown") as "cash" | "card" | "online" | "unknown",
+                        amount: saleData.grossTotal,
+                        recordedAt: new Date(saleData.date).toISOString(),
+                      },
+                    ],
               staffName: saleData.staffName,
               status: saleData.status,
               taxBreakdown: saleData.taxBreakdown
@@ -242,7 +252,8 @@ export default function PublicReceiptPage() {
               total: receipt.grossTotal,
               payments: receipt.payments?.map(payment => ({
                 type: (payment?.type || 'unknown') as "cash" | "card" | "online",
-                amount: payment?.amount || 0
+                amount: payment?.amount || 0,
+                recordedAt: payment?.recordedAt,
               })) || [],
               staffId: receipt.id,
               staffName: receipt.staffName,

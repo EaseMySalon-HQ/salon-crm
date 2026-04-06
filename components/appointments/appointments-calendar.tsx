@@ -20,6 +20,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { AppointmentsAPI, SalesAPI, StaffDirectoryAPI } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
+import { resolveCreatedByDisplay } from "@/lib/utils"
 
 interface Appointment {
   _id: string
@@ -52,6 +54,7 @@ interface Appointment {
   createdBy?: string
   leadSource?: string
   bookingGroupId?: string | null
+  prepaidAtBooking?: boolean
 }
 
 function getServiceDisplayNames(apt: { serviceId?: { name?: string; _id?: unknown }; additionalServices?: Array<{ name?: string }>; bookingGroupId?: string | null }): string[] {
@@ -114,6 +117,7 @@ function getPrimaryStaffId(apt: Appointment): string | null {
 interface StaffMember {
   _id: string
   name: string
+  email?: string
   role?: string
   allowAppointmentScheduling?: boolean
 }
@@ -130,6 +134,7 @@ export const AppointmentsCalendar = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarProps
 >(({ onShowCancelled, initialAppointmentId, onOpenAppointmentForm, view = "list", onSwitchView }, ref) => {
+  const { user } = useAuth()
   const router = useRouter()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [appointments, setAppointments] = useState<Appointment[]>([])
@@ -562,7 +567,7 @@ export const AppointmentsCalendar = forwardRef<
     }
   }
 
-  const handleMarkStatus = async (newStatus: 'arrived' | 'service_started') => {
+  const handleMarkStatus = async (newStatus: 'arrived' | 'service_started' | 'completed') => {
     if (!selectedAppointment) return
     setUpdatingStatus(true)
     try {
@@ -571,19 +576,7 @@ export const AppointmentsCalendar = forwardRef<
         const list = appointments.map((a) =>
           a._id === selectedAppointment._id ? { ...a, status: newStatus } : a
         )
-        if (newStatus === 'arrived') {
-          const groupId = selectedAppointment.bookingGroupId
-          if (groupId) {
-            const updatedList = list.map((a) =>
-              a.bookingGroupId === groupId ? { ...a, status: newStatus } : a
-            )
-            setAppointments(updatedList)
-          } else {
-            setAppointments(list)
-          }
-        } else {
-          setAppointments(list)
-        }
+        setAppointments(list)
         setSelectedAppointment({ ...selectedAppointment, status: newStatus })
       } else {
         alert('Failed to update status. Please try again.')
@@ -930,11 +923,23 @@ export const AppointmentsCalendar = forwardRef<
                       >
                         <div className={`h-1.5 shrink-0 rounded-t-lg ${getStatusColor(appointment.status)}`} aria-hidden />
                         <CardContent className="p-2.5 flex-1">
-                          <div className="flex items-center justify-between mb-1.5">
-                            <Badge className={`text-[10px] font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
-                              {getStatusText(appointment.status)}
-                            </Badge>
-                            <Badge variant="outline" className={`text-[10px] ${col.timeBadgeClass}`}>
+                          <div className="flex items-center justify-between mb-1.5 gap-1 flex-wrap">
+                            <div className="flex items-center gap-1 min-w-0">
+                              <Badge className={`text-[10px] font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
+                                {getStatusText(appointment.status)}
+                              </Badge>
+                              {(anyAppt as { prepaidAtBooking?: boolean }).prepaidAtBooking &&
+                                appointment.status !== 'completed' &&
+                                appointment.status !== 'cancelled' && (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px] shrink-0 border-emerald-600 text-emerald-800 bg-emerald-50"
+                                  >
+                                    Paid
+                                  </Badge>
+                                )}
+                            </div>
+                            <Badge variant="outline" className={`text-[10px] shrink-0 ${col.timeBadgeClass}`}>
                               {appointment.time}
                             </Badge>
                           </div>
@@ -995,9 +1000,12 @@ export const AppointmentsCalendar = forwardRef<
                 const price = a?.price ?? 0
                 const timeFrom = a?.time || ''
                 const timeTo = timeFrom ? slotMinutesToTimeString(parseTimeToMinutes(timeFrom) + duration) : ''
+                const prepaid = !!(a as { prepaidAtBooking?: boolean }).prepaidAtBooking
                 const paymentStatus = linkedSale?.paymentStatus
                   ? (linkedSale.paymentStatus.remainingAmount <= 0 ? 'Paid' : linkedSale.paymentStatus.paidAmount > 0 ? 'Partial' : 'Unpaid')
-                  : '—'
+                  : prepaid
+                    ? 'Paid'
+                    : '—'
                 const createdDate = a?.createdAt ? format(new Date(a.createdAt), 'dd MMM yyyy, h:mm a') : '—'
                 const createdBy = a?.createdBy || '—'
                 const leadSource = a?.leadSource || '—'
@@ -1075,7 +1083,7 @@ export const AppointmentsCalendar = forwardRef<
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Created By</div>
-                        <div>{createdBy}</div>
+                        <div>{resolveCreatedByDisplay(createdBy, { staffDirectory: staffList, currentUser: user })}</div>
                       </div>
                     </div>
                     <div>
@@ -1143,74 +1151,68 @@ export const AppointmentsCalendar = forwardRef<
                         <Pencil className="h-4 w-4 mr-2" />
                         Edit
                       </Button>
-                      <Button
-                        onClick={() => {
-                          if (!selectedAppointment) return
-                          const a = selectedAppointment as any
-                          const staffId = a.staffId?._id || a.staffId
-                          const staffName = a.staffId?.name || ''
-                          let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
-                          if (a.bookingGroupId) {
-                            const groupApts = appointments.filter(
-                              (apt) =>
-                                apt.bookingGroupId === a.bookingGroupId &&
-                                (apt as any).status !== "cancelled"
-                            )
-                            for (const apt of groupApts) {
-                              const svc = apt.serviceId
-                              const sid = (apt as any).staffId?._id || (apt as any).staffId
-                              const sname = (apt as any).staffId?.name || ''
+                      {(selectedAppointment as any)?.prepaidAtBooking ? (
+                        <Button
+                          onClick={() => handleMarkStatus('completed')}
+                          disabled={updatingStatus}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                        >
+                          {updatingStatus ? 'Updating...' : 'Mark Complete'}
+                        </Button>
+                      ) : (
+                        <Button
+                          onClick={() => {
+                            if (!selectedAppointment) return
+                            const a = selectedAppointment as any
+                            const staffId = a.staffId?._id || a.staffId
+                            const staffName = a.staffId?.name || ''
+                            let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
+                            // Only this appointment card's line(s) — not the whole bookingGroupId (multi-day / other dates stay separate)
+                            if (a.additionalServices && a.additionalServices.length > 0) {
+                              const primary = a.serviceId
                               services.push({
-                                serviceId: (typeof svc === 'object' && svc?._id) || (svc as string),
-                                staffId: sid || '',
-                                staffName: sname,
-                                price: (apt as any).price ?? (typeof svc === 'object' && svc?.price) ?? 0,
-                              })
-                            }
-                          } else if (a.additionalServices && a.additionalServices.length > 0) {
-                            const primary = a.serviceId
-                            services.push({
-                              serviceId: (typeof primary === 'object' && primary?._id) || (primary as string),
-                              staffId: staffId || '',
-                              staffName,
-                              price: (typeof primary === 'object' && primary?.price) ?? a.price ?? 0,
-                            })
-                            for (const s of a.additionalServices) {
-                              services.push({
-                                serviceId: s._id || (s as any),
+                                serviceId: (typeof primary === 'object' && primary?._id) || (primary as string),
                                 staffId: staffId || '',
                                 staffName,
-                                price: s.price ?? 0,
+                                price: (typeof primary === 'object' && primary?.price) ?? a.price ?? 0,
                               })
+                              for (const s of a.additionalServices) {
+                                services.push({
+                                  serviceId: s._id || (s as any),
+                                  staffId: staffId || '',
+                                  staffName,
+                                  price: s.price ?? 0,
+                                })
+                              }
+                            } else {
+                              services = [{
+                                serviceId: a.serviceId?._id || a.serviceId,
+                                staffId: staffId || '',
+                                staffName,
+                                price: a.price ?? (typeof a.serviceId === 'object' && a.serviceId?.price) ?? 0,
+                              }]
                             }
-                          } else {
-                            services = [{
-                              serviceId: a.serviceId?._id || a.serviceId,
+                            const appointmentData = {
+                              appointmentId: a._id,
+                              clientId: a.clientId?._id || a.clientId,
+                              clientName: a.clientId?.name || '',
+                              date: a.date,
+                              time: a.time,
+                              services: services.length > 0 ? services : undefined,
+                              serviceId: services.length === 1 ? services[0].serviceId : undefined,
+                              serviceName: a.serviceId?.name || '',
+                              servicePrice: a.price || 0,
+                              serviceDuration: a.duration || 0,
                               staffId: staffId || '',
                               staffName,
-                              price: a.price ?? (typeof a.serviceId === 'object' && a.serviceId?.price) ?? 0,
-                            }]
-                          }
-                          const appointmentData = {
-                            appointmentId: a._id,
-                            clientId: a.clientId?._id || a.clientId,
-                            clientName: a.clientId?.name || '',
-                            date: a.date,
-                            time: a.time,
-                            services: services.length > 0 ? services : undefined,
-                            serviceId: services.length === 1 ? services[0].serviceId : undefined,
-                            serviceName: a.serviceId?.name || '',
-                            servicePrice: a.price || 0,
-                            serviceDuration: a.duration || 0,
-                            staffId: staffId || '',
-                            staffName,
-                          }
-                          setShowDetails(false)
-                          router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
-                        }}
-                      >
-                        Raise Sale
-                      </Button>
+                            }
+                            setShowDetails(false)
+                            router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                          }}
+                        >
+                          Raise Sale
+                        </Button>
+                      )}
                     </div>
                   </>
                 )}
@@ -1251,11 +1253,23 @@ export const AppointmentsCalendar = forwardRef<
                       }}
                     >
                       <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <Badge className={`text-xs font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
-                            {getStatusText(appointment.status)}
-                          </Badge>
-                          <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50">
+                        <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge className={`text-xs font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
+                              {getStatusText(appointment.status)}
+                            </Badge>
+                            {anyAppt.prepaidAtBooking &&
+                              appointment.status !== 'completed' &&
+                              appointment.status !== 'cancelled' && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs shrink-0 border-emerald-600 text-emerald-800 bg-emerald-50"
+                                >
+                                  Paid
+                                </Badge>
+                              )}
+                          </div>
+                          <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50 shrink-0">
                             {appointment.time}
                           </Badge>
                         </div>

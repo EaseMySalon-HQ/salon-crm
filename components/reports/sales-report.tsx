@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
+import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
 import { getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST, formatDateIST } from "@/lib/date-utils"
 import { Calendar } from "@/components/ui/calendar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -77,6 +78,11 @@ interface SalesRecord {
     mode: string
     amount: number
   }>
+  paymentHistory?: Array<{
+    date?: string | Date
+    amount: number
+    method?: string
+  }>
   tip?: number
   netTotal: number
   taxAmount: number
@@ -100,6 +106,7 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
     time: sale.time as string | undefined,
     paymentMode: String(sale.paymentMode ?? ""),
     payments: (sale.payments as SalesRecord["payments"]) || [],
+    paymentHistory: (sale.paymentHistory as SalesRecord["paymentHistory"]) || [],
     tip: (sale.tip as number) || 0,
     tipStaffId: sale.tipStaffId != null ? String(sale.tipStaffId) : undefined,
     tipStaffName: sale.tipStaffName as string | undefined,
@@ -233,7 +240,11 @@ export function SalesReport() {
   const [unpaidPartPaidDateRange, setUnpaidPartPaidDateRange] = useState<{ from?: Date; to?: Date }>({})
   const [unpaidPartPaidStatusFilter, setUnpaidPartPaidStatusFilter] = useState<string>("all")
   const [unpaidPartPaidData, setUnpaidPartPaidData] = useState<any[]>([])
-  const [unpaidPartPaidSummary, setUnpaidPartPaidSummary] = useState<{ count: number; totalOutstanding: number }>({ count: 0, totalOutstanding: 0 })
+  const [unpaidPartPaidSummary, setUnpaidPartPaidSummary] = useState<{
+    count: number
+    totalOutstanding: number
+    totalDuesSettled?: number
+  }>({ count: 0, totalOutstanding: 0 })
   const [unpaidPartPaidLoading, setUnpaidPartPaidLoading] = useState(false)
 
   // Staff Tip report: payouts (for Mark as Paid)
@@ -268,6 +279,14 @@ export function SalesReport() {
   const handleViewReceipt = (sale: SalesRecord) => {
     router.push(`/receipt/${sale.billNo}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
   }
+
+  const navigateToReceiptByBillNo = useCallback(
+    (billNo: string) => {
+      if (!billNo?.trim()) return
+      router.push(`/receipt/${encodeURIComponent(billNo.trim())}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
+    },
+    [router, buildReportsReturnPath],
+  )
 
   const handleEditBill = (sale: SalesRecord) => {
     router.push(`/billing/${sale.billNo}?mode=edit`)
@@ -744,19 +763,25 @@ export function SalesReport() {
     let cancelled = false
     setUnpaidPartPaidLoading(true)
     ReportsAPI.getUnpaidPartPaid(params)
-      .then((res: { success?: boolean; data?: any[]; summary?: { count: number; totalOutstanding: number } }) => {
+      .then((res: {
+        success?: boolean
+        data?: any[]
+        summary?: { count: number; totalOutstanding: number; totalDuesSettled?: number }
+      }) => {
         if (!cancelled && res?.success) {
           setUnpaidPartPaidData(Array.isArray(res.data) ? res.data : [])
-          setUnpaidPartPaidSummary(res.summary || { count: 0, totalOutstanding: 0 })
+          setUnpaidPartPaidSummary(
+            res.summary || { count: 0, totalOutstanding: 0, totalDuesSettled: 0 }
+          )
         } else if (!cancelled) {
           setUnpaidPartPaidData([])
-          setUnpaidPartPaidSummary({ count: 0, totalOutstanding: 0 })
+          setUnpaidPartPaidSummary({ count: 0, totalOutstanding: 0, totalDuesSettled: 0 })
         }
       })
       .catch(() => {
         if (!cancelled) {
           setUnpaidPartPaidData([])
-          setUnpaidPartPaidSummary({ count: 0, totalOutstanding: 0 })
+          setUnpaidPartPaidSummary({ count: 0, totalOutstanding: 0, totalDuesSettled: 0 })
         }
       })
       .finally(() => {
@@ -764,6 +789,12 @@ export function SalesReport() {
       })
     return () => { cancelled = true }
   }, [reportType, unpaidPartPaidDatePeriod, unpaidPartPaidDateRange.from, unpaidPartPaidDateRange.to, unpaidPartPaidStatusFilter])
+
+  useEffect(() => {
+    if (unpaidPartPaidStatusFilter === "dues_settled") {
+      setUnpaidPartPaidStatusFilter("all")
+    }
+  }, [unpaidPartPaidStatusFilter])
 
   // Fetch tip payouts when Staff Tip report is selected (for Paid state)
   useEffect(() => {
@@ -2455,7 +2486,7 @@ export function SalesReport() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <Card className="bg-white border-slate-100">
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm font-medium text-slate-500">No. Of Bills</CardTitle>
@@ -2474,6 +2505,18 @@ export function SalesReport() {
                     </p>
                   </CardContent>
                 </Card>
+                <Card className="bg-white border-slate-100">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-500">Dues settled (period)</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold text-emerald-700">
+                      ₹{(unpaidPartPaidSummary.totalDuesSettled ?? 0).toLocaleString("en-IN", {
+                        maximumFractionDigits: 2,
+                      })}
+                    </p>
+                  </CardContent>
+                </Card>
               </div>
               <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
                 <Table>
@@ -2483,21 +2526,31 @@ export function SalesReport() {
                       <TableHead className="font-semibold">Customer Name</TableHead>
                       <TableHead className="font-semibold">Date</TableHead>
                       <TableHead className="font-semibold">Invoice Amount</TableHead>
-                      <TableHead className="font-semibold">Outstanding Amount</TableHead>
+                      <TableHead className="font-semibold">Dues settled</TableHead>
+                      <TableHead className="font-semibold">Outstanding</TableHead>
                       <TableHead className="font-semibold">Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {unpaidPartPaidData.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center py-12 text-slate-500">
+                        <TableCell colSpan={7} className="text-center py-12 text-slate-500">
                           No bills found for selected filters
                         </TableCell>
                       </TableRow>
                     ) : (
                       unpaidPartPaidData.map((row) => (
                         <TableRow key={row.id} className="border-slate-50">
-                          <TableCell className="font-medium">{row.billNo}</TableCell>
+                          <TableCell className="font-medium">
+                            <Button
+                              type="button"
+                              variant="link"
+                              className="p-0 h-auto font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                              onClick={() => navigateToReceiptByBillNo(row.billNo)}
+                            >
+                              {row.billNo}
+                            </Button>
+                          </TableCell>
                           <TableCell>
                             <div>{row.customerName}</div>
                             {row.customerPhone && (
@@ -2509,6 +2562,19 @@ export function SalesReport() {
                           </TableCell>
                           <TableCell>₹{(row.invoiceAmount ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</TableCell>
                           <TableCell>
+                            <span
+                              className={
+                                (row.duesSettledInPeriod ?? 0) > 0
+                                  ? "font-semibold text-emerald-700"
+                                  : "text-slate-500"
+                              }
+                            >
+                              ₹{(row.duesSettledInPeriod ?? 0).toLocaleString("en-IN", {
+                                maximumFractionDigits: 2,
+                              })}
+                            </span>
+                          </TableCell>
+                          <TableCell>
                             <span className={row.outstandingAmount > 0 ? "font-semibold text-red-600" : ""}>
                               ₹{(row.outstandingAmount ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                             </span>
@@ -2518,7 +2584,8 @@ export function SalesReport() {
                               variant={
                                 row.status === "Overdue" ? "destructive" :
                                 row.status === "Unpaid" ? "destructive" :
-                                row.status === "Part Paid" ? "secondary" : "default"
+                                row.status === "Part Paid" ? "secondary" :
+                                row.status === "Full Paid" ? "outline" : "default"
                               }
                               className="capitalize"
                             >
@@ -3319,10 +3386,13 @@ export function SalesReport() {
                 <div className="border-t pt-4">
                   <label className="text-sm font-medium text-muted-foreground">Payment Breakdown</label>
                   <div className="space-y-2 mt-2">
-                    {selectedBill.payments.map((payment, index) => (
+                    {getSalePaymentLinesWithDates(selectedBill).map((line, index) => (
                       <div key={index} className="flex justify-between items-center bg-muted/30 p-2 rounded">
-                        <span className="font-medium">{payment.mode}</span>
-                        <span className="text-green-600 font-semibold">₹{payment.amount.toFixed(2)}</span>
+                        <span className="font-medium">
+                          {line.mode}
+                          <span className="text-muted-foreground font-normal"> · {formatPaymentRecordedDateLabel(line.recordedAt)}</span>
+                        </span>
+                        <span className="text-green-600 font-semibold">₹{line.amount.toFixed(2)}</span>
                       </div>
                     ))}
                   </div>

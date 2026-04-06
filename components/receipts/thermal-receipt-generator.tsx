@@ -3,6 +3,7 @@
 import { Receipt } from "@/lib/data"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
+import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 
 interface ThermalReceiptGeneratorProps {
   receipt: Receipt
@@ -269,12 +270,24 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
 
           <div class="payments">
             <div style="font-weight: bold; margin-bottom: 4px;">Payment Method(s):</div>
-            ${receipt.payments.map(payment => `
+            ${receipt.payments
+              .map((payment) => {
+                const displayName =
+                  payment.type === "cash"
+                    ? "Cash"
+                    : payment.type === "card"
+                      ? "Card"
+                      : "Online"
+                const d = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
+                const label = d ? `${displayName} (${d})` : displayName
+                return `
               <div class="payment-line">
-                <span>${payment.type === 'cash' ? 'Cash' : payment.type === 'card' ? 'Card' : 'Online'}:</span>
+                <span>${label}:</span>
                 <span>₹${payment.amount.toFixed(2)}</span>
               </div>
-            `).join('')}
+            `
+              })
+              .join("")}
           </div>
 
           <div class="footer">
@@ -563,12 +576,24 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
 
         <div class="payments">
           <div style="font-weight: bold; margin-bottom: 4px;">Payment Method(s):</div>
-          ${receipt.payments.map(payment => `
+          ${receipt.payments
+            .map((payment) => {
+              const displayName =
+                payment.type === "cash"
+                  ? "Cash"
+                  : payment.type === "card"
+                    ? "Card"
+                    : "Online"
+              const d = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
+              const label = d ? `${displayName} (${d})` : displayName
+              return `
             <div class="payment-line">
-              <span>${payment.type === 'cash' ? 'Cash' : payment.type === 'card' ? 'Card' : 'Online'}:</span>
+              <span>${label}:</span>
               <span>₹${payment.amount.toFixed(2)}</span>
             </div>
-          `).join('')}
+          `
+            })
+            .join("")}
         </div>
 
         <div class="footer">

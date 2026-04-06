@@ -12,6 +12,7 @@ import { SettingsAPI } from "@/lib/api"
 import { SalesAPI } from "@/lib/api"
 import { ThermalReceiptGenerator } from "@/components/receipts/thermal-receipt-generator"
 import { useToast } from "@/hooks/use-toast"
+import { buildReceiptPaymentsFromSale } from "@/lib/sale-payment-lines"
 
 interface ReceiptData {
   id: string
@@ -45,6 +46,7 @@ interface ReceiptData {
   payments: Array<{
     type: string
     amount: number
+    recordedAt?: string
   }>
   staffName: string
   status: string
@@ -140,7 +142,17 @@ export default function ReceiptPage() {
               tip: frontendData.tip || 0,
               tipStaffName: frontendData.tipStaffName,
               paymentMode: frontendData.payments?.[0]?.type || 'Cash',
-              payments: frontendData.payments || [{ type: 'Cash', amount: frontendData.total }],
+              payments:
+                buildReceiptPaymentsFromSale({
+                  date: frontendData.date,
+                  payments: (frontendData.payments || [{ type: 'Cash', amount: frontendData.total }]).map(
+                    (p: { type?: string; amount?: number }) => ({
+                      mode: p.type,
+                      amount: p.amount,
+                    })
+                  ),
+                  paymentHistory: frontendData.paymentHistory || [],
+                }),
               staffName: frontendData.staffName,
               status:
                 typeof frontendData.status === "string"
@@ -208,15 +220,24 @@ export default function ReceiptPage() {
               tip: saleData.tip || 0,
               tipStaffName: saleData.tipStaffName,
               paymentMode: saleData.paymentMode,
-              payments: saleData.payments?.length > 0 ? saleData.payments.map((payment: any) => {
-                // Handle both 'mode' field (from Sale model) and 'type' field (from receipt)
-                const paymentType = payment.mode || payment.type
-                console.log('🔍 Processing payment:', { payment, paymentType, mode: payment.mode, type: payment.type })
-                return {
-                  type: paymentType?.toLowerCase() || 'unknown',
-                  amount: payment.amount || 0
-                }
-              }) : [{ type: (saleData.paymentMode?.toLowerCase() || 'unknown'), amount: saleData.grossTotal }],
+              payments:
+                saleData.payments?.length > 0
+                  ? buildReceiptPaymentsFromSale({
+                      date: saleData.date,
+                      payments: saleData.payments,
+                      paymentHistory: saleData.paymentHistory || [],
+                    })
+                  : [
+                      {
+                        type: (saleData.paymentMode?.split?.(",")?.[0]?.toLowerCase() || "cash") as
+                          | "cash"
+                          | "card"
+                          | "online"
+                          | "unknown",
+                        amount: saleData.grossTotal,
+                        recordedAt: new Date(saleData.date).toISOString(),
+                      },
+                    ],
               staffName: saleData.staffName,
               status: typeof saleData.status === "string" ? saleData.status : saleData.invoiceDeleted ? "cancelled" : "completed",
               invoiceDeleted: saleData.invoiceDeleted === true,
@@ -359,7 +380,8 @@ ${publicUrl}`
       total: receipt.grossTotal + (receipt.tip || 0),
       payments: receipt.payments.map(payment => ({
         type: payment.type as "cash" | "card" | "online",
-        amount: payment.amount
+        amount: payment.amount,
+        recordedAt: payment.recordedAt,
       })),
       staffId: "",
       staffName: receipt.staffName,
@@ -481,7 +503,8 @@ ${publicUrl}`
               total: receipt.grossTotal + (receipt.tip || 0),
               payments: receipt.payments?.map(payment => ({
                 type: (payment?.type || 'unknown') as "cash" | "card" | "online",
-                amount: payment?.amount || 0
+                amount: payment?.amount || 0,
+                recordedAt: payment?.recordedAt,
               })) || [],
               staffId: receipt.id,
               staffName: receipt.staffName,
