@@ -1054,20 +1054,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       }
     }
 
-    // Check if this is a closing shift and if there's also opening data
-    const hasOpeningData = entry.openingBalance > 0
-    const hasClosingData = entry.closingBalance > 0
-    
-    if (hasOpeningData && hasClosingData) {
-      // This record has both opening and closing data
-      // We need to ask user which part to delete
-      setSelectedEntry(entry)
-      setIsDeleteDialogOpen(true)
-    } else {
-      // This record only has one type of data, safe to delete entirely
-      setSelectedEntry(entry)
-      setIsDeleteDialogOpen(true)
-    }
+    // One persisted row is either opening or closing (closing docs also store openingBalance for ledger math).
+    setSelectedEntry(entry)
+    setIsDeleteDialogOpen(true)
   }
 
   const handleDeleteDailySummary = (summary: any) => {
@@ -1137,23 +1126,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           throw new Error("Some entries could not be deleted")
         }
       } else {
-        // Regular single entry deletion
-        // Determine which shift to delete based on the current context
-        let shiftTypeToDelete = null
-        
-        // Check if this is a row-specific deletion (we need to determine from the row context)
-        if (selectedEntry.openingBalance > 0 && selectedEntry.closingBalance > 0) {
-          // This record has both opening and closing data
-          // We need to determine which shift the user wants to delete
-          // For now, we'll delete the entire record and let them recreate what they need
-          shiftTypeToDelete = null
-        } else if (selectedEntry.openingBalance > 0) {
-          shiftTypeToDelete = 'opening'
-        } else if (selectedEntry.closingBalance > 0) {
-          shiftTypeToDelete = 'closing'
-        }
-        
-        // Call delete API (shiftType parameter removed for now)
+        // Regular single entry deletion — one document per shift type
         response = await CashRegistryAPI.delete(selectedEntry.id)
         
         // Check if the response has a success message (backend returns { message: '...' })
@@ -1757,14 +1730,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                 <span className="font-medium">Export (Upgrade)</span>
               </Button>
             )}
-              
-              <Button
-                onClick={() => setIsAddModalOpen(true)}
-                className="flex items-center space-x-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 rounded-xl px-6 py-2"
-              >
-                <Banknote className="h-4 w-4" />
-                <span className="font-semibold">Add Entry</span>
-              </Button>
             </div>
           </div>
         </div>
@@ -2101,8 +2066,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                         if ('id' in entry) {
                           const rows = []
                           
-                          // Add opening balance row if it exists
-                          if (entry.openingBalance > 0) {
+                          // One DB doc is either opening or closing. Closing rows still store openingBalance
+                          // (expected cash from ledger) — do not render that as a second "Opening Shift" row.
+                          if (entry.shiftType === "opening" && entry.openingBalance > 0) {
                             rows.push(
                               <TableRow key={`${entry.id}-opening`}>
                                 <TableCell className="font-medium">
@@ -2159,8 +2125,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                             )
                           }
                           
-                          // Add closing balance row if it exists
-                          if (entry.closingBalance > 0) {
+                          if (entry.shiftType === "closing" && entry.closingBalance > 0) {
                             rows.push(
                               <TableRow key={`${entry.id}-closing`}>
                                 <TableCell className="font-medium">

@@ -3,6 +3,8 @@
  * Used by API interceptor and auth context for consistent logout behavior.
  */
 
+import { clearCsrfTokenPersisted } from './csrf'
+
 export const AUTH_LOGOUT_EVENT = 'salon-auth-logout'
 export const SESSION_EXPIRED_KEY = 'salon-session-expired'
 export const REMEMBERED_BUSINESS_CODE_KEY = 'salon-remembered-business-code'
@@ -14,12 +16,11 @@ export const REMEMBERED_BUSINESS_CODE_KEY = 'salon-remembered-business-code'
 export function clearAuthStorage(): void {
   if (typeof window === 'undefined') return
 
-  localStorage.removeItem('salon-auth-token')
   localStorage.removeItem('salon-auth-user')
 
-  // Clear session storage for salon auth (preserves admin auth in separate keys)
-  sessionStorage.removeItem('salon-auth-token')
   sessionStorage.removeItem('salon-auth-user')
+
+  clearCsrfTokenPersisted()
 }
 
 /**

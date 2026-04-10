@@ -39,6 +39,8 @@ const packageSvc = require('../services/package-service');
 const { sendPackageNotification } = require('../services/package-notification-service');
 const databaseManager = require('../config/database-manager');
 const packageSessionSvc = require('../services/scheduling/package-session-service');
+const { validate } = require('../middleware/validate');
+const { packageCreateBodySchema } = require('../validation/schemas');
 
 // All package routes require auth + business DB setup
 const auth = [authenticateToken, setupBusinessDatabase];
@@ -76,7 +78,7 @@ async function auditLog(AuditModel, branchId, package_id, action, performed_by, 
  * POST /api/packages
  * Create a new package (manager/admin only)
  */
-router.post('/', authManager, async (req, res) => {
+router.post('/', authManager, validate(packageCreateBodySchema), async (req, res) => {
   try {
     const { Package, PackageService, Service, PackageAuditLog } = req.businessModels;
     const branchId = req.user.branchId;

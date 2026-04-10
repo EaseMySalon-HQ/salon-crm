@@ -14,10 +14,16 @@ const { ensureAdminAccessDefaults } = require('./utils/admin-access');
 const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
 const {
   buildSalesListMatch,
+  buildSalesListDuePaymentSplitMatches,
+  fetchSalesListPageMerged,
   parseSalesListPagination,
   mergeEditedFlagsFromHistory,
   computeSalesSummaryTotals,
+  computeSalesSummaryTotalsSplit,
 } = require('./lib/sales-list-query');
+const { isAdminReceiptNotificationsEnabled } = require('./lib/whatsapp-admin-gates');
+const { getWhatsAppSettingsWithDefaults } = require('./lib/whatsapp-settings-defaults');
+const { sendAppointmentWhatsAppAfterCreate, sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('./lib/send-appointment-whatsapp');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -45,14 +51,36 @@ const InventoryTransaction = require('./models/InventoryTransaction').model;
 const BillEditHistory = require('./models/BillEditHistory').model;
 const BillArchive = require('./models/BillArchive').model;
 
+const ACTIVITY_ACTIONS = require('./constants/activity-log-actions');
+const { scheduleActivityLog, tenantActorTypeFromRole } = require('./utils/activity-logger');
+
 // Import Routes
 const cashRegistryRoutes = require('./routes/cashRegistry');
 const adminRoutes = require('./routes/admin');
 
 require('dotenv').config();
+/** Fail fast in production if JWT_SECRET missing */
+const { JWT_SECRET } = require('./config/jwt');
+
+const cookieParser = require('cookie-parser');
+const {
+  configureTrustProxy,
+  validateProductionRateLimitConfig,
+  generalApiLimiter,
+  authClusterLimiter,
+  reportsExportLimiter,
+  aiIntegrationLimiter,
+  AUTH_PATH_PREFIXES,
+  shutdownRateLimitInfrastructure,
+  getRateLimitHealthPayload,
+} = require('./middleware/rate-limit');
+const { apiV1AliasMiddleware } = require('./middleware/api-v1-alias');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+configureTrustProxy(app);
+validateProductionRateLimitConfig(app);
 
 // Connect to MongoDB and initialize admin access defaults
 const dbPromise = connectDB();
@@ -90,89 +118,58 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'X-XSRF-Token'],
   preflightContinue: false,
   optionsSuccessStatus: 200
 }));
+
+// Body + cookies before rate limiters so auth routes can key off JSON (email, etc.)
+app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
+
+// /api/v1/* is an alias for /api/* (same handlers; no duplicated route tables)
+app.use(apiV1AliasMiddleware);
+
+// Health checks before /api rate limiters (load balancers / k8s probes)
+app.get('/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'EaseMySalon API is running',
+    timestamp: new Date().toISOString(),
+    ...getRateLimitHealthPayload(),
+  });
+});
+app.get('/api/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'EaseMySalon API is running',
+    timestamp: new Date().toISOString(),
+    ...getRateLimitHealthPayload(),
+  });
+});
+
+// Rate limits: global API + stricter auth + heavy exports + reserved AI prefix (see middleware/rate-limit.js)
+app.use('/api', generalApiLimiter);
+AUTH_PATH_PREFIXES.forEach((p) => app.use(p, authClusterLimiter));
+app.use('/api/reports/export', reportsExportLimiter);
+app.use('/api/integrations/ai', aiIntegrationLimiter);
 
 // Per-request HTTP log (dev only). Set HTTP_LOG=0 to disable morgan during local profiling.
 if (process.env.NODE_ENV !== 'production' && process.env.HTTP_LOG !== '0') {
   app.use(morgan('short'));
 }
-app.use(express.json({ limit: '10mb' }));
+
+const { csrfProtection, setCsrfCookie } = require('./middleware/csrf');
+app.use(csrfProtection);
 
 // Handle CORS preflight for all routes
 app.options('*', cors());
 
-// Helper function to apply WhatsApp settings defaults
-// This ensures that even if settings don't exist in DB, we use schema defaults
-function getWhatsAppSettingsWithDefaults(whatsappSettings) {
-  // Default values from Business model schema
-  const defaults = {
-    enabled: true,
-    receiptNotifications: {
-      enabled: true,
-      autoSendToClients: true,
-      highValueThreshold: 0
-    },
-    appointmentNotifications: {
-      enabled: false,
-      newAppointments: false,
-      confirmations: false,
-      reminders: false,
-      cancellations: false
-    },
-    systemAlerts: {
-      enabled: false,
-      lowInventory: false,
-      paymentFailures: false
-    }
-  };
-
-  // If no settings exist, return defaults
-  if (!whatsappSettings || typeof whatsappSettings !== 'object' || Array.isArray(whatsappSettings)) {
-    return defaults;
-  }
-
-  // Merge with defaults, preserving existing values (including false)
-  const merged = {
-    ...defaults,
-    ...whatsappSettings,
-    // Explicitly handle enabled field - use saved value if it exists, otherwise default
-    enabled: whatsappSettings.hasOwnProperty('enabled') ? whatsappSettings.enabled : defaults.enabled,
-    // Merge nested objects, explicitly preserving enabled fields
-    receiptNotifications: whatsappSettings.receiptNotifications ? {
-      ...defaults.receiptNotifications,
-      ...whatsappSettings.receiptNotifications,
-      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
-      enabled: whatsappSettings.receiptNotifications.hasOwnProperty('enabled')
-        ? whatsappSettings.receiptNotifications.enabled
-        : defaults.receiptNotifications.enabled,
-      // CRITICAL: Explicitly preserve autoSendToClients if it exists (even if false)
-      autoSendToClients: whatsappSettings.receiptNotifications.hasOwnProperty('autoSendToClients')
-        ? whatsappSettings.receiptNotifications.autoSendToClients
-        : defaults.receiptNotifications.autoSendToClients
-    } : defaults.receiptNotifications,
-    appointmentNotifications: whatsappSettings.appointmentNotifications ? {
-      ...defaults.appointmentNotifications,
-      ...whatsappSettings.appointmentNotifications,
-      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
-      enabled: whatsappSettings.appointmentNotifications.hasOwnProperty('enabled')
-        ? whatsappSettings.appointmentNotifications.enabled
-        : defaults.appointmentNotifications.enabled
-    } : defaults.appointmentNotifications,
-    systemAlerts: whatsappSettings.systemAlerts ? {
-      ...defaults.systemAlerts,
-      ...whatsappSettings.systemAlerts,
-      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
-      enabled: whatsappSettings.systemAlerts.hasOwnProperty('enabled')
-        ? whatsappSettings.systemAlerts.enabled
-        : defaults.systemAlerts.enabled
-    } : defaults.systemAlerts
-  };
-  
-  return merged;
-}
+/** Public: set `ems_csrf` cookie for double-submit CSRF (safe before login; no auth). */
+app.get('/api/auth/csrf', (req, res) => {
+  const csrfToken = setCsrfCookie(res);
+  res.json({ success: true, csrfToken });
+});
 
 // Helper function to apply Email settings defaults
 // This ensures that even if settings don't exist in DB, we use defaults
@@ -192,10 +189,13 @@ function getEmailSettingsWithDefaults(emailSettings) {
     },
     appointmentNotifications: {
       enabled: true,
-      newAppointment: true,
-      cancellation: true,
-      noShow: false,
-      reminderTime: 24
+      // Must match Business.settings.emailNotificationSettings + notification UI (plural key)
+      newAppointments: true,
+      cancellations: true,
+      noShows: false,
+      reminders: false,
+      reminderHoursBefore: 24,
+      recipientStaffIds: []
     },
     receiptNotifications: {
       enabled: true,
@@ -304,8 +304,35 @@ app.use('/api/packages', require('./routes/packages'));
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 
-// JWT Secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
+const {
+  signTenantAccess,
+  setTenantAuthCookies,
+  clearTenantAuthCookies,
+  COOKIE,
+  TOKEN_USE,
+} = require('./lib/auth-tokens');
+const { createRefreshSession, rotateRefreshSession, revokeRefreshFamily } = require('./lib/refresh-session');
+const { validate, validateAll } = require('./middleware/validate');
+const {
+  tenantLoginSchema,
+  staffLoginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+  mongoIdParamSchema,
+  createClientBodySchema,
+  updateClientBodySchema,
+  createStaffBodySchema,
+  staffUpdateBodySchema,
+  staffChangePasswordBodySchema,
+  salePaymentBodySchema,
+  saleExchangeBodySchema,
+  createUserBodySchema,
+  updateUserBodySchema,
+  userChangePasswordBodySchema,
+  verifyAdminPasswordBodySchema,
+  createExpenseBodySchema,
+  updateExpenseBodySchema,
+} = require('./validation/schemas');
 
 // Initialize default users if they don't exist
 const initializeDefaultUsers = async () => {
@@ -432,21 +459,24 @@ const checkPermission = (module, feature) => {
   };
 };
 
-// Helper function to generate JWT token
-const generateToken = (user) => {
-  const payload = {
-    id: user._id || user.id,
-    email: user.email,
-    role: user.role
-  };
-  
-  // Include branchId for staff users
-  if (user.branchId) {
-    payload.branchId = user.branchId;
-  }
-  
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
-};
+/**
+ * Issue tenant session: short-lived access + rotated refresh (DB-backed jti) in HttpOnly cookies.
+ * JSON access token retained for clients still using Authorization + localStorage (migration).
+ * @param {'user'|'staff'} subjectType
+ * @param {string} [accessExpiresOverride] — e.g. '1h' for impersonation sessions
+ */
+async function issueTenantSession(res, user, accessExpiresOverride, subjectType = 'user') {
+  const mainConnection = await databaseManager.getMainConnection();
+  const { refreshToken } = await createRefreshSession(mainConnection, {
+    subjectType,
+    userId: subjectType === 'user' ? user._id || user.id : undefined,
+    staffId: subjectType === 'staff' ? user._id || user.id : undefined,
+    branchId: user.branchId,
+  });
+  const accessToken = signTenantAccess(user, accessExpiresOverride);
+  setTenantAuthCookies(res, { accessToken, refreshToken });
+  return accessToken;
+}
 
 // Helper function to hash password
 const hashPassword = async (password) => {
@@ -461,16 +491,9 @@ const comparePassword = async (password, hash) => {
 // Routes
 
 // Authentication routes
-app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
+app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email and password are required'
-      });
-    }
 
     // Use main database User model
     const { User } = req.mainModels;
@@ -526,8 +549,8 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
       updatedAt: new Date()
     });
 
-    // Generate token
-    const token = generateToken(user);
+    await issueTenantSession(res, user);
+    const csrfToken = setCsrfCookie(res);
     const { password: _, ...userWithoutPassword } = user.toObject();
 
     const nextBill =
@@ -543,11 +566,25 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
           }
         : {};
 
+    if (user.branchId) {
+      scheduleActivityLog(
+        {
+          businessId: user.branchId,
+          actorType: tenantActorTypeFromRole(user.role),
+          actorId: user._id,
+          action: ACTIVITY_ACTIONS.USER_LOGIN,
+          entity: 'auth',
+          summary: `User login: ${user.email}`,
+        },
+        req
+      );
+    }
+
     res.json({
       success: true,
       data: {
         user: { ...userWithoutPassword, ...suspensionMeta },
-        token
+        csrfToken,
       }
     });
   } catch (error) {
@@ -560,16 +597,9 @@ app.post('/api/auth/login', setupMainDatabase, async (req, res) => {
 });
 
 // Staff login endpoint
-app.post('/api/auth/staff-login', async (req, res) => {
+app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) => {
   try {
     const { email, password, businessCode } = req.body;
-
-    if (!email || !password || !businessCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email, password, and business code are required'
-      });
-    }
 
     // Get business ID from business code
     const databaseManager = require('./config/database-manager');
@@ -620,18 +650,24 @@ app.post('/api/auth/staff-login', async (req, res) => {
 
     // Generate token with staff info - ensure branchId is set (fallback to business._id for legacy staff)
     const effectiveBranchId = staff.branchId || business._id;
-    const token = generateToken({
-      _id: staff._id,
-      email: staff.email,
-      role: staff.role,
-      branchId: effectiveBranchId,
-      firstName: staff.name.split(' ')[0],
-      lastName: staff.name.split(' ').slice(1).join(' ') || '',
-      mobile: staff.phone,
-      hasLoginAccess: staff.hasLoginAccess,
-      allowAppointmentScheduling: staff.allowAppointmentScheduling,
-      isActive: staff.isActive
-    });
+    await issueTenantSession(
+      res,
+      {
+        _id: staff._id,
+        email: staff.email,
+        role: staff.role,
+        branchId: effectiveBranchId,
+        firstName: staff.name.split(' ')[0],
+        lastName: staff.name.split(' ').slice(1).join(' ') || '',
+        mobile: staff.phone,
+        hasLoginAccess: staff.hasLoginAccess,
+        allowAppointmentScheduling: staff.allowAppointmentScheduling,
+        isActive: staff.isActive
+      },
+      undefined,
+      'staff'
+    );
+    const csrfToken = setCsrfCookie(res);
 
     const { password: _, ...staffWithoutPassword } = staff.toObject();
 
@@ -652,6 +688,18 @@ app.post('/api/auth/staff-login', async (req, res) => {
       suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
     };
 
+    scheduleActivityLog(
+      {
+        businessId: effectiveBranchId,
+        actorType: tenantActorTypeFromRole(staff.role),
+        actorId: staff._id,
+        action: ACTIVITY_ACTIONS.STAFF_LOGIN,
+        entity: 'auth',
+        summary: `Staff login: ${staff.email}`,
+      },
+      req
+    );
+
     res.json({
       success: true,
       data: {
@@ -664,7 +712,7 @@ app.post('/api/auth/staff-login', async (req, res) => {
           mobile: staff.phone,
           role: staff.role,
           branchId: effectiveBranchId,
-          isOwner: false, // Staff are never owner
+          isOwner: false,
           hasLoginAccess: staff.hasLoginAccess,
           allowAppointmentScheduling: staff.allowAppointmentScheduling,
           isActive: staff.isActive,
@@ -676,7 +724,7 @@ app.post('/api/auth/staff-login', async (req, res) => {
           updatedAt: staff.updatedAt,
           ...staffSuspensionMeta,
         },
-        token
+        csrfToken,
       }
     });
   } catch (error) {
@@ -688,7 +736,20 @@ app.post('/api/auth/staff-login', async (req, res) => {
   }
 });
 
-app.post('/api/auth/logout', authenticateToken, (req, res) => {
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  try {
+    const refreshCookie = req.cookies && req.cookies[COOKIE.tenantRefresh];
+    if (refreshCookie) {
+      const decoded = jwt.decode(refreshCookie);
+      if (decoded && decoded.familyId) {
+        const mainConnection = await databaseManager.getMainConnection();
+        await revokeRefreshFamily(mainConnection, decoded.familyId);
+      }
+    }
+  } catch (err) {
+    logger.warn('[auth/logout] Failed to revoke refresh family:', err);
+  }
+  clearTenantAuthCookies(res);
   res.json({
     success: true,
     message: 'Logged out successfully'
@@ -700,6 +761,104 @@ const JWT_REFRESH_GRACE_SEC = 7 * 24 * 60 * 60;
 
 app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
   try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const UserModel = mainConnection.model('User', require('./models/User').schema);
+    const BusinessModel = mainConnection.model('Business', require('./models/Business').schema);
+
+    const refreshCookie = req.cookies && req.cookies[COOKIE.tenantRefresh];
+    if (refreshCookie) {
+      let rdecoded;
+      try {
+        rdecoded = jwt.verify(refreshCookie, JWT_SECRET);
+      } catch (e) {
+        return res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+      }
+      if (rdecoded.tokenUse !== TOKEN_USE.tenantRefresh || !rdecoded.id) {
+        return res.status(403).json({ success: false, error: 'Invalid refresh token' });
+      }
+
+      let newRefreshToken = refreshCookie;
+      if (rdecoded.jti && rdecoded.familyId) {
+        const rotated = await rotateRefreshSession(mainConnection, rdecoded);
+        if (!rotated.ok) {
+          return res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+        }
+        newRefreshToken = rotated.refreshToken;
+      } else {
+        const userTry = await UserModel.findById(rdecoded.id).select('-password');
+        if (userTry) {
+          const created = await createRefreshSession(mainConnection, {
+            subjectType: 'user',
+            userId: userTry._id,
+            branchId: userTry.branchId,
+          });
+          newRefreshToken = created.refreshToken;
+        } else {
+          const bid = rdecoded.branchId;
+          if (!bid) {
+            return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+          }
+          const businessDb = await databaseManager.getConnection(bid, mainConnection);
+          const StaffModel = businessDb.model('Staff', require('./models/Staff').schema);
+          const staffTry = await StaffModel.findById(rdecoded.id).select('-password');
+          if (!staffTry || !staffTry.isActive || !staffTry.hasLoginAccess) {
+            return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+          }
+          const business = await BusinessModel.findById(bid);
+          const effectiveBranchId = staffTry.branchId || business?._id || bid;
+          const created = await createRefreshSession(mainConnection, {
+            subjectType: 'staff',
+            staffId: staffTry._id,
+            branchId: effectiveBranchId,
+          });
+          newRefreshToken = created.refreshToken;
+        }
+      }
+
+      const userDoc = await UserModel.findById(rdecoded.id).select('-password');
+      if (userDoc) {
+        const userForToken = {
+          _id: userDoc._id,
+          email: userDoc.email,
+          role: userDoc.role,
+          branchId: userDoc.branchId,
+        };
+        const newToken = signTenantAccess(userForToken);
+        setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
+        const csrfToken = setCsrfCookie(res);
+        return res.json({ success: true, csrfToken });
+      }
+
+      const businessId = rdecoded.branchId;
+      if (!businessId) {
+        return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+      }
+      const businessDb = await databaseManager.getConnection(businessId, mainConnection);
+      const StaffModel = businessDb.model('Staff', require('./models/Staff').schema);
+      const staff = await StaffModel.findById(rdecoded.id).select('-password');
+      if (!staff || !staff.isActive || !staff.hasLoginAccess) {
+        return res.status(403).json({ success: false, error: 'Invalid or expired token' });
+      }
+      const business = await BusinessModel.findById(businessId);
+      const effectiveBranchId = staff.branchId || business?._id || businessId;
+      const newToken = signTenantAccess({
+        _id: staff._id,
+        email: staff.email,
+        role: staff.role,
+        branchId: effectiveBranchId,
+        firstName: staff.name?.split(' ')[0],
+        lastName: staff.name?.split(' ').slice(1).join(' ') || '',
+        mobile: staff.phone,
+        hasLoginAccess: staff.hasLoginAccess,
+        allowAppointmentScheduling: staff.allowAppointmentScheduling,
+        isActive: staff.isActive,
+      });
+      setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
+      const csrfTokenStaff = setCsrfCookie(res);
+      return res.json({ success: true, csrfToken: csrfTokenStaff });
+    }
+
+    /** Legacy: sliding refresh using access token (Bearer) within grace window */
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.split(' ')[1];
     if (!token || token.startsWith('mock-token-')) {
@@ -720,30 +879,36 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       }
     }
 
+    if (decoded.tokenUse === TOKEN_USE.tenantRefresh) {
+      return res.status(403).json({ success: false, error: 'Use refresh token cookie or legacy access token' });
+    }
+
     if (!decoded.id) {
       return res.status(403).json({ success: false, error: 'Invalid or expired token' });
     }
 
-    const mainConnection = await databaseManager.getMainConnection();
-    const UserModel = mainConnection.model('User', require('./models/User').schema);
-    const BusinessModel = mainConnection.model('Business', require('./models/Business').schema);
-
     const userDoc = await UserModel.findById(decoded.id).select('-password');
     if (userDoc) {
-      // Suspended tenants may refresh tokens; auth middleware blocks non-auth APIs
-      const payload = {
-        id: userDoc._id,
+      const userForToken = {
+        _id: userDoc._id,
         email: userDoc.email,
-        role: userDoc.role
+        role: userDoc.role,
+        branchId: userDoc.branchId,
       };
-      if (userDoc.branchId) payload.branchId = userDoc.branchId;
       if (decoded.isImpersonation) {
-        payload.isImpersonation = true;
-        payload.impersonatedBy = decoded.impersonatedBy;
+        userForToken.isImpersonation = true;
+        userForToken.impersonatedBy = decoded.impersonatedBy;
       }
-      const expiresIn = decoded.isImpersonation ? '1h' : '24h';
-      const newToken = jwt.sign(payload, JWT_SECRET, { expiresIn });
-      return res.json({ success: true, data: { token: newToken } });
+      const accessTtl = decoded.isImpersonation ? '1h' : undefined;
+      const newToken = signTenantAccess(userForToken, accessTtl);
+      const created = await createRefreshSession(mainConnection, {
+        subjectType: 'user',
+        userId: userDoc._id,
+        branchId: userDoc.branchId,
+      });
+      setTenantAuthCookies(res, { accessToken: newToken, refreshToken: created.refreshToken });
+      const csrfTokenLegacyUser = setCsrfCookie(res);
+      return res.json({ success: true, csrfToken: csrfTokenLegacyUser });
     }
 
     const businessId = decoded.branchId;
@@ -760,7 +925,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
 
     const business = await BusinessModel.findById(businessId);
     const effectiveBranchId = staff.branchId || business?._id || businessId;
-    const newToken = generateToken({
+    const newToken = signTenantAccess({
       _id: staff._id,
       email: staff.email,
       role: staff.role,
@@ -770,10 +935,16 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       mobile: staff.phone,
       hasLoginAccess: staff.hasLoginAccess,
       allowAppointmentScheduling: staff.allowAppointmentScheduling,
-      isActive: staff.isActive
+      isActive: staff.isActive,
     });
-
-    return res.json({ success: true, data: { token: newToken } });
+    const created = await createRefreshSession(mainConnection, {
+      subjectType: 'staff',
+      staffId: staff._id,
+      branchId: effectiveBranchId,
+    });
+    setTenantAuthCookies(res, { accessToken: newToken, refreshToken: created.refreshToken });
+    const csrfTokenLegacyStaff = setCsrfCookie(res);
+    return res.json({ success: true, csrfToken: csrfTokenLegacyStaff });
   } catch (error) {
     logger.error('[auth/refresh]', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
@@ -786,6 +957,7 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
     if (req.user.branchId) {
       // Staff user - req.user is already populated by authenticateToken middleware
       // Just return the user data that was already validated
+      const csrfTokenProfile = setCsrfCookie(res);
       res.json({
         success: true,
         data: {
@@ -816,7 +988,8 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           suspensionSupportEmail:
             process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
           suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
-        }
+        },
+        csrfToken: csrfTokenProfile,
       });
     } else {
       // Regular user - lookup from main database
@@ -836,9 +1009,11 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
         data.isImpersonation = true;
         data.impersonatedBy = req.user.impersonatedBy;
       }
+      const csrfTokenOwner = setCsrfCookie(res);
       res.json({
         success: true,
-        data
+        data,
+        csrfToken: csrfTokenOwner,
       });
     }
   } catch (error) {
@@ -1001,16 +1176,9 @@ app.get('/api/business/plans', authenticateToken, setupMainDatabase, async (req,
 });
 
 // Password Reset Routes
-app.post('/api/auth/forgot-password', async (req, res) => {
+app.post('/api/auth/forgot-password', validate(forgotPasswordSchema), async (req, res) => {
   try {
     const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email is required'
-      });
-    }
 
     // Find user by email
     const user = await User.findOne({ email: email.toLowerCase() });
@@ -1043,6 +1211,20 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 
     await resetToken.save();
 
+    if (user.branchId) {
+      scheduleActivityLog(
+        {
+          businessId: user.branchId,
+          actorType: 'system',
+          actorId: null,
+          action: ACTIVITY_ACTIONS.PASSWORD_RESET_REQUESTED,
+          entity: 'auth',
+          summary: 'Password reset requested',
+        },
+        req
+      );
+    }
+
     // In a real application, you would send an email here
     // For now, we'll return the token in development
     const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${token}`;
@@ -1064,16 +1246,9 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 });
 
-app.post('/api/auth/reset-password', async (req, res) => {
+app.post('/api/auth/reset-password', validate(resetPasswordSchema), async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-
-    if (!token || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        error: 'Token and new password are required'
-      });
-    }
 
     // Find the reset token
     const resetToken = await PasswordResetToken.findOne({ token });
@@ -1114,6 +1289,20 @@ app.post('/api/auth/reset-password', async (req, res) => {
     // Mark token as used
     resetToken.used = true;
     await resetToken.save();
+
+    if (user.branchId) {
+      scheduleActivityLog(
+        {
+          businessId: user.branchId,
+          actorType: 'system',
+          actorId: null,
+          action: ACTIVITY_ACTIONS.PASSWORD_RESET_COMPLETED,
+          entity: 'auth',
+          summary: `Password reset completed for ${user.email}`,
+        },
+        req
+      );
+    }
 
     res.json({
       success: true,
@@ -1214,7 +1403,13 @@ app.get('/api/users', authenticateToken, setupMainDatabase, requireAdmin, async 
   }
 });
 
-app.post('/api/users', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.post(
+  '/api/users',
+  authenticateToken,
+  setupMainDatabase,
+  requireAdmin,
+  validate(createUserBodySchema),
+  async (req, res) => {
   try {
     const { User } = req.mainModels;
     const {
@@ -1376,7 +1571,17 @@ app.get('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res)
   }
 });
 
-app.put('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res) => {
+app.put(
+  '/api/users/:id',
+  authenticateToken,
+  setupMainDatabase,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: updateUserBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { User } = req.mainModels;
     const {
@@ -1503,6 +1708,25 @@ app.put('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res)
       });
     }
 
+    if (
+      avatar &&
+      user.branchId &&
+      String(existingUser.avatar || '') !== String(user.avatar || '')
+    ) {
+      scheduleActivityLog(
+        {
+          businessId: user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.USER_AVATAR_UPDATED,
+          entity: 'user',
+          entityId: user._id,
+          summary: 'Profile photo updated',
+        },
+        req
+      );
+    }
+
     res.json({
       success: true,
       data: user
@@ -1516,7 +1740,13 @@ app.put('/api/users/:id', authenticateToken, setupMainDatabase, async (req, res)
   }
 });
 
-app.delete('/api/users/:id', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.delete(
+  '/api/users/:id',
+  authenticateToken,
+  setupMainDatabase,
+  requireAdmin,
+  validate(mongoIdParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { User } = req.mainModels;
     // First check if the user exists and is admin
@@ -1611,7 +1841,18 @@ app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requ
 });
 
 // Change user password (no current password required; admin or self can reset)
-app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.post(
+  '/api/users/:id/change-password',
+  authenticateToken,
+  setupMainDatabase,
+  requireAdmin,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: userChangePasswordBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { newPassword } = req.body;
     const { User } = req.mainModels;
@@ -1656,7 +1897,18 @@ app.post('/api/users/:id/change-password', authenticateToken, setupMainDatabase,
 });
 
 // Verify admin password for editing admin details
-app.post('/api/users/:id/verify-admin-password', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.post(
+  '/api/users/:id/verify-admin-password',
+  authenticateToken,
+  setupMainDatabase,
+  requireAdmin,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: verifyAdminPasswordBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { password } = req.body;
     const { User } = req.mainModels;
@@ -1755,27 +2007,39 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
   try {
     const { Client } = req.businessModels;
     const { q } = req.query;
-    
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const projection = 'name phone email lastVisit status';
+
     if (!q) {
-      const clients = await Client.find({}).sort({ createdAt: -1 });
-      return res.json({
-        success: true,
-        data: clients
-      });
+      const clients = await Client.find({})
+        .select(projection)
+        .sort({ lastVisit: -1, createdAt: -1 })
+        .limit(limit)
+        .lean();
+      return res.json({ success: true, data: clients });
     }
 
-    const searchResults = await Client.find({
-      $or: [
-        { name: { $regex: q, $options: 'i' } },
-        { email: { $regex: q, $options: 'i' } },
-        { phone: { $regex: q, $options: 'i' } }
-      ]
-    }).sort({ createdAt: -1 });
+    if (String(q).trim().length < 2) {
+      return res.json({ success: true, data: [] });
+    }
 
-    res.json({
-      success: true,
-      data: searchResults
-    });
+    const escaped = String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const isDigits = /^\d+$/.test(escaped);
+
+    const conditions = isDigits
+      ? [{ phone: { $regex: `^${escaped}` } }]
+      : [
+          { name: { $regex: `^${escaped}`, $options: 'i' } },
+          { phone: { $regex: `^${escaped}` } },
+        ];
+
+    const searchResults = await Client.find({ $or: conditions })
+      .select(projection)
+      .sort({ lastVisit: -1, createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    res.json({ success: true, data: searchResults });
   } catch (error) {
     logger.error('Error searching clients:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -1803,7 +2067,13 @@ app.get('/api/clients/:id', authenticateToken, setupBusinessDatabase, async (req
   }
 });
 
-app.post('/api/clients', authenticateToken, requireManager, setupBusinessDatabase, async (req, res) => {
+app.post(
+  '/api/clients',
+  authenticateToken,
+  requireManager,
+  setupBusinessDatabase,
+  validate(createClientBodySchema),
+  async (req, res) => {
   try {
     const { name, email, phone, address, notes } = req.body;
 
@@ -1840,6 +2110,19 @@ app.post('/api/clients', authenticateToken, requireManager, setupBusinessDatabas
 
     const savedClient = await newClient.save();
 
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.CREATE_CUSTOMER,
+        entity: 'customer',
+        entityId: savedClient._id,
+        summary: `Customer "${savedClient.name}" created`,
+      },
+      req
+    );
+
     res.status(201).json({
       success: true,
       data: savedClient
@@ -1850,7 +2133,18 @@ app.post('/api/clients', authenticateToken, requireManager, setupBusinessDatabas
   }
 });
 
-app.put('/api/clients/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put(
+  '/api/clients/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireManager,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: updateClientBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { Client } = req.businessModels;
     const { phone } = req.body;
@@ -1882,6 +2176,19 @@ app.put('/api/clients/:id', authenticateToken, setupBusinessDatabase, requireMan
       });
     }
 
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.UPDATE_CUSTOMER,
+        entity: 'customer',
+        entityId: updatedClient._id,
+        summary: `Customer "${updatedClient.name}" updated`,
+      },
+      req
+    );
+
     res.json({
       success: true,
       data: updatedClient
@@ -1892,7 +2199,13 @@ app.put('/api/clients/:id', authenticateToken, setupBusinessDatabase, requireMan
   }
 });
 
-app.delete('/api/clients/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete(
+  '/api/clients/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireAdmin,
+  validate(mongoIdParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { Client } = req.businessModels;
     const deletedClient = await Client.findByIdAndDelete(req.params.id);
@@ -1903,6 +2216,19 @@ app.delete('/api/clients/:id', authenticateToken, setupBusinessDatabase, require
         error: 'Client not found'
       });
     }
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.DELETE_CUSTOMER,
+        entity: 'customer',
+        entityId: deletedClient._id,
+        summary: `Customer "${deletedClient.name}" deleted`,
+      },
+      req
+    );
 
     res.json({
       success: true,
@@ -2726,6 +3052,13 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
     const activities = [];
 
     // Track changes and log activities
+    // Snapshot of notes sent with this request — timeline cards use this so each "Add Status" row
+    // shows the note entered for that event (lead.notes alone only keeps the latest string).
+    const statusActivityDetails =
+      notes !== undefined
+        ? { statusNoteSnapshot: String(notes) }
+        : {};
+
     // Always create a status activity if status is provided (for "Add Status" functionality)
     // This ensures we preserve history even if status value doesn't change
     if (status !== undefined) {
@@ -2740,6 +3073,7 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
           newValue: status,
           field: 'status',
           description: `Status changed from ${lead.status} to ${status}`,
+          details: statusActivityDetails,
           branchId: req.user.branchId
         });
         lead.status = status;
@@ -2755,6 +3089,7 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
           newValue: status,
           field: 'status',
           description: `Status confirmed: ${status}`,
+          details: statusActivityDetails,
           branchId: req.user.branchId
         });
         // Don't update lead.status since it's the same, but we still log the activity
@@ -3037,11 +3372,18 @@ app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusine
       const newAppointment = new Appointment(appointmentData);
       const savedAppointment = await newAppointment.save();
       const populatedAppointment = await Appointment.findById(savedAppointment._id)
-        .populate('clientId', 'name phone')
+        .populate('clientId', 'name phone email')
         .populate('serviceId', 'name price')
-        .populate('staffId', 'name');
+        .populate('staffId', 'name role')
+        .populate('staffAssignments.staffId', 'name role');
       
       createdAppointments.push(populatedAppointment);
+    }
+
+    try {
+      await sendAppointmentWhatsAppAfterCreate(req, createdAppointments);
+    } catch (waErr) {
+      logger.error('WhatsApp after lead convert', waErr);
     }
 
     // Update lead status
@@ -3876,9 +4218,17 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
       usageCountByBillService.set(key, (usageCountByBillService.get(key) || 0) + 1);
     }
 
+    // Batch-fetch all referenced sales in one query instead of N+1
+    const uniqueBillingIds = [...new Set(usageRows.map(u => u.billingId).filter(Boolean))];
+    const salesByBillingId = new Map();
+    if (uniqueBillingIds.length > 0) {
+      const salesDocs = await Sale.find({ _id: { $in: uniqueBillingIds } }).select('items').lean();
+      for (const s of salesDocs) salesByBillingId.set(String(s._id), s);
+    }
+
     let totalSavedViaMembership = 0;
     for (const u of usageRows) {
-      const sale = await Sale.findById(u.billingId).select('items').lean();
+      const sale = salesByBillingId.get(String(u.billingId));
       if (!sale?.items?.length) continue;
       const item = sale.items.find(
         (it) => it.type === 'service' &&
@@ -3908,24 +4258,30 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
       });
     }
 
-    const usageSummary = [];
-    for (const inc of plan.includedServices) {
+    // Batch: count usage per service via aggregation + batch-fetch service names
+    const serviceIds = plan.includedServices.map(inc => inc.serviceId?._id || inc.serviceId);
+    const [usageCounts, servicesDocs] = await Promise.all([
+      MembershipUsage.aggregate([
+        { $match: { branchId, subscriptionId: subscription._id, serviceId: { $in: serviceIds } } },
+        { $group: { _id: '$serviceId', count: { $sum: 1 } } }
+      ]),
+      Service.find({ _id: { $in: serviceIds } }).select('name').lean()
+    ]);
+    const usageCountMap = new Map(usageCounts.map(r => [String(r._id), r.count]));
+    const serviceNameMap = new Map(servicesDocs.map(s => [String(s._id), s.name]));
+
+    const usageSummary = plan.includedServices.map(inc => {
       const serviceId = inc.serviceId?._id || inc.serviceId;
       const usageLimit = inc.usageLimit ?? 0;
-      const used = await MembershipUsage.countDocuments({
-        branchId,
-        subscriptionId: subscription._id,
-        serviceId
-      });
-      const service = await Service.findById(serviceId).select('name').lean();
-      usageSummary.push({
+      const used = usageCountMap.get(String(serviceId)) || 0;
+      return {
         serviceId,
-        serviceName: service?.name || 'Unknown',
+        serviceName: serviceNameMap.get(String(serviceId)) || 'Unknown',
         used,
         limit: usageLimit,
         remaining: Math.max(0, usageLimit - used)
-      });
-    }
+      };
+    });
 
     const freeServicesRemaining = usageSummary.reduce(
       (sum, row) => sum + (Number(row.remaining) || 0),
@@ -6102,7 +6458,13 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
   }
 });
 
-app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.post(
+  '/api/staff',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireAdmin,
+  validate(createStaffBodySchema),
+  async (req, res) => {
   try {
     const { Staff } = req.businessModels;
     const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, workSchedule } = req.body;
@@ -6168,6 +6530,19 @@ app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, a
     const newStaff = new Staff(staffData);
     const savedStaff = await newStaff.save();
 
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.CREATE_STAFF,
+        entity: 'staff',
+        entityId: savedStaff._id,
+        summary: `Staff member "${savedStaff.name}" created (${savedStaff.email})`,
+      },
+      req
+    );
+
     res.status(201).json({
       success: true,
       data: savedStaff
@@ -6181,7 +6556,17 @@ app.post('/api/staff', authenticateToken, setupBusinessDatabase, requireAdmin, a
   }
 });
 
-app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put(
+  '/api/staff/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: staffUpdateBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { Staff } = req.businessModels;
     const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive } = req.body;
@@ -6232,6 +6617,18 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       if (!updatedStaff) {
         return res.status(404).json({ success: false, error: 'Staff member not found' });
       }
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.UPDATE_STAFF,
+          entity: 'staff',
+          entityId: updatedStaff._id,
+          summary: `Work schedule updated for ${updatedStaff.name}`,
+        },
+        req
+      );
       return res.json({ success: true, data: updatedStaff });
     }
 
@@ -6249,6 +6646,18 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       if (!updatedStaff) {
         return res.status(404).json({ success: false, error: 'Staff member not found' });
       }
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.UPDATE_STAFF,
+          entity: 'staff',
+          entityId: updatedStaff._id,
+          summary: `Permissions updated for ${updatedStaff.name}`,
+        },
+        req
+      );
       return res.json({ success: true, data: updatedStaff });
     }
 
@@ -6279,6 +6688,19 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
         updateData,
         { new: true }
       ).select('-password');
+
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.UPDATE_STAFF,
+          entity: 'staff',
+          entityId: updatedStaff._id,
+          summary: `Staff profile updated (self): ${updatedStaff.name}`,
+        },
+        req
+      );
 
       return res.json({
         success: true,
@@ -6355,6 +6777,33 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
       });
     }
 
+    if (String(existingStaff.role) !== String(updatedStaff.role)) {
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.STAFF_ROLE_CHANGED,
+          entity: 'staff',
+          entityId: updatedStaff._id,
+          summary: `Role changed for ${updatedStaff.name}: ${existingStaff.role} → ${updatedStaff.role}`,
+        },
+        req
+      );
+    }
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.UPDATE_STAFF,
+        entity: 'staff',
+        entityId: updatedStaff._id,
+        summary: `Staff member "${updatedStaff.name}" updated`,
+      },
+      req
+    );
+
     res.json({
       success: true,
       data: updatedStaff
@@ -6368,7 +6817,13 @@ app.put('/api/staff/:id', authenticateToken, setupBusinessDatabase, async (req, 
   }
 });
 
-app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete(
+  '/api/staff/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireAdmin,
+  validate(mongoIdParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { Staff } = req.businessModels;
     const staffToDelete = await Staff.findById(req.params.id);
@@ -6393,6 +6848,19 @@ app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAd
 
     await Staff.findByIdAndDelete(req.params.id);
 
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.DELETE_STAFF,
+        entity: 'staff',
+        entityId: staffToDelete._id,
+        summary: `Staff member "${staffToDelete.name}" deleted`,
+      },
+      req
+    );
+
     res.json({
       success: true,
       message: 'Staff member deleted successfully'
@@ -6407,7 +6875,18 @@ app.delete('/api/staff/:id', authenticateToken, setupBusinessDatabase, requireAd
 });
 
 // Change staff password (admin or manager can reset)
-app.post('/api/staff/:id/change-password', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post(
+  '/api/staff/:id/change-password',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireManager,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: staffChangePasswordBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { newPassword } = req.body;
     const { Staff } = req.businessModels;
@@ -6432,6 +6911,19 @@ app.post('/api/staff/:id/change-password', authenticateToken, setupBusinessDatab
       req.params.id,
       { password: hashedPassword },
       { new: true, runValidators: true }
+    );
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.STAFF_PASSWORD_CHANGED,
+        entity: 'staff',
+        entityId: staff._id,
+        summary: `Password changed for staff ${staff.name}`,
+      },
+      req
     );
 
     res.json({
@@ -6688,6 +7180,48 @@ app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
+/** Resolve catalog service ObjectId from a sale line (handles ObjectId, hex string, populated { _id }). */
+function extractSaleLineServiceId(item) {
+  if (!item || item.type !== 'service') return null;
+  const raw = item.serviceId;
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'object' && raw !== null && raw._id != null) {
+    const id = raw._id;
+    if (mongoose.Types.ObjectId.isValid(String(id))) {
+      return new mongoose.Types.ObjectId(String(id));
+    }
+    return null;
+  }
+  if (mongoose.Types.ObjectId.isValid(String(raw))) {
+    return new mongoose.Types.ObjectId(String(raw));
+  }
+  return null;
+}
+
+/** Primary + additional service ids from the booked appointment (fallback when sale lines lack resolvable IDs). */
+function serviceIdsFromBookedAppointment(appointment) {
+  const ids = [];
+  const seen = new Set();
+  const pushId = (v) => {
+    if (v == null || v === '') return;
+    const s = String(v);
+    if (!mongoose.Types.ObjectId.isValid(s)) return;
+    if (seen.has(s)) return;
+    seen.add(s);
+    ids.push(new mongoose.Types.ObjectId(s));
+  };
+  const primary = appointment.serviceId?._id != null ? appointment.serviceId._id : appointment.serviceId;
+  pushId(primary);
+  const addl = appointment.additionalServiceIds;
+  if (Array.isArray(addl)) {
+    for (const a of addl) {
+      const id = a?._id != null ? a._id : a;
+      pushId(id);
+    }
+  }
+  return ids;
+}
+
 const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = null, businessModels = null) => {
   if (!AppointmentModel || !appointmentId) return;
   try {
@@ -6711,7 +7245,14 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
     // Same staff: update this card with primary + additional. Different staff: create new card(s).
     if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
       const serviceItems = sale.items
-        .filter((i) => i.type === 'service' && i.serviceId)
+        .filter((i) => {
+          if (i.type !== 'service') return false;
+          if (extractSaleLineServiceId(i)) return true;
+          const c0 = (i.staffContributions || [])[0];
+          if (c0?.staffId != null) return true;
+          if (i.staffId != null && String(i.staffId).trim() !== '') return true;
+          return false;
+        })
         .map((i) => {
           const contrib = (i.staffContributions || [])[0];
           const staffId = contrib ? String(contrib.staffId) : (i.staffId ? String(i.staffId) : null);
@@ -6769,9 +7310,17 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
         });
 
         if (servicesToApplyToMain.length > 0) {
-          const serviceIds = servicesToApplyToMain.map((i) => i.serviceId?._id || i.serviceId).filter(Boolean);
+          let serviceIds = servicesToApplyToMain.map((i) => extractSaleLineServiceId(i)).filter(Boolean);
           if (serviceIds.length === 0) {
-            logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
+            const fromBooking = serviceIdsFromBookedAppointment(appointment);
+            if (fromBooking.length > 0) {
+              serviceIds = fromBooking;
+              logger.debug(
+                `Appointment ${appointmentId}: sale lines had no resolvable serviceIds; using booked service ids (${serviceIds.length})`
+              );
+            } else {
+              logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
+            }
           }
           const firstServiceId = serviceIds[0];
           const firstItem = servicesToApplyToMain[0];
@@ -6809,20 +7358,26 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
             const contrib = (item.staffContributions || [])[0];
             const staffId = contrib?.staffId || item.staffId;
             if (!staffId || existingGroupStaffIds.has(String(staffId))) continue;
-            const idx = allOrdered.findIndex((o) => (o.serviceId?._id || o.serviceId) === (item.serviceId?._id || item.serviceId));
+            const itemSid = extractSaleLineServiceId(item)?.toString();
+            const idx = allOrdered.findIndex((o) => {
+              const oSid = extractSaleLineServiceId(o)?.toString();
+              return itemSid && oSid && itemSid === oSid;
+            });
             let cumulativeM = 0;
             for (let i = 0; i < idx; i++) {
-              const s = await Service.findById(allOrdered[i].serviceId?._id || allOrdered[i].serviceId).select('duration').lean();
+              const oid = extractSaleLineServiceId(allOrdered[i]);
+              const s = oid ? await Service.findById(oid).select('duration').lean() : null;
               cumulativeM += s?.duration ?? 60;
             }
             const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
-            const service = await Service.findById(item.serviceId?._id || item.serviceId).lean();
+            const lineServiceId = extractSaleLineServiceId(item);
+            const service = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
             if (!service) continue;
 
             existingGroupStaffIds.add(String(staffId));
             const newApt = new AppointmentModel({
               clientId: appointment.clientId,
-              serviceId: item.serviceId?._id || item.serviceId,
+              serviceId: lineServiceId,
               date: appointment.date,
               time: serviceTime,
               duration: service.duration ?? 60,
@@ -6882,6 +7437,9 @@ const syncCompletedLinkedAppointmentStaffFromSale = async (AppointmentModel, sal
     const appointment = await AppointmentModel.findById(sale.appointmentId);
     if (!appointment) return;
     if (String(appointment.status || '').toLowerCase() !== 'completed') return;
+
+    // Multi-staff booking group: each card keeps its own assigned staff; don't reassign based on first sale line
+    if (appointment.bookingGroupId) return;
 
     const primary = getPrimaryStaffFromSaleServiceItems(sale.items);
     if (!primary || !mongoose.Types.ObjectId.isValid(primary.staffId)) {
@@ -7305,7 +7863,9 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         if (appointmentNotificationsEnabled) {
         // Send confirmation to client if email exists
         // Check if new appointments are enabled
-        const sendNewAppointments = emailSettings?.appointmentNotifications?.newAppointments === true;
+        const sendNewAppointments =
+          emailSettings?.appointmentNotifications?.newAppointments === true ||
+          emailSettings?.appointmentNotifications?.newAppointment === true;
         logger.debug(`📧 Send new appointments to clients: ${sendNewAppointments}`);
         
         if (sendNewAppointments) {
@@ -7594,142 +8154,9 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       // Don't fail appointment creation if email fails
     }
 
-    // Send WhatsApp appointment confirmation if enabled
+    // Send WhatsApp appointment confirmation if enabled (same path as receipt on checkout)
     try {
-      const whatsappService = require('./services/whatsapp-service');
-      await whatsappService.initialize();
-      
-      if (whatsappService.enabled) {
-        const databaseManager = require('./config/database-manager');
-        const mainConnection = await databaseManager.getMainConnection();
-        const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
-        const Business = mainConnection.model('Business', require('./models/Business').schema);
-        const WhatsAppMessageLog = mainConnection.model('WhatsAppMessageLog', require('./models/WhatsAppMessageLog').schema);
-        
-        const adminSettings = await AdminSettings.getSettings();
-        const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
-        const adminAppointmentNotificationsEnabled = adminSettings?.notifications?.whatsapp?.appointmentNotifications === true;
-        
-        logger.debug('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
-        logger.debug('📱 [WhatsApp] Admin Appointment Notifications enabled:', adminAppointmentNotificationsEnabled);
-        
-        if (whatsappEnabled && adminAppointmentNotificationsEnabled) {
-          const business = await Business.findById(req.user.branchId);
-          const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
-          const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
-          const businessWhatsappEnabled = whatsappSettings.enabled === true;
-          const appointmentWhatsappEnabled = whatsappSettings.appointmentNotifications?.enabled === true;
-          const confirmationsEnabled = whatsappSettings.appointmentNotifications?.confirmations === true;
-          
-          if (businessWhatsappEnabled && appointmentWhatsappEnabled && confirmationsEnabled) {
-            // Check quiet hours
-            const quietHours = adminSettings?.notifications?.whatsapp?.quietHours;
-            const inQuietHours = whatsappService.isQuietHours(quietHours);
-            
-            if (!inQuietHours) {
-              const { Client, Staff } = req.businessModels;
-              
-              for (const appointment of createdAppointments) {
-                // Get client
-                let client = null;
-                if (appointment.clientId && typeof appointment.clientId === 'object') {
-                  client = appointment.clientId;
-                } else {
-                  const clientId = appointment.clientId?._id || appointment.clientId;
-                  if (clientId) {
-                    client = await Client.findById(clientId);
-                  }
-                }
-                
-                if (client?.phone) {
-                  try {
-                    // Get service name
-                    let serviceName = 'Service';
-                    if (appointment.serviceId) {
-                      if (typeof appointment.serviceId === 'object' && appointment.serviceId.name) {
-                        serviceName = appointment.serviceId.name;
-                      } else {
-                        const { Service } = req.businessModels;
-                        const service = await Service.findById(appointment.serviceId);
-                        serviceName = service?.name || 'Service';
-                      }
-                    }
-                    
-                    // Get staff name
-                    let staffName = 'Not assigned';
-                    if (appointment.staffId) {
-                      if (typeof appointment.staffId === 'object' && appointment.staffId.name) {
-                        staffName = appointment.staffId.name;
-                      } else {
-                        const staff = await Staff.findById(appointment.staffId);
-                        staffName = staff?.name || 'Not assigned';
-                      }
-                    } else if (appointment.staffAssignments && appointment.staffAssignments.length > 0) {
-                      const firstAssignment = appointment.staffAssignments[0];
-                      if (firstAssignment.staffId && typeof firstAssignment.staffId === 'object' && firstAssignment.staffId.name) {
-                        staffName = firstAssignment.staffId.name;
-                      } else if (firstAssignment.staffId) {
-                        const staff = await Staff.findById(firstAssignment.staffId);
-                        staffName = staff?.name || 'Not assigned';
-                      }
-                    }
-                    
-                    const result = await whatsappService.sendAppointmentConfirmation({
-                      to: client.phone,
-                      clientName: client.name || 'Client',
-                      appointmentData: {
-                        serviceName: serviceName,
-                        date: appointment.date,
-                        time: appointment.time,
-                        staffName: staffName,
-                        businessName: business.name,
-                        businessPhone: business.contact?.phone
-                      }
-                    });
-                    
-                    // Log to WhatsAppMessageLog
-                    await WhatsAppMessageLog.create({
-                      businessId: business._id,
-                      recipientPhone: client.phone,
-                      messageType: 'appointment',
-                      status: result.success ? 'sent' : 'failed',
-                      msg91Response: result.data || null,
-                      relatedEntityId: appointment._id,
-                      relatedEntityType: 'Appointment',
-                      error: result.error || null,
-                      timestamp: new Date()
-                    });
-                    
-                    if (result.success) {
-                      // Increment WhatsApp quota usage
-                      try {
-                        const mainConnection = await databaseManager.getMainConnection();
-                        const Business = mainConnection.model('Business', require('./models/Business').schema);
-                        await Business.updateOne(
-                          { _id: business._id },
-                          { $inc: { 'plan.addons.whatsapp.used': 1 } }
-                        );
-                        logger.debug(`📊 WhatsApp quota incremented for business: ${business._id}`);
-                      } catch (quotaError) {
-                        logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
-                        // Don't fail the appointment if quota increment fails
-                      }
-                      
-                      logger.debug(`✅ Appointment WhatsApp sent to client: ${client.phone}`);
-                    } else {
-                      logger.error(`❌ Failed to send appointment WhatsApp to ${client.phone}:`, result.error);
-                    }
-                  } catch (whatsappError) {
-                    logger.error('❌ Error sending appointment WhatsApp to client:', whatsappError);
-                  }
-                }
-              }
-            } else {
-              logger.debug('📱 WhatsApp quiet hours active, skipping appointment message');
-            }
-          }
-        }
-      }
+      await sendAppointmentWhatsAppAfterCreate(req, createdAppointments);
     } catch (whatsappError) {
       logger.error('Error sending appointment WhatsApp:', whatsappError);
       // Don't fail appointment creation if WhatsApp fails
@@ -8048,7 +8475,9 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         
         const adminSettings = await AdminSettings.getSettings();
         const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
-        const adminReceiptNotificationsEnabled = adminSettings?.notifications?.whatsapp?.receiptNotifications === true;
+        const adminReceiptNotificationsEnabled = isAdminReceiptNotificationsEnabled(
+          adminSettings?.notifications?.whatsapp
+        );
         
         if (whatsappEnabled && adminReceiptNotificationsEnabled) {
           // Use lean() to get plain object so nested objects are accessible
@@ -8342,8 +8771,12 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     const previousStatus = appointment.status;
     const isBeingCancelled = updateData.status === 'cancelled' && previousStatus !== 'cancelled';
 
-    // Status updates apply only to this appointment. bookingGroupId links multi-day / multi-card bookings;
-    // each visit keeps its own status (do not updateMany across the group).
+
+    const isBeingRescheduled =
+      previousStatus !== 'cancelled' &&
+      updateData.status !== 'cancelled' &&
+      ((updateData.date && updateData.date !== appointment.date) ||
+       (updateData.time && updateData.time !== appointment.time));
 
     // Update the appointment
     const updatedAppointment = await Appointment.findByIdAndUpdate(
@@ -8354,6 +8787,19 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     .populate('clientId', 'name phone email')
     .populate('serviceId', 'name price duration')
     .populate('staffId', 'name role');
+
+    // Propagate "arrived" to all cards in the same bookingGroup (same customer physically arrived).
+    // Other status transitions (service_started, completed) remain per-card since each staff starts independently.
+    if (updateData.status === 'arrived' && appointment.bookingGroupId) {
+      await Appointment.updateMany(
+        {
+          bookingGroupId: appointment.bookingGroupId,
+          _id: { $ne: appointment._id },
+          status: { $in: ['scheduled', 'confirmed'] }
+        },
+        { $set: { status: 'arrived' } }
+      );
+    }
 
     // Send cancellation emails if appointment was cancelled (errors only — no per-update debug)
     if (isBeingCancelled) {
@@ -8542,6 +8988,20 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       } catch (emailError) {
         logger.error('Error sending cancellation emails:', emailError);
         // Don't fail the update if email fails
+      }
+
+      try {
+        await sendAppointmentCancellationWhatsApp(req, updatedAppointment);
+      } catch (whatsappErr) {
+        logger.error('Error sending appointment cancellation WhatsApp:', whatsappErr);
+      }
+    }
+
+    if (isBeingRescheduled) {
+      try {
+        await sendAppointmentRescheduleWhatsApp(req, updatedAppointment);
+      } catch (whatsappErr) {
+        logger.error('Error sending appointment reschedule WhatsApp:', whatsappErr);
       }
     }
 
@@ -8848,8 +9308,10 @@ app.get('/api/sales/summary', authenticateToken, setupBusinessDatabase, requireS
   try {
     const { Sale } = req.businessModels;
     const branchId = req.user.branchId;
-    const match = buildSalesListMatch(branchId, req.query);
-    const totals = await computeSalesSummaryTotals(Sale, match);
+    const split = buildSalesListDuePaymentSplitMatches(branchId, req.query);
+    const totals = split
+      ? await computeSalesSummaryTotalsSplit(Sale, split.matchInvoice, split.matchPaymentOnly)
+      : await computeSalesSummaryTotals(Sale, buildSalesListMatch(branchId, req.query));
     const durationMs = Date.now() - started;
     if (durationMs > 500) {
       logger.warn('Slow GET /api/sales/summary', { durationMs });
@@ -8878,20 +9340,29 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
   try {
     const { Sale, BillEditHistory } = req.businessModels;
     const branchId = req.user.branchId;
-    const match = buildSalesListMatch(branchId, req.query);
     const { limit, page, skip } = parseSalesListPagination(req.query);
+    const split = buildSalesListDuePaymentSplitMatches(branchId, req.query);
+    const match = split ? null : buildSalesListMatch(branchId, req.query);
 
-    const [total, sales] = await Promise.all([
-      Sale.countDocuments(match),
-      // Newest bills first: `date` is often the calendar day only (same instant for many rows) while
-      // `time` is a separate string — composite date+time sort is unreliable. `createdAt` reflects
-      // actual save order and aligns with sequential invoice numbers (INV-…).
-      Sale.find(match)
-        .sort({ createdAt: -1, billNo: -1, _id: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-    ]);
+    const [total, sales] = split
+      ? await Promise.all([
+          Promise.all([
+            Sale.countDocuments(split.matchInvoice),
+            Sale.countDocuments(split.matchPaymentOnly),
+          ]).then(([a, b]) => a + b),
+          fetchSalesListPageMerged(Sale, split.matchInvoice, split.matchPaymentOnly, skip, limit),
+        ])
+      : await Promise.all([
+          Sale.countDocuments(match),
+          // Newest bills first: `date` is often the calendar day only (same instant for many rows) while
+          // `time` is a separate string — composite date+time sort is unreliable. `createdAt` reflects
+          // actual save order and aligns with sequential invoice numbers (INV-…).
+          Sale.find(match)
+            .sort({ createdAt: -1, billNo: -1, _id: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+        ]);
 
     await mergeEditedFlagsFromHistory(sales, BillEditHistory);
 
@@ -9364,7 +9835,9 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         
         const adminSettings = await AdminSettings.getSettings();
         const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
-        const adminReceiptNotificationsEnabled = adminSettings?.notifications?.whatsapp?.receiptNotifications === true; // Admin master switch
+        const adminReceiptNotificationsEnabled = isAdminReceiptNotificationsEnabled(
+          adminSettings?.notifications?.whatsapp
+        );
         
         logger.debug('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
         logger.debug('📱 [WhatsApp] Admin Receipt Notifications enabled:', adminReceiptNotificationsEnabled);
@@ -9595,6 +10068,20 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     
     logger.debug('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
 
+    const createdSale = savedSale || sale;
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.CREATE_INVOICE,
+        entity: 'sale',
+        entityId: createdSale._id,
+        summary: `Invoice ${createdSale.billNo || createdSale._id} created`,
+      },
+      req
+    );
+
     res.status(201).json({ 
       success: true, 
       data: savedSale || sale,
@@ -9678,6 +10165,8 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
 
     const previousStatus = String(existingSale.status || '').toLowerCase();
     const oldPaidAmount = Number(existingSale.paymentStatus?.paidAmount || 0);
+    const prevDiscount = Number(existingSale.discount || 0);
+    const prevDiscountType = String(existingSale.discountType || '');
 
     // Archive original bill snapshot once per edit
     try {
@@ -10069,6 +10558,35 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       session.endSession();
     }
 
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.UPDATE_INVOICE,
+        entity: 'sale',
+        entityId: savedSale._id,
+        summary: `Invoice ${savedSale.billNo || savedSale._id} updated`,
+      },
+      req
+    );
+    const newDisc = Number(savedSale.discount || 0);
+    const newType = String(savedSale.discountType || '');
+    if (prevDiscount !== newDisc || prevDiscountType !== newType) {
+      scheduleActivityLog(
+        {
+          businessId: req.user.branchId,
+          actorType: tenantActorTypeFromRole(req.user.role),
+          actorId: req.user._id,
+          action: ACTIVITY_ACTIONS.INVOICE_DISCOUNT_CHANGED,
+          entity: 'sale',
+          entityId: savedSale._id,
+          summary: `Invoice ${savedSale.billNo || ''}: discount ${prevDiscount} (${prevDiscountType}) → ${newDisc} (${newType})`,
+        },
+        req
+      );
+    }
+
     res.json({ success: true, data: savedSale });
   } catch (err) {
     logger.error('❌ Error updating sale:', err);
@@ -10346,7 +10864,11 @@ app.get('/api/sales/by-phone/:phone', authenticateToken, setupBusinessDatabase, 
     
     const { Sale } = req.businessModels;
     
-    const sales = await Sale.find({ customerPhone: phone }).sort({ date: -1 });
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const sales = await Sale.find({ customerPhone: phone })
+      .sort({ date: -1 })
+      .limit(limit)
+      .lean();
     
     res.json({
       success: true,
@@ -10480,7 +11002,18 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
 });
 
 // Add payment to a sale
-app.post('/api/sales/:id/payment', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post(
+  '/api/sales/:id/payment',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireStaff,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: salePaymentBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { id } = req.params;
     const { amount, method, notes, collectedBy } = req.body;
@@ -10561,7 +11094,18 @@ app.get('/api/sales/:id/payment-summary', authenticateToken, setupBusinessDataba
 });
 
 // Exchange products within a sale (bill)
-app.post('/api/sales/:id/exchange', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post(
+  '/api/sales/:id/exchange',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireStaff,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: saleExchangeBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   const { Sale } = req.businessModels;
   const session = await Sale.startSession();
   session.startTransaction();
@@ -10892,7 +11436,13 @@ app.get('/api/expenses', authenticateToken, setupBusinessDatabase, requireManage
   }
 });
 
-app.post('/api/expenses', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post(
+  '/api/expenses',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireStaff,
+  validate(createExpenseBodySchema),
+  async (req, res) => {
   try {
     const { Expense } = req.businessModels;
     const { category, paymentMode, description, amount, date, status, vendor, notes, approvedBy } = req.body;
@@ -10930,7 +11480,18 @@ app.get('/api/expenses/:id', authenticateToken, setupBusinessDatabase, async (re
   }
 });
 
-app.put('/api/expenses/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put(
+  '/api/expenses/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireManager,
+  validateAll(
+    [
+      { schema: mongoIdParamSchema, source: 'params' },
+      { schema: updateExpenseBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { Expense } = req.businessModels;
     const expense = await Expense.findByIdAndUpdate(req.params.id, req.body, { new: true });
@@ -10941,7 +11502,13 @@ app.put('/api/expenses/:id', authenticateToken, setupBusinessDatabase, requireMa
   }
 });
 
-app.delete('/api/expenses/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.delete(
+  '/api/expenses/:id',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireManager,
+  validate(mongoIdParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { Expense } = req.businessModels;
     const expense = await Expense.findByIdAndDelete(req.params.id);
@@ -11017,6 +11584,7 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
       city,
       state,
       zipCode,
+      googleMapsUrl,
       socialMedia,
       logo,
       gstNumber
@@ -11033,11 +11601,37 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
       });
     }
 
+    const mapsTrimmed = typeof googleMapsUrl === "string" ? googleMapsUrl.trim() : "";
+    let mapsStored = mapsTrimmed;
+    if (mapsTrimmed) {
+      const isShortSlug = !mapsTrimmed.includes("://") && /^[a-zA-Z0-9_-]+$/.test(mapsTrimmed);
+      if (isShortSlug) {
+        mapsStored = `https://maps.app.goo.gl/${mapsTrimmed}`;
+      } else {
+        try {
+          const u = new URL(mapsTrimmed);
+          if (u.protocol !== "http:" && u.protocol !== "https:") {
+            return res.status(400).json({
+              success: false,
+              error: "Google Maps URL must start with http:// or https://"
+            });
+          }
+        } catch {
+          return res.status(400).json({
+            success: false,
+            error: "Invalid Google Maps URL"
+          });
+        }
+      }
+    }
+
     let settings = await BusinessSettings.findOne();
     
     if (!settings) {
       settings = new BusinessSettings();
     }
+
+    const prevLogo = settings.logo || '';
 
     // Update settings
     settings.name = name;
@@ -11049,11 +11643,41 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
     settings.city = city;
     settings.state = state;
     settings.zipCode = zipCode;
+    settings.googleMapsUrl = mapsStored;
     settings.socialMedia = socialMedia || "@glamoursalon";
     settings.logo = logo || "";
     settings.gstNumber = gstNumber || "";
 
     await settings.save();
+
+    const newLogo = settings.logo || '';
+    if (prevLogo !== newLogo) {
+      if (!newLogo) {
+        scheduleActivityLog(
+          {
+            businessId: req.user.branchId,
+            actorType: tenantActorTypeFromRole(req.user.role),
+            actorId: req.user._id,
+            action: ACTIVITY_ACTIONS.BUSINESS_LOGO_REMOVED,
+            entity: 'business_settings',
+            summary: 'Business logo removed',
+          },
+          req
+        );
+      } else {
+        scheduleActivityLog(
+          {
+            businessId: req.user.branchId,
+            actorType: tenantActorTypeFromRole(req.user.role),
+            actorId: req.user._id,
+            action: ACTIVITY_ACTIONS.BUSINESS_LOGO_UPDATED,
+            entity: 'business_settings',
+            summary: 'Business logo updated',
+          },
+          req
+        );
+      }
+    }
 
     logger.debug('✅ Business settings updated for:', settings.name);
     res.json({
@@ -11789,6 +12413,19 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
     if (inventoryChanges.length === 0 && productItems.length > 0) {
       logger.warn('Bill delete: no inventory restored despite product lines; check productId / product records', { billNo: sale.billNo });
     }
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.DELETE_INVOICE,
+        entity: 'sale',
+        entityId: sale._id,
+        summary: `Invoice ${sale.billNo || sale._id} deleted`,
+      },
+      req
+    );
 
     res.json({ 
       success: true, 
@@ -13461,15 +14098,6 @@ app.post('/api/gdpr/consent/:userId', authenticateToken, setupBusinessDatabase, 
   }
 })
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    success: true,
-    message: 'EaseMySalon API is running',
-    timestamp: new Date().toISOString()
-  });
-});
-
 // Email service status check
 app.get('/api/email-service/status', authenticateToken, async (req, res) => {
   try {
@@ -13516,10 +14144,10 @@ app.use('*', (req, res) => {
 
 // Start server
 
-app.listen(PORT, '0.0.0.0', async () => {
+const server = app.listen(PORT, '0.0.0.0', async () => {
   logger.debug(`🚀 EaseMySalon Backend running on port ${PORT}`);
-  logger.debug(`📊 Health check: http://localhost:${PORT}/api/health`);
-  logger.debug(`🔐 API Base: http://localhost:${PORT}/api`);
+  logger.debug(`📊 Health check: http://localhost:${PORT}/health / http://localhost:${PORT}/api/health (also /api/v1/health)`);
+  logger.debug(`🔐 API base: http://localhost:${PORT}/api — versioned alias: http://localhost:${PORT}/api/v1`);
   // Old initialization functions disabled for multi-tenant architecture
   // Admin users should be created via create-admin.js script
   // await initializeDefaultUsers();
@@ -13535,6 +14163,10 @@ app.listen(PORT, '0.0.0.0', async () => {
   // Setup package expiry cron job (daily midnight UTC)
   const { startExpiryJob } = require('./services/package-expiry-job');
   startExpiryJob();
+
+  // Setup WhatsApp appointment reminder cron job (every 30 min)
+  const { setupAppointmentReminderJob } = require('./jobs/appointment-reminder');
+  setupAppointmentReminderJob();
   
   // Initialize email service on server start
   const emailService = require('./services/email-service');
@@ -13542,6 +14174,11 @@ app.listen(PORT, '0.0.0.0', async () => {
     logger.error('⚠️  Failed to initialize email service:', err.message);
   });
 });
+
+const { registerGracefulShutdown } = require('./utils/shutdown');
+registerGracefulShutdown(server, [
+  { name: 'rate-limit-redis', close: shutdownRateLimitInfrastructure },
+]);
 
 // Setup inactivity checker cron job
 function setupInactivityChecker() {

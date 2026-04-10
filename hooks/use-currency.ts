@@ -24,9 +24,8 @@ export function useCurrency() {
           return
         }
         
-        // Skip if no auth token (not authenticated)
-        const token = localStorage.getItem('salon-auth-token')
-        if (!token) {
+        // On login/public pages, skip the API call (cookies handle auth automatically)
+        if (window.location.pathname.includes('/login')) {
           setIsLoading(false)
           return
         }

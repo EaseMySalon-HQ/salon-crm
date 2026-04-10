@@ -124,6 +124,7 @@ const adminSettingsSchema = new mongoose.Schema({
         appointmentConfirmation: { type: String, default: '' }, // Appointment confirmation
         appointmentCancellation: { type: String, default: '' }, // Appointment cancellation
         appointmentReminder: { type: String, default: '' }, // Appointment reminder
+        appointmentReschedule: { type: String, default: '' }, // Appointment reschedule
         default: { type: String, default: '' } // Default/fallback template
       },
       // Template variable mappings - configure which variables each template uses
@@ -143,6 +144,7 @@ const adminSettingsSchema = new mongoose.Schema({
       msg91TemplateId: { type: String, default: '' },
       // Template configuration
       templateIncludesBaseUrl: { type: Boolean, default: true }, // If true, template already has base URL, only pass path variables
+      templateIncludesGoogleMapsBaseUrl: { type: Boolean, default: true }, // If true, MSG91 template URL is https://maps.app.goo.gl/{{1}} — send slug only
       // Notification preferences (system defaults)
       receiptNotifications: { type: Boolean, default: true },
       appointmentNotifications: { type: Boolean, default: true },
@@ -262,6 +264,7 @@ adminSettingsSchema.statics.getSettings = async function() {
       msg91ApiKey: '',
       msg91SenderId: '',
       templateIncludesBaseUrl: true,
+      templateIncludesGoogleMapsBaseUrl: true,
       templates: {
         welcomeMessage: '',
         businessAccountCreated: '',

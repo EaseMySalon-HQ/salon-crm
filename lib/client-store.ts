@@ -20,11 +20,57 @@ export interface Client {
   birthdate?: string
 }
 
-// Create a simple store with event listeners
+const CACHE_MAX = 30
+const CACHE_TTL_MS = 60_000 // 1 minute
+
+interface CacheEntry {
+  data: Client[]
+  ts: number
+}
+
+class LRUSearchCache {
+  private map = new Map<string, CacheEntry>()
+  private maxSize: number
+
+  constructor(maxSize = CACHE_MAX) {
+    this.maxSize = maxSize
+  }
+
+  get(key: string): Client[] | null {
+    const entry = this.map.get(key)
+    if (!entry) return null
+    if (Date.now() - entry.ts > CACHE_TTL_MS) {
+      this.map.delete(key)
+      return null
+    }
+    // Move to end (most-recently-used)
+    this.map.delete(key)
+    this.map.set(key, entry)
+    return entry.data
+  }
+
+  set(key: string, data: Client[]) {
+    if (this.map.has(key)) this.map.delete(key)
+    this.map.set(key, { data, ts: Date.now() })
+    if (this.map.size > this.maxSize) {
+      // Evict oldest (first key)
+      const oldest = this.map.keys().next().value
+      if (oldest !== undefined) this.map.delete(oldest)
+    }
+  }
+
+  clear() {
+    this.map.clear()
+  }
+}
+
 class ClientStore {
   private clients: Client[] = [...initialClients]
   private listeners: (() => void)[] = []
   private isLoading = false
+  private searchCache = new LRUSearchCache()
+  private recentClients: Client[] | null = null
+  private recentLoading = false
 
   async loadClients() {
     // localStorage + API auth only exist in the browser; skip SSR to avoid 401s
@@ -97,7 +143,6 @@ class ClientStore {
       const apiPayload = { ...client, dob: (client as any).birthdate || (client as any).dob }
       const response = await ClientsAPI.create(apiPayload)
       if (response.success) {
-        // Normalize the response data to ensure both id and _id are set
         const clientId = response.data._id || response.data.id
         const normalizedClient = {
           ...response.data,
@@ -105,6 +150,7 @@ class ClientStore {
           _id: clientId
         }
         this.clients.push(normalizedClient)
+        this.clearSearchCache()
         this.notifyListeners()
         return true
       }
@@ -148,6 +194,7 @@ class ClientStore {
             _id: clientId
           }
           this.clients[index] = normalizedClient
+          this.clearSearchCache()
           this.notifyListeners()
         }
         return true
@@ -177,10 +224,8 @@ class ClientStore {
       // Try API first
       const response = await ClientsAPI.delete(id)
       if (response.success) {
-        // Remove client by matching either id or _id
-        const beforeCount = this.clients.length
         this.clients = this.clients.filter(c => c.id !== id && c._id !== id)
-        const afterCount = this.clients.length
+        this.clearSearchCache()
         this.notifyListeners()
         return true
       }
@@ -232,47 +277,77 @@ class ClientStore {
     return this.clients.find((client) => client.id === id || client._id === id)
   }
 
+  async preloadRecent(): Promise<Client[]> {
+    if (this.recentClients) return this.recentClients
+    if (this.recentLoading) {
+      // Wait for the in-flight request
+      return new Promise((resolve) => {
+        const check = setInterval(() => {
+          if (!this.recentLoading) {
+            clearInterval(check)
+            resolve(this.recentClients || [])
+          }
+        }, 50)
+      })
+    }
+    this.recentLoading = true
+    try {
+      const response = await ClientsAPI.search("", { limit: 15 })
+      if (response.success) {
+        this.recentClients = this.normalizeList(response.data)
+        return this.recentClients
+      }
+      return []
+    } catch {
+      return []
+    } finally {
+      this.recentLoading = false
+    }
+  }
+
+  private normalizeList(data: any[]): Client[] {
+    return (data || []).map((c: any) => {
+      const clientId = c._id || c.id
+      return { ...c, id: clientId, _id: clientId }
+    })
+  }
+
   async searchClients(query: string): Promise<Client[]> {
-    if (!query.trim()) return this.clients
+    const trimmed = query.trim()
+    if (!trimmed) return this.recentClients || this.clients
+
+    if (trimmed.length < 2) return []
+
+    const cacheKey = trimmed.toLowerCase()
+    const cached = this.searchCache.get(cacheKey)
+    if (cached) return cached
 
     try {
-      // Try API search first
       const response = await ClientsAPI.search(query)
       if (response.success) {
-        // Normalize search results to ensure both id and _id are set
-        return response.data.map((c: any) => {
-          const clientId = c._id || c.id
-          return {
-            ...c,
-            id: clientId,
-            _id: clientId
-          }
-        })
+        const results = this.normalizeList(response.data)
+        this.searchCache.set(cacheKey, results)
+        return results
       }
       return []
     } catch {
       console.warn("API not available, using local search fallback")
-      
-      // Fallback to local search
-      // Clean the query for phone number matching
-      const cleanQuery = query.replace(/\D/g, "") // Remove non-digits
-
+      const cleanQuery = query.replace(/\D/g, "")
       return this.clients.filter((client) => {
-        // Search by name
         const nameMatch = client.name.toLowerCase().includes(query.toLowerCase())
-
-        // Search by email
         const emailMatch = client.email && client.email.toLowerCase().includes(query.toLowerCase())
-
-        // Search by phone - try both original and cleaned versions
         const phoneMatch =
           client.phone.includes(query) ||
           client.phone.replace(/\D/g, "").includes(cleanQuery) ||
           client.phone.includes(cleanQuery)
-
         return nameMatch || emailMatch || phoneMatch
       })
     }
+  }
+
+  clearSearchCache() {
+    this.searchCache.clear()
+    this.recentClients = null
   }
 
   subscribe(listener: () => void): () => void {

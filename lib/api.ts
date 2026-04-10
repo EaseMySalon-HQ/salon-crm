@@ -1,39 +1,36 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
-
+import { getCsrfToken, setCsrfTokenPersisted, CSRF_HEADER_NAME } from './csrf'
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
-/** Plain axios for refresh — must not use apiClient interceptors (avoids loops). */
-let refreshInFlight: Promise<string | null> | null = null
+/**
+ * Refresh auth session using HttpOnly cookie. New tokens are set as cookies
+ * by the server — no token is returned in the JSON body.
+ */
+let refreshInFlight: Promise<boolean> | null = null
 
-async function refreshAuthTokenOnce(): Promise<string | null> {
-  if (typeof window === 'undefined') return null
+async function refreshAuthTokenOnce(): Promise<boolean> {
+  if (typeof window === 'undefined') return false
   if (refreshInFlight) return refreshInFlight
   refreshInFlight = (async () => {
     try {
-      const token = localStorage.getItem('salon-auth-token')
-      if (!token) return null
-      const res = await axios.post<{ success?: boolean; data?: { token?: string } }>(
+      const res = await axios.post<{ success?: boolean; csrfToken?: string }>(
         `${API_BASE_URL}/auth/refresh`,
         {},
-        {
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          timeout: 25000,
-        }
+        { withCredentials: true, timeout: 25000 }
       )
-      const newToken = res.data?.data?.token
-      if (newToken && typeof newToken === 'string') {
-        localStorage.setItem('salon-auth-token', newToken)
-        return newToken
+      const t = res.data?.csrfToken
+      if (typeof t === 'string' && t.trim()) {
+        setCsrfTokenPersisted(t)
       }
+      return res.data?.success === true
     } catch {
-      /* refresh failed — caller will fall through to logout or surface error */
+      return false
     } finally {
       refreshInFlight = null
     }
-    return null
   })()
   return refreshInFlight
 }
@@ -50,6 +47,8 @@ function normalizeApiErrorMessage(data: unknown): string {
 function isTokenAuthFailure(status: number | undefined, errorMsg: string): boolean {
   const m = errorMsg.toLowerCase()
   if (m.includes('business_suspended')) return false
+  /** Backend CSRF failures use "Invalid CSRF token" — must not trigger JWT logout. */
+  if (m.includes('csrf')) return false
   if (status === 401) return true
   if (status !== 403) return false
   return (
@@ -117,7 +116,11 @@ function logApiResponseError(error: AxiosError | any) {
       errorInfo.code = String(error?.code || 'SETUP_ERROR')
     }
 
-    if (errorInfo.status === 404) {
+    const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
+    const isAuthProbe = errorInfo.status === 401 && errorInfo.url?.includes('/auth/profile')
+    if (isLoginPage && isAuthProbe) {
+      // Silent: expected 401 when probing for existing session on the login page
+    } else if (errorInfo.status === 404) {
       if (errorInfo.url && errorInfo.url !== 'Unknown URL') {
         console.warn(`⚠️ API 404: ${errorInfo.method} ${errorInfo.url} - ${errorInfo.message || 'Not Found'}`)
       }
@@ -158,18 +161,51 @@ function logApiResponseError(error: AxiosError | any) {
 const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 })
 
-// Request interceptor to add auth token
+/** Ensures sessionStorage has a CSRF mirror before mutating requests (cross-origin cannot read ems_csrf cookie). */
+let csrfBootstrapInFlight: Promise<void> | null = null
+
+function ensureCsrfTokenForMutatingRequest(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve()
+  if (getCsrfToken()) return Promise.resolve()
+  if (csrfBootstrapInFlight) return csrfBootstrapInFlight
+  csrfBootstrapInFlight = (async () => {
+    try {
+      await apiClient.get('/auth/csrf')
+    } catch {
+      /* ignore — caller may still 403 */
+    } finally {
+      csrfBootstrapInFlight = null
+    }
+  })()
+  return csrfBootstrapInFlight
+}
+
+// Request interceptor: attach CSRF token for mutating methods (cookies carry auth automatically)
 apiClient.interceptors.request.use(
-  (config) => {
+  async (config) => {
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('salon-auth-token')
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`
+      const method = (config.method || 'get').toUpperCase()
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        const url = String(config.url || '')
+        const skipCsrfBootstrap =
+          url.includes('/auth/login') ||
+          url.includes('/auth/staff-login') ||
+          url.includes('/auth/refresh') ||
+          url.includes('/auth/forgot-password') ||
+          url.includes('/auth/reset-password')
+        if (!skipCsrfBootstrap) {
+          await ensureCsrfTokenForMutatingRequest()
+        }
+        const csrf = getCsrfToken()
+        if (csrf) {
+          config.headers[CSRF_HEADER_NAME] = csrf
+        }
       }
     }
     return config
@@ -180,9 +216,23 @@ apiClient.interceptors.request.use(
   }
 )
 
-// Response interceptor: network retry → token refresh + retry → log → session / reject
+// Response interceptor: persist CSRF for cross-origin SPAs (API host cookie not visible to document.cookie)
 apiClient.interceptors.response.use(
-  (response: AxiosResponse) => response,
+  (response: AxiosResponse) => {
+    const url = String(response.config?.url || '')
+    const data = response.data as { csrfToken?: string } | undefined
+    if (
+      data?.csrfToken &&
+      typeof data.csrfToken === 'string' &&
+      data.csrfToken.trim() &&
+      (url.includes('/auth/profile') ||
+        url.includes('/auth/refresh') ||
+        url.includes('/auth/csrf'))
+    ) {
+      setCsrfTokenPersisted(data.csrfToken)
+    }
+    return response
+  },
   async (error: AxiosError | any) => {
     if (!error) {
       console.error('❌ API Response Interceptor: Error is null or undefined')
@@ -216,10 +266,8 @@ apiClient.interceptors.response.use(
         url.includes('/auth/staff-login')
       if (!skipRefresh && isTokenAuthFailure(status, errorMsg)) {
         config.__retryAfterRefresh = true
-        const newToken = await refreshAuthTokenOnce()
-        if (newToken) {
-          config.headers = config.headers || {}
-          config.headers.Authorization = `Bearer ${newToken}`
+        const refreshed = await refreshAuthTokenOnce()
+        if (refreshed) {
           return apiClient(config)
         }
       }
@@ -299,7 +347,7 @@ export interface PaginatedResponse<T> extends ApiResponse<T[]> {
 
 // API Service Classes
 export class AuthAPI {
-  static async login(email: string, password: string): Promise<ApiResponse<{ user: any; token: string }>> {
+  static async login(email: string, password: string): Promise<ApiResponse<{ user: any; csrfToken?: string }>> {
     const response = await apiClient.post('/auth/login', { email, password })
     return response.data
   }
@@ -314,7 +362,7 @@ export class AuthAPI {
     return response.data
   }
 
-  static async refreshToken(): Promise<ApiResponse<{ token: string }>> {
+  static async refreshToken(): Promise<ApiResponse & { csrfToken?: string }> {
     const response = await apiClient.post('/auth/refresh')
     return response.data
   }
@@ -334,7 +382,7 @@ export class AuthAPI {
     return response.data
   }
 
-  static async staffLogin(email: string, password: string, businessCode: string): Promise<ApiResponse<{ user: any; token: string }>> {
+  static async staffLogin(email: string, password: string, businessCode: string): Promise<ApiResponse<{ user: any; csrfToken?: string }>> {
     const response = await apiClient.post('/auth/staff-login', { email, password, businessCode })
     return response.data
   }
@@ -366,8 +414,10 @@ export class ClientsAPI {
     return response.data
   }
 
-  static async search(query: string): Promise<ApiResponse<any[]>> {
-    const response = await apiClient.get('/clients/search', { params: { q: query } })
+  static async search(query: string, opts?: { limit?: number }): Promise<ApiResponse<any[]>> {
+    const params: Record<string, string | number> = { q: query }
+    if (opts?.limit) params.limit = opts.limit
+    const response = await apiClient.get('/clients/search', { params })
     return response.data
   }
 

@@ -26,6 +26,13 @@ import { useAuth } from "@/lib/auth-context"
 import { resolveCreatedByDisplay } from "@/lib/utils"
 import { BlockTimeModal, getBlockReasonIcon } from "@/components/appointments/block-time-modal"
 import { useToast } from "@/hooks/use-toast"
+import {
+  getServiceDisplayNames,
+  getAppointmentTotalDurationGrid as getTotalDuration,
+  getBookingGroupSiblings,
+  collectSaleLinesFromAppointmentCard,
+  buildRaiseSaleAppointmentPayload,
+} from "@/lib/appointment-calendar-helpers"
 
 interface Appointment {
   _id: string
@@ -59,23 +66,6 @@ interface Appointment {
   leadSource?: string
   bookingGroupId?: string | null
   prepaidAtBooking?: boolean
-}
-
-function getServiceDisplayNames(apt: { serviceId?: { name?: string; _id?: unknown }; additionalServices?: Array<{ name?: string }>; bookingGroupId?: string | null }): string[] {
-  const svc = apt?.serviceId
-  const primary = (typeof svc === "object" && svc?.name) || "Service"
-  // Include additionalServices (e.g. services added via edit for same staff) on all cards
-  const additional = (apt?.additionalServices || []).map((s) => s?.name).filter(Boolean) as string[]
-  return [primary, ...additional]
-}
-
-/** Total duration for multi-service appointments: primary + sum of additional services.
- * Uses apt.duration when set (e.g. from resize) so user overrides take precedence over service defaults. */
-function getTotalDuration(apt: { duration?: number; serviceId?: { duration?: number }; additionalServices?: Array<{ duration?: number }> }): number {
-  if (apt?.duration != null && apt.duration > 0) return apt.duration
-  const primary = apt?.serviceId?.duration ?? 60
-  const additional = (apt?.additionalServices || []).reduce((sum, s) => sum + (s.duration ?? 0), 0)
-  return primary + additional
 }
 
 interface StaffWorkDay {
@@ -1100,16 +1090,16 @@ export const AppointmentsCalendarGrid = forwardRef<
     try {
       const res = await AppointmentsAPI.update(selectedAppointment._id, { status: newStatus })
       if (res?.success) {
-        const list = appointments.map((a) =>
-          a._id === selectedAppointment._id ? { ...a, status: newStatus } : a
-        )
+        const bgId = (selectedAppointment as any).bookingGroupId
+        const list = appointments.map((a) => {
+          if (a._id === selectedAppointment._id) return { ...a, status: newStatus }
+          if (newStatus === "arrived" && bgId && (a as any).bookingGroupId === bgId) {
+            return { ...a, status: newStatus }
+          }
+          return a
+        })
         setAppointments(list)
         setSelectedAppointment({ ...selectedAppointment, status: newStatus })
-        if (newStatus === "arrived") {
-          // no alert; user may click "Service Started" next
-        } else {
-          // service_started
-        }
       } else {
         alert("Failed to update status. Please try again.")
       }
@@ -2707,48 +2697,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                           onClick={() => {
                             if (!selectedAppointment) return
                             const a = selectedAppointment as any
-                            const staffId = a.staffId?._id || a.staffId
-                            const staffName = a.staffId?.name || ""
-                            let services: Array<{ serviceId: string; staffId: string; staffName: string; price: number }> = []
-                            // Only this appointment card's line(s) — not the whole bookingGroupId (multi-day / other dates stay separate)
-                            if (a.additionalServices && a.additionalServices.length > 0) {
-                              const primary = a.serviceId
-                              services.push({
-                                serviceId: primary?._id || primary,
-                                staffId: staffId || "",
-                                staffName,
-                                price: (typeof primary === "object" && primary?.price) ?? a.price ?? 0,
-                              })
-                              for (const s of a.additionalServices) {
-                                services.push({
-                                  serviceId: s._id || s,
-                                  staffId: staffId || "",
-                                  staffName,
-                                  price: s.price ?? 0,
-                                })
-                              }
-                            } else {
-                              services = [{
-                                serviceId: a.serviceId?._id || a.serviceId,
-                                staffId: staffId || "",
-                                staffName,
-                                price: a.price ?? (typeof a.serviceId === "object" && a.serviceId?.price) ?? 0,
-                              }]
-                            }
-                            const appointmentData = {
-                              appointmentId: a._id,
-                              clientId: a.clientId?._id || a.clientId,
-                              clientName: a.clientId?.name || "",
-                              date: a.date,
-                              time: a.time,
-                              services: services.length > 0 ? services : undefined,
-                              serviceId: services.length === 1 ? services[0].serviceId : undefined,
-                              serviceName: a.serviceId?.name || "",
-                              servicePrice: a.price || 0,
-                              serviceDuration: a.duration || 0,
-                              staffId: staffId || "",
-                              staffName,
-                            }
+                            const siblings = getBookingGroupSiblings(appointments, a)
+                            const allServices = siblings.flatMap((sib: any) => collectSaleLinesFromAppointmentCard(sib))
+                            const appointmentData = buildRaiseSaleAppointmentPayload(a, siblings, allServices)
                             setShowDetails(false)
                             router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
                           }}

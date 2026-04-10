@@ -15,8 +15,12 @@ import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { StaffServiceDetailDrawer } from "@/components/reports/staff-service-detail-drawer"
-import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI, ReportsAPI } from "@/lib/api"
-import { CommissionProfileCalculator, StaffCommissionResult } from "@/lib/commission-profile-calculator"
+import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI, ReportsAPI, ServicesAPI } from "@/lib/api"
+import {
+  CommissionProfileCalculator,
+  StaffCommissionResult,
+  enrichSalesWithServiceIdsFromCatalog
+} from "@/lib/commission-profile-calculator"
 import { CommissionProfile } from "@/lib/commission-profile-types"
 import { splitLineRevenueByStaff } from "@/lib/staff-line-revenue"
 import {
@@ -263,20 +267,28 @@ export function StaffPerformanceReport() {
         const { startDate, endDate } = getPerformanceFilterBounds(datePeriod, dateRange)
 
         // Paged fetch avoids one huge response; N sequential calls for large DBs. Long-term: server aggregates by staff/range.
-        const allSales = await SalesAPI.getAllMergePages({ batchSize: 500 })
+        const [allSales, servicesResponse] = await Promise.all([
+          SalesAPI.getAllMergePages({ batchSize: 500 }),
+          ServicesAPI.getAll({ limit: 2000 })
+        ])
+        const catalogServices =
+          servicesResponse?.success && Array.isArray(servicesResponse.data) ? servicesResponse.data : []
+
         if (Array.isArray(allSales)) {
-          
           // Filter sales by date range
           const filteredSales = allSales.filter((sale: any) => {
             const saleDate = new Date(sale.date)
             return saleDate >= startDate && saleDate <= endDate
           })
 
+          enrichSalesWithServiceIdsFromCatalog(filteredSales, catalogServices)
+
           setSalesData(filteredSales)
 
           // Also fetch previous month's data for comparison (only for current month view)
           let previousMonthSales: any[] = []
           if (datePeriod === "currentMonth") {
+            const now = new Date()
             const prevStartDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
             const prevEndDate = new Date(now.getFullYear(), now.getMonth(), 0)
             
@@ -383,7 +395,9 @@ export function StaffPerformanceReport() {
             if (staff && staff.commissionProfileIds && staff.commissionProfileIds.length > 0) {
               const staffProfiles = commissionProfiles.filter(profile => {
                 const profileId = profile.id ?? profile._id
-                return profileId != null && staff.commissionProfileIds?.includes(profileId)
+                if (profileId == null) return false
+                const pid = String(profileId)
+                return staff.commissionProfileIds?.some((cid) => String(cid) === pid) ?? false
               })
               
               if (staffProfiles.length > 0) {

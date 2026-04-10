@@ -1,4 +1,4 @@
-import { CommissionProfile } from './commission-profile-types'
+import { CommissionProfile, type CommissionProfileType } from './commission-profile-types'
 import {
   getAttributedRevenueForStaff,
   staffIsAttributedToLineItem,
@@ -11,6 +11,8 @@ export interface SaleItem {
   quantity: number
   price: number
   total: number
+  /** Catalog service id when type === 'service' (ObjectId string or populated shape) */
+  serviceId?: string | { _id?: string }
   staffId?: string
   staffName?: string
   discount?: number
@@ -24,6 +26,19 @@ export interface SaleItem {
     percentage?: number
     amount?: number
   }>
+}
+
+function normalizeSaleLineServiceId(
+  item: Pick<SaleItem, 'type' | 'serviceId'>
+): string | null {
+  if (String(item.type).toLowerCase() !== 'service' || item.serviceId == null || item.serviceId === '') {
+    return null
+  }
+  const raw = item.serviceId as string | { _id?: string }
+  if (typeof raw === 'object' && raw !== null && raw._id != null) {
+    return String(raw._id)
+  }
+  return String(raw)
 }
 
 export interface Sale {
@@ -66,10 +81,40 @@ export interface StaffCommissionResult {
   profileBreakdown: Array<{
     profileId: string
     profileName: string
+    profileType?: CommissionProfileType
     commission: number
     revenue: number
     itemCount: number
   }>
+}
+
+/**
+ * When sale lines lack serviceId (legacy bills), map service name to catalog id so service-based rules match.
+ */
+export function enrichSalesWithServiceIdsFromCatalog(
+  sales: Array<{ items?: SaleItem[] }>,
+  services: Array<{ _id?: string; id?: string; name?: string }>
+): void {
+  const byName = new Map<string, string>()
+  for (const s of services) {
+    const id = String(s._id ?? s.id ?? '')
+    const nm = String(s.name ?? '').trim().toLowerCase()
+    if (!id || !nm) continue
+    if (!byName.has(nm)) byName.set(nm, id)
+  }
+  for (const sale of sales) {
+    const items = sale.items
+    if (!items || !Array.isArray(items)) continue
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i] as SaleItem
+      if (String(item.type).toLowerCase() !== 'service' || normalizeSaleLineServiceId(item)) continue
+      const key = String(item.name ?? '').trim().toLowerCase()
+      const sid = byName.get(key)
+      if (sid) {
+        items[i] = { ...item, serviceId: sid }
+      }
+    }
+  }
 }
 
 export class CommissionProfileCalculator {
@@ -98,7 +143,7 @@ export class CommissionProfileCalculator {
     }
 
     // Group items by type
-    const serviceItems = staffItems.filter(item => item.type === 'service')
+    const serviceItems = staffItems.filter(item => String(item.type).toLowerCase() === 'service')
     const productItems = staffItems.filter(item => item.type === 'product')
     const packageItems = staffItems.filter(item => item.type === 'package')
     const membershipItems = staffItems.filter(item => item.type === 'membership')
@@ -118,6 +163,7 @@ export class CommissionProfileCalculator {
     const profileBreakdown: Array<{
       profileId: string
       profileName: string
+      profileType?: CommissionProfileType
       commission: number
       revenue: number
       itemCount: number
@@ -126,27 +172,54 @@ export class CommissionProfileCalculator {
     for (const profile of staffCommissionProfiles) {
       if (!profile.isActive) continue
 
+      const profileId = String(profile.id ?? profile._id ?? '')
+
+      if (profile.type === 'service_based') {
+        if (!profile.serviceRules?.length) {
+          continue
+        }
+        const { commission: profileCommission, revenue: profileRevenue, itemCount: profileItemCount } =
+          this.calculateServiceBasedCommission(serviceItems, profile.serviceRules)
+
+        if (profileCommission === 0 && profileRevenue === 0) {
+          continue
+        }
+
+        totalCommission += profileCommission
+
+        profileBreakdown.push({
+          profileId,
+          profileName: profile.name,
+          profileType: 'service_based',
+          commission: profileCommission,
+          revenue: profileRevenue,
+          itemCount: profileItemCount
+        })
+        continue
+      }
+
+      const qualifying = profile.qualifyingItems ?? []
       let profileRevenue = 0
       let profileItemCount = 0
 
       // Calculate revenue for this profile based on qualifying items
-      if (profile.qualifyingItems.includes('Service')) {
+      if (qualifying.includes('Service')) {
         profileRevenue += serviceRevenue
         profileItemCount += serviceItems.length
       }
-      if (profile.qualifyingItems.includes('Product')) {
+      if (qualifying.includes('Product')) {
         profileRevenue += productRevenue
         profileItemCount += productItems.length
       }
-      if (profile.qualifyingItems.includes('Package')) {
+      if (qualifying.includes('Package')) {
         profileRevenue += packageRevenue
         profileItemCount += packageItems.length
       }
-      if (profile.qualifyingItems.includes('Membership')) {
+      if (qualifying.includes('Membership')) {
         profileRevenue += membershipRevenue
         profileItemCount += membershipItems.length
       }
-      if (profile.qualifyingItems.includes('Prepaid')) {
+      if (qualifying.includes('Prepaid')) {
         profileRevenue += prepaidRevenue
         profileItemCount += prepaidItems.length
       }
@@ -159,14 +232,15 @@ export class CommissionProfileCalculator {
       if (profile.type === 'target_based' && profile.targetTiers) {
         profileCommission = this.calculateTargetBasedCommission(profileRevenue, profile.targetTiers, profile.cascadingCommission)
       } else if (profile.type === 'item_based' && profile.itemRates) {
-        profileCommission = this.calculateItemBasedCommission(profileRevenue, profile.itemRates, profile.qualifyingItems)
+        profileCommission = this.calculateItemBasedCommission(profileRevenue, profile.itemRates, qualifying)
       }
 
       totalCommission += profileCommission
 
       profileBreakdown.push({
-        profileId: profile.id,
+        profileId,
         profileName: profile.name,
+        profileType: profile.type,
         commission: profileCommission,
         revenue: profileRevenue,
         itemCount: profileItemCount
@@ -182,10 +256,18 @@ export class CommissionProfileCalculator {
       totalCommission,
       totalRevenue,
       serviceCommission: profileBreakdown
-        .filter(p => p.profileName.toLowerCase().includes('service'))
+        .filter(
+          (p) =>
+            p.profileType === 'service_based' ||
+            (p.profileType === 'target_based' && p.profileName.toLowerCase().includes('service'))
+        )
         .reduce((sum, p) => sum + p.commission, 0),
       productCommission: profileBreakdown
-        .filter(p => p.profileName.toLowerCase().includes('product'))
+        .filter(
+          (p) =>
+            p.profileType === 'item_based' ||
+            (p.profileType === 'target_based' && p.profileName.toLowerCase().includes('product'))
+        )
         .reduce((sum, p) => sum + p.commission, 0),
       serviceRevenue,
       productRevenue,
@@ -230,6 +312,7 @@ export class CommissionProfileCalculator {
     const profileBreakdownMap = new Map<string, {
       profileId: string
       profileName: string
+      profileType?: CommissionProfileType
       commission: number
       revenue: number
       itemCount: number
@@ -281,7 +364,9 @@ export class CommissionProfileCalculator {
     for (const staff of staffMembers) {
       const profileIdMatch = (profile: CommissionProfile) => {
         const id = profile.id ?? profile._id
-        return id != null && staff.commissionProfileIds.includes(id)
+        if (id == null) return false
+        const pid = String(id)
+        return staff.commissionProfileIds.some((cid) => String(cid) === pid)
       }
       const staffProfiles = commissionProfiles.filter(profileIdMatch)
 
@@ -341,6 +426,57 @@ export class CommissionProfileCalculator {
     }
 
     return totalCommission
+  }
+
+  /**
+   * Per-catalog-service rules: attributed pre-tax line amount × % or flat ₹ per line row.
+   * Lines without serviceId or without a matching rule earn 0.
+   */
+  private static calculateServiceBasedCommission(
+    serviceStaffItems: Array<SaleItem & { total: number }>,
+    serviceRules: Array<{
+      serviceId: string
+      calculateBy: 'percent' | 'fixed'
+      value: number
+    }>
+  ): { commission: number; revenue: number; itemCount: number } {
+    const ruleMap = new Map<string, { calculateBy: 'percent' | 'fixed'; value: number }>()
+    for (const rule of serviceRules) {
+      if (rule?.serviceId) {
+        ruleMap.set(String(rule.serviceId), {
+          calculateBy: rule.calculateBy === 'fixed' ? 'fixed' : 'percent',
+          value: Number(rule.value) || 0
+        })
+      }
+    }
+
+    let commission = 0
+    let revenue = 0
+    let itemCount = 0
+
+    for (const item of serviceStaffItems) {
+      const sid = normalizeSaleLineServiceId(item)
+      if (!sid) continue
+      const rule = ruleMap.get(sid)
+      if (!rule || rule.value <= 0) continue
+
+      const attributed = Math.max(0, Number(item.total) || 0)
+      if (attributed <= 0) continue
+
+      let lineCommission = 0
+      if (rule.calculateBy === 'percent') {
+        lineCommission = (attributed * rule.value) / 100
+      } else {
+        // Fixed ₹ once per invoice line row (not multiplied by quantity)
+        lineCommission = rule.value
+      }
+
+      commission += lineCommission
+      revenue += attributed
+      itemCount += 1
+    }
+
+    return { commission, revenue, itemCount }
   }
 
   /**

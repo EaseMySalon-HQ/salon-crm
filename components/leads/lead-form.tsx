@@ -99,6 +99,13 @@ export function LeadForm({ lead, isEditMode = false, onSuccess, onCancel }: Lead
     }
   }, [status, form])
 
+  // New Lead: no notes when status is New; clear draft notes when switching back to New
+  useEffect(() => {
+    if (!isEditMode && status === "new") {
+      form.setValue("notes", "")
+    }
+  }, [status, isEditMode, form])
+
   useEffect(() => {
     loadServices()
   }, [])
@@ -142,8 +149,17 @@ export function LeadForm({ lead, isEditMode = false, onSuccess, onCancel }: Lead
           }
         })
 
+      // Notes only apply when status is not "new". Preserve existing lead notes when editing a "new" lead.
+      let notesPayload = ""
+      if (values.status !== "new") {
+        notesPayload = values.notes || ""
+      } else if (isEditMode) {
+        notesPayload = lead?.notes ?? ""
+      }
+
       const leadData = {
         ...values,
+        notes: notesPayload,
         assignedStaffId: values.assignedStaffId === "none" ? undefined : values.assignedStaffId,
         interestedServices: servicesArray,
         followUpDate: values.followUpDate || undefined,
@@ -291,7 +307,11 @@ export function LeadForm({ lead, isEditMode = false, onSuccess, onCancel }: Lead
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="new">New</SelectItem>
+                        {(!isEditMode || field.value === "new") && (
+                          <SelectItem value="new" disabled={isEditMode}>
+                            New
+                          </SelectItem>
+                        )}
                         <SelectItem value="follow-up">Follow-up</SelectItem>
                         <SelectItem value="converted">Converted</SelectItem>
                         <SelectItem value="lost">Lost</SelectItem>
@@ -406,26 +426,28 @@ export function LeadForm({ lead, isEditMode = false, onSuccess, onCancel }: Lead
               />
             )}
 
-            <FormField
-              control={form.control}
-              name="notes"
-              render={({ field }) => (
-                <FormItem className="space-y-2">
-                  <FormLabel className="flex items-center gap-2">
-                    <FileText className="h-4 w-4" />
-                    Notes
-                  </FormLabel>
-                  <FormControl>
-                    <Textarea 
-                      placeholder="Add any notes about this lead..."
-                      className="min-h-[100px]"
-                      {...field} 
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {status !== "new" && (
+              <FormField
+                control={form.control}
+                name="notes"
+                render={({ field }) => (
+                  <FormItem className="space-y-2">
+                    <FormLabel className="flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      Notes
+                    </FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Add any notes about this lead..."
+                        className="min-h-[100px]"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <div className="flex justify-end gap-2">
               {onCancel && (

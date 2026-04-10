@@ -163,7 +163,9 @@ class ModelFactory {
       AdminSettings: this.getModel('AdminSettings', require('./AdminSettings').schema, connection),
       PasswordResetToken: this.getModel('PasswordResetToken', require('./PasswordResetToken').schema, connection),
       PlanChangeLog: this.getModel('PlanChangeLog', require('./PlanChangeLog').schema, connection),
-      PlanTemplate: this.getModel('PlanTemplate', require('./PlanTemplate').schema, connection)
+      PlanTemplate: this.getModel('PlanTemplate', require('./PlanTemplate').schema, connection),
+      RefreshToken: this.getModel('RefreshToken', require('./RefreshToken').schema, connection),
+      ActivityLog: this.getModel('ActivityLog', require('./ActivityLog').schema, connection)
     };
   }
 

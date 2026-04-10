@@ -3,6 +3,8 @@ const { logger } = require('../utils/logger');
 const router = express.Router();
 const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateAdmin } = require('../middleware/admin-auth');
+const { validate } = require('../middleware/validate');
+const { adminSettingsCategoryParamSchema } = require('../validation/schemas');
 
 // Admin Settings Schema (in-memory fallback for backward compatibility)
 let adminSettingsFallback = {
@@ -22,7 +24,7 @@ let adminSettingsFallback = {
       maxConcurrentSessions: 3
     },
     security: {
-      jwtSecret: "your-super-secret-jwt-key-change-this-in-production",
+      jwtSecret: "",
       passwordMinLength: 8,
       passwordRequireSpecialChars: true,
       maxLoginAttempts: 5,
@@ -386,7 +388,7 @@ let adminSettingsFallback = {
       statusCode: 429
     },
     authentication: {
-      jwtSecret: "your-super-secret-jwt-key-change-this-in-production",
+      jwtSecret: "",
       jwtExpiration: "24h",
       refreshTokenExpiration: "7d",
       enableRefreshTokens: true,
@@ -399,9 +401,9 @@ let adminSettingsFallback = {
       {
         id: 1,
         name: "Business Created",
-        url: "https://webhook.site/unique-id",
+        url: "",
         events: ["business.created"],
-        secret: "webhook-secret-key",
+        secret: "",
         enabled: true,
         retryCount: 3,
         timeout: 5000
@@ -409,9 +411,9 @@ let adminSettingsFallback = {
       {
         id: 2,
         name: "User Created",
-        url: "https://webhook.site/unique-id-2",
+        url: "",
         events: ["user.created", "user.updated"],
-        secret: "webhook-secret-key-2",
+        secret: "",
         enabled: false,
         retryCount: 3,
         timeout: 5000
@@ -449,6 +451,7 @@ let adminSettingsFallback = {
         msg91ApiKey: "",
         msg91SenderId: "",
         templateIncludesBaseUrl: true, // If true, template already has base URL, only pass path variables
+        templateIncludesGoogleMapsBaseUrl: true, // MSG91 short link: base https://maps.app.goo.gl/ is in template; pass slug only
         templates: {
           welcomeMessage: "",
           businessAccountCreated: "",
@@ -490,6 +493,27 @@ let adminSettingsFallback = {
   }
 };
 
+/** Never expose JWT signing material to the admin UI; real secret is process.env.JWT_SECRET */
+function stripJwtSecretsFromCategory(category, data) {
+  if (!data || typeof data !== 'object') return data;
+  const clone = JSON.parse(JSON.stringify(data));
+  if (category === 'api' && clone.authentication && 'jwtSecret' in clone.authentication) {
+    delete clone.authentication.jwtSecret;
+  }
+  if (category === 'system' && clone.security && 'jwtSecret' in clone.security) {
+    delete clone.security.jwtSecret;
+  }
+  return clone;
+}
+
+function stripJwtSecretsFromFullSettings(data) {
+  if (!data || typeof data !== 'object') return data;
+  const clone = JSON.parse(JSON.stringify(data));
+  if (clone.api) clone.api = stripJwtSecretsFromCategory('api', clone.api);
+  if (clone.system) clone.system = stripJwtSecretsFromCategory('system', clone.system);
+  return clone;
+}
+
 // GET /api/admin/settings - Get all admin settings
 router.get('/', authenticateAdmin, setupMainDatabase, async (req, res) => {
   try {
@@ -497,14 +521,14 @@ router.get('/', authenticateAdmin, setupMainDatabase, async (req, res) => {
     const settings = await AdminSettings.getSettings();
     res.json({
       success: true,
-      data: settings.toObject()
+      data: stripJwtSecretsFromFullSettings(settings.toObject())
     });
   } catch (error) {
     logger.error('Error fetching admin settings:', error);
     // Fallback to in-memory settings
     res.json({
       success: true,
-      data: adminSettingsFallback
+      data: stripJwtSecretsFromFullSettings(adminSettingsFallback)
     });
   }
 });
@@ -780,8 +804,24 @@ router.post('/sms/template-details', authenticateAdmin, setupMainDatabase, async
   }
 });
 
+// GET /api/admin/settings/meta/security — safe flags derived from server env (no secrets)
+router.get('/meta/security', authenticateAdmin, setupMainDatabase, (req, res) => {
+  const secret = process.env.JWT_SECRET;
+  res.json({
+    success: true,
+    data: {
+      jwtSecretConfigured: Boolean(secret && String(secret).trim().length > 0)
+    }
+  });
+});
+
 // GET /api/admin/settings/:category - Get specific category settings
-router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.get(
+  '/:category',
+  authenticateAdmin,
+  setupMainDatabase,
+  validate(adminSettingsCategoryParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { category } = req.params;
     const { AdminSettings } = req.mainModels;
@@ -806,7 +846,7 @@ router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     
     res.json({
       success: true,
-      data: settingsObj[category]
+      data: stripJwtSecretsFromCategory(category, settingsObj[category])
     });
   } catch (error) {
     logger.error('Error fetching admin settings category:', error);
@@ -815,7 +855,10 @@ router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
       logger.debug('⚠️ [Backend GET] Using fallback settings for category:', req.params.category);
       return res.json({
         success: true,
-        data: adminSettingsFallback[req.params.category]
+        data: stripJwtSecretsFromCategory(
+          req.params.category,
+          adminSettingsFallback[req.params.category]
+        )
       });
     }
     res.status(500).json({
@@ -823,13 +866,25 @@ router.get('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
       error: 'Failed to fetch admin settings category'
     });
   }
-});
+  }
+);
 
 // PUT /api/admin/settings/:category - Update specific category settings
-router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) => {
+router.put(
+  '/:category',
+  authenticateAdmin,
+  setupMainDatabase,
+  validate(adminSettingsCategoryParamSchema, 'params'),
+  async (req, res) => {
   try {
     const { category } = req.params;
-    const updates = req.body;
+    const updates = { ...req.body };
+    if (category === 'api' && updates.authentication && updates.authentication.jwtSecret !== undefined) {
+      delete updates.authentication.jwtSecret;
+    }
+    if (category === 'system' && updates.security && updates.security.jwtSecret !== undefined) {
+      delete updates.security.jwtSecret;
+    }
     const { AdminSettings } = req.mainModels;
     
     // Log what we're receiving for debugging
@@ -889,7 +944,7 @@ router.put('/:category', authenticateAdmin, setupMainDatabase, async (req, res) 
     
     res.json({
       success: true,
-      data: settingsObj[category],
+      data: stripJwtSecretsFromCategory(category, settingsObj[category]),
       message: 'Settings updated successfully'
     });
   } catch (error) {

@@ -8,6 +8,8 @@ import {
   setAdminAuthSession,
   clearAdminAuthSession
 } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import { setCsrfTokenPersisted, clearCsrfTokenPersisted } from "@/lib/csrf"
 
 export interface Admin {
   id: string
@@ -21,7 +23,7 @@ interface AdminAuthContextType {
   admin: Admin | null
   isLoading: boolean
   login: (email: string, password: string) => Promise<boolean>
-  logout: () => void
+  logout: () => Promise<void>
 }
 
 const AdminAuthContext = createContext<AdminAuthContextType | undefined>(undefined)
@@ -54,10 +56,8 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
         try {
           const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
           const response = await fetch(`${API_URL}/admin/profile`, {
-            headers: {
-              'Authorization': `Bearer ${storedToken}`,
-              'Content-Type': 'application/json'
-            }
+            credentials: 'include',
+            headers: adminRequestHeaders({ 'Content-Type': 'application/json' }),
           })
           
           if (response.ok) {
@@ -106,6 +106,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
       const response = await fetch(`${API_URL}/admin/login`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
         },
@@ -115,7 +116,10 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       const data = await response.json()
       
       if (data.success) {
-        const { admin: adminData, token } = data.data
+        const { admin: adminData, token, csrfToken } = data.data
+        if (csrfToken && typeof csrfToken === 'string') {
+          setCsrfTokenPersisted(csrfToken)
+        }
         setAdmin(adminData)
         
         if (typeof window !== 'undefined') {
@@ -135,13 +139,24 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+      await fetch(`${API_URL}/admin/logout`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: adminRequestHeaders({ 'Content-Type': 'application/json' }),
+      })
+    } catch {
+      /* still clear local session */
+    }
     setAdmin(null)
-    
+
     if (typeof window !== 'undefined') {
       clearAdminAuthSession()
+      clearCsrfTokenPersisted()
     }
-    
+
     router.push('/admin/login')
   }
 

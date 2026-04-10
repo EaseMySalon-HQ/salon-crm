@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useAdminAuth } from "@/lib/admin-auth-context"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -167,8 +167,6 @@ const formatDate = (value?: string) => {
     return value
   }
 }
-
-const getToken = () => getAdminAuthToken()
 
 // Helper function to check if admin has permission
 const hasPermission = (admin: AdminUser | null | undefined, module: string, action: string): boolean => {
@@ -347,21 +345,11 @@ export function AdminAccessPage() {
     return adminsWithCurrent.find(a => a.isCurrentUser) || null
   }, [adminsWithCurrent])
 
-  const authHeaders = () => {
-    const token = getToken()
-    return token
-      ? {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
-        }
-      : { "Content-Type": "application/json" }
-  }
-
   const fetchOverview = async () => {
     setIsRefreshing(true)
     try {
       const response = await fetch(`${API_URL}/admin/access/overview`, {
-        headers: authHeaders()
+        headers: adminRequestHeaders({ "Content-Type": "application/json" })
       })
       if (!response.ok) {
         throw new Error("Failed to load overview")
@@ -458,7 +446,7 @@ export function AdminAccessPage() {
         editingRole ? `${API_URL}/admin/access/roles/${editingRole.id}` : `${API_URL}/admin/access/roles`,
         {
           method: editingRole ? "PUT" : "POST",
-          headers: authHeaders(),
+          headers: adminRequestHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(payload)
         }
       )
@@ -502,7 +490,7 @@ export function AdminAccessPage() {
     try {
       const response = await fetch(`${API_URL}/admin/access/roles/${role.id}`, {
         method: "DELETE",
-        headers: authHeaders()
+        headers: adminRequestHeaders({ "Content-Type": "application/json" })
       })
 
       if (!response.ok) {
@@ -601,7 +589,7 @@ export function AdminAccessPage() {
         editingAdmin ? `${API_URL}/admin/access/users/${editingAdmin.id}` : `${API_URL}/admin/access/users`,
         {
           method: editingAdmin ? "PUT" : "POST",
-          headers: authHeaders(),
+          headers: adminRequestHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(payload)
         }
       )
@@ -643,7 +631,7 @@ export function AdminAccessPage() {
     try {
       const response = await fetch(`${API_URL}/admin/access/users/${admin.id}/status`, {
         method: "PATCH",
-        headers: authHeaders(),
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ isActive: nextStatus })
       })
 
@@ -730,10 +718,7 @@ export function AdminAccessPage() {
     try {
       const response = await fetch(`${API_URL}/admin/access/users/${permissionDialogAdmin.id}/permissions`, {
         method: "PATCH",
-        headers: {
-          ...authHeaders(),
-          "Content-Type": "application/json"
-        },
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ permissionOverrides: permissionOverridesState })
       })
 
@@ -801,7 +786,7 @@ export function AdminAccessPage() {
     try {
       const response = await fetch(`${API_URL}/admin/access/users/${resettingAdmin.id}/password`, {
         method: "PATCH",
-        headers: authHeaders(),
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ password: newPassword })
       })
 

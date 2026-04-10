@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useAdminAuth } from "@/lib/admin-auth-context"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -85,14 +85,6 @@ export function AdminLogsPage() {
   const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 0 })
   const [showFilters, setShowFilters] = useState(false)
 
-  const authHeaders = () => {
-    const token = getAdminAuthToken()
-    return {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`
-    }
-  }
-
   const fetchLogs = async () => {
     try {
       setIsRefreshing(true)
@@ -105,7 +97,7 @@ export function AdminLogsPage() {
       })
 
       const response = await fetch(`${API_URL}/admin/logs?${params}`, {
-        headers: authHeaders()
+        headers: adminRequestHeaders({ "Content-Type": "application/json" })
       })
 
       if (!response.ok) {
@@ -136,7 +128,7 @@ export function AdminLogsPage() {
   const fetchFilterOptions = async () => {
     try {
       const response = await fetch(`${API_URL}/admin/logs/filters`, {
-        headers: authHeaders()
+        headers: adminRequestHeaders({ "Content-Type": "application/json" })
       })
 
       if (!response.ok) {
@@ -186,7 +178,7 @@ export function AdminLogsPage() {
       })
 
       const response = await fetch(`${API_URL}/admin/logs?${params}`, {
-        headers: authHeaders()
+        headers: adminRequestHeaders({ "Content-Type": "application/json" })
       })
 
       if (!response.ok) {

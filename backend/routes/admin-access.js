@@ -15,6 +15,13 @@ const {
   permissionOverridesForApi,
   applyPermissionOverrides
 } = require('../utils/permission-helpers');
+const { validate, validateAll } = require('../middleware/validate');
+const {
+  roleIdParamSchema,
+  adminUserIdParamSchema,
+  adminRoleCreateBodySchema,
+  adminRoleUpdateBodySchema,
+} = require('../validation/schemas');
 
 const slugify = (value) => value
   .toLowerCase()
@@ -189,7 +196,7 @@ router.get('/roles', async (req, res) => {
   }
 });
 
-router.post('/roles', requireAdminRole('super_admin'), async (req, res) => {
+router.post('/roles', requireAdminRole('super_admin'), validate(adminRoleCreateBodySchema), async (req, res) => {
   try {
     const { AdminRole } = req.mainModels;
     const { name, description = '', permissions = [], color = 'gray' } = req.body;
@@ -234,7 +241,16 @@ router.post('/roles', requireAdminRole('super_admin'), async (req, res) => {
   }
 });
 
-router.put('/roles/:roleId', requireAdminRole('super_admin'), async (req, res) => {
+router.put(
+  '/roles/:roleId',
+  requireAdminRole('super_admin'),
+  validateAll(
+    [
+      { schema: roleIdParamSchema, source: 'params' },
+      { schema: adminRoleUpdateBodySchema, source: 'body' },
+    ]
+  ),
+  async (req, res) => {
   try {
     const { Admin, AdminRole } = req.mainModels;
     const { roleId } = req.params;
@@ -329,7 +345,7 @@ router.put('/roles/:roleId', requireAdminRole('super_admin'), async (req, res) =
   }
 });
 
-router.delete('/roles/:roleId', requireAdminRole('super_admin'), async (req, res) => {
+router.delete('/roles/:roleId', requireAdminRole('super_admin'), validate(roleIdParamSchema, 'params'), async (req, res) => {
   try {
     const { Admin, AdminRole } = req.mainModels;
     const { roleId } = req.params;
@@ -456,7 +472,7 @@ router.post('/users', authenticateAdmin, checkAdminPermission('users', 'create')
   }
 });
 
-router.put('/users/:userId', authenticateAdmin, checkAdminPermission('users', 'update'), async (req, res) => {
+router.put('/users/:userId', authenticateAdmin, checkAdminPermission('users', 'update'), validate(adminUserIdParamSchema, 'params'), async (req, res) => {
   try {
     const { Admin, AdminRole } = req.mainModels;
     const { userId } = req.params;
@@ -574,7 +590,7 @@ router.put('/users/:userId', authenticateAdmin, checkAdminPermission('users', 'u
   }
 });
 
-router.patch('/users/:userId/permissions', authenticateAdmin, checkAdminPermission('users', 'update'), async (req, res) => {
+router.patch('/users/:userId/permissions', authenticateAdmin, checkAdminPermission('users', 'update'), validate(adminUserIdParamSchema, 'params'), async (req, res) => {
   try {
     const { Admin, AdminRole } = req.mainModels;
     const { userId } = req.params;
@@ -631,7 +647,7 @@ router.patch('/users/:userId/permissions', authenticateAdmin, checkAdminPermissi
   }
 });
 
-router.patch('/users/:userId/status', requireAdminRole('super_admin'), async (req, res) => {
+router.patch('/users/:userId/status', requireAdminRole('super_admin'), validate(adminUserIdParamSchema, 'params'), async (req, res) => {
   try {
     const { Admin, AdminRole } = req.mainModels;
     const { userId } = req.params;
@@ -690,7 +706,7 @@ router.patch('/users/:userId/status', requireAdminRole('super_admin'), async (re
   }
 });
 
-router.patch('/users/:userId/password', authenticateAdmin, async (req, res) => {
+router.patch('/users/:userId/password', authenticateAdmin, validate(adminUserIdParamSchema, 'params'), async (req, res) => {
   try {
     const { Admin } = req.mainModels;
     const { userId } = req.params;

@@ -42,7 +42,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { cn } from "@/lib/utils"
 
 interface Business {
@@ -86,11 +86,6 @@ interface Stats {
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
-
-function authHeaders(extra: HeadersInit = {}) {
-  const token = getAdminAuthToken()
-  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra }
-}
 
 function formatRelative(date: string | null | undefined): string {
   if (!date) return "—"
@@ -164,7 +159,7 @@ export function BusinessManagement() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch(`${API_URL}/admin/businesses/stats`, { headers: authHeaders() })
+      const res = await fetch(`${API_URL}/admin/businesses/stats`, { headers: adminRequestHeaders() })
       if (res.ok) {
         const data = await res.json()
         if (data.success) setStats(data.data)
@@ -183,8 +178,8 @@ export function BusinessManagement() {
         ...(planFilter !== "all" && { plan: planFilter }),
       })
       const [businessesRes, plansRes] = await Promise.all([
-        fetch(`${API_URL}/admin/businesses?${params}`, { headers: authHeaders({ "Content-Type": "application/json" }) }),
-        fetch(`${API_URL}/admin/plans/businesses?${params}`, { headers: authHeaders() }),
+        fetch(`${API_URL}/admin/businesses?${params}`, { headers: adminRequestHeaders({ "Content-Type": "application/json" }) }),
+        fetch(`${API_URL}/admin/plans/businesses?${params}`, { headers: adminRequestHeaders() }),
       ])
 
       if (businessesRes.ok && plansRes.ok) {
@@ -240,7 +235,7 @@ export function BusinessManagement() {
     try {
       const res = await fetch(`${API_URL}/admin/businesses/${businessId}/status`, {
         method: "PATCH",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ status: newStatus }),
       })
       if (res.ok) {
@@ -262,7 +257,7 @@ export function BusinessManagement() {
     try {
       const res = await fetch(`${API_URL}/admin/businesses/${businessId}`, {
         method: "DELETE",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
       })
       if (res.ok) {
         toast({ title: "Business deleted", description: isSoft ? `"${businessName}" marked as deleted.` : `"${businessName}" permanently deleted.` })
@@ -296,7 +291,7 @@ export function BusinessManagement() {
     if (!confirm(`Suspend ${selectedIds.size} selected business(es)?`)) return
     Promise.all(Array.from(selectedIds).map((id) => fetch(`${API_URL}/admin/businesses/${id}/status`, {
       method: "PATCH",
-      headers: authHeaders({ "Content-Type": "application/json" }),
+      headers: adminRequestHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ status: "suspended" }),
     }))).then(() => {
       toast({ title: "Done", description: "Selected businesses suspended." })
@@ -310,18 +305,16 @@ export function BusinessManagement() {
     try {
       const res = await fetch(`${API_URL}/admin/businesses/${business._id}/impersonate`, {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         throw new Error(err.error || "Impersonation failed")
       }
       const data = await res.json()
-      if (data.success && data.data?.token) {
+      if (data.success) {
         if (typeof window !== "undefined") {
           sessionStorage.setItem("admin-impersonation-origin", window.location.pathname + window.location.search)
-          localStorage.setItem("salon-auth-token", data.data.token)
-          localStorage.setItem("salon-auth-user", JSON.stringify({ _id: "pending", email: "", role: "admin" }))
           window.location.href = "/dashboard"
         }
       }
@@ -357,7 +350,7 @@ export function BusinessManagement() {
     try {
       const res = await fetch(`${API_URL}/admin/businesses/${business._id}/reset-owner-password`, {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {

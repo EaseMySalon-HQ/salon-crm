@@ -19,6 +19,7 @@ export function BusinessSettings() {
     city: "",
     state: "",
     zipCode: "",
+    googleMapsUrl: "",
     website: "",
     description: "",
     socialMedia: "",
@@ -318,6 +319,22 @@ export function BusinessSettings() {
                   className="border-slate-200 focus:border-blue-500 focus:ring-blue-500"
                 />
               </div>
+            </div>
+
+            <div className="space-y-3">
+              <Label htmlFor="googleMapsUrl" className="text-sm font-medium text-slate-700">Google Maps URL</Label>
+              <Input
+                id="googleMapsUrl"
+                type="text"
+                inputMode="url"
+                value={businessInfo.googleMapsUrl || ""}
+                onChange={(e) => setBusinessInfo({ ...businessInfo, googleMapsUrl: e.target.value })}
+                placeholder="https://maps.app.goo.gl/... or short code only"
+                className="border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-500">
+                Optional. Full link (e.g. https://maps.app.goo.gl/rwY2PmLdcE4TNo8w9) or only the short code after maps.app.goo.gl/ — used for WhatsApp buttons and directions.
+              </p>
             </div>
           </div>
         </div>

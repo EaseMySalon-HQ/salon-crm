@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard } from "lucide-react"
@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { ClientsAPI, SalesAPI, MembershipAPI, AppointmentsAPI, PackagesAPI } from "@/lib/api"
+import { SalesAPI, MembershipAPI, AppointmentsAPI, PackagesAPI } from "@/lib/api"
 import { isClientPackageRedeemable } from "@/lib/client-package-utils"
 import type { Client } from "@/lib/client-store"
 import { useCurrency } from "@/hooks/use-currency"
@@ -73,7 +73,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   const [totalRevenue, setTotalRevenue] = useState(0)
   const [bills, setBills] = useState<any[]>([])
   const [duesUnpaid, setDuesUnpaid] = useState(0)
-  const [clientDetails, setClientDetails] = useState<Client | null>(null)
+  
   const [membershipData, setMembershipData] = useState<{ subscription: any; plan: any } | null>(null)
   const [showAllBills, setShowAllBills] = useState(false)
   const [expandedBillId, setExpandedBillId] = useState<string | null>(null)
@@ -131,6 +131,9 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     setRedeemContext(null)
   }, [clientId])
 
+  const [loadingNotes, setLoadingNotes] = useState(false)
+  const appointmentNotesFetched = useRef<string | null>(null)
+
   useEffect(() => {
     if (!clientId) {
       setLoading(false)
@@ -138,23 +141,18 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     }
 
     let cancelled = false
+    appointmentNotesFetched.current = null
 
     async function fetchStats() {
       setLoading(true)
       try {
-        const [salesRes, appointmentsRes, clientRes, membershipRes, packagesRes] = await Promise.all([
+        const [salesRes, membershipRes, packagesRes] = await Promise.all([
           client.phone ? SalesAPI.getByClient(client.phone) : Promise.resolve({ success: false, data: [] as any[] }),
-          AppointmentsAPI.getAll({ clientId, limit: 200 }).catch(() => ({ success: false, data: [] as any[] })),
-          ClientsAPI.getById(clientId).catch(() => ({ success: false, data: null })),
           MembershipAPI.getByCustomer(clientId).catch(() => ({ success: false, data: null })),
           PackagesAPI.getClientPackages(clientId).catch(() => ({ success: false, data: [] as any[] })),
         ])
 
         if (cancelled) return
-
-        if (clientRes?.success && clientRes.data) {
-          setClientDetails(clientRes.data)
-        }
 
         if (membershipRes?.success && membershipRes.data) {
           setMembershipData(membershipRes.data as any)
@@ -184,34 +182,12 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         }, 0)
         setDuesUnpaid(duesSum)
 
-        // Build customer notes from appointments and sales
-        const appointmentsList = Array.isArray(appointmentsRes?.data) ? appointmentsRes.data : []
-        const notes: CustomerNote[] = []
-
-        appointmentsList.forEach((apt: any) => {
-          const content = (apt.notes || "").trim()
-          if (!content) return
-          const staffName =
-            apt.staffId?.name ||
-            apt.staffAssignments?.[0]?.staffId?.name ||
-            apt.staffAssignments?.[0]?.staffId
-          const aptId = apt._id || apt.id
-          notes.push({
-            id: `apt-${aptId}`,
-            source: "appointment",
-            content,
-            createdAt: apt.createdAt || apt.date || new Date().toISOString(),
-            staffName: typeof staffName === "string" ? staffName : staffName?.name,
-            recordId: aptId,
-            href: `/appointments/new?edit=${aptId}`,
-          })
-        })
-
+        const saleNotes: CustomerNote[] = []
         salesList.forEach((s: any) => {
           const content = (s.notes || "").trim()
           if (!content) return
           const billNo = s.billNo || s._id || s.id
-          notes.push({
+          saleNotes.push({
             id: `sale-${billNo}`,
             source: "quicksale",
             content,
@@ -221,9 +197,8 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
             href: `/receipt/${encodeURIComponent(billNo)}?returnTo=${encodeURIComponent(`/clients/${clientId}`)}`,
           })
         })
-
-        notes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        setCustomerNotes(notes)
+        saleNotes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        setCustomerNotes(saleNotes)
       } catch (e) {
         console.error("Error fetching client stats:", e)
       } finally {
@@ -235,10 +210,48 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     return () => {
       cancelled = true
     }
-  }, [clientId, client.name])
+  }, [clientId])
 
-  const displayName = clientDetails?.name ?? client.name
-  const displayPhone = clientDetails?.phone ?? client.phone
+  const fetchAppointmentNotes = useCallback(async () => {
+    if (!clientId || appointmentNotesFetched.current === clientId) return
+    appointmentNotesFetched.current = clientId
+    setLoadingNotes(true)
+    try {
+      const res = await AppointmentsAPI.getAll({ clientId, limit: 200 })
+      const list = Array.isArray(res?.data) ? res.data : []
+      const aptNotes: CustomerNote[] = []
+      list.forEach((apt: any) => {
+        const content = (apt.notes || "").trim()
+        if (!content) return
+        const staffName =
+          apt.staffId?.name ||
+          apt.staffAssignments?.[0]?.staffId?.name ||
+          apt.staffAssignments?.[0]?.staffId
+        const aptId = apt._id || apt.id
+        aptNotes.push({
+          id: `apt-${aptId}`,
+          source: "appointment",
+          content,
+          createdAt: apt.createdAt || apt.date || new Date().toISOString(),
+          staffName: typeof staffName === "string" ? staffName : staffName?.name,
+          recordId: aptId,
+          href: `/appointments/new?edit=${aptId}`,
+        })
+      })
+      setCustomerNotes(prev => {
+        const merged = [...prev, ...aptNotes]
+        merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        return merged
+      })
+    } catch {
+      // keep existing sale notes
+    } finally {
+      setLoadingNotes(false)
+    }
+  }, [clientId])
+
+  const displayName = client.name
+  const displayPhone = client.phone
   const initial = (displayName?.charAt(0) || "?").toUpperCase()
   const activeMembershipPlanName = getActiveMembershipPlanName(membershipData)
 
@@ -728,7 +741,10 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         <Separator className="shrink-0" />
 
         {/* Customer Notes */}
-        <Collapsible open={customerNotesOpen} onOpenChange={setCustomerNotesOpen} className="flex flex-col min-h-0 shrink-0">
+        <Collapsible open={customerNotesOpen} onOpenChange={(open) => {
+          setCustomerNotesOpen(open)
+          if (open) fetchAppointmentNotes()
+        }} className="flex flex-col min-h-0 shrink-0">
           <CollapsibleTrigger asChild>
             <button
               type="button"
@@ -745,7 +761,13 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent className="flex flex-col min-h-0 data-[state=closed]:hidden">
-            {customerNotes.length === 0 ? (
+            {loadingNotes && (
+              <div className="flex items-center gap-2 py-2 text-xs text-slate-500">
+                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                Loading appointment notes…
+              </div>
+            )}
+            {customerNotes.length === 0 && !loadingNotes ? (
               <p className="text-xs sm:text-sm text-slate-500 shrink-0">No notes yet</p>
             ) : (
               <ul className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-0.5 sm:pr-1 max-h-40">

@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 
 interface Plan {
   id: string
@@ -54,14 +54,6 @@ export function PlanTemplateManager() {
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
-  const authHeaders = (extra: HeadersInit = {}) => {
-    const token = getAdminAuthToken()
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...extra,
-    }
-  }
-
   const [formData, setFormData] = useState({
     id: '',
     name: '',
@@ -90,7 +82,7 @@ export function PlanTemplateManager() {
     try {
       setLoading(true)
       const response = await fetch(`${API_URL}/admin/plans/config`, {
-        headers: authHeaders(),
+        headers: adminRequestHeaders(),
       })
 
       if (response.ok) {
@@ -158,7 +150,7 @@ export function PlanTemplateManager() {
     try {
       const response = await fetch(`${API_URL}/admin/plans/templates/${planId}`, {
         method: 'DELETE',
-        headers: authHeaders(),
+        headers: adminRequestHeaders(),
       })
 
       if (response.ok) {
@@ -214,7 +206,7 @@ export function PlanTemplateManager() {
       
       const response = await fetch(url, {
         method,
-        headers: authHeaders({
+        headers: adminRequestHeaders({
           'Content-Type': 'application/json',
         }),
         body: JSON.stringify({
