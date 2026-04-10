@@ -113,8 +113,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return
         }
 
-        const isPublicRoute = window.location.pathname.includes('/receipt/public/') ||
-                             window.location.pathname.includes('/public/')
+        const pathname = window.location.pathname
+        const isPublicRoute = pathname === '/login' ||
+                             pathname === '/forgot-password' ||
+                             pathname === '/reset-password' ||
+                             pathname.includes('/receipt/public/') ||
+                             pathname.includes('/public/')
         if (isPublicRoute) {
           setIsLoading(false)
           return
@@ -307,10 +311,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         keysToRemove.forEach(k => sessionStorage.removeItem(k))
       }
       
-      AuthAPI.logout().catch(() => {})
-      
-      await new Promise(resolve => setTimeout(resolve, 100))
-      
+      try {
+        await AuthAPI.logout()
+      } catch {
+        // Server may be unreachable — proceed with client-side cleanup
+      }
+
       if (typeof window !== 'undefined') {
         window.location.href = '/login'
       } else {
