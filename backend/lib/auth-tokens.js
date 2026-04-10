@@ -33,8 +33,8 @@ function isSecureCookie() {
 
 /**
  * Cross-origin credentialed XHR (SPA origin ≠ API origin) requires SameSite=None + Secure.
- * Default to 'none' in production so deployed cross-origin setups work out of the box.
- * Override with COOKIE_SAME_SITE env var for same-origin deployments.
+ * Auto-detect: if CORS_ORIGINS is set we're in a cross-origin deployment, or if NODE_ENV
+ * is production. Override with COOKIE_SAME_SITE env var for same-origin deployments.
  */
 function sameSiteValue() {
   const v = process.env.COOKIE_SAME_SITE;
@@ -42,6 +42,7 @@ function sameSiteValue() {
     const lower = v.toLowerCase();
     if (lower === 'none' || lower === 'strict' || lower === 'lax') return lower;
   }
+  if (process.env.CORS_ORIGINS) return 'none';
   return isSecureCookie() ? 'none' : 'lax';
 }
 
