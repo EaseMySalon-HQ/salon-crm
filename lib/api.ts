@@ -167,12 +167,41 @@ const apiClient: AxiosInstance = axios.create({
   },
 })
 
+/** Ensures sessionStorage has a CSRF mirror before mutating requests (cross-origin cannot read ems_csrf cookie). */
+let csrfBootstrapInFlight: Promise<void> | null = null
+
+function ensureCsrfTokenForMutatingRequest(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve()
+  if (getCsrfToken()) return Promise.resolve()
+  if (csrfBootstrapInFlight) return csrfBootstrapInFlight
+  csrfBootstrapInFlight = (async () => {
+    try {
+      await apiClient.get('/auth/csrf')
+    } catch {
+      /* ignore — caller may still 403 */
+    } finally {
+      csrfBootstrapInFlight = null
+    }
+  })()
+  return csrfBootstrapInFlight
+}
+
 // Request interceptor: attach CSRF token for mutating methods (cookies carry auth automatically)
 apiClient.interceptors.request.use(
-  (config) => {
+  async (config) => {
     if (typeof window !== 'undefined') {
       const method = (config.method || 'get').toUpperCase()
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        const url = String(config.url || '')
+        const skipCsrfBootstrap =
+          url.includes('/auth/login') ||
+          url.includes('/auth/staff-login') ||
+          url.includes('/auth/refresh') ||
+          url.includes('/auth/forgot-password') ||
+          url.includes('/auth/reset-password')
+        if (!skipCsrfBootstrap) {
+          await ensureCsrfTokenForMutatingRequest()
+        }
         const csrf = getCsrfToken()
         if (csrf) {
           config.headers[CSRF_HEADER_NAME] = csrf
@@ -196,7 +225,9 @@ apiClient.interceptors.response.use(
       data?.csrfToken &&
       typeof data.csrfToken === 'string' &&
       data.csrfToken.trim() &&
-      (url.includes('/auth/profile') || url.includes('/auth/refresh'))
+      (url.includes('/auth/profile') ||
+        url.includes('/auth/refresh') ||
+        url.includes('/auth/csrf'))
     ) {
       setCsrfTokenPersisted(data.csrfToken)
     }

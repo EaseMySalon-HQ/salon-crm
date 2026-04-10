@@ -3,7 +3,8 @@
  *
  * On cross-origin deployments (SPA origin ≠ API origin), `ems_csrf` is set on
  * the API host — `document.cookie` on the SPA cannot read it. The backend
- * returns `csrfToken` in JSON from login, GET /auth/profile, and POST /auth/refresh;
+ * returns `csrfToken` in JSON from login, GET /auth/profile, POST /auth/refresh,
+ * and GET /auth/csrf (used to bootstrap before the first mutating request if needed);
  * we persist it here so mutating requests can send `X-CSRF-Token`.
  *
  * Bearer-authenticated requests skip CSRF on the backend.

@@ -147,3 +147,101 @@ describe('Bearer token bypass', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('CSRF Origin fallback (cookie blocked on cross-origin SPA)', () => {
+  const prevCors = process.env.CORS_ORIGINS;
+
+  afterEach(() => {
+    if (prevCors === undefined) delete process.env.CORS_ORIGINS;
+    else process.env.CORS_ORIGINS = prevCors;
+  });
+
+  it('allows PUT without ems_csrf cookie when Origin matches CORS_ORIGINS and header is 64+ chars', async () => {
+    jest.resetModules();
+    process.env.CSRF_ENABLED = '1';
+    process.env.CORS_ORIGINS = 'https://salon-crm-staging.up.railway.app';
+    const { csrfProtection } = require('../../middleware/csrf');
+
+    const app = express();
+    app.use(cookieParser());
+    app.use(express.json());
+    app.use(csrfProtection);
+    app.put('/api/settings/payment', (req, res) => res.json({ ok: true }));
+
+    const token = 'a'.repeat(64);
+    const res = await request(app)
+      .put('/api/settings/payment')
+      .set('Origin', 'https://salon-crm-staging.up.railway.app')
+      .set('X-CSRF-Token', token)
+      .send({});
+
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects Origin fallback when Origin is not in CORS_ORIGINS', async () => {
+    jest.resetModules();
+    process.env.CSRF_ENABLED = '1';
+    process.env.CORS_ORIGINS = 'https://salon-crm-staging.up.railway.app';
+    const { csrfProtection } = require('../../middleware/csrf');
+
+    const app = express();
+    app.use(cookieParser());
+    app.use(express.json());
+    app.use(csrfProtection);
+    app.put('/api/test/update', (req, res) => res.json({ ok: true }));
+
+    const token = 'b'.repeat(64);
+    const res = await request(app)
+      .put('/api/test/update')
+      .set('Origin', 'https://evil.example.com')
+      .set('X-CSRF-Token', token)
+      .send({});
+
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects Origin fallback when header is too short', async () => {
+    jest.resetModules();
+    process.env.CSRF_ENABLED = '1';
+    process.env.CORS_ORIGINS = 'http://localhost:3000';
+    const { csrfProtection } = require('../../middleware/csrf');
+
+    const app = express();
+    app.use(cookieParser());
+    app.use(express.json());
+    app.use(csrfProtection);
+    app.put('/api/test/update', (req, res) => res.json({ ok: true }));
+
+    const res = await request(app)
+      .put('/api/test/update')
+      .set('Origin', 'http://localhost:3000')
+      .set('X-CSRF-Token', 'short')
+      .send({});
+
+    expect(res.status).toBe(403);
+  });
+
+  it('allows stale cookie mismatch when Origin matches and header is 64+ chars (SPA sessionStorage vs old cookie)', async () => {
+    jest.resetModules();
+    process.env.CSRF_ENABLED = '1';
+    process.env.CORS_ORIGINS = 'https://salon-crm-staging.up.railway.app';
+    const { csrfProtection } = require('../../middleware/csrf');
+
+    const app = express();
+    app.use(cookieParser());
+    app.use(express.json());
+    app.use(csrfProtection);
+    app.put('/api/email-notifications/settings', (req, res) => res.json({ ok: true }));
+
+    const oldCookie = '0'.repeat(64);
+    const newHeader = '1'.repeat(64);
+    const res = await request(app)
+      .put('/api/email-notifications/settings')
+      .set('Cookie', `ems_csrf=${oldCookie}`)
+      .set('Origin', 'https://salon-crm-staging.up.railway.app')
+      .set('X-CSRF-Token', newHeader)
+      .send({});
+
+    expect(res.status).toBe(200);
+  });
+});

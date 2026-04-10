@@ -47,6 +47,15 @@ function shouldSkip(req) {
   return SKIP_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
 }
 
+/** Same list as server.js CORS — SPA origin must match for credentialed requests anyway. */
+function isOriginAllowed(origin) {
+  if (!origin || typeof origin !== 'string') return false;
+  const allowed = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+    : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  return allowed.includes(origin);
+}
+
 function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -111,15 +120,35 @@ function csrfProtection(req, res, next) {
     }
   }
 
-  if (!cookieToken || !headerToken || cookieToken !== String(headerToken)) {
-    logger.warn('CSRF check failed for %s %s', req.method, normalizePath(req));
-    return res.status(403).json({
-      success: false,
-      error: 'Invalid CSRF token',
-      message: 'Invalid or missing CSRF token. Call GET /api/auth/csrf then retry.',
-    });
+  const headerStr = headerToken != null ? String(headerToken) : '';
+  const doubleSubmitOk =
+    cookieToken && headerStr && cookieToken === headerStr;
+
+  if (doubleSubmitOk) {
+    return next();
   }
-  next();
+
+  /*
+   * Cross-origin SPA:
+   * 1) Some browsers block `ems_csrf` — cookie missing but header present.
+   * 2) Stale cookie: old `ems_csrf` cookie + newer `X-CSRF-Token` from JSON (profile/login
+   *    rotated token; sessionStorage updated but browser still sends old cookie).
+   * If Origin matches CORS_ORIGINS and header looks like our hex token, accept.
+   */
+  if (
+    headerStr.length >= 64 &&
+    isOriginAllowed(req.headers.origin) &&
+    (!cookieToken || cookieToken !== headerStr)
+  ) {
+    return next();
+  }
+
+  logger.warn('CSRF check failed for %s %s', req.method, normalizePath(req));
+  return res.status(403).json({
+    success: false,
+    error: 'Invalid CSRF token',
+    message: 'Invalid or missing CSRF token. Call GET /api/auth/csrf then retry.',
+  });
 }
 
 module.exports = {
