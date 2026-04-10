@@ -71,6 +71,11 @@ import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
 import { computePackageLineTotal } from "@/lib/package-tax"
 import { useRouter } from "next/navigation"
 import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
+import {
+  decodeQuickSaleAppointmentParam,
+  extractAppointmentIdsFromPayload,
+  resolveAppointmentIdsToComplete,
+} from "@/lib/quick-sale-helpers"
 
 // Mock data for customers
 // const mockCustomers = [
@@ -302,6 +307,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const router = useRouter()
   const searchParams = useSearchParams()
   const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
+  const [linkedAppointmentIds, setLinkedAppointmentIds] = useState<string[]>([])
   const [linkedAppointmentTime, setLinkedAppointmentTime] = useState<string | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
@@ -995,13 +1001,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
     const prefillAppointmentData = async () => {
       try {
-        // Decode the base64 appointment data
-        const appointmentData = JSON.parse(atob(appointmentParam))
-        console.log('Pre-filling from appointment:', appointmentData)
+        const rawAppointment = decodeQuickSaleAppointmentParam(appointmentParam)
+        if (!rawAppointment) return
+        console.log('Pre-filling from appointment:', rawAppointment)
 
-        if (appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id) {
-          setLinkedAppointmentId(appointmentData.appointmentId || appointmentData.appointmentID || appointmentData.id)
-        }
+        const { primaryId, linkedIds } = extractAppointmentIdsFromPayload(rawAppointment)
+        if (primaryId) setLinkedAppointmentId(primaryId)
+        if (linkedIds.length > 0) setLinkedAppointmentIds(linkedIds)
+
+        const appointmentData = rawAppointment as any
         if (appointmentData.time) {
           setLinkedAppointmentTime(appointmentData.time)
         }
@@ -3654,7 +3662,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               onlineAmount,
               totalPaid
             })
-            console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
             result = await SalesAPI.update(saleId!, {
               ...saleData,
               editReason: effectiveReason,
@@ -3667,7 +3674,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           } else if (mode === "exchange") {
             // Exchange products
             console.log('🚀 About to call SalesAPI.exchangeProducts with data:', saleData)
-            console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
             result = await SalesAPI.exchangeProducts(saleId!, {
               updatedItems: saleData.items,
               netTotal: saleData.netTotal,
@@ -3682,7 +3688,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           } else {
             // Create new sale
             console.log('🚀 About to call SalesAPI.create with data:', saleData)
-            console.log('🔐 Current auth token:', localStorage.getItem('salon-auth-token') ? 'Present' : 'Missing')
             result = await SalesAPI.create(saleData)
             console.log('📊 SalesAPI.create response:', result)
           }
@@ -3740,14 +3745,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               console.warn('⚠️ No WhatsApp status in response')
             }
             
-            // Mark linked appointment (and all in same booking group) as completed if fully paid
+            // Mark all linked appointments as completed if fully paid
             if (linkedAppointmentId && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
               try {
-                await AppointmentsAPI.update(linkedAppointmentId, { status: "completed" })
+                const idsToComplete = resolveAppointmentIdsToComplete(linkedAppointmentIds, linkedAppointmentId)
+                await Promise.all(idsToComplete.map(id => AppointmentsAPI.update(id, { status: "completed" })))
                 window.dispatchEvent(new CustomEvent("appointments-refresh"))
                 toast({
                   title: "Appointment Completed",
-                  description: "This appointment has been marked as completed.",
+                  description: idsToComplete.length > 1
+                    ? `All ${idsToComplete.length} linked appointments have been marked as completed.`
+                    : "This appointment has been marked as completed.",
                 })
               } catch (error) {
                 console.error("Failed to update appointment status:", error)

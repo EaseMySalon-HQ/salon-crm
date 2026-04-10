@@ -124,6 +124,11 @@ const appointmentSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  /** Timestamp when WhatsApp reminder was sent — used to prevent duplicate sends */
+  reminderSentAt: {
+    type: Date,
+    default: null
+  },
   /** Dedupes concurrent bookings for same staff + exact window (see pre-save). Omitted when not applicable (do not set null — unique index). */
   slotKey: {
     type: String,

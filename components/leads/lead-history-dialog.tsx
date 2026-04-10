@@ -107,6 +107,8 @@ interface Activity {
   previousValue?: any
   newValue?: any
   field?: string
+  /** Per-event note text for "Add Status" (backend); avoids wrong notes from time-window grouping. */
+  details?: { statusNoteSnapshot?: string }
 }
 
 export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: LeadHistoryDialogProps) {
@@ -126,6 +128,16 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
     },
   })
 
+  /** Oldest first; tie-break by _id so status_changed always sorts before notes_updated when created in the same ms. */
+  function sortActivitiesOldestFirst<T extends { createdAt: string; _id?: string }>(acts: T[]): T[] {
+    return [...acts].sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime()
+      const tb = new Date(b.createdAt).getTime()
+      if (ta !== tb) return ta - tb
+      return String(a._id ?? "").localeCompare(String(b._id ?? ""))
+    })
+  }
+
   const fetchActivities = async (leadId: string, leadData?: any) => {
     try {
       setIsLoadingActivities(true)
@@ -138,8 +150,9 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
         // If activities exist, use them
         if (response.data.length > 0) {
           console.log('Found activities:', response.data.length)
-          // Reverse to get oldest first (for proper grouping)
-          const reversedActivities = [...response.data].reverse()
+          // Oldest first — do not rely on .reverse() alone: equal timestamps can reorder
+          // notes_updated before status_changed, which breaks grouping and hides notes on the status card.
+          const reversedActivities = sortActivitiesOldestFirst(response.data as Activity[])
           console.log('Activities for grouping:', JSON.stringify(reversedActivities.map(a => ({
             id: a._id,
             type: a.activityType,
@@ -169,15 +182,15 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
                 phone: leadForFallback.phone,
                 source: leadForFallback.source,
                 status: 'new', // Always "new" for initial creation, regardless of current status
-                notes: leadForFallback.notes || null
-              }
+                // Do not use lead.notes here — it is only the latest value and would mirror the newest status.
+                notes: null,
+              },
             }
-            // Insert synthetic activity at the beginning (oldest)
-            reversedActivities.unshift(syntheticActivity)
+            reversedActivities.push(syntheticActivity)
             console.log('Added synthetic created activity with status: new')
           }
-          
-          setActivities(reversedActivities)
+
+          setActivities(sortActivitiesOldestFirst(reversedActivities))
         } else {
           console.log('No activities found, creating synthetic activity')
           // No activities in database, create synthetic "created" activity if lead has createdAt
@@ -193,8 +206,8 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
                 phone: leadForFallback.phone,
                 source: leadForFallback.source,
                 status: leadForFallback.status,
-                notes: leadForFallback.notes || null
-              }
+                notes: null,
+              },
             }
             setActivities([syntheticActivity])
           } else {
@@ -216,8 +229,8 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
               phone: leadForFallback.phone,
               source: leadForFallback.source,
               status: leadForFallback.status,
-              notes: leadForFallback.notes || null
-            }
+              notes: null,
+            },
           }
           setActivities([syntheticActivity])
         } else {
@@ -240,8 +253,8 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
             phone: leadForFallback.phone,
             source: leadForFallback.source,
             status: leadForFallback.status,
-            notes: leadForFallback.notes || null
-          }
+            notes: null,
+          },
         }
         setActivities([syntheticActivity])
       } else {
@@ -328,7 +341,7 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
         
         // Refresh activities after status update
         console.log('Refreshing activities after adding new status...')
-        await fetchActivities(leadId, updatedResponse.data)
+        await fetchActivities(leadId, updatedResponse?.data)
         console.log('Activities refreshed, new card should appear')
         
         toast({
@@ -663,6 +676,22 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
                           if (activity.newValue) {
                             status = String(activity.newValue)
                           }
+
+                          // Prefer note snapshot on this activity (backend). If the key exists, do not
+                          // fall back to time-window grouping — avoids showing the wrong row's note.
+                          const hasNoteSnapshot =
+                            activity.details != null &&
+                            Object.prototype.hasOwnProperty.call(
+                              activity.details,
+                              'statusNoteSnapshot'
+                            )
+                          if (hasNoteSnapshot) {
+                            const snap = activity.details!.statusNoteSnapshot
+                            notes =
+                              typeof snap === 'string' && snap.trim().length > 0
+                                ? snap.trim()
+                                : null
+                          }
                           
                           // Find all related activities (notes_updated, follow_up) within 5 seconds
                           // Check both forward and backward to handle any ordering issues
@@ -748,8 +777,12 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
                               }
                             }
                             
-                            // Extract notes (take the first valid one found)
-                            if (!notes && nearbyActivity.activityType === 'notes_updated') {
+                            // Legacy: attach nearby notes_updated only when this activity has no snapshot field
+                            if (
+                              !hasNoteSnapshot &&
+                              !notes &&
+                              nearbyActivity.activityType === 'notes_updated'
+                            ) {
                               console.log(`    Checking notes_updated at index ${i}, newValue:`, nearbyActivity.newValue)
                               if (nearbyActivity.newValue !== undefined && nearbyActivity.newValue !== null) {
                                 const notesValue = String(nearbyActivity.newValue).trim()

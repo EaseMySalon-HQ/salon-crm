@@ -30,6 +30,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 
+/** WhatsApp template types that support Business Settings → Google Maps link on buttons */
+const APPOINTMENT_WHATSAPP_TEMPLATE_TYPES = [
+  'appointmentScheduling',
+  'appointmentConfirmation',
+  'appointmentCancellation',
+  'appointmentReminder',
+  'appointmentReschedule',
+] as const
+
 interface WhatsAppAdminSettingsProps {
   settings?: any
   onSettingsChange: (settings: any) => void
@@ -54,9 +63,12 @@ interface WhatsAppSettingsState {
   templateVariables: Record<string, Record<string, string>>
   templateJavaScriptCodes: Record<string, string>
   msg91TemplateId?: string
-  receiptNotifications?: boolean
-  appointmentNotifications?: boolean
-  systemAlerts?: boolean
+  /** Legacy admin saves used bare booleans; API now returns nested { enabled, ... } */
+  receiptNotifications?: boolean | { enabled?: boolean; autoSendToClients?: boolean; highValueThreshold?: number }
+  appointmentNotifications?:
+    | boolean
+    | { enabled?: boolean; confirmations?: boolean; newAppointments?: boolean; reminders?: boolean; cancellations?: boolean }
+  systemAlerts?: boolean | { enabled?: boolean; lowInventory?: boolean; paymentFailures?: boolean }
   quietHours?: { enabled: boolean; start: string; end: string }
   [key: string]: unknown
 }
@@ -89,15 +101,22 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
       appointmentConfirmation: "",
       appointmentCancellation: "",
       appointmentReminder: "",
+      appointmentReschedule: "",
       default: ""
     },
     templateVariables: {}, // Will be auto-populated when JavaScript code is parsed from approved MSG91 templates
     templateJavaScriptCodes: {}, // Store JavaScript code for each template
     // Legacy: Keep for backward compatibility
     msg91TemplateId: "",
-    receiptNotifications: true,
-    appointmentNotifications: true,
-    systemAlerts: false,
+    receiptNotifications: { enabled: true, autoSendToClients: true, highValueThreshold: 0 },
+    appointmentNotifications: {
+      enabled: true,
+      confirmations: true,
+      newAppointments: true,
+      reminders: false,
+      cancellations: false,
+    },
+    systemAlerts: { enabled: false, lowInventory: false, paymentFailures: false },
     quietHours: {
       enabled: false,
       start: "22:00",
@@ -484,10 +503,11 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
       businessAccountCreated: ['businessName', 'businessCode', 'adminName', 'loginUrl'],
       receipt: ['clientName', 'businessName', 'receiptLink'],
       receiptCancellation: ['clientName', 'receiptNumber', 'businessName', 'cancellationReason'],
-      appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName'],
-      appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone'],
-      appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason'],
-      appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours'],
+      appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'googleMapsUrl'],
+      appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
+      appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason', 'googleMapsUrl'],
+      appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours', 'googleMapsUrl'],
+      appointmentReschedule: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
     }
 
     // Create variable mapping
@@ -502,9 +522,11 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
           const bodyIndex = parseInt(varName.replace('body_', '')) - 1;
           newMapping[varName] = defaultFieldList[bodyIndex] || `variable_${bodyIndex + 1}`;
         } else if (varName.startsWith('button_')) {
-          // Map button variables - for receipts, button_1 should be receiptLink
+          // Map button variables - receipts use receiptLink; appointment templates use salon Google Maps link
           if (templateType === 'receipt') {
             newMapping[varName] = 'receiptLink';
+          } else if ((APPOINTMENT_WHATSAPP_TEMPLATE_TYPES as readonly string[]).includes(templateType)) {
+            newMapping[varName] = 'googleMapsUrl';
           } else {
             newMapping[varName] = `button_${varName.replace('button_', '')}`;
           }
@@ -575,10 +597,11 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
           businessAccountCreated: ['businessName', 'businessCode', 'adminName', 'loginUrl'],
           receipt: ['clientName', 'businessName', 'receiptLink'],
           receiptCancellation: ['clientName', 'receiptNumber', 'businessName', 'cancellationReason'],
-          appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName'],
-          appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone'],
-          appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason'],
-          appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours'],
+          appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'googleMapsUrl'],
+          appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
+          appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason', 'googleMapsUrl'],
+          appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours', 'googleMapsUrl'],
+          appointmentReschedule: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
         }
 
         // Create variable mapping
@@ -593,9 +616,11 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
               const bodyIndex = parseInt(varName.replace('body_', '')) - 1;
               newMapping[varName] = defaultFieldList[bodyIndex] || `variable_${bodyIndex + 1}`;
             } else if (varName.startsWith('button_')) {
-              // Map button variables - for receipts, button_1 should be receiptLink
+              // Map button variables - receipts use receiptLink; appointment templates use Google Maps link
               if (editingTemplate === 'receipt') {
                 newMapping[varName] = 'receiptLink';
+              } else if ((APPOINTMENT_WHATSAPP_TEMPLATE_TYPES as readonly string[]).includes(editingTemplate)) {
+                newMapping[varName] = 'googleMapsUrl';
               } else {
                 newMapping[varName] = `button_${varName.replace('button_', '')}`;
               }
@@ -1015,6 +1040,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                                           <SelectItem value="businessCode">Business Code</SelectItem>
                                           <SelectItem value="receiptNumber">Receipt Number</SelectItem>
                                           <SelectItem value="receiptLink">Receipt Link</SelectItem>
+                                          <SelectItem value="googleMapsUrl">Google Maps Link</SelectItem>
                                           <SelectItem value="serviceName">Service Name</SelectItem>
                                           <SelectItem value="date">Date</SelectItem>
                                           <SelectItem value="time">Time</SelectItem>
@@ -1104,6 +1130,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                       <SelectItem value="appointmentConfirmation">Appointment Confirmation</SelectItem>
                       <SelectItem value="appointmentCancellation">Appointment Cancellation</SelectItem>
                       <SelectItem value="appointmentReminder">Appointment Reminder</SelectItem>
+                      <SelectItem value="appointmentReschedule">Appointment Reschedule</SelectItem>
                     </SelectContent>
                   </Select>
                   <Input
@@ -1152,8 +1179,18 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
               </p>
             </div>
             <Switch
-              checked={settings.receiptNotifications}
-              onCheckedChange={(checked) => handleSettingChange('receiptNotifications', checked)}
+              checked={
+                typeof settings.receiptNotifications === 'boolean'
+                  ? settings.receiptNotifications
+                  : (settings.receiptNotifications?.enabled ?? false)
+              }
+              onCheckedChange={(checked) => {
+                const prev =
+                  typeof settings.receiptNotifications === 'object' && settings.receiptNotifications !== null
+                    ? settings.receiptNotifications
+                    : { autoSendToClients: true as boolean, highValueThreshold: 0 };
+                handleSettingChange('receiptNotifications', { ...prev, enabled: checked });
+              }}
             />
           </div>
 
@@ -1165,8 +1202,25 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
               </p>
             </div>
             <Switch
-              checked={settings.appointmentNotifications}
-              onCheckedChange={(checked) => handleSettingChange('appointmentNotifications', checked)}
+              checked={
+                typeof settings.appointmentNotifications === 'boolean'
+                  ? settings.appointmentNotifications
+                  : (settings.appointmentNotifications?.enabled ?? false)
+              }
+              onCheckedChange={(checked) => {
+                const prev =
+                  typeof settings.appointmentNotifications === 'object' &&
+                  settings.appointmentNotifications !== null
+                    ? settings.appointmentNotifications
+                    : { reminders: false, cancellations: false };
+                handleSettingChange('appointmentNotifications', {
+                  ...prev,
+                  enabled: checked,
+                  ...(checked
+                    ? { confirmations: true, newAppointments: true }
+                    : { confirmations: false, newAppointments: false }),
+                });
+              }}
             />
           </div>
 
@@ -1178,8 +1232,18 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
               </p>
             </div>
             <Switch
-              checked={settings.systemAlerts}
-              onCheckedChange={(checked) => handleSettingChange('systemAlerts', checked)}
+              checked={
+                typeof settings.systemAlerts === 'boolean'
+                  ? settings.systemAlerts
+                  : (settings.systemAlerts?.enabled ?? false)
+              }
+              onCheckedChange={(checked) => {
+                const prev =
+                  typeof settings.systemAlerts === 'object' && settings.systemAlerts !== null
+                    ? settings.systemAlerts
+                    : { lowInventory: false, paymentFailures: false };
+                handleSettingChange('systemAlerts', { ...prev, enabled: checked });
+              }}
             />
           </div>
 
@@ -1286,8 +1350,12 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
         </CardContent>
       </Card>
 
-      {/* Edit Template Modal */}
-      <Dialog open={!!editingTemplate} onOpenChange={(open) => !open && setEditingTemplate(null)}>
+      {/* Edit Template Modal — key remounts dialog when template changes (avoids Radix Dialog hook order issues with React 19) */}
+      <Dialog
+        key={editingTemplate ?? "closed"}
+        open={!!editingTemplate}
+        onOpenChange={(open) => !open && setEditingTemplate(null)}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
@@ -1364,10 +1432,11 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                         businessAccountCreated: ['businessName', 'businessCode', 'adminName', 'loginUrl'],
                         receipt: ['clientName', 'businessName', 'receiptLink'],
                         receiptCancellation: ['clientName', 'receiptNumber', 'businessName', 'cancellationReason'],
-                        appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName'],
-                        appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone'],
-                        appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason'],
-                        appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours'],
+                        appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'googleMapsUrl'],
+                        appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
+                        appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason', 'googleMapsUrl'],
+                        appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours', 'googleMapsUrl'],
+                        appointmentReschedule: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
                       }
 
                       // Create variable mapping
@@ -1382,9 +1451,11 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                             const bodyIndex = parseInt(varName.replace('body_', '')) - 1;
                             newMapping[varName] = defaultFieldList[bodyIndex] || `variable_${bodyIndex + 1}`;
                           } else if (varName.startsWith('button_')) {
-                            // Map button variables - for receipts, button_1 should be receiptLink
+                            // Map button variables - receipts use receiptLink; appointment templates use Google Maps link
                             if (editingTemplate === 'receipt') {
                               newMapping[varName] = 'receiptLink';
+                            } else if ((APPOINTMENT_WHATSAPP_TEMPLATE_TYPES as readonly string[]).includes(editingTemplate)) {
+                              newMapping[varName] = 'googleMapsUrl';
                             } else {
                               newMapping[varName] = `button_${varName.replace('button_', '')}`;
                             }

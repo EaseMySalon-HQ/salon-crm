@@ -1,41 +1,32 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
+import { getCsrfToken, CSRF_HEADER_NAME } from './csrf'
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
-/** Plain axios for refresh — must not use apiClient interceptors (avoids loops). */
-let refreshInFlight: Promise<string | null> | null = null
+/**
+ * Refresh auth session using HttpOnly cookie. New tokens are set as cookies
+ * by the server — no token is returned in the JSON body.
+ */
+let refreshInFlight: Promise<boolean> | null = null
 
-async function refreshAuthTokenOnce(): Promise<string | null> {
-  if (typeof window === 'undefined') return null
+async function refreshAuthTokenOnce(): Promise<boolean> {
+  if (typeof window === 'undefined') return false
   if (refreshInFlight) return refreshInFlight
   refreshInFlight = (async () => {
     try {
-      const token = localStorage.getItem('salon-auth-token')
-      if (!token) return null
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (token) headers.Authorization = `Bearer ${token}`
-      const res = await axios.post<{ success?: boolean; data?: { token?: string } }>(
+      const res = await axios.post<{ success?: boolean }>(
         `${API_BASE_URL}/auth/refresh`,
         {},
-        {
-          headers,
-          withCredentials: true,
-          timeout: 25000,
-        }
+        { withCredentials: true, timeout: 25000 }
       )
-      const newToken = res.data?.data?.token
-      if (newToken && typeof newToken === 'string') {
-        localStorage.setItem('salon-auth-token', newToken)
-        return newToken
-      }
+      return res.data?.success === true
     } catch {
-      /* refresh failed — caller will fall through to logout or surface error */
+      return false
     } finally {
       refreshInFlight = null
     }
-    return null
   })()
   return refreshInFlight
 }
@@ -121,7 +112,11 @@ function logApiResponseError(error: AxiosError | any) {
       errorInfo.code = String(error?.code || 'SETUP_ERROR')
     }
 
-    if (errorInfo.status === 404) {
+    const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
+    const isAuthProbe = errorInfo.status === 401 && errorInfo.url?.includes('/auth/profile')
+    if (isLoginPage && isAuthProbe) {
+      // Silent: expected 401 when probing for existing session on the login page
+    } else if (errorInfo.status === 404) {
       if (errorInfo.url && errorInfo.url !== 'Unknown URL') {
         console.warn(`⚠️ API 404: ${errorInfo.method} ${errorInfo.url} - ${errorInfo.message || 'Not Found'}`)
       }
@@ -168,13 +163,16 @@ const apiClient: AxiosInstance = axios.create({
   },
 })
 
-// Request interceptor to add auth token (Bearer skip on backend makes CSRF unnecessary for apiClient)
+// Request interceptor: attach CSRF token for mutating methods (cookies carry auth automatically)
 apiClient.interceptors.request.use(
   (config) => {
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('salon-auth-token')
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`
+      const method = (config.method || 'get').toUpperCase()
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        const csrf = getCsrfToken()
+        if (csrf) {
+          config.headers[CSRF_HEADER_NAME] = csrf
+        }
       }
     }
     return config
@@ -221,10 +219,8 @@ apiClient.interceptors.response.use(
         url.includes('/auth/staff-login')
       if (!skipRefresh && isTokenAuthFailure(status, errorMsg)) {
         config.__retryAfterRefresh = true
-        const newToken = await refreshAuthTokenOnce()
-        if (newToken) {
-          config.headers = config.headers || {}
-          config.headers.Authorization = `Bearer ${newToken}`
+        const refreshed = await refreshAuthTokenOnce()
+        if (refreshed) {
           return apiClient(config)
         }
       }
@@ -304,7 +300,7 @@ export interface PaginatedResponse<T> extends ApiResponse<T[]> {
 
 // API Service Classes
 export class AuthAPI {
-  static async login(email: string, password: string): Promise<ApiResponse<{ user: any; token: string; csrfToken?: string }>> {
+  static async login(email: string, password: string): Promise<ApiResponse<{ user: any; csrfToken?: string }>> {
     const response = await apiClient.post('/auth/login', { email, password })
     return response.data
   }
@@ -319,7 +315,7 @@ export class AuthAPI {
     return response.data
   }
 
-  static async refreshToken(): Promise<ApiResponse<{ token: string }>> {
+  static async refreshToken(): Promise<ApiResponse> {
     const response = await apiClient.post('/auth/refresh')
     return response.data
   }
@@ -339,7 +335,7 @@ export class AuthAPI {
     return response.data
   }
 
-  static async staffLogin(email: string, password: string, businessCode: string): Promise<ApiResponse<{ user: any; token: string; csrfToken?: string }>> {
+  static async staffLogin(email: string, password: string, businessCode: string): Promise<ApiResponse<{ user: any; csrfToken?: string }>> {
     const response = await apiClient.post('/auth/staff-login', { email, password, businessCode })
     return response.data
   }

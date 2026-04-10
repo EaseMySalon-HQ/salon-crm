@@ -136,6 +136,11 @@ class WhatsAppService {
     if (!cleaned.startsWith('91') && cleaned.length === 10) {
       cleaned = '91' + cleaned;
     }
+
+    // Duplicate country code: 9191XXXXXXXXXX → 91XXXXXXXXXX
+    if (cleaned.startsWith('9191') && cleaned.length === 13) {
+      cleaned = cleaned.slice(2);
+    }
     
     // Validate length (should be 12 digits: 91 + 10 digits)
     if (cleaned.length !== 12) {
@@ -597,6 +602,71 @@ class WhatsAppService {
     return receiptLink;
   }
 
+  /**
+   * Normalize Google Maps short link input (full URL or slug only) to a canonical https URL.
+   * Slug example: rwY2PmLdcE4TNo8w9 -> https://maps.app.goo.gl/rwY2PmLdcE4TNo8w9
+   */
+  normalizeGoogleMapsUrl(input) {
+    if (input == null || input === '') return '';
+    const t = String(input).trim();
+    if (!t) return '';
+    if (!t.includes('://') && /^[a-zA-Z0-9_-]+$/.test(t)) {
+      return `https://maps.app.goo.gl/${t}`;
+    }
+    try {
+      const u = new URL(t.startsWith('http') ? t : `https://${t}`);
+      if (/maps\.app\.goo\.gl$/i.test(u.hostname)) {
+        const seg = u.pathname.replace(/^\//, '').split('/')[0];
+        return seg ? `https://maps.app.goo.gl/${seg}` : t;
+      }
+      return u.toString();
+    } catch {
+      return t;
+    }
+  }
+
+  /**
+   * When the MSG91 template URL already includes https://maps.app.goo.gl/, pass only the path segment (slug).
+   */
+  extractGoogleMapsSlug(mapsUrl) {
+    if (!mapsUrl) return '';
+    const m = String(mapsUrl).match(/maps\.app\.goo\.gl\/([^/?#]+)/i);
+    if (m && m[1]) return m[1];
+    return String(mapsUrl);
+  }
+
+  /**
+   * @returns {{ processedBody: string, processedButton: string }}
+   */
+  prepareGoogleMapsTemplateParts(rawMapsUrl) {
+    const templateIncludesGoogleMapsBaseUrl = this.config?.templateIncludesGoogleMapsBaseUrl !== false;
+    const normalizedFull = this.normalizeGoogleMapsUrl(rawMapsUrl);
+    if (!normalizedFull) {
+      return { processedBody: '', processedButton: '' };
+    }
+    if (templateIncludesGoogleMapsBaseUrl) {
+      const slug = this.extractGoogleMapsSlug(normalizedFull);
+      return { processedBody: slug, processedButton: slug };
+    }
+    return { processedBody: normalizedFull, processedButton: normalizedFull };
+  }
+
+  /**
+   * After mapDataToTemplateVariables, ensure button/body slots mapped to googleMapsUrl get path vs full URL correctly.
+   */
+  applyGoogleMapsVariableOverrides(templateType, variables, processedBody, processedButton) {
+    const variableMapping = this.getTemplateVariableMapping(templateType);
+    if (Object.keys(variableMapping).length === 0) return;
+    Object.keys(variableMapping).forEach((varName) => {
+      if (variableMapping[varName] !== 'googleMapsUrl') return;
+      if (varName.startsWith('button_')) {
+        variables[varName] = processedButton;
+      } else if (varName.startsWith('body_')) {
+        variables[varName] = processedBody;
+      }
+    });
+  }
+
   async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink }) {
     logger.debug('📱 [sendReceipt] Starting receipt send:', {
       to,
@@ -714,15 +784,20 @@ class WhatsAppService {
    * Send appointment scheduling via WhatsApp
    */
   async sendAppointmentScheduling({ to, clientName, appointmentData }) {
+    const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
+      appointmentData?.googleMapsUrl
+    );
     const data = {
       clientName: clientName || 'Customer',
       serviceName: appointmentData?.serviceName || 'Service',
       date: appointmentData?.date || '',
       time: appointmentData?.time || '',
-      businessName: appointmentData?.businessName || ''
+      businessName: appointmentData?.businessName || '',
+      googleMapsUrl: gmapsBody
     };
     
     const variables = this.mapDataToTemplateVariables('appointmentScheduling', data);
+    this.applyGoogleMapsVariableOverrides('appointmentScheduling', variables, gmapsBody, gmapsBtn);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -743,6 +818,9 @@ class WhatsAppService {
    * Send appointment confirmation via WhatsApp
    */
   async sendAppointmentConfirmation({ to, clientName, appointmentData }) {
+    const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
+      appointmentData?.googleMapsUrl
+    );
     const data = {
       clientName: clientName || 'Customer',
       serviceName: appointmentData?.serviceName || 'Service',
@@ -750,10 +828,12 @@ class WhatsAppService {
       time: appointmentData?.time || '',
       staffName: appointmentData?.staffName || 'Not assigned',
       businessName: appointmentData?.businessName || '',
-      businessPhone: appointmentData?.businessPhone || ''
+      businessPhone: appointmentData?.businessPhone || '',
+      googleMapsUrl: gmapsBody
     };
     
     const variables = this.mapDataToTemplateVariables('appointmentConfirmation', data);
+    this.applyGoogleMapsVariableOverrides('appointmentConfirmation', variables, gmapsBody, gmapsBtn);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -765,9 +845,15 @@ class WhatsAppService {
       variables.body_7 = data.businessPhone;
     }
 
+    const templateId = this.getTemplateId('appointmentConfirmation');
+    if (!templateId || !String(templateId).trim()) {
+      logger.error('📱 [WhatsApp] appointmentConfirmation: no template ID in admin settings (templates.appointmentConfirmation or templates.default)');
+      return { success: false, error: 'Appointment confirmation template ID is not configured in Admin → Notifications → WhatsApp' };
+    }
+
     return await this.sendMessage({
       to,
-      templateId: this.getTemplateId('appointmentConfirmation'),
+      templateId,
       variables
     });
   }
@@ -776,16 +862,21 @@ class WhatsAppService {
    * Send appointment cancellation via WhatsApp
    */
   async sendAppointmentCancellation({ to, clientName, appointmentData, cancellationReason }) {
+    const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
+      appointmentData?.googleMapsUrl
+    );
     const data = {
       clientName: clientName || 'Customer',
       serviceName: appointmentData?.serviceName || 'Service',
       date: appointmentData?.date || '',
       time: appointmentData?.time || '',
       businessName: appointmentData?.businessName || '',
-      cancellationReason: cancellationReason || 'Cancelled'
+      cancellationReason: cancellationReason || 'Cancelled',
+      googleMapsUrl: gmapsBody
     };
     
     const variables = this.mapDataToTemplateVariables('appointmentCancellation', data);
+    this.applyGoogleMapsVariableOverrides('appointmentCancellation', variables, gmapsBody, gmapsBtn);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -804,9 +895,52 @@ class WhatsAppService {
   }
 
   /**
+   * Send appointment reschedule notification via WhatsApp
+   */
+  async sendAppointmentReschedule({ to, clientName, appointmentData }) {
+    const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
+      appointmentData?.googleMapsUrl
+    );
+    const data = {
+      clientName: clientName || 'Customer',
+      serviceName: appointmentData?.serviceName || 'Service',
+      date: appointmentData?.date || '',
+      time: appointmentData?.time || '',
+      staffName: appointmentData?.staffName || 'Not assigned',
+      businessName: appointmentData?.businessName || '',
+      businessPhone: appointmentData?.businessPhone || '',
+      googleMapsUrl: gmapsBody
+    };
+
+    const variables = this.mapDataToTemplateVariables('appointmentReschedule', data);
+    this.applyGoogleMapsVariableOverrides('appointmentReschedule', variables, gmapsBody, gmapsBtn);
+
+    if (Object.keys(variables).length === 0) {
+      variables.body_1 = data.clientName;
+      variables.body_2 = data.serviceName;
+      variables.body_3 = data.date;
+      variables.body_4 = data.time;
+      variables.body_5 = data.staffName;
+      variables.body_6 = data.businessName;
+      variables.body_7 = data.businessPhone;
+    }
+
+    const templateId = this.getTemplateId('appointmentReschedule');
+    if (!templateId || !String(templateId).trim()) {
+      logger.error('📱 [WhatsApp] appointmentReschedule: no template ID configured');
+      return { success: false, error: 'Appointment reschedule template ID is not configured in Admin → Notifications → WhatsApp' };
+    }
+
+    return await this.sendMessage({ to, templateId, variables });
+  }
+
+  /**
    * Send appointment reminder via WhatsApp
    */
   async sendAppointmentReminder({ to, clientName, appointmentData, reminderHours }) {
+    const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
+      appointmentData?.googleMapsUrl
+    );
     const data = {
       clientName: clientName || 'Customer',
       serviceName: appointmentData?.serviceName || 'Service',
@@ -814,10 +948,12 @@ class WhatsAppService {
       time: appointmentData?.time || '',
       businessName: appointmentData?.businessName || '',
       businessPhone: appointmentData?.businessPhone || '',
-      reminderHours: `${reminderHours || 24} hours`
+      reminderHours: `${reminderHours || 24} hours`,
+      googleMapsUrl: gmapsBody
     };
     
     const variables = this.mapDataToTemplateVariables('appointmentReminder', data);
+    this.applyGoogleMapsVariableOverrides('appointmentReminder', variables, gmapsBody, gmapsBtn);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -891,6 +1027,14 @@ class WhatsAppService {
             testValue = 'TEST-001';
           } else if (dataField === 'receiptLink') {
             testValue = 'https://example.com/receipt/test';
+          } else if (dataField === 'googleMapsUrl') {
+            const sample = 'https://maps.app.goo.gl/rwY2PmLdcE4TNo8w9';
+            const { processedBody, processedButton } = this.prepareGoogleMapsTemplateParts(sample);
+            if (varName.startsWith('button_')) {
+              testValue = processedButton;
+            } else {
+              testValue = processedBody;
+            }
           } else if (dataField === 'serviceName') {
             testValue = 'Test Service';
           } else if (dataField === 'date') {

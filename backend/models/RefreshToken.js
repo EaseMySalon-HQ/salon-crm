@@ -19,7 +19,7 @@ const refreshTokenSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-refreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 * 14 });
+refreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 * 2 });
 
 module.exports = {
   schema: refreshTokenSchema,

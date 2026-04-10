@@ -84,10 +84,12 @@ export function ClientImportModal({ isOpen, onClose, onImportComplete }: { isOpe
         return item
       })
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-      const token = localStorage.getItem('salon-auth-token')
+      const csrfCookie = document.cookie.split('; ').find(c => c.startsWith('ems_csrf='))
+      const csrfToken = csrfCookie ? csrfCookie.split('=')[1] : ''
       const resp = await fetch(`${API_URL}/clients/import`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}) },
         body: JSON.stringify({ clients: rawData, mapping: columnMapping, updateExisting })
       })
       const result = await resp.json()

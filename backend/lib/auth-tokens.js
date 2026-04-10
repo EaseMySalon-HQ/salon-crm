@@ -49,11 +49,11 @@ function baseCookieOptions(maxAgeMs) {
 }
 
 function accessMaxAgeMs() {
-  return 15 * 60 * 1000;
+  return 4 * 60 * 60 * 1000;
 }
 
 function refreshMaxAgeMs() {
-  return 7 * 24 * 60 * 60 * 1000;
+  return 24 * 60 * 60 * 1000;
 }
 
 /**

@@ -81,11 +81,11 @@ async function createBooking(models, businessDoc, payload, opts = {}) {
     paymentMode = 'per_appointment',
     paymentState = 'pending',
     packagePaymentCollected = false,
-    units,
     packagePurchaseId,
     holdIdsToConsume = [],
     metadata = {}
   } = payload;
+  let { units } = payload;
 
   const shouldPrepayAtBooking =
     !!packagePaymentCollected && paymentMode === 'full_upfront';
@@ -117,6 +117,10 @@ async function createBooking(models, businessDoc, payload, opts = {}) {
     }
   }
 
+  const isRecurring = units.length > 1;
+  const skippedDates = [];
+  const validUnits = [];
+
   for (const unit of units) {
     const staffId = primaryStaffFromUnit(unit);
     const start = parseSchedulingInstant(unit.startAt);
@@ -137,9 +141,17 @@ async function createBooking(models, businessDoc, payload, opts = {}) {
         end
       });
       if (!within.ok) {
-        const err = new Error(within.reason || 'Slot outside availability');
+        if (isRecurring && within.reason === 'closed') {
+          skippedDates.push(toDateStringIST(start));
+          continue;
+        }
+        const dateStr = toDateStringIST(start);
+        const reason = within.reason === 'closed'
+          ? `The business or staff is closed on ${dateStr}`
+          : within.reason || 'Slot outside availability';
+        const err = new Error(reason);
         err.code = 'OUTSIDE_AVAILABILITY';
-        err.details = within;
+        err.details = { ...within, date: dateStr };
         throw err;
       }
     }
@@ -156,7 +168,19 @@ async function createBooking(models, businessDoc, payload, opts = {}) {
       err.details = c;
       throw err;
     }
+    validUnits.push(unit);
   }
+
+  if (validUnits.length === 0) {
+    const err = new Error(
+      `All dates fall on closed days (skipped: ${skippedDates.join(', ')})`
+    );
+    err.code = 'OUTSIDE_AVAILABILITY';
+    err.details = { skippedDates };
+    throw err;
+  }
+
+  units = validUnits;
 
   /** Single insert avoids a second save inside transactions (some drivers report matchedCount 0 on the follow-up update → DocumentNotFoundError). */
   const bookingId = new mongoose.Types.ObjectId();
@@ -247,7 +271,7 @@ async function createBooking(models, businessDoc, payload, opts = {}) {
         }
       }
 
-      return { booking, appointmentIds };
+      return { booking, appointmentIds, skippedDates };
     } catch (rollbackErr) {
       if (appointmentIds.length) {
         await Appointment.deleteMany({ _id: { $in: appointmentIds } }, sOpt);

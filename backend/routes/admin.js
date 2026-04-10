@@ -21,6 +21,8 @@ const {
   setAdminAuthCookies,
   clearAdminAuthCookies,
   signTenantAccess,
+  setTenantAuthCookies,
+  COOKIE,
 } = require('../lib/auth-tokens');
 const { validate } = require('../middleware/validate');
 const { adminLoginSchema } = require('../validation/schemas');
@@ -341,6 +343,8 @@ router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin,
       '1h'
     );
 
+    setTenantAuthCookies(res, { accessToken: token, refreshToken: '' });
+
     await logAdminActivity({
       adminId: req.admin,
       action: 'admin_impersonation',
@@ -352,7 +356,7 @@ router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin,
       userAgent: req.headers['user-agent'],
     });
 
-    res.json({ success: true, data: { token, businessId: business._id.toString(), businessCode: business.code } });
+    res.json({ success: true, data: { businessId: business._id.toString(), businessCode: business.code } });
   } catch (error) {
     logger.error('Impersonate error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });

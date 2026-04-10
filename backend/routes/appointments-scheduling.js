@@ -8,6 +8,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { setupBusinessDatabase } = require('../middleware/business-db');
 const { logger } = require('../utils/logger');
 const bookingService = require('../services/scheduling/booking-service');
+const { sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('../lib/send-appointment-whatsapp');
 
 const auth = [authenticateToken, setupBusinessDatabase];
 
@@ -33,6 +34,25 @@ router.patch('/:id/reschedule', auth, async (req, res) => {
       req.params.id,
       { scope, startAt, endAt, skipAvailability: !!skipAvailability }
     );
+
+    try {
+      const { Appointment } = req.businessModels;
+      const rescheduled = out.updated || [];
+      for (const item of rescheduled) {
+        const apptId = item._id || item.id;
+        if (!apptId) continue;
+        const populated = await Appointment.findById(apptId)
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role');
+        if (populated) {
+          await sendAppointmentRescheduleWhatsApp(req, populated);
+        }
+      }
+    } catch (whatsappErr) {
+      logger.error('Error sending reschedule WhatsApp:', whatsappErr);
+    }
+
     return res.json({ success: true, data: out });
   } catch (e) {
     logger.error('[appointments] reschedule', e);
@@ -49,7 +69,36 @@ router.patch('/:id/reschedule', auth, async (req, res) => {
 router.patch('/:id/cancel', auth, async (req, res) => {
   try {
     const { scope = 'this', reason } = req.body;
+    const { Appointment } = req.businessModels;
+
+    const preCancel = await Appointment.findById(req.params.id).select('parentBookingId').lean();
     const out = await bookingService.cancelAppointment(req.businessModels, req.params.id, { scope, reason });
+
+    try {
+      if (scope === 'this' || !preCancel?.parentBookingId) {
+        const populated = await Appointment.findById(req.params.id)
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role');
+        if (populated) {
+          await sendAppointmentCancellationWhatsApp(req, populated, reason);
+        }
+      } else {
+        const cancelled = await Appointment.find({
+          parentBookingId: preCancel.parentBookingId,
+          status: 'cancelled'
+        })
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role');
+        for (const apt of cancelled) {
+          await sendAppointmentCancellationWhatsApp(req, apt, reason);
+        }
+      }
+    } catch (whatsappErr) {
+      logger.error('Error sending cancellation WhatsApp:', whatsappErr);
+    }
+
     return res.json({ success: true, data: out });
   } catch (e) {
     logger.error('[appointments] cancel', e);

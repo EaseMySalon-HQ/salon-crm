@@ -131,18 +131,7 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
 
     setIsLoading(true)
     try {
-      // Get auth token from localStorage
-      const authToken = localStorage.getItem('salon-auth-token')
-      
-      if (!authToken) {
-        toast({
-          title: "Authentication Error",
-          description: "Please log in to save cash registry data.",
-          variant: "destructive",
-        })
-        setIsLoading(false)
-        return
-      }
+      // Auth is handled by HttpOnly cookies — no token check needed
 
       // Clean and validate denominations data
       const cleanDenominations = denominations
@@ -172,8 +161,6 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
 
       console.log("Saving cash registry data:", cashRegistryData)
       console.log("User info:", { name: user?.name, email: user?.email })
-      console.log("User object:", user)
-      console.log("Token starts with 'mock':", authToken?.startsWith('mock-token-'))
       console.log("Denominations structure:", denominations.filter(d => d.count > 0).map(d => ({ value: d.value, count: d.count, total: d.total })))
 
             console.log("Making API call to /cash-registry...")

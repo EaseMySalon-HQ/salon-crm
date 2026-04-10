@@ -451,6 +451,7 @@ let adminSettingsFallback = {
         msg91ApiKey: "",
         msg91SenderId: "",
         templateIncludesBaseUrl: true, // If true, template already has base URL, only pass path variables
+        templateIncludesGoogleMapsBaseUrl: true, // MSG91 short link: base https://maps.app.goo.gl/ is in template; pass slug only
         templates: {
           welcomeMessage: "",
           businessAccountCreated: "",

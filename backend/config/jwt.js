@@ -39,10 +39,10 @@ module.exports = {
   JWT_SECRET,
   getJwtSecret: () => JWT_SECRET,
   isProduction,
-  /** Access token (tenant or admin) — short-lived */
-  accessExpires: process.env.JWT_ACCESS_EXPIRES || '15m',
+  /** Access token (tenant or admin) */
+  accessExpires: process.env.JWT_ACCESS_EXPIRES || '4h',
   /** Refresh token (tenant) — longer-lived, httpOnly cookie */
-  refreshExpires: process.env.JWT_REFRESH_EXPIRES || '7d',
+  refreshExpires: process.env.JWT_REFRESH_EXPIRES || '1d',
   /** Legacy single-token expiry (still returned in JSON body for migration) */
   legacyAccessExpires: process.env.JWT_LEGACY_EXPIRES || '24h',
 };

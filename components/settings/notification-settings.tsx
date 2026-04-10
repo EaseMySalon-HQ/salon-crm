@@ -194,10 +194,7 @@ export function NotificationSettings() {
     setIsLoadingStaff(true)
     try {
       const response = await EmailNotificationsAPI.getStaff()
-      console.log('📧 Staff API Response:', response)
       if (response.success && response.data) {
-        console.log('📧 Staff Members Data:', response.data)
-        console.log('📧 Staff Count:', response.data.length)
         setStaffMembers(response.data)
       } else {
         console.warn('📧 No staff data in response:', response)

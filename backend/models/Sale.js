@@ -229,6 +229,8 @@ saleSchema.index({ branchId: 1, status: 1, date: -1 });
 saleSchema.index({ branchId: 1, createdAt: -1, billNo: -1 });
 // Multikey: $elemMatch on paymentHistory.date (due payments in date range)
 saleSchema.index({ branchId: 1, 'paymentHistory.date': 1 });
+// Narrow payment-only branch of due-payment split (status + branch before multikey)
+saleSchema.index({ branchId: 1, status: 1, 'paymentHistory.date': 1 });
 saleSchema.index({ status: 1 });
 saleSchema.index({ customerPhone: 1, branchId: 1 });
 saleSchema.index({ customerId: 1, branchId: 1 });

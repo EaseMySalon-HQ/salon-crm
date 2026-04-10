@@ -41,6 +41,172 @@ function buildPaymentModeCondition(mode) {
   };
 }
 
+function wantsDuePaymentDates(q) {
+  const { includeDuePaymentDates, forCashRegister } = q;
+  return (
+    includeDuePaymentDates === '1' ||
+    includeDuePaymentDates === 'true' ||
+    forCashRegister === '1' ||
+    forCashRegister === 'true'
+  );
+}
+
+/** Invoice `date` strictly outside the inclusive IST day range (complement of elemMatch + invoice range split). */
+function buildInvoiceDateOutsideRange(dateRange) {
+  const lo = dateRange.$gte;
+  const hi = dateRange.$lte;
+  if (lo != null && hi != null) {
+    return { $or: [{ date: { $lt: lo } }, { date: { $gt: hi } }] };
+  }
+  if (lo != null) return { date: { $lt: lo } };
+  if (hi != null) return { date: { $gt: hi } };
+  return null;
+}
+
+/**
+ * When cash-register / due-payment mode adds `$or` on invoice date vs paymentHistory.date, MongoDB often
+ * merges two IXSCANs and applies an in-memory sort. These two matches are disjoint and union to the same
+ * set as the `$or`; each uses a simpler filter + index.
+ * @returns {{ matchInvoice: object, matchPaymentOnly: object } | null}
+ */
+function buildSalesListDuePaymentSplitMatches(branchId, q) {
+  const {
+    date,
+    dateFrom,
+    dateTo,
+    status,
+    paymentMode,
+    search,
+    tipStaffId,
+  } = q;
+
+  let df = dateFrom || date;
+  let dt = dateTo || date;
+  if (date && !dateFrom && !dateTo) {
+    df = date;
+    dt = date;
+  }
+
+  if (!(df || dt) || !wantsDuePaymentDates(q)) return null;
+
+  const dateRange = {};
+  if (df) dateRange.$gte = getStartOfDayIST(df);
+  if (dt) dateRange.$lte = getEndOfDayIST(dt);
+
+  const outside = buildInvoiceDateOutsideRange(dateRange);
+  if (!outside) return null;
+
+  const parts = [{ branchId: branchId }];
+
+  if (status && status !== 'all') {
+    if (status === 'cancelled') {
+      parts.push({ status: { $in: ['cancelled', 'Cancelled'] } });
+    } else {
+      const st = String(status).toLowerCase();
+      const variants =
+        st === 'completed'
+          ? ['completed', 'Completed']
+          : st === 'partial'
+            ? ['partial', 'Partial']
+            : st === 'unpaid'
+              ? ['unpaid', 'Unpaid']
+              : [status];
+      parts.push({ status: { $in: variants } });
+    }
+  } else {
+    parts.push({ status: { $nin: ['cancelled', 'Cancelled'] } });
+  }
+
+  const tail = [];
+  const pm = buildPaymentModeCondition(paymentMode);
+  if (pm) tail.push(pm);
+
+  if (search && String(search).trim()) {
+    const re = escapeRegex(String(search).trim());
+    tail.push({
+      $or: [
+        { customerName: { $regex: re, $options: 'i' } },
+        { billNo: { $regex: re, $options: 'i' } },
+        { staffName: { $regex: re, $options: 'i' } },
+      ],
+    });
+  }
+
+  if (tipStaffId && tipStaffId !== 'all') {
+    const mongoose = require('mongoose');
+    const tid = mongoose.Types.ObjectId.isValid(tipStaffId)
+      ? new mongoose.Types.ObjectId(tipStaffId)
+      : tipStaffId;
+    tail.push({
+      $and: [{ tip: { $gt: 0 } }, { tipStaffId: tid }],
+    });
+  }
+
+  const matchInvoice = { $and: [...parts, { date: dateRange }, ...tail] };
+  const matchPaymentOnly = {
+    $and: [
+      ...parts,
+      outside,
+      { paymentHistory: { $elemMatch: { date: dateRange } } },
+      ...tail,
+    ],
+  };
+
+  return { matchInvoice, matchPaymentOnly };
+}
+
+const SALES_LIST_SORT = { createdAt: -1, billNo: -1, _id: -1 };
+
+function saleSortKey(doc) {
+  const t = doc.createdAt ? new Date(doc.createdAt).getTime() : 0;
+  const bill = String(doc.billNo ?? '');
+  const id = String(doc._id ?? '');
+  return { t, bill, id };
+}
+
+/** True if a sorts before b in descending list order (a is "newer" first). */
+function salesListSortDesc(a, b) {
+  const ka = saleSortKey(a);
+  const kb = saleSortKey(b);
+  if (ka.t !== kb.t) return ka.t > kb.t;
+  if (ka.bill !== kb.bill) return ka.bill > kb.bill;
+  return ka.id > kb.id;
+}
+
+/**
+ * Paginated sales for due-payment split: two disjoint queries merged in app (no top-level `$or`).
+ * @param {import('mongoose').Model} Sale
+ */
+async function fetchSalesListPageMerged(Sale, matchInvoice, matchPaymentOnly, skip, limit) {
+  const cur1 = Sale.find(matchInvoice).sort(SALES_LIST_SORT).lean().cursor();
+  const cur2 = Sale.find(matchPaymentOnly).sort(SALES_LIST_SORT).lean().cursor();
+  let n1 = await cur1.next();
+  let n2 = await cur2.next();
+  let skipped = 0;
+  const out = [];
+  try {
+    while (out.length < limit && (n1 != null || n2 != null)) {
+      let pick;
+      if (n2 == null) pick = n1;
+      else if (n1 == null) pick = n2;
+      else pick = salesListSortDesc(n1, n2) ? n1 : n2;
+
+      if (pick === n1) n1 = await cur1.next();
+      else n2 = await cur2.next();
+
+      if (skipped < skip) {
+        skipped += 1;
+        continue;
+      }
+      out.push(pick);
+    }
+  } finally {
+    await cur1.close();
+    await cur2.close();
+  }
+  return out;
+}
+
 /**
  * Build Mongo match for sales list / summary / count.
  * @param {import('mongoose').Types.ObjectId} branchId
@@ -266,6 +432,38 @@ async function computeSalesSummaryTotals(Sale, match) {
 }
 
 /**
+ * Same totals as {@link computeSalesSummaryTotals} for the union of two disjoint matches (due-payment split).
+ */
+async function computeSalesSummaryTotalsSplit(Sale, matchInvoice, matchPaymentOnly) {
+  const projection = {
+    grossTotal: 1,
+    payments: 1,
+    paymentMode: 1,
+    tip: 1,
+    status: 1,
+    paymentStatus: 1,
+    netTotal: 1,
+  };
+  const acc = {
+    totalRevenue: 0,
+    cashCollected: 0,
+    onlineCash: 0,
+    unpaidValue: 0,
+    tips: 0,
+    completedSales: 0,
+    partialSales: 0,
+    unpaidSales: 0,
+  };
+  for (const match of [matchInvoice, matchPaymentOnly]) {
+    const cursor = Sale.find(match).select(projection).lean().cursor();
+    for await (const doc of cursor) {
+      accumulateSaleSummary(doc, acc);
+    }
+  }
+  return acc;
+}
+
+/**
  * @deprecated Use buildSalesListMatch — kept for any internal caller expecting old signature
  */
 function buildSalesListFilter(branchId, dateFrom, dateTo) {
@@ -275,6 +473,9 @@ function buildSalesListFilter(branchId, dateFrom, dateTo) {
 module.exports = {
   buildSalesListFilter,
   buildSalesListMatch,
+  buildSalesListDuePaymentSplitMatches,
+  fetchSalesListPageMerged,
+  computeSalesSummaryTotalsSplit,
   parseSalesListPagination,
   mergeEditedFlagsFromHistory,
   computeSalesSummaryTotals,

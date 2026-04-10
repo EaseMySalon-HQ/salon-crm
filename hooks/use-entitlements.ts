@@ -63,9 +63,7 @@ export function useEntitlements(): Entitlements {
       setError(null)
 
       const response = await fetch(`${API_URL}/business/plan`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('salon-auth-token')}`,
-        },
+        credentials: 'include',
       })
 
       if (response.ok) {
