@@ -56,6 +56,37 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+function getApiErrorMessage(err: unknown): string {
+  const e = err as { response?: { data?: unknown } }
+  const d = e?.response?.data
+  if (!d || typeof d !== "object") return ""
+  const o = d as { error?: unknown; message?: unknown }
+  if (typeof o.error === "string") return o.error
+  if (typeof o.message === "string") return o.message
+  return ""
+}
+
+/** Match api.ts isTokenAuthFailure for 403 — do not clear session on unrelated 403s (e.g. CSRF wording handled elsewhere). */
+function isInvalidSession403(msg: string): boolean {
+  const m = msg.toLowerCase()
+  if (m.includes("csrf")) return false
+  if (m.includes("business_suspended")) return false
+  return (
+    (m.includes("invalid") && m.includes("token")) ||
+    m.includes("expired") ||
+    m.includes("access token") ||
+    m.includes("authentication required") ||
+    m.includes("user not found")
+  )
+}
+
+function restoreUserFromStorage(storedUser: string): User | null {
+  try {
+    return JSON.parse(storedUser) as User
+  } catch {
+    return null
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -71,80 +102,74 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(AUTH_LOGOUT_EVENT, handleAuthLogout)
   }, [])
 
-  // Check for existing session on mount
+  // Check for existing session on mount (cookie-based — no localStorage token needed)
   useEffect(() => {
     const checkAuth = async () => {
       try {
         setIsLoading(true)
-        
-        // Check if we're in browser environment
+
         if (typeof window === 'undefined') {
           setIsLoading(false)
           return
         }
-        
-        // Skip auth check on public routes (like public receipt page)
+
         const isPublicRoute = window.location.pathname.includes('/receipt/public/') ||
                              window.location.pathname.includes('/public/')
         if (isPublicRoute) {
           setIsLoading(false)
           return
         }
-        
-        // Prefer localStorage; also try HttpOnly cookie session (no token visible in JS)
-        const storedToken = localStorage.getItem("salon-auth-token")
-        const storedUser = localStorage.getItem("salon-auth-user")
 
-        if (!storedToken || !storedUser) {
-          try {
-            const response = await AuthAPI.getProfile()
-            if (response.success && response.data) {
-              setUser(response.data as User)
-            }
-          } catch {
-            /* no session */
-          }
-          setIsLoading(false)
-          return
-        }
-        
-        // Clear mock tokens - only use real authentication
-        if (storedToken.startsWith('mock-token-')) {
-          clearAuthStorage()
-          setIsLoading(false)
-          return
-        }
-        
-        // Validate token with API — retry transient failures (wake-from-sleep / flaky network)
+        // Show cached user immediately while profile fetch is in progress
+        const storedUser = localStorage.getItem("salon-auth-user")
+        const cached = storedUser ? restoreUserFromStorage(storedUser) : null
+        if (cached) setUser(cached)
+
+        // Validate session with backend — retry transient failures
         const maxAttempts = 4
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
             const response = await AuthAPI.getProfile()
             if (response.success && response.data) {
-              setUser(response.data)
-            } else {
-              clearAuthStorage()
+              const freshUser = response.data as User
+              setUser(freshUser)
+              localStorage.setItem("salon-auth-user", JSON.stringify(freshUser))
+            } else if (!cached) {
+              setUser(null)
             }
             break
           } catch (apiError: any) {
             const status = apiError?.response?.status
-            if (status === 401 || status === 403) {
+            const errMsg = getApiErrorMessage(apiError)
+
+            if (status === 401) {
               clearAuthStorage()
               setUser(null)
               break
             }
+
+            if (status === 403 && isInvalidSession403(errMsg)) {
+              clearAuthStorage()
+              setUser(null)
+              break
+            }
+
             if (attempt < maxAttempts - 1 && !apiError?.response) {
               await new Promise((r) => setTimeout(r, 400 * (attempt + 1)))
               continue
             }
-            if (!apiError?.response) {
-              try {
-                setUser(JSON.parse(storedUser) as User)
-              } catch {
-                clearAuthStorage()
-                setUser(null)
-              }
-            } else {
+
+            if (!apiError?.response && cached) break
+
+            if ((status === undefined || status >= 500 || status === 429) && cached) break
+
+            if (status === 404) {
+              clearAuthStorage()
+              setUser(null)
+              break
+            }
+
+            if (!cached) {
               clearAuthStorage()
               setUser(null)
             }
@@ -152,8 +177,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
       } catch (error) {
-        console.error('Authentication check error:', error)
-        clearAuthStorage()
+        console.error("Authentication check error:", error)
       } finally {
         setIsLoading(false)
       }
@@ -162,6 +186,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuth()
   }, [])
 
+  // Proactive token refresh — silently refresh before the 4h access token expires.
+  // New tokens are set as HttpOnly cookies by the server automatically.
+  useEffect(() => {
+    if (!user) return
+    const REFRESH_INTERVAL_MS = 3.5 * 60 * 60 * 1000 // 3.5 hours
+    const id = setInterval(async () => {
+      try {
+        await AuthAPI.refreshToken()
+      } catch {
+        // Silent — reactive interceptor will handle on next API call
+      }
+    }, REFRESH_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [user])
+
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string; message?: string }> => {
     setIsLoading(true)
 
@@ -169,15 +208,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await AuthAPI.login(email, password)
       
       if (response.success) {
-        const { user: userData, token, csrfToken } = response.data
+        const { user: userData, csrfToken } = response.data
         if (csrfToken && typeof csrfToken === 'string') {
           setCsrfTokenPersisted(csrfToken)
         }
         setUser(userData)
         
-        // Only use localStorage in browser environment
         if (typeof window !== 'undefined') {
-          localStorage.setItem("salon-auth-token", token)
           localStorage.setItem("salon-auth-user", JSON.stringify(userData))
         }
         
@@ -216,15 +253,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await AuthAPI.staffLogin(email, password, businessCode)
       
       if (response.success) {
-        const { user: userData, token, csrfToken } = response.data
+        const { user: userData, csrfToken } = response.data
         if (csrfToken && typeof csrfToken === 'string') {
           setCsrfTokenPersisted(csrfToken)
         }
         setUser(userData)
         
-        // Only use localStorage in browser environment
         if (typeof window !== 'undefined') {
-          localStorage.setItem("salon-auth-token", token)
           localStorage.setItem("salon-auth-user", JSON.stringify(userData))
         }
         

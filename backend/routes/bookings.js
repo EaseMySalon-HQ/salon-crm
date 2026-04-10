@@ -8,6 +8,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { setupBusinessDatabase } = require('../middleware/business-db');
 const { logger } = require('../utils/logger');
 const bookingService = require('../services/scheduling/booking-service');
+const { sendAppointmentWhatsAppAfterCreate } = require('../lib/send-appointment-whatsapp');
 const { validate, validateAll } = require('../middleware/validate');
 const {
   bookingCreateBodySchema,
@@ -41,6 +42,17 @@ router.post('/', auth, validate(bookingCreateBodySchema), async (req, res) => {
     const result = await bookingService.createBooking(req.businessModels, businessDoc, payload, {
       skipHoldConflict: true
     });
+    try {
+      const { Appointment } = req.businessModels;
+      const populated = await Appointment.find({ _id: { $in: result.appointmentIds } })
+        .populate('clientId', 'name phone email')
+        .populate('serviceId', 'name price duration')
+        .populate('staffId', 'name role')
+        .populate('staffAssignments.staffId', 'name role');
+      await sendAppointmentWhatsAppAfterCreate(req, populated);
+    } catch (waErr) {
+      logger.error('[bookings] appointment WhatsApp after create', waErr);
+    }
     return res.status(201).json({
       success: true,
       data: {
@@ -53,7 +65,7 @@ router.post('/', auth, validate(bookingCreateBodySchema), async (req, res) => {
   } catch (e) {
     logger.error('[bookings] create', e);
     const code = e.code || 'ERROR';
-    const status = code === 'CONFLICT' ? 409 : code === 'VALIDATION' || code === 'STAFF_REQUIRED' || code === 'BAD_STAFF_SPLIT' ? 400 : 500;
+    const status = code === 'CONFLICT' ? 409 : code === 'VALIDATION' || code === 'STAFF_REQUIRED' || code === 'BAD_STAFF_SPLIT' || code === 'OUTSIDE_AVAILABILITY' ? 400 : 500;
     return res.status(status).json({ success: false, error: e.message, code, details: e.details });
   }
 });

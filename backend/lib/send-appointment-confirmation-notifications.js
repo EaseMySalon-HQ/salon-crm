@@ -1,8 +1,10 @@
 'use strict';
 
 const { logger } = require('../utils/logger');
+const { isAdminAppointmentNotificationsEnabled } = require('./whatsapp-admin-gates');
+const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
 
-async function sendAppointmentConfirmationNotifications(req, createdAppointments, getEmailSettingsWithDefaults, getWhatsAppSettingsWithDefaults) {
+async function sendAppointmentConfirmationNotifications(req, createdAppointments, getEmailSettingsWithDefaults) {
   // Send email notifications if enabled
   try {
     const emailService = require('../services/email-service');
@@ -61,7 +63,9 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       if (appointmentNotificationsEnabled) {
       // Send confirmation to client if email exists
       // Check if new appointments are enabled
-      const sendNewAppointments = emailSettings?.appointmentNotifications?.newAppointments === true;
+      const sendNewAppointments =
+        emailSettings?.appointmentNotifications?.newAppointments === true ||
+        emailSettings?.appointmentNotifications?.newAppointment === true;
       logger.debug(`Send new appointments to clients: ${sendNewAppointments}`);
       
       if (sendNewAppointments) {
@@ -359,7 +363,9 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       
       const adminSettings = await AdminSettings.getSettings();
       const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
-      const adminAppointmentNotificationsEnabled = adminSettings?.notifications?.whatsapp?.appointmentNotifications === true;
+      const adminAppointmentNotificationsEnabled = isAdminAppointmentNotificationsEnabled(
+        adminSettings?.notifications?.whatsapp
+      );
       
       logger.debug('WhatsApp admin settings', {
         whatsappEnabled,
@@ -372,8 +378,8 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
         const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
         const businessWhatsappEnabled = whatsappSettings.enabled === true;
         const appointmentWhatsappEnabled = whatsappSettings.appointmentNotifications?.enabled === true;
-        const confirmationsEnabled = whatsappSettings.appointmentNotifications?.confirmations === true;
-        
+        const confirmationsEnabled = whatsappSettings.appointmentNotifications?.confirmations !== false;
+
         if (businessWhatsappEnabled && appointmentWhatsappEnabled && confirmationsEnabled) {
           // Check quiet hours
           const quietHours = adminSettings?.notifications?.whatsapp?.quietHours;

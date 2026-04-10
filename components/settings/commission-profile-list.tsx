@@ -1,13 +1,13 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Plus, Edit, Trash2, MoreHorizontal, Target, Award, Package } from "lucide-react"
+import { Plus, Edit, Trash2, MoreHorizontal, Target, Award, Package, Scissors } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { CommissionProfile, CommissionProfileFormData } from "@/lib/commission-profile-types"
+import { CommissionProfile, CommissionProfileFormData, toCommissionProfileApiBody } from "@/lib/commission-profile-types"
 import { useToast } from "@/components/ui/use-toast"
 import { AddCommissionProfileModal } from "./add-commission-profile-modal"
 import { EditCommissionProfileModal } from "./edit-commission-profile-modal"
@@ -79,7 +79,7 @@ export function CommissionProfileList() {
 
   const handleSaveProfile = async (profileData: CommissionProfileFormData) => {
     try {
-      const response = await CommissionProfileAPI.createProfile(profileData)
+      const response = await CommissionProfileAPI.createProfile(toCommissionProfileApiBody(profileData))
       if (response?.success && response.data) {
         const newProfile = normalizeProfile(response.data as CommissionProfile)
         setProfiles(prev => [newProfile, ...prev])
@@ -104,7 +104,7 @@ export function CommissionProfileList() {
 
   const handleSaveEditedProfile = async (profileId: string, profileData: CommissionProfileFormData) => {
     try {
-      const response = await CommissionProfileAPI.updateProfile(profileId, profileData)
+      const response = await CommissionProfileAPI.updateProfile(profileId, toCommissionProfileApiBody(profileData))
       if (response?.success && response.data) {
         const updatedProfile = normalizeProfile(response.data as CommissionProfile)
         setProfiles(prev => prev.map(p => p.id === profileId ? updatedProfile : p))
@@ -165,6 +165,8 @@ export function CommissionProfileList() {
         return <Target className="h-4 w-4" />
       case "item_based":
         return <Package className="h-4 w-4" />
+      case "service_based":
+        return <Scissors className="h-4 w-4" />
       default:
         return <Award className="h-4 w-4" />
     }
@@ -173,7 +175,8 @@ export function CommissionProfileList() {
   const getProfileTypeBadge = (type: string) => {
     const typeConfig = {
       target_based: { label: "Commission by Target", variant: "default" as const },
-      item_based: { label: "Commission by Item", variant: "secondary" as const }
+      item_based: { label: "Commission by Item", variant: "secondary" as const },
+      service_based: { label: "Commission by Service", variant: "outline" as const }
     }
     
     const config = typeConfig[type as keyof typeof typeConfig] || typeConfig.target_based

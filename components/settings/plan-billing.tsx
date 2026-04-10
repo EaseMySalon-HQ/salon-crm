@@ -94,9 +94,7 @@ export function PlanBilling() {
     try {
       setIsLoadingBusiness(true)
       const response = await fetch(`${API_URL}/business/info`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('salon-auth-token')}`,
-        },
+        credentials: 'include',
       })
 
       if (response.ok) {
@@ -116,9 +114,7 @@ export function PlanBilling() {
     try {
       setIsLoadingPlans(true)
       const response = await fetch(`${API_URL}/business/plans`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('salon-auth-token')}`,
-        },
+        credentials: 'include',
       })
 
       if (response.ok) {

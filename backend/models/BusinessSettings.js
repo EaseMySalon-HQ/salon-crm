@@ -13,6 +13,8 @@ const businessSettingsSchema = new mongoose.Schema({
   city: { type: String, required: true, default: "New York" },
   state: { type: String, required: true, default: "NY" },
   zipCode: { type: String, required: true, default: "10001" },
+  /** Link to Google Maps (place or directions); optional. */
+  googleMapsUrl: { type: String, default: "" },
   
   // Receipt/Invoice Settings
   receiptPrefix: { type: String, default: "INV" },

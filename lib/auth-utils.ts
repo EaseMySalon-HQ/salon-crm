@@ -16,11 +16,8 @@ export const REMEMBERED_BUSINESS_CODE_KEY = 'salon-remembered-business-code'
 export function clearAuthStorage(): void {
   if (typeof window === 'undefined') return
 
-  localStorage.removeItem('salon-auth-token')
   localStorage.removeItem('salon-auth-user')
 
-  // Clear session storage for salon auth (preserves admin auth in separate keys)
-  sessionStorage.removeItem('salon-auth-token')
   sessionStorage.removeItem('salon-auth-user')
 
   clearCsrfTokenPersisted()

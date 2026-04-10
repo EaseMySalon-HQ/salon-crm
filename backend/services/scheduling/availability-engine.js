@@ -65,6 +65,16 @@ async function getEffectiveStaffDayWindow(models, branchId, staffId, ymd, busine
     }
   }
 
+  const { Staff } = models;
+  if (Staff) {
+    const staffDoc = await Staff.findById(staffId).lean();
+    const dayRow = (staffDoc?.workSchedule || []).find(r => r.day === (dayNum === -1 ? 0 : dayNum));
+    if (dayRow) {
+      if (dayRow.enabled === false) return { closed: true };
+      return { closed: false, open: dayRow.startTime || '09:00', close: dayRow.endTime || '21:00' };
+    }
+  }
+
   return getBranchOperatingWindow(businessDoc, ymd);
 }
 

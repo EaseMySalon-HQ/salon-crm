@@ -1,22 +1,43 @@
 "use client"
 
-import { useState } from "react"
-import { Plus, Trash2, Target, Package, HelpCircle } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Plus, Trash2, Target, Package, HelpCircle, Scissors } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { CommissionProfileFormData, CALCULATION_INTERVALS, QUALIFYING_ITEMS } from "@/lib/commission-profile-types"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  CommissionProfileFormData,
+  CALCULATION_INTERVALS,
+  QUALIFYING_ITEMS,
+  ServiceCommissionRule
+} from "@/lib/commission-profile-types"
+import { ServicesAPI } from "@/lib/api"
 
 interface AddCommissionProfileModalProps {
   isOpen: boolean
   onClose: () => void
   onSave: (profile: CommissionProfileFormData) => Promise<void>
 }
+
+const defaultTier = {
+  from: 0,
+  to: 0,
+  calculateBy: "percent" as const,
+  value: 0
+}
+
+const emptyServiceRule = (): ServiceCommissionRule => ({
+  serviceId: "",
+  calculateBy: "percent",
+  value: 0
+})
 
 export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommissionProfileModalProps) {
   const [formData, setFormData] = useState<CommissionProfileFormData>({
@@ -27,65 +48,110 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
     qualifyingItems: [],
     includeTax: false,
     cascadingCommission: false,
-    targetTiers: [
-      {
-        from: 0,
-        to: 0,
-        calculateBy: "percent",
-        value: 0
-      }
-    ]
+    targetTiers: [defaultTier]
   })
 
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [isSaving, setIsSaving] = useState(false)
+  const [services, setServices] = useState<Array<{ _id?: string; id?: string; name: string }>>([])
 
-  const handleInputChange = (field: keyof CommissionProfileFormData, value: any) => {
-    setFormData(prev => ({ ...prev, [field]: value }))
-    // Clear error when user starts typing
-    if (errors[field]) {
-      setErrors(prev => ({ ...prev, [field]: "" }))
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const response = await ServicesAPI.getAll({ limit: 2000 })
+        if (!cancelled && response?.success && Array.isArray(response.data)) {
+          setServices(response.data)
+        }
+      } catch {
+        if (!cancelled) setServices([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen])
+
+  const handleInputChange = (field: keyof CommissionProfileFormData, value: unknown) => {
+    if (field === "type") {
+      const nextType = value as CommissionProfileFormData["type"]
+      if (nextType === "service_based") {
+        setFormData((prev) => ({
+          ...prev,
+          type: "service_based",
+          qualifyingItems: [],
+          serviceRules: prev.serviceRules?.length ? prev.serviceRules : [emptyServiceRule()]
+        }))
+      } else {
+        setFormData((prev) => ({
+          ...prev,
+          type: "target_based",
+          serviceRules: undefined,
+          targetTiers: prev.targetTiers?.length ? prev.targetTiers : [defaultTier]
+        }))
+      }
+      return
+    }
+    setFormData((prev) => ({ ...prev, [field]: value }))
+    if (errors[field as string]) {
+      setErrors((prev) => ({ ...prev, [field as string]: "" }))
     }
   }
 
   const handleQualifyingItemToggle = (item: string) => {
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
       qualifyingItems: prev.qualifyingItems.includes(item)
-        ? prev.qualifyingItems.filter(i => i !== item)
+        ? prev.qualifyingItems.filter((i) => i !== item)
         : [...prev.qualifyingItems, item]
     }))
   }
 
   const addTargetTier = () => {
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      targetTiers: [
-        ...(prev.targetTiers || []),
-        {
-          from: 0,
-          to: 0,
-          calculateBy: "percent",
-          value: 0
-        }
-      ]
+      targetTiers: [...(prev.targetTiers || []), { ...defaultTier }]
     }))
   }
 
   const removeTargetTier = (index: number) => {
     if (formData.targetTiers && formData.targetTiers.length > 1) {
-      setFormData(prev => ({
+      setFormData((prev) => ({
         ...prev,
         targetTiers: prev.targetTiers?.filter((_, i) => i !== index)
       }))
     }
   }
 
-  const updateTargetTier = (index: number, field: string, value: any) => {
-    setFormData(prev => ({
+  const updateTargetTier = (index: number, field: string, value: unknown) => {
+    setFormData((prev) => ({
       ...prev,
-      targetTiers: prev.targetTiers?.map((tier, i) => 
-        i === index ? { ...tier, [field]: value } : tier
+      targetTiers: prev.targetTiers?.map((tier, i) => (i === index ? { ...tier, [field]: value } : tier))
+    }))
+  }
+
+  const addServiceRule = () => {
+    setFormData((prev) => ({
+      ...prev,
+      serviceRules: [...(prev.serviceRules ?? []), emptyServiceRule()]
+    }))
+  }
+
+  const removeServiceRule = (index: number) => {
+    const rules = formData.serviceRules ?? []
+    if (rules.length <= 1) return
+    setFormData((prev) => ({
+      ...prev,
+      serviceRules: rules.filter((_, i) => i !== index)
+    }))
+  }
+
+  const updateServiceRule = (index: number, field: keyof ServiceCommissionRule, value: unknown) => {
+    setFormData((prev) => ({
+      ...prev,
+      serviceRules: (prev.serviceRules ?? []).map((row, i) =>
+        i === index ? { ...row, [field]: value } : row
       )
     }))
   }
@@ -97,22 +163,45 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
       newErrors.name = "Profile name is required"
     }
 
-    if (formData.qualifyingItems.length === 0) {
-      newErrors.qualifyingItems = "At least one qualifying item is required"
-    }
-
-    if (formData.targetTiers) {
-      formData.targetTiers.forEach((tier, index) => {
-        if (tier.from < 0) {
-          newErrors[`tier_${index}_from`] = "From amount cannot be negative"
+    if (formData.type === "service_based") {
+      const rules = formData.serviceRules ?? []
+      if (rules.length === 0) {
+        newErrors.serviceRules = "Add at least one service"
+      }
+      const ids = rules.map((r) => r.serviceId).filter((id) => id && String(id).trim())
+      if (new Set(ids).size !== ids.length) {
+        newErrors.serviceRules = "Each service can only appear once"
+      }
+      rules.forEach((rule, index) => {
+        if (!rule.serviceId || !String(rule.serviceId).trim()) {
+          newErrors[`service_${index}`] = "Select a service"
         }
-        if (tier.to <= tier.from) {
-          newErrors[`tier_${index}_to`] = "To amount must be greater than From amount"
+        const v = Number(rule.value)
+        if (!Number.isFinite(v) || v <= 0) {
+          newErrors[`service_${index}_value`] = "Commission value must be greater than 0"
         }
-        if (tier.value < 0) {
-          newErrors[`tier_${index}_value`] = "Value cannot be negative"
+        if (rule.calculateBy === "percent" && v > 100) {
+          newErrors[`service_${index}_value`] = "Percentage cannot exceed 100"
         }
       })
+    } else {
+      if (formData.qualifyingItems.length === 0) {
+        newErrors.qualifyingItems = "At least one qualifying item is required"
+      }
+
+      if (formData.targetTiers) {
+        formData.targetTiers.forEach((tier, index) => {
+          if (tier.from < 0) {
+            newErrors[`tier_${index}_from`] = "From amount cannot be negative"
+          }
+          if (tier.to <= tier.from) {
+            newErrors[`tier_${index}_to`] = "To amount must be greater than From amount"
+          }
+          if (tier.value < 0) {
+            newErrors[`tier_${index}_value`] = "Value cannot be negative"
+          }
+        })
+      }
     }
 
     setErrors(newErrors)
@@ -144,17 +233,26 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
       qualifyingItems: [],
       includeTax: false,
       cascadingCommission: false,
-      targetTiers: [
-        {
-          from: 0,
-          to: 0,
-          calculateBy: "percent",
-          value: 0
-        }
-      ]
+      targetTiers: [defaultTier]
     })
     setErrors({})
     onClose()
+  }
+
+  const serviceIdOptions = (rowIndex: number) => {
+    const rules = formData.serviceRules ?? []
+    const otherSelected = new Set(
+      rules
+        .map((r, i) => (i !== rowIndex && r.serviceId ? String(r.serviceId) : null))
+        .filter((x): x is string => x != null && x !== "")
+    )
+    return services.filter((s) => {
+      const sid = String(s._id ?? s.id ?? "")
+      if (!sid) return false
+      const current = rules[rowIndex]?.serviceId
+      if (current && String(current) === sid) return true
+      return !otherSelected.has(sid)
+    })
   }
 
   return (
@@ -163,13 +261,12 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
         <DialogHeader>
           <DialogTitle>Add Commission Profile</DialogTitle>
           <DialogDescription>
-            Create a new commission profile with target-based or item-based calculations
+            Create a commission profile: target-based tiers or per-service rules
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6">
-          {/* Commission Type Toggle */}
-          <div className="flex items-center space-x-4 p-4 bg-gray-50 rounded-lg">
+          <div className="flex flex-wrap items-center gap-4 p-4 bg-gray-50 rounded-lg">
             <div className="flex items-center space-x-2">
               <input
                 type="radio"
@@ -189,6 +286,22 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
             <div className="flex items-center space-x-2">
               <input
                 type="radio"
+                id="service_based"
+                name="type"
+                value="service_based"
+                checked={formData.type === "service_based"}
+                onChange={(e) => handleInputChange("type", e.target.value)}
+                className="w-4 h-4 text-blue-600"
+                aria-label="Commission by Service"
+              />
+              <Label htmlFor="service_based" className="flex items-center space-x-2 cursor-pointer">
+                <Scissors className="h-4 w-4" />
+                <span>Commission by Service</span>
+              </Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <input
+                type="radio"
                 id="item_based"
                 name="type"
                 value="item_based"
@@ -201,12 +314,13 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
               <Label htmlFor="item_based" className="flex items-center space-x-2 cursor-not-allowed text-gray-400">
                 <Package className="h-4 w-4" />
                 <span>Commission by Item</span>
-                <Badge variant="secondary" className="text-xs">Coming Soon</Badge>
+                <Badge variant="secondary" className="text-xs">
+                  Coming Soon
+                </Badge>
               </Label>
             </div>
           </div>
 
-          {/* Basic Information */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="name">Profile Name *</Label>
@@ -226,7 +340,7 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
                 value={formData.calculationInterval}
                 onValueChange={(value) => handleInputChange("calculationInterval", value)}
               >
-                <SelectTrigger>
+                <SelectTrigger id="interval">
                   <SelectValue placeholder="Select interval" />
                 </SelectTrigger>
                 <SelectContent>
@@ -240,49 +354,173 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
             </div>
           </div>
 
-          {/* Description */}
-          <div className="space-y-2">
-            <Label htmlFor="description">Description</Label>
-            <Input
-              id="description"
-              value={formData.description || ""}
-              onChange={(e) => handleInputChange("description", e.target.value)}
-              placeholder="Enter profile description (optional)"
-            />
-          </div>
-
-          {/* Qualifying Items */}
-          <div className="space-y-2">
-            <Label>Qualifying Items *</Label>
-            <div className="flex flex-wrap gap-2">
-              {QUALIFYING_ITEMS.map((item) => (
-                <div
-                  key={item}
-                  onClick={() => handleQualifyingItemToggle(item)}
-                  className={`px-3 py-2 rounded-lg border cursor-pointer transition-all ${
-                    formData.qualifyingItems.includes(item)
-                      ? "bg-blue-100 border-blue-500 text-blue-700"
-                      : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  {item}
-                </div>
-              ))}
+          {formData.type === "service_based" ? (
+            <div className="space-y-2">
+              <Label htmlFor="description">Description</Label>
+              <Textarea
+                id="description"
+                value={formData.description || ""}
+                onChange={(e) => handleInputChange("description", e.target.value)}
+                placeholder="Optional notes for this profile"
+                rows={3}
+                className="resize-y min-h-[80px]"
+              />
             </div>
-            {errors.qualifyingItems && <p className="text-sm text-red-500">{errors.qualifyingItems}</p>}
-          </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="description">Description</Label>
+              <Input
+                id="description"
+                value={formData.description || ""}
+                onChange={(e) => handleInputChange("description", e.target.value)}
+                placeholder="Enter profile description (optional)"
+              />
+            </div>
+          )}
 
-          {/* Tax Inclusion Checkbox */}
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="includeTax"
-              checked={formData.includeTax}
-              onCheckedChange={(checked) => handleInputChange("includeTax", checked)}
-            />
-            <Label htmlFor="includeTax">Include tax amount in incentive calculation</Label>
-          </div>
+          {formData.type === "target_based" && (
+            <>
+              <div className="space-y-2">
+                <Label>Qualifying Items *</Label>
+                <div className="flex flex-wrap gap-2">
+                  {QUALIFYING_ITEMS.map((item) => (
+                    <div
+                      key={item}
+                      onClick={() => handleQualifyingItemToggle(item)}
+                      className={`px-3 py-2 rounded-lg border cursor-pointer transition-all ${
+                        formData.qualifyingItems.includes(item)
+                          ? "bg-blue-100 border-blue-500 text-blue-700"
+                          : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      {item}
+                    </div>
+                  ))}
+                </div>
+                {errors.qualifyingItems && <p className="text-sm text-red-500">{errors.qualifyingItems}</p>}
+              </div>
 
-          {/* Target Tier Section */}
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="includeTax"
+                  checked={formData.includeTax}
+                  onCheckedChange={(checked) => handleInputChange("includeTax", checked)}
+                />
+                <Label htmlFor="includeTax">Include tax amount in incentive calculation</Label>
+              </div>
+            </>
+          )}
+
+          {formData.type === "service_based" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Service commission rules</h3>
+                <Button type="button" variant="outline" size="sm" onClick={addServiceRule} className="gap-2">
+                  <Plus className="h-4 w-4" />
+                  Add Service
+                </Button>
+              </div>
+              {errors.serviceRules && <p className="text-sm text-red-500">{errors.serviceRules}</p>}
+              <div className="border rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[38%]">Service</TableHead>
+                      <TableHead className="w-[28%]">Commission type</TableHead>
+                      <TableHead className="w-[28%]">Value</TableHead>
+                      <TableHead className="w-14 text-right" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(formData.serviceRules ?? [emptyServiceRule()]).map((rule, index) => (
+                      <TableRow key={index}>
+                        <TableCell>
+                          <Select
+                            value={rule.serviceId || ""}
+                            onValueChange={(v) => updateServiceRule(index, "serviceId", v)}
+                          >
+                            <SelectTrigger
+                              className={errors[`service_${index}`] ? "border-red-500" : ""}
+                            >
+                              <SelectValue placeholder="Select service" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {serviceIdOptions(index).map((s) => {
+                                const sid = String(s._id ?? s.id)
+                                return (
+                                  <SelectItem key={sid} value={sid}>
+                                    {s.name}
+                                  </SelectItem>
+                                )
+                              })}
+                            </SelectContent>
+                          </Select>
+                          {errors[`service_${index}`] && (
+                            <p className="text-xs text-red-500 mt-1">{errors[`service_${index}`]}</p>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Select
+                            value={rule.calculateBy}
+                            onValueChange={(v) =>
+                              updateServiceRule(index, "calculateBy", v as ServiceCommissionRule["calculateBy"])
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="percent">Percentage (%)</SelectItem>
+                              <SelectItem value="fixed">Fixed amount (₹)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min={0}
+                              step={rule.calculateBy === "percent" ? 0.01 : 1}
+                              value={rule.value === 0 ? "" : rule.value}
+                              onChange={(e) => {
+                                const raw = e.target.value
+                                updateServiceRule(
+                                  index,
+                                  "value",
+                                  raw === "" ? 0 : parseFloat(raw) || 0
+                                )
+                              }}
+                              className={errors[`service_${index}_value`] ? "border-red-500" : ""}
+                            />
+                            <span className="text-sm text-muted-foreground whitespace-nowrap shrink-0">
+                              {rule.calculateBy === "percent" ? "%" : "₹"}
+                            </span>
+                          </div>
+                          {errors[`service_${index}_value`] && (
+                            <p className="text-xs text-red-500 mt-1">{errors[`service_${index}_value`]}</p>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => removeServiceRule(index)}
+                            disabled={(formData.serviceRules ?? []).length <= 1}
+                            className="text-red-600 hover:text-red-700"
+                            aria-label="Remove row"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+
           {formData.type === "target_based" && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -299,7 +537,6 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
                 </Button>
               </div>
 
-              {/* Cascading Commission Checkbox */}
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="cascadingCommission"
@@ -310,21 +547,30 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
                 <TooltipProvider delayDuration={0}>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <button type="button" className="text-muted-foreground hover:text-foreground focus:outline-none" aria-label="Cascading Commission help">
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground focus:outline-none"
+                        aria-label="Cascading Commission help"
+                      >
                         <HelpCircle className="h-4 w-4" />
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side="top" className="max-w-sm p-3 text-sm">
                       <p className="font-medium mb-1">Cascading Commission (enabled):</p>
-                      <p className="text-muted-foreground mb-2">Commission is calculated slab-wise. Each target slab applies its own commission percentage only to the revenue within that slab.</p>
+                      <p className="text-muted-foreground mb-2">
+                        Commission is calculated slab-wise. Each target slab applies its own commission percentage
+                        only to the revenue within that slab.
+                      </p>
                       <p className="font-medium mb-1">Non-Cascading Commission (disabled):</p>
-                      <p className="text-muted-foreground">The commission percentage of the highest target slab achieved is applied to the entire eligible amount.</p>
+                      <p className="text-muted-foreground">
+                        The commission percentage of the highest target slab achieved is applied to the entire
+                        eligible amount.
+                      </p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
               </div>
 
-              {/* Target Tiers */}
               <div className="space-y-4">
                 {formData.targetTiers?.map((tier, index) => (
                   <div key={index} className="p-4 border rounded-lg bg-gray-50">
@@ -387,9 +633,7 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
                       </div>
 
                       <div className="space-y-2">
-                        <Label>
-                          Value {tier.calculateBy === "percent" ? "(%)" : "(₹)"}
-                        </Label>
+                        <Label>Value {tier.calculateBy === "percent" ? "(%)" : "(₹)"}</Label>
                         <Input
                           type="number"
                           value={tier.value}

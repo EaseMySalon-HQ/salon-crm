@@ -167,13 +167,15 @@ export function ProductImportModal({ isOpen, onClose, onImportComplete }: Produc
 
       // Call the import API
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-      const token = localStorage.getItem('salon-auth-token')
+      const csrfCookie = document.cookie.split('; ').find(c => c.startsWith('ems_csrf='))
+      const csrfToken = csrfCookie ? csrfCookie.split('=')[1] : ''
       
       const response = await fetch(`${API_URL}/products/import`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
         },
         body: JSON.stringify({
           products: rawData,

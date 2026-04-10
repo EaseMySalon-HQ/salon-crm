@@ -16,9 +16,9 @@ import {
   type DatePeriod,
   getPerformanceFilterBounds,
 } from "@/lib/staff-performance-period"
-import { SalesAPI, CommissionProfileAPI, StaffDirectoryAPI } from "@/lib/api"
+import { SalesAPI, CommissionProfileAPI, StaffDirectoryAPI, ServicesAPI } from "@/lib/api"
 import { toDateStringIST, getStartOfDayIST, getEndOfDayIST } from "@/lib/date-utils"
-import { CommissionProfileCalculator } from "@/lib/commission-profile-calculator"
+import { CommissionProfileCalculator, enrichSalesWithServiceIdsFromCatalog } from "@/lib/commission-profile-calculator"
 import type { CommissionProfile } from "@/lib/commission-profile-types"
 import type { Sale } from "@/lib/commission-profile-calculator"
 import {
@@ -71,6 +71,7 @@ function toSale(sale: any): Sale {
       quantity: item.quantity ?? 1,
       price: item.price ?? 0,
       total: item.total ?? (item.price ?? 0) * (item.quantity ?? 1),
+      serviceId: item.serviceId,
       staffId: item.staffId,
       staffName: item.staffName,
       discount: item.discount,
@@ -107,6 +108,7 @@ export function StaffServiceDetailDrawer({
   const [sales, setSales] = useState<any[]>([])
   const [commissionProfiles, setCommissionProfiles] = useState<CommissionProfile[]>([])
   const [staffMembers, setStaffMembers] = useState<any[]>([])
+  const [catalogServices, setCatalogServices] = useState<Array<{ _id?: string; id?: string; name?: string }>>([])
   const [loading, setLoading] = useState(false)
   const [showServices, setShowServices] = useState(true)
   const [showProducts, setShowProducts] = useState(true)
@@ -137,14 +139,17 @@ export function StaffServiceDetailDrawer({
           salesParams.dateFrom = getStartOfDayIST(toDateStringIST(startDate))
           salesParams.dateTo = getEndOfDayIST(toDateStringIST(endDate))
         }
-        const [salesRows, profilesRes, staffRes] = await Promise.all([
+        const [salesRows, profilesRes, staffRes, servicesRes] = await Promise.all([
           SalesAPI.getAllMergePages(salesParams),
           CommissionProfileAPI.getProfiles(),
-          StaffDirectoryAPI.getAll()
+          StaffDirectoryAPI.getAll(),
+          ServicesAPI.getAll({ limit: 2000 })
         ])
         setSales(Array.isArray(salesRows) ? salesRows : [])
         if (profilesRes.success && profilesRes.data) setCommissionProfiles(profilesRes.data)
         if (staffRes.success && staffRes.data) setStaffMembers(staffRes.data)
+        if (servicesRes.success && Array.isArray(servicesRes.data)) setCatalogServices(servicesRes.data)
+        else setCatalogServices([])
       } catch (e) {
         console.error(e)
       } finally {
@@ -158,7 +163,9 @@ export function StaffServiceDetailDrawer({
   const staffProfileIds = staff?.commissionProfileIds || []
   const staffProfiles = commissionProfiles.filter((p) => {
     const id = p.id ?? p._id
-    return id != null && staffProfileIds.includes(id)
+    if (id == null) return false
+    const pid = String(id)
+    return staffProfileIds.some((cid) => String(cid) === pid)
   })
 
   const filteredSales = (sales as any[])
@@ -186,7 +193,11 @@ export function StaffServiceDetailDrawer({
       return saleStaffMatch || itemMatch
     })
 
-  const normalizedSales = filteredSales.map(toSale)
+  const normalizedSales = (() => {
+    const rows = filteredSales.map(toSale)
+    enrichSalesWithServiceIdsFromCatalog(rows as Parameters<typeof enrichSalesWithServiceIdsFromCatalog>[0], catalogServices)
+    return rows
+  })()
   const commissionResult =
     staffProfiles.length > 0
       ? CommissionProfileCalculator.calculateMultipleSalesCommission(

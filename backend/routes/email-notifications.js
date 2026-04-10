@@ -304,43 +304,33 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
         source: hasDirectEnabled ? 'direct' : 'dbWhatsappSettings'
       });
       
-      // Now merge nested objects, but preserve their enabled states if they exist in DB
-      if (dbWhatsappSettings.receiptNotifications) {
-        mergedWhatsappSettings.receiptNotifications = {
-          ...defaultWhatsappSettings.receiptNotifications,
-          ...dbWhatsappSettings.receiptNotifications,
-          // Preserve enabled state from DB if it exists (even if false)
-          enabled: ('enabled' in dbWhatsappSettings.receiptNotifications)
-            ? dbWhatsappSettings.receiptNotifications.enabled
-            : defaultWhatsappSettings.receiptNotifications.enabled
-        };
-      } else {
-        mergedWhatsappSettings.receiptNotifications = defaultWhatsappSettings.receiptNotifications;
-      }
-      
-      if (dbWhatsappSettings.appointmentNotifications) {
-        mergedWhatsappSettings.appointmentNotifications = {
-          ...defaultWhatsappSettings.appointmentNotifications,
-          ...dbWhatsappSettings.appointmentNotifications,
-          enabled: ('enabled' in dbWhatsappSettings.appointmentNotifications)
-            ? dbWhatsappSettings.appointmentNotifications.enabled
-            : defaultWhatsappSettings.appointmentNotifications.enabled
-        };
-      } else {
-        mergedWhatsappSettings.appointmentNotifications = defaultWhatsappSettings.appointmentNotifications;
-      }
-      
-      if (dbWhatsappSettings.systemAlerts) {
-        mergedWhatsappSettings.systemAlerts = {
-          ...defaultWhatsappSettings.systemAlerts,
-          ...dbWhatsappSettings.systemAlerts,
-          enabled: ('enabled' in dbWhatsappSettings.systemAlerts)
-            ? dbWhatsappSettings.systemAlerts.enabled
-            : defaultWhatsappSettings.systemAlerts.enabled
-        };
-      } else {
-        mergedWhatsappSettings.systemAlerts = defaultWhatsappSettings.systemAlerts;
-      }
+      // Nested sections: DB may store either { enabled, ... } or a legacy bare boolean (admin UI used to save boolean).
+      const normalizeSection = (raw, def) => {
+        if (raw === true || raw === false) {
+          return { ...def, enabled: raw };
+        }
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+          return {
+            ...def,
+            ...raw,
+            enabled: ('enabled' in raw) ? raw.enabled : def.enabled
+          };
+        }
+        return { ...def };
+      };
+
+      mergedWhatsappSettings.receiptNotifications = normalizeSection(
+        dbWhatsappSettings.receiptNotifications,
+        defaultWhatsappSettings.receiptNotifications
+      );
+      mergedWhatsappSettings.appointmentNotifications = normalizeSection(
+        dbWhatsappSettings.appointmentNotifications,
+        defaultWhatsappSettings.appointmentNotifications
+      );
+      mergedWhatsappSettings.systemAlerts = normalizeSection(
+        dbWhatsappSettings.systemAlerts,
+        defaultWhatsappSettings.systemAlerts
+      );
       
       // FINAL CHECK: Ensure enabled is exactly what's in the database
       if (('enabled' in dbWhatsappSettings) && mergedWhatsappSettings.enabled !== dbWhatsappSettings.enabled) {

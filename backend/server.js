@@ -14,10 +14,16 @@ const { ensureAdminAccessDefaults } = require('./utils/admin-access');
 const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
 const {
   buildSalesListMatch,
+  buildSalesListDuePaymentSplitMatches,
+  fetchSalesListPageMerged,
   parseSalesListPagination,
   mergeEditedFlagsFromHistory,
   computeSalesSummaryTotals,
+  computeSalesSummaryTotalsSplit,
 } = require('./lib/sales-list-query');
+const { isAdminReceiptNotificationsEnabled } = require('./lib/whatsapp-admin-gates');
+const { getWhatsAppSettingsWithDefaults } = require('./lib/whatsapp-settings-defaults');
+const { sendAppointmentWhatsAppAfterCreate, sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('./lib/send-appointment-whatsapp');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -165,76 +171,6 @@ app.get('/api/auth/csrf', (req, res) => {
   res.json({ success: true, csrfToken });
 });
 
-// Helper function to apply WhatsApp settings defaults
-// This ensures that even if settings don't exist in DB, we use schema defaults
-function getWhatsAppSettingsWithDefaults(whatsappSettings) {
-  // Default values from Business model schema
-  const defaults = {
-    enabled: true,
-    receiptNotifications: {
-      enabled: true,
-      autoSendToClients: true,
-      highValueThreshold: 0
-    },
-    appointmentNotifications: {
-      enabled: false,
-      newAppointments: false,
-      confirmations: false,
-      reminders: false,
-      cancellations: false
-    },
-    systemAlerts: {
-      enabled: false,
-      lowInventory: false,
-      paymentFailures: false
-    }
-  };
-
-  // If no settings exist, return defaults
-  if (!whatsappSettings || typeof whatsappSettings !== 'object' || Array.isArray(whatsappSettings)) {
-    return defaults;
-  }
-
-  // Merge with defaults, preserving existing values (including false)
-  const merged = {
-    ...defaults,
-    ...whatsappSettings,
-    // Explicitly handle enabled field - use saved value if it exists, otherwise default
-    enabled: whatsappSettings.hasOwnProperty('enabled') ? whatsappSettings.enabled : defaults.enabled,
-    // Merge nested objects, explicitly preserving enabled fields
-    receiptNotifications: whatsappSettings.receiptNotifications ? {
-      ...defaults.receiptNotifications,
-      ...whatsappSettings.receiptNotifications,
-      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
-      enabled: whatsappSettings.receiptNotifications.hasOwnProperty('enabled')
-        ? whatsappSettings.receiptNotifications.enabled
-        : defaults.receiptNotifications.enabled,
-      // CRITICAL: Explicitly preserve autoSendToClients if it exists (even if false)
-      autoSendToClients: whatsappSettings.receiptNotifications.hasOwnProperty('autoSendToClients')
-        ? whatsappSettings.receiptNotifications.autoSendToClients
-        : defaults.receiptNotifications.autoSendToClients
-    } : defaults.receiptNotifications,
-    appointmentNotifications: whatsappSettings.appointmentNotifications ? {
-      ...defaults.appointmentNotifications,
-      ...whatsappSettings.appointmentNotifications,
-      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
-      enabled: whatsappSettings.appointmentNotifications.hasOwnProperty('enabled')
-        ? whatsappSettings.appointmentNotifications.enabled
-        : defaults.appointmentNotifications.enabled
-    } : defaults.appointmentNotifications,
-    systemAlerts: whatsappSettings.systemAlerts ? {
-      ...defaults.systemAlerts,
-      ...whatsappSettings.systemAlerts,
-      // CRITICAL: Explicitly preserve enabled field if it exists (even if false)
-      enabled: whatsappSettings.systemAlerts.hasOwnProperty('enabled')
-        ? whatsappSettings.systemAlerts.enabled
-        : defaults.systemAlerts.enabled
-    } : defaults.systemAlerts
-  };
-  
-  return merged;
-}
-
 // Helper function to apply Email settings defaults
 // This ensures that even if settings don't exist in DB, we use defaults
 function getEmailSettingsWithDefaults(emailSettings) {
@@ -253,10 +189,13 @@ function getEmailSettingsWithDefaults(emailSettings) {
     },
     appointmentNotifications: {
       enabled: true,
-      newAppointment: true,
-      cancellation: true,
-      noShow: false,
-      reminderTime: 24
+      // Must match Business.settings.emailNotificationSettings + notification UI (plural key)
+      newAppointments: true,
+      cancellations: true,
+      noShows: false,
+      reminders: false,
+      reminderHoursBefore: 24,
+      recipientStaffIds: []
     },
     receiptNotifications: {
       enabled: true,
@@ -372,7 +311,7 @@ const {
   COOKIE,
   TOKEN_USE,
 } = require('./lib/auth-tokens');
-const { createRefreshSession, rotateRefreshSession } = require('./lib/refresh-session');
+const { createRefreshSession, rotateRefreshSession, revokeRefreshFamily } = require('./lib/refresh-session');
 const { validate, validateAll } = require('./middleware/validate');
 const {
   tenantLoginSchema,
@@ -610,7 +549,7 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
       updatedAt: new Date()
     });
 
-    const token = await issueTenantSession(res, user);
+    await issueTenantSession(res, user);
     const csrfToken = setCsrfCookie(res);
     const { password: _, ...userWithoutPassword } = user.toObject();
 
@@ -645,7 +584,6 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
       success: true,
       data: {
         user: { ...userWithoutPassword, ...suspensionMeta },
-        token,
         csrfToken,
       }
     });
@@ -712,7 +650,7 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
 
     // Generate token with staff info - ensure branchId is set (fallback to business._id for legacy staff)
     const effectiveBranchId = staff.branchId || business._id;
-    const token = await issueTenantSession(
+    await issueTenantSession(
       res,
       {
         _id: staff._id,
@@ -774,7 +712,7 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
           mobile: staff.phone,
           role: staff.role,
           branchId: effectiveBranchId,
-          isOwner: false, // Staff are never owner
+          isOwner: false,
           hasLoginAccess: staff.hasLoginAccess,
           allowAppointmentScheduling: staff.allowAppointmentScheduling,
           isActive: staff.isActive,
@@ -786,7 +724,6 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
           updatedAt: staff.updatedAt,
           ...staffSuspensionMeta,
         },
-        token,
         csrfToken,
       }
     });
@@ -799,7 +736,19 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
   }
 });
 
-app.post('/api/auth/logout', authenticateToken, (req, res) => {
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  try {
+    const refreshCookie = req.cookies && req.cookies[COOKIE.tenantRefresh];
+    if (refreshCookie) {
+      const decoded = jwt.decode(refreshCookie);
+      if (decoded && decoded.familyId) {
+        const mainConnection = await databaseManager.getMainConnection();
+        await revokeRefreshFamily(mainConnection, decoded.familyId);
+      }
+    }
+  } catch (err) {
+    logger.warn('[auth/logout] Failed to revoke refresh family:', err);
+  }
   clearTenantAuthCookies(res);
   res.json({
     success: true,
@@ -876,7 +825,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         };
         const newToken = signTenantAccess(userForToken);
         setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
-        return res.json({ success: true, data: { token: newToken } });
+        return res.json({ success: true });
       }
 
       const businessId = rdecoded.branchId;
@@ -904,7 +853,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         isActive: staff.isActive,
       });
       setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
-      return res.json({ success: true, data: { token: newToken } });
+      return res.json({ success: true });
     }
 
     /** Legacy: sliding refresh using access token (Bearer) within grace window */
@@ -956,7 +905,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         branchId: userDoc.branchId,
       });
       setTenantAuthCookies(res, { accessToken: newToken, refreshToken: created.refreshToken });
-      return res.json({ success: true, data: { token: newToken } });
+      return res.json({ success: true });
     }
 
     const businessId = decoded.branchId;
@@ -991,7 +940,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       branchId: effectiveBranchId,
     });
     setTenantAuthCookies(res, { accessToken: newToken, refreshToken: created.refreshToken });
-    return res.json({ success: true, data: { token: newToken } });
+    return res.json({ success: true });
   } catch (error) {
     logger.error('[auth/refresh]', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
@@ -3083,6 +3032,13 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
     const activities = [];
 
     // Track changes and log activities
+    // Snapshot of notes sent with this request — timeline cards use this so each "Add Status" row
+    // shows the note entered for that event (lead.notes alone only keeps the latest string).
+    const statusActivityDetails =
+      notes !== undefined
+        ? { statusNoteSnapshot: String(notes) }
+        : {};
+
     // Always create a status activity if status is provided (for "Add Status" functionality)
     // This ensures we preserve history even if status value doesn't change
     if (status !== undefined) {
@@ -3097,6 +3053,7 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
           newValue: status,
           field: 'status',
           description: `Status changed from ${lead.status} to ${status}`,
+          details: statusActivityDetails,
           branchId: req.user.branchId
         });
         lead.status = status;
@@ -3112,6 +3069,7 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
           newValue: status,
           field: 'status',
           description: `Status confirmed: ${status}`,
+          details: statusActivityDetails,
           branchId: req.user.branchId
         });
         // Don't update lead.status since it's the same, but we still log the activity
@@ -3394,11 +3352,18 @@ app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusine
       const newAppointment = new Appointment(appointmentData);
       const savedAppointment = await newAppointment.save();
       const populatedAppointment = await Appointment.findById(savedAppointment._id)
-        .populate('clientId', 'name phone')
+        .populate('clientId', 'name phone email')
         .populate('serviceId', 'name price')
-        .populate('staffId', 'name');
+        .populate('staffId', 'name role')
+        .populate('staffAssignments.staffId', 'name role');
       
       createdAppointments.push(populatedAppointment);
+    }
+
+    try {
+      await sendAppointmentWhatsAppAfterCreate(req, createdAppointments);
+    } catch (waErr) {
+      logger.error('WhatsApp after lead convert', waErr);
     }
 
     // Update lead status
@@ -7439,6 +7404,9 @@ const syncCompletedLinkedAppointmentStaffFromSale = async (AppointmentModel, sal
     if (!appointment) return;
     if (String(appointment.status || '').toLowerCase() !== 'completed') return;
 
+    // Multi-staff booking group: each card keeps its own assigned staff; don't reassign based on first sale line
+    if (appointment.bookingGroupId) return;
+
     const primary = getPrimaryStaffFromSaleServiceItems(sale.items);
     if (!primary || !mongoose.Types.ObjectId.isValid(primary.staffId)) {
       return;
@@ -7861,7 +7829,9 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         if (appointmentNotificationsEnabled) {
         // Send confirmation to client if email exists
         // Check if new appointments are enabled
-        const sendNewAppointments = emailSettings?.appointmentNotifications?.newAppointments === true;
+        const sendNewAppointments =
+          emailSettings?.appointmentNotifications?.newAppointments === true ||
+          emailSettings?.appointmentNotifications?.newAppointment === true;
         logger.debug(`📧 Send new appointments to clients: ${sendNewAppointments}`);
         
         if (sendNewAppointments) {
@@ -8150,142 +8120,9 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       // Don't fail appointment creation if email fails
     }
 
-    // Send WhatsApp appointment confirmation if enabled
+    // Send WhatsApp appointment confirmation if enabled (same path as receipt on checkout)
     try {
-      const whatsappService = require('./services/whatsapp-service');
-      await whatsappService.initialize();
-      
-      if (whatsappService.enabled) {
-        const databaseManager = require('./config/database-manager');
-        const mainConnection = await databaseManager.getMainConnection();
-        const AdminSettings = mainConnection.model('AdminSettings', require('./models/AdminSettings').schema);
-        const Business = mainConnection.model('Business', require('./models/Business').schema);
-        const WhatsAppMessageLog = mainConnection.model('WhatsAppMessageLog', require('./models/WhatsAppMessageLog').schema);
-        
-        const adminSettings = await AdminSettings.getSettings();
-        const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
-        const adminAppointmentNotificationsEnabled = adminSettings?.notifications?.whatsapp?.appointmentNotifications === true;
-        
-        logger.debug('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
-        logger.debug('📱 [WhatsApp] Admin Appointment Notifications enabled:', adminAppointmentNotificationsEnabled);
-        
-        if (whatsappEnabled && adminAppointmentNotificationsEnabled) {
-          const business = await Business.findById(req.user.branchId);
-          const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
-          const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
-          const businessWhatsappEnabled = whatsappSettings.enabled === true;
-          const appointmentWhatsappEnabled = whatsappSettings.appointmentNotifications?.enabled === true;
-          const confirmationsEnabled = whatsappSettings.appointmentNotifications?.confirmations === true;
-          
-          if (businessWhatsappEnabled && appointmentWhatsappEnabled && confirmationsEnabled) {
-            // Check quiet hours
-            const quietHours = adminSettings?.notifications?.whatsapp?.quietHours;
-            const inQuietHours = whatsappService.isQuietHours(quietHours);
-            
-            if (!inQuietHours) {
-              const { Client, Staff } = req.businessModels;
-              
-              for (const appointment of createdAppointments) {
-                // Get client
-                let client = null;
-                if (appointment.clientId && typeof appointment.clientId === 'object') {
-                  client = appointment.clientId;
-                } else {
-                  const clientId = appointment.clientId?._id || appointment.clientId;
-                  if (clientId) {
-                    client = await Client.findById(clientId);
-                  }
-                }
-                
-                if (client?.phone) {
-                  try {
-                    // Get service name
-                    let serviceName = 'Service';
-                    if (appointment.serviceId) {
-                      if (typeof appointment.serviceId === 'object' && appointment.serviceId.name) {
-                        serviceName = appointment.serviceId.name;
-                      } else {
-                        const { Service } = req.businessModels;
-                        const service = await Service.findById(appointment.serviceId);
-                        serviceName = service?.name || 'Service';
-                      }
-                    }
-                    
-                    // Get staff name
-                    let staffName = 'Not assigned';
-                    if (appointment.staffId) {
-                      if (typeof appointment.staffId === 'object' && appointment.staffId.name) {
-                        staffName = appointment.staffId.name;
-                      } else {
-                        const staff = await Staff.findById(appointment.staffId);
-                        staffName = staff?.name || 'Not assigned';
-                      }
-                    } else if (appointment.staffAssignments && appointment.staffAssignments.length > 0) {
-                      const firstAssignment = appointment.staffAssignments[0];
-                      if (firstAssignment.staffId && typeof firstAssignment.staffId === 'object' && firstAssignment.staffId.name) {
-                        staffName = firstAssignment.staffId.name;
-                      } else if (firstAssignment.staffId) {
-                        const staff = await Staff.findById(firstAssignment.staffId);
-                        staffName = staff?.name || 'Not assigned';
-                      }
-                    }
-                    
-                    const result = await whatsappService.sendAppointmentConfirmation({
-                      to: client.phone,
-                      clientName: client.name || 'Client',
-                      appointmentData: {
-                        serviceName: serviceName,
-                        date: appointment.date,
-                        time: appointment.time,
-                        staffName: staffName,
-                        businessName: business.name,
-                        businessPhone: business.contact?.phone
-                      }
-                    });
-                    
-                    // Log to WhatsAppMessageLog
-                    await WhatsAppMessageLog.create({
-                      businessId: business._id,
-                      recipientPhone: client.phone,
-                      messageType: 'appointment',
-                      status: result.success ? 'sent' : 'failed',
-                      msg91Response: result.data || null,
-                      relatedEntityId: appointment._id,
-                      relatedEntityType: 'Appointment',
-                      error: result.error || null,
-                      timestamp: new Date()
-                    });
-                    
-                    if (result.success) {
-                      // Increment WhatsApp quota usage
-                      try {
-                        const mainConnection = await databaseManager.getMainConnection();
-                        const Business = mainConnection.model('Business', require('./models/Business').schema);
-                        await Business.updateOne(
-                          { _id: business._id },
-                          { $inc: { 'plan.addons.whatsapp.used': 1 } }
-                        );
-                        logger.debug(`📊 WhatsApp quota incremented for business: ${business._id}`);
-                      } catch (quotaError) {
-                        logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
-                        // Don't fail the appointment if quota increment fails
-                      }
-                      
-                      logger.debug(`✅ Appointment WhatsApp sent to client: ${client.phone}`);
-                    } else {
-                      logger.error(`❌ Failed to send appointment WhatsApp to ${client.phone}:`, result.error);
-                    }
-                  } catch (whatsappError) {
-                    logger.error('❌ Error sending appointment WhatsApp to client:', whatsappError);
-                  }
-                }
-              }
-            } else {
-              logger.debug('📱 WhatsApp quiet hours active, skipping appointment message');
-            }
-          }
-        }
-      }
+      await sendAppointmentWhatsAppAfterCreate(req, createdAppointments);
     } catch (whatsappError) {
       logger.error('Error sending appointment WhatsApp:', whatsappError);
       // Don't fail appointment creation if WhatsApp fails
@@ -8604,7 +8441,9 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         
         const adminSettings = await AdminSettings.getSettings();
         const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
-        const adminReceiptNotificationsEnabled = adminSettings?.notifications?.whatsapp?.receiptNotifications === true;
+        const adminReceiptNotificationsEnabled = isAdminReceiptNotificationsEnabled(
+          adminSettings?.notifications?.whatsapp
+        );
         
         if (whatsappEnabled && adminReceiptNotificationsEnabled) {
           // Use lean() to get plain object so nested objects are accessible
@@ -8898,8 +8737,12 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     const previousStatus = appointment.status;
     const isBeingCancelled = updateData.status === 'cancelled' && previousStatus !== 'cancelled';
 
-    // Status updates apply only to this appointment. bookingGroupId links multi-day / multi-card bookings;
-    // each visit keeps its own status (do not updateMany across the group).
+
+    const isBeingRescheduled =
+      previousStatus !== 'cancelled' &&
+      updateData.status !== 'cancelled' &&
+      ((updateData.date && updateData.date !== appointment.date) ||
+       (updateData.time && updateData.time !== appointment.time));
 
     // Update the appointment
     const updatedAppointment = await Appointment.findByIdAndUpdate(
@@ -8910,6 +8753,19 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     .populate('clientId', 'name phone email')
     .populate('serviceId', 'name price duration')
     .populate('staffId', 'name role');
+
+    // Propagate "arrived" to all cards in the same bookingGroup (same customer physically arrived).
+    // Other status transitions (service_started, completed) remain per-card since each staff starts independently.
+    if (updateData.status === 'arrived' && appointment.bookingGroupId) {
+      await Appointment.updateMany(
+        {
+          bookingGroupId: appointment.bookingGroupId,
+          _id: { $ne: appointment._id },
+          status: { $in: ['scheduled', 'confirmed'] }
+        },
+        { $set: { status: 'arrived' } }
+      );
+    }
 
     // Send cancellation emails if appointment was cancelled (errors only — no per-update debug)
     if (isBeingCancelled) {
@@ -9098,6 +8954,20 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       } catch (emailError) {
         logger.error('Error sending cancellation emails:', emailError);
         // Don't fail the update if email fails
+      }
+
+      try {
+        await sendAppointmentCancellationWhatsApp(req, updatedAppointment);
+      } catch (whatsappErr) {
+        logger.error('Error sending appointment cancellation WhatsApp:', whatsappErr);
+      }
+    }
+
+    if (isBeingRescheduled) {
+      try {
+        await sendAppointmentRescheduleWhatsApp(req, updatedAppointment);
+      } catch (whatsappErr) {
+        logger.error('Error sending appointment reschedule WhatsApp:', whatsappErr);
       }
     }
 
@@ -9404,8 +9274,10 @@ app.get('/api/sales/summary', authenticateToken, setupBusinessDatabase, requireS
   try {
     const { Sale } = req.businessModels;
     const branchId = req.user.branchId;
-    const match = buildSalesListMatch(branchId, req.query);
-    const totals = await computeSalesSummaryTotals(Sale, match);
+    const split = buildSalesListDuePaymentSplitMatches(branchId, req.query);
+    const totals = split
+      ? await computeSalesSummaryTotalsSplit(Sale, split.matchInvoice, split.matchPaymentOnly)
+      : await computeSalesSummaryTotals(Sale, buildSalesListMatch(branchId, req.query));
     const durationMs = Date.now() - started;
     if (durationMs > 500) {
       logger.warn('Slow GET /api/sales/summary', { durationMs });
@@ -9434,20 +9306,29 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
   try {
     const { Sale, BillEditHistory } = req.businessModels;
     const branchId = req.user.branchId;
-    const match = buildSalesListMatch(branchId, req.query);
     const { limit, page, skip } = parseSalesListPagination(req.query);
+    const split = buildSalesListDuePaymentSplitMatches(branchId, req.query);
+    const match = split ? null : buildSalesListMatch(branchId, req.query);
 
-    const [total, sales] = await Promise.all([
-      Sale.countDocuments(match),
-      // Newest bills first: `date` is often the calendar day only (same instant for many rows) while
-      // `time` is a separate string — composite date+time sort is unreliable. `createdAt` reflects
-      // actual save order and aligns with sequential invoice numbers (INV-…).
-      Sale.find(match)
-        .sort({ createdAt: -1, billNo: -1, _id: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-    ]);
+    const [total, sales] = split
+      ? await Promise.all([
+          Promise.all([
+            Sale.countDocuments(split.matchInvoice),
+            Sale.countDocuments(split.matchPaymentOnly),
+          ]).then(([a, b]) => a + b),
+          fetchSalesListPageMerged(Sale, split.matchInvoice, split.matchPaymentOnly, skip, limit),
+        ])
+      : await Promise.all([
+          Sale.countDocuments(match),
+          // Newest bills first: `date` is often the calendar day only (same instant for many rows) while
+          // `time` is a separate string — composite date+time sort is unreliable. `createdAt` reflects
+          // actual save order and aligns with sequential invoice numbers (INV-…).
+          Sale.find(match)
+            .sort({ createdAt: -1, billNo: -1, _id: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+        ]);
 
     await mergeEditedFlagsFromHistory(sales, BillEditHistory);
 
@@ -9920,7 +9801,9 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         
         const adminSettings = await AdminSettings.getSettings();
         const whatsappEnabled = adminSettings?.notifications?.whatsapp?.enabled === true;
-        const adminReceiptNotificationsEnabled = adminSettings?.notifications?.whatsapp?.receiptNotifications === true; // Admin master switch
+        const adminReceiptNotificationsEnabled = isAdminReceiptNotificationsEnabled(
+          adminSettings?.notifications?.whatsapp
+        );
         
         logger.debug('📱 [WhatsApp] Admin WhatsApp enabled:', whatsappEnabled);
         logger.debug('📱 [WhatsApp] Admin Receipt Notifications enabled:', adminReceiptNotificationsEnabled);
@@ -11663,6 +11546,7 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
       city,
       state,
       zipCode,
+      googleMapsUrl,
       socialMedia,
       logo,
       gstNumber
@@ -11677,6 +11561,30 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
         success: false,
         error: "Required fields are missing"
       });
+    }
+
+    const mapsTrimmed = typeof googleMapsUrl === "string" ? googleMapsUrl.trim() : "";
+    let mapsStored = mapsTrimmed;
+    if (mapsTrimmed) {
+      const isShortSlug = !mapsTrimmed.includes("://") && /^[a-zA-Z0-9_-]+$/.test(mapsTrimmed);
+      if (isShortSlug) {
+        mapsStored = `https://maps.app.goo.gl/${mapsTrimmed}`;
+      } else {
+        try {
+          const u = new URL(mapsTrimmed);
+          if (u.protocol !== "http:" && u.protocol !== "https:") {
+            return res.status(400).json({
+              success: false,
+              error: "Google Maps URL must start with http:// or https://"
+            });
+          }
+        } catch {
+          return res.status(400).json({
+            success: false,
+            error: "Invalid Google Maps URL"
+          });
+        }
+      }
     }
 
     let settings = await BusinessSettings.findOne();
@@ -11697,6 +11605,7 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
     settings.city = city;
     settings.state = state;
     settings.zipCode = zipCode;
+    settings.googleMapsUrl = mapsStored;
     settings.socialMedia = socialMedia || "@glamoursalon";
     settings.logo = logo || "";
     settings.gstNumber = gstNumber || "";
@@ -14216,6 +14125,10 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   // Setup package expiry cron job (daily midnight UTC)
   const { startExpiryJob } = require('./services/package-expiry-job');
   startExpiryJob();
+
+  // Setup WhatsApp appointment reminder cron job (every 30 min)
+  const { setupAppointmentReminderJob } = require('./jobs/appointment-reminder');
+  setupAppointmentReminderJob();
   
   // Initialize email service on server start
   const emailService = require('./services/email-service');

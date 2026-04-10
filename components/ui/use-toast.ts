@@ -174,6 +174,8 @@ function toast({ ...props }: Toast) {
 function useToast() {
   const [state, setState] = React.useState<State>(memoryState)
 
+  // Subscribe once per mount. (Depending on [state] re-ran this effect on every toast update,
+  // removed/re-added listeners, and could trigger "invalid hook call" / hook order issues in React 19.)
   React.useEffect(() => {
     listeners.push(setState)
     return () => {
@@ -182,7 +184,7 @@ function useToast() {
         listeners.splice(index, 1)
       }
     }
-  }, [state])
+  }, [])
 
   return {
     ...state,

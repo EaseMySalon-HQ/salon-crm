@@ -50,6 +50,7 @@ export function WhatsAppBusinessSettings() {
       newAppointments: false,
       confirmations: false,
       reminders: false,
+      reschedule: false,
       cancellations: false
     },
     systemAlerts: {
@@ -68,9 +69,7 @@ export function WhatsAppBusinessSettings() {
     try {
       setIsLoadingStatus(true)
       const response = await fetch(`${API_URL}/email-notifications/whatsapp/status`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('salon-auth-token')}`,
-        },
+        credentials: 'include',
       })
       
       if (response.ok) {
@@ -122,11 +121,6 @@ export function WhatsAppBusinessSettings() {
                 : prev.systemAlerts.enabled
             }
           }))
-          console.log('📱 [Frontend] Loaded WhatsApp settings - enabled:', whatsappSettings.enabled)
-          console.log('📱 [Frontend] Loaded WhatsApp settings - type:', typeof whatsappSettings.enabled)
-          console.log('📱 [Frontend] Loaded WhatsApp settings - isFalse:', whatsappSettings.enabled === false)
-          console.log('📱 [Frontend] Loaded WhatsApp settings - isTrue:', whatsappSettings.enabled === true)
-          console.log('📱 [Frontend] Loaded WhatsApp settings - full:', whatsappSettings)
         }
       }
     } catch (error) {
@@ -150,17 +144,9 @@ export function WhatsAppBusinessSettings() {
 
     try {
       setIsLoading(true)
-      console.log('📱 [Frontend] Saving WhatsApp - enabled:', settings.enabled)
-      console.log('📱 [Frontend] Saving WhatsApp - type:', typeof settings.enabled)
-      console.log('📱 [Frontend] Saving WhatsApp - isFalse:', settings.enabled === false)
-      console.log('📱 [Frontend] Saving WhatsApp - full:', settings)
       const response = await EmailNotificationsAPI.updateSettings({
         whatsappNotificationSettings: settings
       })
-      console.log('📱 [Frontend] Save response - success:', response.success)
-      console.log('📱 [Frontend] Save response - enabled:', response.data?.whatsappNotificationSettings?.enabled)
-      console.log('📱 [Frontend] Save response - type:', typeof response.data?.whatsappNotificationSettings?.enabled)
-      console.log('📱 [Frontend] Save response - full data:', response.data)
 
       if (response.success) {
         toast({
@@ -374,28 +360,105 @@ export function WhatsAppBusinessSettings() {
                 Send appointment updates via WhatsApp.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
                   <Label>Enable Appointment Notifications</Label>
                   <p className="text-sm text-gray-500">
-                    Send appointment confirmations, reminders, and cancellations via WhatsApp.
+                    Master toggle for all appointment-related WhatsApp messages.
                   </p>
                 </div>
                 <Switch
                   checked={settings.appointmentNotifications.enabled}
-                  onCheckedChange={(checked) => 
-                    setSettings(prev => ({
+                  onCheckedChange={(checked) =>
+                    setSettings((prev) => ({
                       ...prev,
                       appointmentNotifications: {
                         ...prev.appointmentNotifications,
-                        enabled: checked
-                      }
+                        enabled: checked,
+                        ...(checked
+                          ? { confirmations: true, newAppointments: true, reminders: true, cancellations: true }
+                          : {}),
+                      },
                     }))
                   }
                   disabled={!isAdmin || !settings.enabled}
                 />
               </div>
+
+              {settings.appointmentNotifications.enabled && (
+                <div className="space-y-3 pt-3 border-t border-gray-100">
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Individual Templates</p>
+
+                  <div className="flex items-center justify-between py-1.5">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm">Confirmation</Label>
+                      <p className="text-xs text-gray-500">Sent when a new appointment is booked.</p>
+                    </div>
+                    <Switch
+                      checked={settings.appointmentNotifications.confirmations}
+                      onCheckedChange={(checked) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          appointmentNotifications: { ...prev.appointmentNotifications, confirmations: checked },
+                        }))
+                      }
+                      disabled={!isAdmin || !settings.enabled}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between py-1.5">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm">Reminder</Label>
+                      <p className="text-xs text-gray-500">Sent automatically 2–24 hours before the appointment.</p>
+                    </div>
+                    <Switch
+                      checked={settings.appointmentNotifications.reminders}
+                      onCheckedChange={(checked) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          appointmentNotifications: { ...prev.appointmentNotifications, reminders: checked },
+                        }))
+                      }
+                      disabled={!isAdmin || !settings.enabled}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between py-1.5">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm">Reschedule</Label>
+                      <p className="text-xs text-gray-500">Sent when an appointment date or time is changed.</p>
+                    </div>
+                    <Switch
+                      checked={settings.appointmentNotifications.reschedule !== false}
+                      onCheckedChange={(checked) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          appointmentNotifications: { ...prev.appointmentNotifications, reschedule: checked },
+                        }))
+                      }
+                      disabled={!isAdmin || !settings.enabled}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between py-1.5">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm">Cancellation</Label>
+                      <p className="text-xs text-gray-500">Sent when an appointment is cancelled.</p>
+                    </div>
+                    <Switch
+                      checked={settings.appointmentNotifications.cancellations}
+                      onCheckedChange={(checked) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          appointmentNotifications: { ...prev.appointmentNotifications, cancellations: checked },
+                        }))
+                      }
+                      disabled={!isAdmin || !settings.enabled}
+                    />
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 

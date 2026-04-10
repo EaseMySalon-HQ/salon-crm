@@ -372,7 +372,11 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
                               <div className="flex items-center gap-2">
                                 <span>{profile.name}</span>
                                 <Badge variant="outline" className="text-xs">
-                                  {profile.type === 'target_based' ? 'Target Based' : 'Item Based'}
+                                  {profile.type === 'target_based'
+                                    ? 'Target Based'
+                                    : profile.type === 'service_based'
+                                      ? 'Service Based'
+                                      : 'Item Based'}
                                 </Badge>
                               </div>
                             </CommandItem>

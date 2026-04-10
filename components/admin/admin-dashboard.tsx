@@ -25,7 +25,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { useRouter } from "next/navigation"
 import { format } from "date-fns"
@@ -453,10 +459,15 @@ export function AdminDashboard() {
       {/* Users modal */}
       <Dialog open={showUsersModal} onOpenChange={setShowUsersModal}>
         <DialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
-          <div className="flex items-center gap-2">
-            <Users className="h-5 w-5 text-slate-600" />
-            <span className="font-semibold">All users ({users.length})</span>
-          </div>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-left">
+              <Users className="h-5 w-5 text-slate-600" />
+              All users ({users.length})
+            </DialogTitle>
+            <DialogDescription>
+              Search and browse all platform users. Filter by name, email, business, or role.
+            </DialogDescription>
+          </DialogHeader>
           <Input
             placeholder="Search by name, email, or business..."
             value={usersSearch}
