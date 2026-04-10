@@ -1,12 +1,12 @@
 /**
  * CSRF helpers — double-submit cookie mirror.
  *
- * For requests that carry `Authorization: Bearer <token>`, the backend skips
- * CSRF entirely (Bearer tokens are inherently un-forgeable cross-origin).
+ * On cross-origin deployments (SPA origin ≠ API origin), `ems_csrf` is set on
+ * the API host — `document.cookie` on the SPA cannot read it. The backend
+ * returns `csrfToken` in JSON from login, GET /auth/profile, and POST /auth/refresh;
+ * we persist it here so mutating requests can send `X-CSRF-Token`.
  *
- * These helpers only matter for cookie-only sessions (e.g. admin `fetch()`
- * calls that don't use apiClient).  They read the `ems_csrf` cookie if
- * available, or fall back to a value stored in sessionStorage at login.
+ * Bearer-authenticated requests skip CSRF on the backend.
  */
 
 /** Matches backend `backend/middleware/csrf.js` — double-submit cookie name. */

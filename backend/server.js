@@ -825,7 +825,8 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         };
         const newToken = signTenantAccess(userForToken);
         setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
-        return res.json({ success: true });
+        const csrfToken = setCsrfCookie(res);
+        return res.json({ success: true, csrfToken });
       }
 
       const businessId = rdecoded.branchId;
@@ -853,7 +854,8 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         isActive: staff.isActive,
       });
       setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
-      return res.json({ success: true });
+      const csrfTokenStaff = setCsrfCookie(res);
+      return res.json({ success: true, csrfToken: csrfTokenStaff });
     }
 
     /** Legacy: sliding refresh using access token (Bearer) within grace window */
@@ -905,7 +907,8 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         branchId: userDoc.branchId,
       });
       setTenantAuthCookies(res, { accessToken: newToken, refreshToken: created.refreshToken });
-      return res.json({ success: true });
+      const csrfTokenLegacyUser = setCsrfCookie(res);
+      return res.json({ success: true, csrfToken: csrfTokenLegacyUser });
     }
 
     const businessId = decoded.branchId;
@@ -940,7 +943,8 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       branchId: effectiveBranchId,
     });
     setTenantAuthCookies(res, { accessToken: newToken, refreshToken: created.refreshToken });
-    return res.json({ success: true });
+    const csrfTokenLegacyStaff = setCsrfCookie(res);
+    return res.json({ success: true, csrfToken: csrfTokenLegacyStaff });
   } catch (error) {
     logger.error('[auth/refresh]', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
@@ -953,6 +957,7 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
     if (req.user.branchId) {
       // Staff user - req.user is already populated by authenticateToken middleware
       // Just return the user data that was already validated
+      const csrfTokenProfile = setCsrfCookie(res);
       res.json({
         success: true,
         data: {
@@ -983,7 +988,8 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           suspensionSupportEmail:
             process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
           suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
-        }
+        },
+        csrfToken: csrfTokenProfile,
       });
     } else {
       // Regular user - lookup from main database
@@ -1003,9 +1009,11 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
         data.isImpersonation = true;
         data.impersonatedBy = req.user.impersonatedBy;
       }
+      const csrfTokenOwner = setCsrfCookie(res);
       res.json({
         success: true,
-        data
+        data,
+        csrfToken: csrfTokenOwner,
       });
     }
   } catch (error) {
