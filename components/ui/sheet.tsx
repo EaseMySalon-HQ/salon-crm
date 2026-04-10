@@ -6,6 +6,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { isRadixPortaledInteraction } from "../../lib/radix-portal"
 
 const Sheet = SheetPrimitive.Root
 
@@ -56,12 +57,20 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, ...props }, ref) => (
+>(({ side = "right", className, children, onPointerDownOutside, onFocusOutside, ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <SheetPrimitive.Content
       ref={ref}
       className={cn(sheetVariants({ side }), className)}
+      onPointerDownOutside={(e) => {
+        if (isRadixPortaledInteraction(e)) e.preventDefault()
+        onPointerDownOutside?.(e)
+      }}
+      onFocusOutside={(e) => {
+        if (isRadixPortaledInteraction(e)) e.preventDefault()
+        onFocusOutside?.(e)
+      }}
       {...props}
     >
       {children}

@@ -414,8 +414,10 @@ export class ClientsAPI {
     return response.data
   }
 
-  static async search(query: string): Promise<ApiResponse<any[]>> {
-    const response = await apiClient.get('/clients/search', { params: { q: query } })
+  static async search(query: string, opts?: { limit?: number }): Promise<ApiResponse<any[]>> {
+    const params: Record<string, string | number> = { q: query }
+    if (opts?.limit) params.limit = opts.limit
+    const response = await apiClient.get('/clients/search', { params })
     return response.data
   }
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -189,6 +189,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [clients, setClients] = useState<Client[]>([])
+  const [searchingClients, setSearchingClients] = useState(false)
+  const clientSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Services and staff state
   const [services, setServices] = useState<any[]>([])
@@ -348,7 +350,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   useEffect(() => {
     fetchServices()
     fetchStaff()
-    fetchClients()
   }, [])
 
   // Load appointment when in edit mode
@@ -496,15 +497,17 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     return () => { cancelled = true }
   }, [appointmentId])
 
-  // Subscribe to client store changes
+  // After creating a new client via dialog, refresh search results
   useEffect(() => {
     const unsubscribe = clientStore.subscribe(() => {
-      const updatedClients = clientStore.getClients()
-      setClients(updatedClients || [])
+      if (customerSearch.trim() && !selectedCustomer) {
+        clientStore.searchClients(customerSearch.trim())
+          .then(results => setClients(results || []))
+          .catch(() => {})
+      }
     })
-
     return unsubscribe
-  }, [])
+  }, [customerSearch, selectedCustomer])
 
   // Hide client details panel when search box is empty (no number/name)
   useEffect(() => {
@@ -571,23 +574,32 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     }
   }
 
-  const fetchClients = async () => {
-    try {
-      await clientStore.loadClients()
-      const allClients = clientStore.getClients()
-      setClients(allClients || [])
-    } catch (error) {
-      console.error('Failed to fetch clients:', error)
+  useEffect(() => {
+    if (selectedCustomer) return
+    const trimmed = customerSearch.trim()
+    if (!trimmed) return
+    if (trimmed.length < 2) {
+      setClients([])
+      return
     }
-  }
+    if (clientSearchTimer.current) clearTimeout(clientSearchTimer.current)
+    clientSearchTimer.current = setTimeout(async () => {
+      setSearchingClients(true)
+      try {
+        const results = await clientStore.searchClients(trimmed)
+        setClients(results || [])
+      } catch {
+        setClients([])
+      } finally {
+        setSearchingClients(false)
+      }
+    }, 300)
+    return () => {
+      if (clientSearchTimer.current) clearTimeout(clientSearchTimer.current)
+    }
+  }, [customerSearch, selectedCustomer])
 
-  // Filter customers based on search
-  const filteredCustomers = clients.filter(
-    (client) =>
-      client.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
-      client.phone.includes(customerSearch) ||
-      (client.email && client.email.toLowerCase().includes(customerSearch.toLowerCase())),
-  )
+  const filteredCustomers = clients
 
   // Handle customer selection
   const handleCustomerSelect = (customer: Client) => {
@@ -672,10 +684,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       const success = await clientStore.addClient(newClientData)
       
       if (success) {
-        // Refresh clients list
-        await fetchClients()
-        
-        // Find the newly created client
+        // Use the newly created client directly from the store (no full reload needed)
         const allClients = clientStore.getClients()
         const createdClient = allClients.find(c => 
           c.name === newClientData.name && c.phone === newClientData.phone
@@ -1099,13 +1108,25 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                       }
                     }
                   }}
-                  onFocus={() => setShowCustomerDropdown(true)}
+                  onFocus={() => {
+                    setShowCustomerDropdown(true)
+                    if (!customerSearch.trim() && !selectedCustomer) {
+                      clientStore.preloadRecent().then(recent => {
+                        if (recent.length) setClients(recent)
+                      })
+                    }
+                  }}
                   className="pl-12 h-12 border-slate-200 focus:border-indigo-500 focus:ring-indigo-500 rounded-xl"
                 />
 
-                {showCustomerDropdown && customerSearch && (
+                {showCustomerDropdown && (customerSearch || clients.length > 0) && (
                   <div className="absolute top-full left-0 right-0 z-10 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-auto">
-                    {filteredCustomers.length > 0 ? (
+                    {searchingClients ? (
+                      <div className="p-4 text-center text-slate-500 flex items-center justify-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span className="text-sm">Searching clients...</span>
+                      </div>
+                    ) : filteredCustomers.length > 0 ? (
                       filteredCustomers.map((customer, index) => (
                         <div
                           key={`${customer._id || customer.id || 'customer'}-${customer.phone || index}-${index}`}
@@ -1161,7 +1182,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                   return (
                     <FormItem className="flex flex-col space-y-2">
                       <FormLabel className="text-sm font-semibold text-slate-700">Date *</FormLabel>
-                      <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+                      <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen} modal>
                         <PopoverTrigger asChild>
                           <FormControl>
                             <Button
@@ -1193,23 +1214,21 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                               classNames={{
                                 months: "flex",
                                 month: "space-y-8",
-                                caption: "flex justify-center items-center mb-16 relative h-10 pt-4",
+                                month_caption: "flex justify-center items-center mb-16 relative h-10 pt-4",
                                 caption_label: "text-lg font-semibold text-slate-900 absolute left-1/2 -translate-x-1/2 z-10",
                                 nav: "absolute inset-x-0 flex items-center justify-between px-1 top-4",
-                                nav_button: "h-8 w-8 bg-transparent hover:bg-slate-100 rounded-md inline-flex items-center justify-center transition-colors disabled:opacity-50 z-20",
-                                nav_button_previous: "absolute left-1",
-                                nav_button_next: "absolute right-1",
-                                table: "w-full border-collapse mt-8",
-                                head_row: "flex mb-2",
-                                head_cell: "text-slate-500 font-medium text-xs uppercase w-10 text-center",
-                                row: "flex w-full mt-1",
-                                cell: "relative p-0.5 text-center text-sm",
-                                day: "h-9 w-9 rounded-md font-normal text-sm",
+                                button_previous: "h-8 w-8 bg-transparent hover:bg-slate-100 rounded-md inline-flex items-center justify-center transition-colors disabled:opacity-50 z-20 absolute left-1",
+                                button_next: "h-8 w-8 bg-transparent hover:bg-slate-100 rounded-md inline-flex items-center justify-center transition-colors disabled:opacity-50 z-20 absolute right-1",
+                                month_grid: "w-full border-collapse mt-8",
+                                weekdays: "flex mb-2",
+                                weekday: "text-slate-500 font-medium text-xs uppercase w-10 text-center",
+                                week: "flex w-full mt-1",
+                                day: "relative p-0.5 text-center text-sm",
                                 day_button: "h-9 w-9 rounded-md font-normal hover:bg-slate-100 transition-colors",
-                                day_selected: "bg-slate-900 text-white hover:bg-slate-800 font-medium",
-                                day_today: "font-semibold text-slate-900 border border-slate-300",
-                                day_outside: "text-slate-300",
-                                day_disabled: "text-slate-200 line-through cursor-not-allowed hover:bg-transparent",
+                                selected: "bg-indigo-600 text-white hover:bg-indigo-700 font-medium rounded-md [&>button]:bg-indigo-600 [&>button]:text-white [&>button]:hover:bg-indigo-700",
+                                today: "font-semibold text-slate-900 border border-slate-300 rounded-md",
+                                outside: "text-slate-300",
+                                disabled: "text-slate-200 line-through cursor-not-allowed hover:bg-transparent",
                               }}
                             />
                           </div>

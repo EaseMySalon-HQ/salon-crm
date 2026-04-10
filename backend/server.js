@@ -2007,27 +2007,39 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
   try {
     const { Client } = req.businessModels;
     const { q } = req.query;
-    
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const projection = 'name phone email lastVisit status';
+
     if (!q) {
-      const clients = await Client.find({}).sort({ createdAt: -1 });
-      return res.json({
-        success: true,
-        data: clients
-      });
+      const clients = await Client.find({})
+        .select(projection)
+        .sort({ lastVisit: -1, createdAt: -1 })
+        .limit(limit)
+        .lean();
+      return res.json({ success: true, data: clients });
     }
 
-    const searchResults = await Client.find({
-      $or: [
-        { name: { $regex: q, $options: 'i' } },
-        { email: { $regex: q, $options: 'i' } },
-        { phone: { $regex: q, $options: 'i' } }
-      ]
-    }).sort({ createdAt: -1 });
+    if (String(q).trim().length < 2) {
+      return res.json({ success: true, data: [] });
+    }
 
-    res.json({
-      success: true,
-      data: searchResults
-    });
+    const escaped = String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const isDigits = /^\d+$/.test(escaped);
+
+    const conditions = isDigits
+      ? [{ phone: { $regex: `^${escaped}` } }]
+      : [
+          { name: { $regex: `^${escaped}`, $options: 'i' } },
+          { phone: { $regex: `^${escaped}` } },
+        ];
+
+    const searchResults = await Client.find({ $or: conditions })
+      .select(projection)
+      .sort({ lastVisit: -1, createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    res.json({ success: true, data: searchResults });
   } catch (error) {
     logger.error('Error searching clients:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -4206,9 +4218,17 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
       usageCountByBillService.set(key, (usageCountByBillService.get(key) || 0) + 1);
     }
 
+    // Batch-fetch all referenced sales in one query instead of N+1
+    const uniqueBillingIds = [...new Set(usageRows.map(u => u.billingId).filter(Boolean))];
+    const salesByBillingId = new Map();
+    if (uniqueBillingIds.length > 0) {
+      const salesDocs = await Sale.find({ _id: { $in: uniqueBillingIds } }).select('items').lean();
+      for (const s of salesDocs) salesByBillingId.set(String(s._id), s);
+    }
+
     let totalSavedViaMembership = 0;
     for (const u of usageRows) {
-      const sale = await Sale.findById(u.billingId).select('items').lean();
+      const sale = salesByBillingId.get(String(u.billingId));
       if (!sale?.items?.length) continue;
       const item = sale.items.find(
         (it) => it.type === 'service' &&
@@ -4238,24 +4258,30 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
       });
     }
 
-    const usageSummary = [];
-    for (const inc of plan.includedServices) {
+    // Batch: count usage per service via aggregation + batch-fetch service names
+    const serviceIds = plan.includedServices.map(inc => inc.serviceId?._id || inc.serviceId);
+    const [usageCounts, servicesDocs] = await Promise.all([
+      MembershipUsage.aggregate([
+        { $match: { branchId, subscriptionId: subscription._id, serviceId: { $in: serviceIds } } },
+        { $group: { _id: '$serviceId', count: { $sum: 1 } } }
+      ]),
+      Service.find({ _id: { $in: serviceIds } }).select('name').lean()
+    ]);
+    const usageCountMap = new Map(usageCounts.map(r => [String(r._id), r.count]));
+    const serviceNameMap = new Map(servicesDocs.map(s => [String(s._id), s.name]));
+
+    const usageSummary = plan.includedServices.map(inc => {
       const serviceId = inc.serviceId?._id || inc.serviceId;
       const usageLimit = inc.usageLimit ?? 0;
-      const used = await MembershipUsage.countDocuments({
-        branchId,
-        subscriptionId: subscription._id,
-        serviceId
-      });
-      const service = await Service.findById(serviceId).select('name').lean();
-      usageSummary.push({
+      const used = usageCountMap.get(String(serviceId)) || 0;
+      return {
         serviceId,
-        serviceName: service?.name || 'Unknown',
+        serviceName: serviceNameMap.get(String(serviceId)) || 'Unknown',
         used,
         limit: usageLimit,
         remaining: Math.max(0, usageLimit - used)
-      });
-    }
+      };
+    });
 
     const freeServicesRemaining = usageSummary.reduce(
       (sum, row) => sum + (Number(row.remaining) || 0),
@@ -10838,7 +10864,11 @@ app.get('/api/sales/by-phone/:phone', authenticateToken, setupBusinessDatabase, 
     
     const { Sale } = req.businessModels;
     
-    const sales = await Sale.find({ customerPhone: phone }).sort({ date: -1 });
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const sales = await Sale.find({ customerPhone: phone })
+      .sort({ date: -1 })
+      .limit(limit)
+      .lean();
     
     res.json({
       success: true,
