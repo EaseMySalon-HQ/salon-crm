@@ -31,18 +31,26 @@ function isSecureCookie() {
   return process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === '1';
 }
 
-/** lax works for many same-site deployments; use COOKIE_SAME_SITE=none behind HTTPS cross-site */
+/**
+ * Cross-origin credentialed XHR (SPA origin ≠ API origin) requires SameSite=None + Secure.
+ * Default to 'none' in production so deployed cross-origin setups work out of the box.
+ * Override with COOKIE_SAME_SITE env var for same-origin deployments.
+ */
 function sameSiteValue() {
-  const v = (process.env.COOKIE_SAME_SITE || 'lax').toLowerCase();
-  if (v === 'none' || v === 'strict' || v === 'lax') return v;
-  return 'lax';
+  const v = process.env.COOKIE_SAME_SITE;
+  if (v) {
+    const lower = v.toLowerCase();
+    if (lower === 'none' || lower === 'strict' || lower === 'lax') return lower;
+  }
+  return isSecureCookie() ? 'none' : 'lax';
 }
 
 function baseCookieOptions(maxAgeMs) {
+  const sameSite = sameSiteValue();
   return {
     httpOnly: true,
-    secure: isSecureCookie(),
-    sameSite: sameSiteValue(),
+    secure: sameSite === 'none' ? true : isSecureCookie(),
+    sameSite,
     path: '/',
     maxAge: maxAgeMs,
   };
@@ -116,11 +124,12 @@ function setTenantAuthCookies(res, { accessToken, refreshToken }) {
 }
 
 function clearTenantAuthCookies(res) {
-  const opts = { ...baseCookieOptions(0), maxAge: 0 };
-  res.clearCookie(COOKIE.tenantAccess, { path: '/' });
-  res.clearCookie(COOKIE.tenantRefresh, { path: '/' });
-  res.cookie(COOKIE.tenantAccess, '', opts);
-  res.cookie(COOKIE.tenantRefresh, '', opts);
+  const clearOpts = baseCookieOptions(0);
+  clearOpts.maxAge = 0;
+  res.clearCookie(COOKIE.tenantAccess, clearOpts);
+  res.clearCookie(COOKIE.tenantRefresh, clearOpts);
+  res.cookie(COOKIE.tenantAccess, '', clearOpts);
+  res.cookie(COOKIE.tenantRefresh, '', clearOpts);
 }
 
 function setAdminAuthCookies(res, { accessToken }) {
@@ -128,9 +137,10 @@ function setAdminAuthCookies(res, { accessToken }) {
 }
 
 function clearAdminAuthCookies(res) {
-  const opts = { ...baseCookieOptions(0), maxAge: 0 };
-  res.clearCookie(COOKIE.adminAccess, { path: '/' });
-  res.cookie(COOKIE.adminAccess, '', opts);
+  const clearOpts = baseCookieOptions(0);
+  clearOpts.maxAge = 0;
+  res.clearCookie(COOKIE.adminAccess, clearOpts);
+  res.cookie(COOKIE.adminAccess, '', clearOpts);
 }
 
 module.exports = {
