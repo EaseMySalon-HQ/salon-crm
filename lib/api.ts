@@ -1,7 +1,7 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
-import { getCsrfToken, CSRF_HEADER_NAME } from './csrf'
+import { getCsrfToken, setCsrfTokenPersisted, CSRF_HEADER_NAME } from './csrf'
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
@@ -16,11 +16,15 @@ async function refreshAuthTokenOnce(): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight
   refreshInFlight = (async () => {
     try {
-      const res = await axios.post<{ success?: boolean }>(
+      const res = await axios.post<{ success?: boolean; csrfToken?: string }>(
         `${API_BASE_URL}/auth/refresh`,
         {},
         { withCredentials: true, timeout: 25000 }
       )
+      const t = res.data?.csrfToken
+      if (typeof t === 'string' && t.trim()) {
+        setCsrfTokenPersisted(t)
+      }
       return res.data?.success === true
     } catch {
       return false
@@ -183,9 +187,21 @@ apiClient.interceptors.request.use(
   }
 )
 
-// Response interceptor: network retry → token refresh + retry → log → session / reject
+// Response interceptor: persist CSRF for cross-origin SPAs (API host cookie not visible to document.cookie)
 apiClient.interceptors.response.use(
-  (response: AxiosResponse) => response,
+  (response: AxiosResponse) => {
+    const url = String(response.config?.url || '')
+    const data = response.data as { csrfToken?: string } | undefined
+    if (
+      data?.csrfToken &&
+      typeof data.csrfToken === 'string' &&
+      data.csrfToken.trim() &&
+      (url.includes('/auth/profile') || url.includes('/auth/refresh'))
+    ) {
+      setCsrfTokenPersisted(data.csrfToken)
+    }
+    return response
+  },
   async (error: AxiosError | any) => {
     if (!error) {
       console.error('❌ API Response Interceptor: Error is null or undefined')
@@ -315,7 +331,7 @@ export class AuthAPI {
     return response.data
   }
 
-  static async refreshToken(): Promise<ApiResponse> {
+  static async refreshToken(): Promise<ApiResponse & { csrfToken?: string }> {
     const response = await apiClient.post('/auth/refresh')
     return response.data
   }
