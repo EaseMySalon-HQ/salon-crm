@@ -262,7 +262,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56 border-0 shadow-xl bg-white/95 backdrop-blur-sm rounded-xl">
                 <DropdownMenuItem 
-                  onClick={() => setShowCashRegistryModal(true)}
+                  onClick={() => setTimeout(() => setShowCashRegistryModal(true), 0)}
                   className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
                 >
                   <div className="p-2 bg-blue-100 rounded-lg">
