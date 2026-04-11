@@ -23,12 +23,6 @@ const authenticateToken = (req, res, next) => {
   logger.debug('🔍 AuthenticateToken middleware called');
   const token = getTenantAccessToken(req);
 
-  // #region agent log
-  if (req.path === '/auth/profile' || req.originalUrl?.includes('/auth/profile')) {
-    logger.info('[DBG-d9251f] profile-auth-check', {hasToken:!!token,tokenLen:token?token.length:0,hasTenantCookie:!!(req.cookies&&req.cookies[COOKIE.tenantAccess]),hasAdminCookie:!!(req.cookies&&req.cookies[COOKIE.adminAccess]),hasAuthHeader:!!req.headers['authorization'],cookieNames:req.cookies?Object.keys(req.cookies):[],origin:req.headers['origin']||'none'});
-  }
-  // #endregion
-
   if (!token) {
     logger.debug('🔍 No token found in request');
     return res.status(401).json({ success: false, error: 'Access token required' });

@@ -344,10 +344,6 @@ router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin,
     );
 
     setTenantAuthCookies(res, { accessToken: token, refreshToken: '' });
-    // #region agent log
-    logger.info('[DBG-d9251f] impersonate-cookie-set', {ownerId:String(owner._id),businessId:String(business._id),tokenLen:token.length,setCookie:res.getHeaders()['set-cookie']?.map(c=>c.substring(0,80)+'...')});
-    // #endregion
-
     await logAdminActivity({
       adminId: req.admin,
       action: 'admin_impersonation',

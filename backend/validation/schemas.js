@@ -75,8 +75,11 @@ const createClientBodySchema = z
     email: z.union([emailSchema, z.literal('')]).optional(),
     address: z.string().max(2000).optional(),
     notes: z.string().max(5000).optional(),
+    status: z.enum(['active', 'inactive']).optional(),
+    gender: z.enum(['male', 'female', 'other']).optional(),
+    dob: z.union([z.string(), z.date()]).optional(),
   })
-  .strict();
+  .passthrough();
 
 /** Update allows partial fields; unknown keys preserved for Mongoose updates. */
 const updateClientBodySchema = z
