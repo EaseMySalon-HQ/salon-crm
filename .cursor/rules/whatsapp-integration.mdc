@@ -1,0 +1,92 @@
+---
+description: How to add a new WhatsApp message type (MSG91 template) to the salon CRM
+globs: backend/services/whatsapp-service.js, backend/lib/send-appointment-whatsapp.js, backend/lib/whatsapp-*.js
+alwaysApply: false
+---
+
+# Adding a New WhatsApp Message Type
+
+## Architecture overview
+
+- **Admin settings** (`AdminSettings.notifications.whatsapp`) — platform-level MSG91 config (API key, sender ID, templates, variable mappings).
+- **Business settings** (`Business.settings.whatsappNotificationSettings`) — per-salon toggles (master enabled + per-section: receipt, appointment, system alerts).
+- **`whatsapp-service.js`** — MSG91 HTTP calls; one `send*` method per message type.
+- **`whatsapp-admin-gates.js`** — resolves admin preference flags that may be `undefined`, boolean, or `{ enabled }`.
+- **`whatsapp-settings-defaults.js`** — `getWhatsAppSettingsWithDefaults()` merges business settings with defaults.
+- **`send-appointment-whatsapp.js`** — example of a reusable sender (gates → service → log → quota).
+
+## Step-by-step checklist
+
+### 1. MSG91 template
+- Create template in MSG91 Dashboard → WhatsApp → Templates.
+- Note the **template name** (e.g. `payment_reminder`), **number of body variables**, and **button variables**.
+- Wait for approval.
+
+### 2. AdminSettings schema
+- Add a new key under `notifications.whatsapp.templates` in `backend/models/AdminSettings.js`:
+  ```js
+  paymentReminder: { type: String, default: '' },
+  ```
+
+### 3. Admin UI template row
+- The template row appears automatically in `whatsapp-admin-settings.tsx` from the `templates` object.
+- To add JS code parsing (the `<>` icon), save the MSG91 sample JS code via the edit modal. The system auto-parses it into `templateVariables` and `templateJavaScriptCodes`.
+
+### 4. Variable mapping — CRITICAL
+- **The variable count MUST exactly match the MSG91 template.** Extra body variables cause silent delivery failure (MSG91 returns 200/success but never delivers).
+- Mapping lives in `AdminSettings.notifications.whatsapp.templateVariables.<templateType>`.
+- Keys: `body_1`, `body_2`, … `button_1`. Values: data field names (`clientName`, `date`, etc.).
+- Verify by comparing with the MSG91 JS code sample `components` object.
+
+### 5. WhatsApp service sender method
+- Add a `send*` method in `backend/services/whatsapp-service.js` following this pattern:
+  ```js
+  async sendPaymentReminder({ to, clientName, reminderData }) {
+    const data = {
+      clientName: clientName || 'Customer',
+      amount: reminderData?.amount || '',
+      dueDate: reminderData?.dueDate || '',
+    };
+    const variables = this.mapDataToTemplateVariables('paymentReminder', data);
+    if (Object.keys(variables).length === 0) {
+      variables.body_1 = data.clientName;
+      variables.body_2 = data.amount;
+      variables.body_3 = data.dueDate;
+    }
+    const templateId = this.getTemplateId('paymentReminder');
+    if (!templateId || !String(templateId).trim()) {
+      return { success: false, error: 'paymentReminder template not configured' };
+    }
+    return await this.sendMessage({ to, templateId, variables });
+  }
+  ```
+- The fallback (when `variables` is empty) should match the **same variable count** as the MSG91 template.
+- For templates with a Google Maps button, use `prepareGoogleMapsTemplateParts()` + `applyGoogleMapsVariableOverrides()`.
+
+### 6. Reusable sender function (recommended)
+- Create `backend/lib/send-<type>-whatsapp.js` following `send-appointment-whatsapp.js`:
+  1. Initialize whatsapp service
+  2. Check `whatsappService.enabled`
+  3. Check admin gates: `whatsappEnabled`, `isAdmin*NotificationsEnabled()`
+  4. Check business gates: `getWhatsAppSettingsWithDefaults()` → master enabled + section enabled
+  5. Check quiet hours
+  6. Call `whatsappService.send*()`
+  7. Log to `WhatsAppMessageLog`
+  8. Increment `plan.addons.whatsapp.used`
+
+### 7. Wire into the route
+- Call the sender after the DB write succeeds. Wrap in try/catch so failures don't break the main operation:
+  ```js
+  try { await sendPaymentReminderWhatsApp(req, entities); }
+  catch (e) { logger.error('WhatsApp payment reminder error', e); }
+  ```
+
+### 8. Business settings UI (optional)
+- If the salon should be able to toggle this message type, add a section in `whatsapp-business-settings.tsx` and update `getWhatsAppSettingsWithDefaults()` defaults.
+
+## Common pitfalls
+- **Variable count mismatch** — MSG91 silently drops messages. Always verify mapping count matches template.
+- **Admin `undefined` fields** — use `whatsapp-admin-gates.js` helpers, never `=== true` on optional admin flags.
+- **Empty button values** — `sendTemplateMessage` skips empty buttons; MSG91 rejects if button is expected but missing.
+- **Phone format** — `formatPhoneNumber()` adds `91` prefix and strips duplicate `9191`.
+- **Database name** — main DB is `ease_my_salon_main` (via `databaseManager.getMainConnection()`), not the MONGODB_URI database.

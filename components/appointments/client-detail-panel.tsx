@@ -109,7 +109,8 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   const visibleBills = showAllBills ? bills : bills.slice(0, BILLS_VISIBLE_DEFAULT)
   const hasMoreBills = bills.length > BILLS_VISIBLE_DEFAULT
 
-  const clientId = client._id || client.id
+  const rawClientId = client._id || client.id
+  const clientId = rawClientId && !String(rawClientId).startsWith('new-') ? rawClientId : ''
 
   const refreshClientPackages = useCallback(async () => {
     if (!clientId) return

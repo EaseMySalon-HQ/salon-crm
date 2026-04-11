@@ -24,7 +24,7 @@ function isCsrfEnabled() {
   return process.env.CSRF_ENABLED !== '0' && process.env.CSRF_ENABLED !== 'false';
 }
 
-/** Paths that skip CSRF (login, password reset, token refresh, admin login). */
+/** Paths that skip CSRF (login, password reset, token refresh, logout, admin login). */
 const SKIP_PREFIXES = [
   '/api/auth/login',
   '/api/auth/staff-login',
@@ -32,6 +32,7 @@ const SKIP_PREFIXES = [
   '/api/auth/reset-password',
   /** Refresh uses HttpOnly rotation cookie; SameSite + short-lived access reduce CSRF risk. */
   '/api/auth/refresh',
+  '/api/auth/logout',
   '/api/admin/login',
 ];
 
