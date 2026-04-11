@@ -305,13 +305,20 @@ export function BusinessManagement() {
     try {
       const res = await fetch(`${API_URL}/admin/businesses/${business._id}/impersonate`, {
         method: "POST",
+        credentials: "include",
         headers: adminRequestHeaders({ "Content-Type": "application/json" }),
       })
+      // #region agent log
+      console.log('[DBG-d9251f] impersonate-response', {status:res.status,ok:res.ok,headers:[...res.headers.entries()]});
+      // #endregion
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         throw new Error(err.error || "Impersonation failed")
       }
       const data = await res.json()
+      // #region agent log
+      console.log('[DBG-d9251f] impersonate-data', {success:data.success,cookies:document.cookie,localStorage_salonAuth:!!localStorage.getItem('salon-auth-user')});
+      // #endregion
       if (data.success) {
         if (typeof window !== "undefined") {
           sessionStorage.setItem("admin-impersonation-origin", window.location.pathname + window.location.search)
@@ -319,6 +326,9 @@ export function BusinessManagement() {
         }
       }
     } catch (e: unknown) {
+      // #region agent log
+      console.log('[DBG-d9251f] impersonate-error', e instanceof Error ? e.message : String(e));
+      // #endregion
       toast({ title: "Error", description: e instanceof Error ? e.message : "Impersonation failed", variant: "destructive" })
     }
   }

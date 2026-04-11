@@ -88,6 +88,10 @@ export const metadata: Metadata = {
     telephone: false,
   },
   metadataBase: new URL(siteUrl),
+  icons: {
+    icon: [{ url: "/images/monogram-circle-color-transparent.png", type: "image/png" }],
+    apple: "/images/monogram-circle-color-transparent.png",
+  },
   alternates: {
     canonical: '/',
   },

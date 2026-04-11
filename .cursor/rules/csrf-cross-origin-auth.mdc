@@ -1,0 +1,81 @@
+---
+description: Playbook for Invalid CSRF token, cookie auth, and cross-origin SPA + API on Railway
+alwaysApply: true
+---
+
+# CSRF and cross-origin auth (salon-crm)
+
+When the user reports **403**, **`Invalid CSRF token`**, or a screenshot of mutating requests (`POST`/`PUT`/`PATCH`/`DELETE`) failing on staging (`*.railway.app` with **frontend host ≠ API host**), use this playbook first—do not re-derive from scratch.
+
+## How it works (double-submit)
+
+- Backend [`backend/middleware/csrf.js`](backend/middleware/csrf.js): For mutating methods, requires **both**:
+  - Cookie `ems_csrf` (readable, not HttpOnly—set on the **API origin**)
+  - Header `X-CSRF-Token` (or `X-XSRF-Token`) with the **same value**
+- **Bearer `Authorization`** requests **skip** CSRF (comment in middleware).
+- Skipped paths include `/api/auth/login`, `/auth/staff-login`, `/auth/refresh`, forgot/reset password (see `SKIP_PREFIXES` in `csrf.js`).
+
+## Why cross-origin SPAs break without extra care
+
+- **Auth cookies** (`ems_tenant_access`, `ems_tenant_refresh`) and **CSRF cookie** (`ems_csrf`) are set on the **API host** (e.g. `salon-crm-backend-staging.up.railway.app`).
+- The **browser does not expose** those cookies to `document.cookie` on the **app host** (e.g. `salon-crm-staging.up.railway.app`).
+- So the SPA cannot read `ems_csrf` from JS; it must mirror the token in **`sessionStorage`** via JSON from the server.
+
+## Frontend source of truth
+
+| Piece | Role |
+|-------|------|
+| [`lib/csrf.ts`](lib/csrf.ts) | `getCsrfToken()` = cookie (same-origin only) OR `sessionStorage` key `salon-ems-csrf` |
+| [`lib/api.ts`](lib/api.ts) | `apiClient` has `withCredentials: true`; request interceptor adds `X-CSRF-Token` for mutating methods; persists `csrfToken` from responses; **bootstraps** via `GET /api/auth/csrf` if token missing |
+| [`lib/auth-context.tsx`](lib/auth-context.tsx) | Login/staff-login persist `csrfToken` from JSON |
+
+## Backend CSRF middleware fallback ([`backend/middleware/csrf.js`](backend/middleware/csrf.js))
+
+If **`X-CSRF-Token`** is present (64+ chars) and **`Origin` matches `CORS_ORIGINS`**, the middleware **still allows** the request when the **`ems_csrf` cookie is missing** *or* **stale** (old cookie value does not match the header—e.g. sessionStorage has a newer token from profile/login/refresh than what the browser still sends for the CSRF cookie). This matches the same trust as credentialed CORS (other sites cannot forge `Origin` from JS). Double-submit (cookie + header match) is still preferred when both are in sync.
+
+## Backend must return `csrfToken` in JSON when cookies are set
+
+- Login / staff-login: already return `data.csrfToken`.
+- **`GET /api/auth/profile`** and **`POST /api/auth/refresh`**: must call `setCsrfCookie(res)` and include **`csrfToken`** in the JSON body (cross-origin clients cannot rely on reading the cookie).
+- **`GET /api/auth/csrf`**: public bootstrap; returns `{ success, csrfToken }`.
+
+## Cookie `SameSite` (API)
+
+- [`backend/lib/auth-tokens.js`](backend/lib/auth-tokens.js): Auth cookies use **`SameSite=None`** when `CORS_ORIGINS` is set or in production—required for credentialed cross-origin XHR.
+- CSRF cookie options in [`backend/middleware/csrf.js`](backend/middleware/csrf.js) (`csrfCookieOptions`)—align with `COOKIE_SAME_SITE` / production defaults.
+
+## Instant diagnosis (“Invalid CSRF token”)
+
+| Situation | Likely cause | Fix |
+|-----------|----------------|-----|
+| First action after load fails; GETs work | No token in `sessionStorage` yet (race before profile) | Ensure [`lib/api.ts`](lib/api.ts) bootstrap (`ensureCsrfTokenForMutatingRequest` → `GET /auth/csrf`) and response persistence for `/auth/csrf` |
+| After full page refresh | Session mirror empty | Same + profile/refresh must return `csrfToken` in JSON |
+| `fetch()` or raw `axios` **not** using `apiClient` | No `withCredentials`, no header | Use `apiClient`, or `credentials: 'include'` + `getCsrfToken()` / `csrfHeadersObject()` from [`lib/csrf.ts`](lib/csrf.ts) |
+| Only some screens fail | That screen uses a **non**-`apiClient` call | Grep the component for `fetch(` or `axios.` and align with `apiClient` pattern |
+| Cookie blocked but header sent | Third-party cookie blocking | Origin fallback allows valid long header when cookie is missing; ensure `CORS_ORIGINS` includes frontend origin |
+| Cookie and header **differ** (stale cookie) | Old `ems_csrf` cookie + newer token in `sessionStorage` / header | Same Origin fallback when `Origin` is allowlisted; deploy backend middleware that treats mismatch like missing cookie for allowlisted origins |
+
+## When adding new API calls
+
+1. Prefer **`apiClient`** from [`lib/api.ts`](lib/api.ts) for tenant APIs.
+2. If you must use `fetch`: `credentials: 'include'` and spread **`csrfHeadersObject()`** from [`lib/csrf.ts`](lib/csrf.ts) on **POST/PUT/PATCH/DELETE**.
+3. Do **not** trigger logout on CSRF 403: [`lib/api.ts`](lib/api.ts) `isTokenAuthFailure` excludes messages containing `csrf`.
+
+## When adding new backend mutating routes
+
+1. Ensure route is under the global **`csrfProtection`** stack (after `cookie-parser`).
+2. If the route must be called without CSRF (rare), add to `SKIP_PREFIXES` in [`backend/middleware/csrf.js`](backend/middleware/csrf.js) with a security review—not for normal tenant CRUD.
+
+## Quick grep commands
+
+```bash
+# Find fetch/axios bypassing apiClient (tenant UI)
+rg "fetch\\(`|axios\\.(post|put|patch|delete)" components lib app --glob "*.tsx"
+```
+
+## Files to touch for “still broken” after code is correct
+
+- **Railway / env**: `CORS_ORIGINS` includes exact frontend origin; `NODE_ENV` or `COOKIE_SAME_SITE` / `COOKIE_SECURE` consistent with HTTPS.
+- **Deploy**: Both **frontend** and **backend** must ship the matching JSON `csrfToken` + bootstrap changes.
+
+This rule is the **first** place to look for staging 403 CSRF issues; only then search for one-off component bugs.
