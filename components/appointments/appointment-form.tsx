@@ -673,23 +673,22 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     }
 
     try {
-             const newClientData = {
-         id: `new-${Date.now()}`,
-         name: newClient.lastName ? `${newClient.firstName} ${newClient.lastName}` : newClient.firstName,
-         phone: phoneNumber,
-         email: newClient.email,
-         status: "active" as const,
-       }
+      const newClientData = {
+        id: `new-${Date.now()}`,
+        name: newClient.lastName ? `${newClient.firstName} ${newClient.lastName}` : newClient.firstName,
+        phone: phoneNumber,
+        email: newClient.email,
+        status: "active" as const,
+      }
 
       const success = await clientStore.addClient(newClientData)
-      
+
       if (success) {
-        // Use the newly created client directly from the store (no full reload needed)
         const allClients = clientStore.getClients()
-        const createdClient = allClients.find(c => 
-          c.name === newClientData.name && c.phone === newClientData.phone
+        const createdClient = allClients.find(c =>
+          c.phone === phoneNumber && c._id && !String(c._id).startsWith('new-')
         )
-        
+
         if (createdClient) {
           setSelectedCustomer(createdClient)
           setCustomerSearch(createdClient.name)

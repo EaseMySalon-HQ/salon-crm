@@ -117,7 +117,11 @@ function logApiResponseError(error: AxiosError | any) {
     }
 
     const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
-    const isAuthProbe = errorInfo.status === 401 && errorInfo.url?.includes('/auth/profile')
+    const urlStr = String(errorInfo.url || error?.config?.url || '')
+    const isAuthProbe =
+      errorInfo.status === 401 &&
+      (urlStr.includes('/auth/profile') ||
+        (isLoginPage && urlStr.includes('/auth/refresh')))
     if (isLoginPage && isAuthProbe) {
       // Silent: expected 401 when probing for existing session on the login page
     } else if (errorInfo.status === 404) {

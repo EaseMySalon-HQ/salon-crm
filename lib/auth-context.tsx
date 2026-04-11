@@ -115,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const pathname = window.location.pathname
         const isPublicRoute = pathname === '/login' ||
+                             pathname === '/admin/login' ||
                              pathname === '/forgot-password' ||
                              pathname === '/reset-password' ||
                              pathname.includes('/receipt/public/') ||

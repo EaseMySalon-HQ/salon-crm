@@ -305,6 +305,7 @@ export function BusinessManagement() {
     try {
       const res = await fetch(`${API_URL}/admin/businesses/${business._id}/impersonate`, {
         method: "POST",
+        credentials: "include",
         headers: adminRequestHeaders({ "Content-Type": "application/json" }),
       })
       if (!res.ok) {
