@@ -120,6 +120,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                              pathname === '/reset-password' ||
                              pathname.includes('/receipt/public/') ||
                              pathname.includes('/public/')
+        // #region agent log
+        console.log('[DBG-d9251f] checkAuth-start', {pathname,isPublicRoute,hasCachedUser:!!localStorage.getItem('salon-auth-user')});
+        // #endregion
         if (isPublicRoute) {
           setIsLoading(false)
           return
@@ -135,6 +138,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           try {
             const response = await AuthAPI.getProfile()
+            // #region agent log
+            console.log('[DBG-d9251f] getProfile-success', {success:response.success,hasData:!!response.data,userName:(response.data as any)?.name,isImpersonation:(response.data as any)?.isImpersonation});
+            // #endregion
             if (response.success && response.data) {
               const freshUser = response.data as User
               setUser(freshUser)
@@ -146,6 +152,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } catch (apiError: any) {
             const status = apiError?.response?.status
             const errMsg = getApiErrorMessage(apiError)
+            // #region agent log
+            console.log('[DBG-d9251f] getProfile-error', {status,errMsg,attempt,isInvalid403:status===403&&isInvalidSession403(errMsg),hasCached:!!cached});
+            // #endregion
 
             if (status === 401) {
               clearAuthStorage()
