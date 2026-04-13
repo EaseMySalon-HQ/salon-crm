@@ -1,31 +1,13 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Users, CalendarDays, PieChart, Settings, Package, Clock, DollarSign, CreditCard, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { ReportsAPI, ServicesAPI, ProductsAPI, SalesAPI, AppointmentsAPI, CashRegistryAPI } from "@/lib/api"
-import { getTodayIST } from "@/lib/date-utils"
 import { useAuth } from "@/lib/auth-context"
 import { cn } from "@/lib/utils"
-
-interface DashboardStats {
-  totalClients: number
-  totalAppointments: number
-  totalRevenue: number
-  totalServices: number
-}
-
-interface CashRegistryStats {
-  openingBalance: number
-  cashCollected: number
-  expenses: number
-  expectedCashBalance: number
-  actualClosingBalance: number
-  balanceDifference: number
-  hasOpeningShift: boolean
-  hasClosingShift: boolean
-}
+import { useDashboardInit } from "@/lib/queries/dashboard"
 
 interface ServiceStats {
   totalServices: number
@@ -41,89 +23,22 @@ interface ProductStats {
 }
 
 export function DashboardStatsCards() {
-  const [stats, setStats] = useState<DashboardStats>({
-    totalClients: 0,
-    totalAppointments: 0,
-    totalRevenue: 0,
-    totalServices: 0
-  })
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(false)
-  const [retryKey, setRetryKey] = useState(0)
+  const { data, isPending, isError, refetch } = useDashboardInit()
 
-  // Safe currency formatting utility
   const safeFormatAmount = (amount: number) => {
-    // Simple fallback formatting for SSR and when hook is not ready
     return `₹${amount.toFixed(2)}`
   }
 
-  useEffect(() => {
-    let cancelled = false
-    const fetchStats = async () => {
-      setLoading(true)
-      setLoadError(false)
-      try {
-        const todayStr = getTodayIST()
-
-        // Fetch dashboard counts, sales (today only — bounded query), and today's appointments concurrently
-        const [dashboardRes, salesRows, todaysAppointmentsRes] = await Promise.all([
-          ReportsAPI.getDashboardStats(),
-          SalesAPI.getAllMergePages({ dateFrom: todayStr, dateTo: todayStr, batchSize: 500 }),
-          AppointmentsAPI.getAll({ limit: 200, date: todayStr }),
-        ])
-
-        if (cancelled) return
-
-        // Base stats from dashboard API (clients, appointments, services)
-        let base: DashboardStats = {
-          totalClients: 0,
-          totalAppointments: 0,
-          totalRevenue: 0,
-          totalServices: 0,
-        }
-        if (dashboardRes?.success && dashboardRes.data) {
-          base = dashboardRes.data
-        }
-
-        // Today's revenue: sales list is already date-bounded (IST) from the API
-        let todaysRevenue = 0
-        const sales = Array.isArray(salesRows) ? salesRows : []
-        if (Array.isArray(sales)) {
-          todaysRevenue = sales.reduce((sum: number, sale: any) => {
-            const isCompleted = String(sale.status || '').toLowerCase() === 'completed'
-            return isCompleted ? sum + (Number(sale.grossTotal) || 0) : sum
-          }, 0)
-        }
-
-        // Appointments for today
-        const todaysAppointmentsCount = (todaysAppointmentsRes?.success && Array.isArray(todaysAppointmentsRes.data))
-          ? todaysAppointmentsRes.data.length
-          : 0
-
-        setStats({
-          totalClients: base.totalClients,
-          totalAppointments: todaysAppointmentsCount,
-          totalRevenue: todaysRevenue,
-          totalServices: base.totalServices,
-        })
-      } catch (error: any) {
-        const status = error?.response?.status
-        if (status !== 401 && status !== 403) {
-          console.error("Failed to fetch dashboard stats:", error)
-          if (!cancelled) setLoadError(true)
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
+  const stats = data?.todayStats
+    ? {
+        totalClients: data.todayStats.totalClients ?? 0,
+        totalAppointments: data.todayStats.todaysAppointmentCount ?? 0,
+        totalRevenue: data.todayStats.todaysCompletedRevenue ?? 0,
+        totalServices: data.todayStats.totalServices ?? 0,
       }
-    }
+    : { totalClients: 0, totalAppointments: 0, totalRevenue: 0, totalServices: 0 }
 
-    fetchStats()
-    return () => {
-      cancelled = true
-    }
-  }, [retryKey])
-
-  if (loading) {
+  if (isPending) {
     return (
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {[1, 2, 3, 4].map((i) => (
@@ -142,14 +57,14 @@ export function DashboardStatsCards() {
     )
   }
 
-  if (loadError) {
+  if (isError) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex gap-2 text-amber-900 text-sm">
           <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
           <span>Could not load dashboard figures. Check your connection, then try again.</span>
         </div>
-        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => setRetryKey((k) => k + 1)}>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => refetch()}>
           Retry
         </Button>
       </div>
@@ -214,48 +129,19 @@ export function DashboardStatsCards() {
 }
 
 export function MembershipStatsCards() {
-  const [stats, setStats] = useState({
-    totalActiveMembers: 0,
-    membershipRevenue: 0,
-    membersExpiringIn30Days: 0
-  })
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(false)
-  const [retryKey, setRetryKey] = useState(0)
+  const { data, isPending, isError, refetch } = useDashboardInit()
 
   const safeFormatAmount = (amount: number) => `₹${amount.toFixed(2)}`
 
-  useEffect(() => {
-    let cancelled = false
-    const fetchStats = async () => {
-      setLoading(true)
-      setLoadError(false)
-      try {
-        const res = await ReportsAPI.getDashboardStats()
-        if (cancelled) return
-        if (res?.success && res.data) {
-          setStats({
-            totalActiveMembers: res.data.totalActiveMembers ?? 0,
-            membershipRevenue: res.data.membershipRevenue ?? 0,
-            membersExpiringIn30Days: res.data.membersExpiringIn30Days ?? 0
-          })
-        }
-      } catch (error: any) {
-        if (error?.response?.status !== 401 && error?.response?.status !== 403) {
-          console.error("Failed to fetch membership stats:", error)
-          if (!cancelled) setLoadError(true)
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
+  const stats = data?.membership
+    ? {
+        totalActiveMembers: data.membership.totalActiveMembers ?? 0,
+        membershipRevenue: data.membership.membershipRevenue ?? 0,
+        membersExpiringIn30Days: data.membership.membersExpiringIn30Days ?? 0,
       }
-    }
-    fetchStats()
-    return () => {
-      cancelled = true
-    }
-  }, [retryKey])
+    : { totalActiveMembers: 0, membershipRevenue: 0, membersExpiringIn30Days: 0 }
 
-  if (loading) {
+  if (isPending) {
     return (
       <div className="grid gap-4 md:grid-cols-3">
         {[1, 2, 3].map((i) => (
@@ -274,14 +160,14 @@ export function MembershipStatsCards() {
     )
   }
 
-  if (loadError) {
+  if (isError) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex gap-2 text-amber-900 text-sm">
           <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
           <span>Could not load membership stats. Try again.</span>
         </div>
-        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => setRetryKey((k) => k + 1)}>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => refetch()}>
           Retry
         </Button>
       </div>
@@ -331,68 +217,30 @@ export function MembershipStatsCards() {
 }
 
 export function ServiceStatsCards() {
-  const [stats, setStats] = useState<ServiceStats>({
-    totalServices: 0,
-    averagePrice: 0,
-    averageDuration: 0
-  })
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(false)
-  const [retryKey, setRetryKey] = useState(0)
+  const queryClient = useQueryClient()
+  const { data, isPending, isError, refetch } = useDashboardInit()
 
-  // Safe currency formatting utility
   const safeFormatAmount = (amount: number) => {
-    // Simple fallback formatting for SSR and when hook is not ready
     return `₹${amount.toFixed(2)}`
   }
 
-  const fetchServiceStats = async () => {
-    setLoading(true)
-    setLoadError(false)
-    try {
-      const response = await ServicesAPI.getAll({ limit: 1000 }) // Fetch up to 1000 services
-      if (response.success) {
-        const services = response.data || []
-        
-        const totalServices = services.length
-        const averagePrice = totalServices > 0 
-          ? services.reduce((sum: number, service: any) => sum + service.price, 0) / totalServices
-          : 0
-        const averageDuration = totalServices > 0
-          ? services.reduce((sum: number, service: any) => sum + service.duration, 0) / totalServices
-          : 0
-
-        setStats({
-          totalServices,
-          averagePrice: Math.round(averagePrice),
-          averageDuration: Math.round(averageDuration)
-        })
+  const stats: ServiceStats = data?.serviceAggregates
+    ? {
+        totalServices: data.serviceAggregates.totalServices ?? 0,
+        averagePrice: data.serviceAggregates.averagePrice ?? 0,
+        averageDuration: data.serviceAggregates.averageDuration ?? 0,
       }
-    } catch (error: any) {
-      if (error?.response?.status !== 401 && error?.response?.status !== 403) {
-        console.error("Failed to fetch service stats:", error)
-        setLoadError(true)
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
+    : { totalServices: 0, averagePrice: 0, averageDuration: 0 }
 
-  useEffect(() => {
-    fetchServiceStats()
-  }, [retryKey])
-
-  // Listen for custom events to refresh stats
   useEffect(() => {
     const handleServiceAdded = () => {
-      fetchServiceStats()
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "init"] })
     }
+    window.addEventListener("service-added", handleServiceAdded)
+    return () => window.removeEventListener("service-added", handleServiceAdded)
+  }, [queryClient])
 
-    window.addEventListener('service-added', handleServiceAdded)
-    return () => window.removeEventListener('service-added', handleServiceAdded)
-  }, [])
-
-  if (loading) {
+  if (isPending) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {[1, 2, 3].map((i) => (
@@ -411,14 +259,14 @@ export function ServiceStatsCards() {
     )
   }
 
-  if (loadError) {
+  if (isError) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex gap-2 text-amber-900 text-sm">
           <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
           <span>Could not load service stats. Try again.</span>
         </div>
-        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => setRetryKey((k) => k + 1)}>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => refetch()}>
           Retry
         </Button>
       </div>
@@ -487,84 +335,38 @@ interface ProductStatsCardsProps {
   lowStockFilterActive?: boolean
 }
 
-export function ProductStatsCards({ productTypeFilter = "all", onLowStockClick, lowStockFilterActive = false }: ProductStatsCardsProps = {}) {
+export function ProductStatsCards({
+  productTypeFilter: _productTypeFilter = "all",
+  onLowStockClick,
+  lowStockFilterActive = false,
+}: ProductStatsCardsProps = {}) {
   const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
-  
-  const [stats, setStats] = useState<ProductStats>({
-    totalProducts: 0,
-    lowStockCount: 0,
-    totalValue: 0,
-    categories: 0
-  })
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(false)
-  const [retryKey, setRetryKey] = useState(0)
+  const isAdmin = user?.role === "admin"
+  const queryClient = useQueryClient()
+  const { data, isPending, isError, refetch } = useDashboardInit()
 
-  // Safe currency formatting utility
   const safeFormatAmount = (amount: number) => {
-    // Simple fallback formatting for SSR and when hook is not ready
     return `₹${amount.toFixed(2)}`
   }
 
-  const fetchProductStats = async () => {
-    setLoading(true)
-    setLoadError(false)
-    try {
-      const response = await ProductsAPI.getAll({ limit: 1000 }) // Fetch up to 1000 products
-      if (response.success) {
-        let products = response.data || []
-        
-        // Filter products based on productTypeFilter
-        if (productTypeFilter !== "all" && productTypeFilter !== "both") {
-          // Filter by specific type (retail or service)
-          products = products.filter((product: any) => {
-            const productType = product.productType || 'retail'
-            return productType === productTypeFilter
-          })
-        }
-        // "both" and "all" both show all products (no filtering needed)
-        
-        const totalProducts = products.length
-        const lowStockCount = products.filter((product: any) => {
-          const minimumStock = product.minimumStock || 10 // Default to 10 if not set
-          return product.stock !== undefined && product.stock < minimumStock
-        }).length
-        const totalValue = products.reduce((sum: number, product: any) => sum + (product.price * product.stock), 0)
-        const categories = new Set(products.map((product: any) => product.category)).size
-
-        setStats({
-          totalProducts,
-          lowStockCount,
-          totalValue: Math.round(totalValue),
-          categories
-        })
+  const stats: ProductStats = data?.productAggregates
+    ? {
+        totalProducts: data.productAggregates.totalProducts ?? 0,
+        lowStockCount: data.productAggregates.lowStockCount ?? 0,
+        totalValue: data.productAggregates.totalValue ?? 0,
+        categories: data.productAggregates.categories ?? 0,
       }
-    } catch (error: any) {
-      if (error?.response?.status !== 401 && error?.response?.status !== 403) {
-        console.error("Failed to fetch product stats:", error)
-        setLoadError(true)
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
+    : { totalProducts: 0, lowStockCount: 0, totalValue: 0, categories: 0 }
 
-  useEffect(() => {
-    fetchProductStats()
-  }, [productTypeFilter, retryKey])
-
-  // Listen for custom events to refresh stats
   useEffect(() => {
     const handleProductAdded = () => {
-      fetchProductStats()
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "init"] })
     }
+    window.addEventListener("product-added", handleProductAdded)
+    return () => window.removeEventListener("product-added", handleProductAdded)
+  }, [queryClient])
 
-    window.addEventListener('product-added', handleProductAdded)
-    return () => window.removeEventListener('product-added', handleProductAdded)
-  }, [])
-
-  if (loading) {
+  if (isPending) {
     const cardCount = isAdmin ? 4 : 3
     return (
       <div className={`grid gap-4 ${isAdmin ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
@@ -584,14 +386,14 @@ export function ProductStatsCards({ productTypeFilter = "all", onLowStockClick, 
     )
   }
 
-  if (loadError) {
+  if (isError) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex gap-2 text-amber-900 text-sm">
           <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
           <span>Could not load product stats. Try again.</span>
         </div>
-        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => setRetryKey((k) => k + 1)}>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => refetch()}>
           Retry
         </Button>
       </div>

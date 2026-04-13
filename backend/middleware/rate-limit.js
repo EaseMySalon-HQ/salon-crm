@@ -95,6 +95,30 @@ function skip(req) {
   return skipOptions(req) || isValidBypass(req);
 }
 
+/**
+ * Global limiter skips these paths so a saturated IP bucket cannot block login, CSRF bootstrap,
+ * token refresh, or logout. Auth cluster + per-email/IP keys still apply on the same routes.
+ */
+const GLOBAL_API_SKIP_PREFIXES = [
+  '/api/auth/csrf',
+  '/api/auth/login',
+  '/api/auth/staff-login',
+  '/api/auth/logout',
+  '/api/auth/refresh',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+  '/api/auth/verify-reset-token',
+  '/api/admin/login',
+];
+
+function isSkippedFromGlobalApiLimiter(req) {
+  const p = (req.originalUrl || req.url || '').split('?')[0];
+  for (const prefix of GLOBAL_API_SKIP_PREFIXES) {
+    if (p === prefix || p.startsWith(`${prefix}/`)) return true;
+  }
+  return false;
+}
+
 /** Optional Redis client for violation counters (same URL as rate limit store). */
 let violationRedis;
 function redisCommandTimeoutMs() {
@@ -237,14 +261,18 @@ function wrapKeyGenerator(fn) {
   };
 }
 
-function buildLimiter(store, options, limiterType) {
+function buildLimiter(store, options, limiterType, additionalSkip) {
   if (!isEnabled()) {
     return noop;
   }
+  const skipCombined =
+    typeof additionalSkip === 'function'
+      ? (req, res) => skip(req) || additionalSkip(req, res)
+      : skip;
   return rateLimit({
     standardHeaders: 'draft-7',
     legacyHeaders: false,
-    skip,
+    skip: skipCombined,
     handler: (req, res, next, opts) => onLimit(req, res, next, opts, limiterType),
     store,
     ...options,
@@ -260,11 +288,12 @@ const generalApiLimiter = buildLimiter(
   storeGlobal,
   {
     windowMs: envInt('RATE_LIMIT_GLOBAL_WINDOW_MS', 15 * 60 * 1000),
-    max: envInt('RATE_LIMIT_GLOBAL_MAX', 400),
+    max: envInt('RATE_LIMIT_GLOBAL_MAX', 1200),
     message: false,
     keyGenerator: wrapKeyGenerator(globalApiKeyGenerator),
   },
-  'global'
+  'global',
+  isSkippedFromGlobalApiLimiter
 );
 
 const authClusterLimiter = buildLimiter(

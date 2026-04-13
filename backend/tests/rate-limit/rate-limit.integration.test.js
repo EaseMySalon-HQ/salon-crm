@@ -18,6 +18,7 @@ function buildAppWithRateLimit() {
   app.use('/api', rl.generalApiLimiter);
   rl.AUTH_PATH_PREFIXES.forEach((p) => app.use(p, rl.authClusterLimiter));
   app.get('/api/ping', (req, res) => res.json({ success: true }));
+  app.get('/api/auth/csrf', (req, res) => res.json({ success: true, csrfToken: 'test' }));
   app.post('/api/auth/login', (req, res) => res.json({ success: true }));
   return app;
 }
@@ -75,6 +76,27 @@ describe('rate limiting (integration)', () => {
       expect(rateHdr).toBeDefined();
     };
     return run();
+  });
+
+  it('does not count auth bootstrap paths against the global limiter', () => {
+    jest.resetModules();
+    process.env.RATE_LIMIT_ENABLED = '1';
+    delete process.env.REDIS_URL;
+    delete process.env.RATE_LIMIT_REDIS_URL;
+    process.env.RATE_LIMIT_GLOBAL_MAX = '3';
+    process.env.RATE_LIMIT_GLOBAL_WINDOW_MS = '600000';
+    process.env.RATE_LIMIT_AUTH_MAX = '25';
+    process.env.RATE_LIMIT_AUTH_WINDOW_MS = '600000';
+
+    const app = buildAppWithRateLimit();
+    const agent = request.agent(app);
+    return (async () => {
+      for (let i = 0; i < 3; i++) {
+        await agent.get('/api/ping').expect(200);
+      }
+      await agent.get('/api/ping').expect(429);
+      await agent.get('/api/auth/csrf').expect(200);
+    })();
   });
 
   it('applies a stricter auth limiter than global for /api/auth/login', () => {

@@ -822,6 +822,16 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       return
     }
 
+    const missingService = selectedServices.some(service => !service.serviceId)
+    if (missingService) {
+      toast({
+        title: "Error",
+        description: "Please select a service for all entries.",
+        variant: "destructive",
+      })
+      return
+    }
+
     // Validate that all services have staff assigned
     const unassignedServices = selectedServices.filter(service => !service.staffId)
     if (unassignedServices.length > 0) {
@@ -1037,11 +1047,12 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           toast({ title: "Error", description: "Failed to create appointment. Please try again.", variant: "destructive" })
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating appointment:', error)
+      const serverMsg = error?.responseData?.error || error?.response?.data?.error
       toast({
         title: "Error",
-        description: "Failed to create appointment. Please try again.",
+        description: serverMsg || "Failed to create appointment. Please try again.",
         variant: "destructive",
       })
     } finally {

@@ -7,6 +7,7 @@ module.exports = {
     '**/tests/api-v1-alias.test.js',
     '**/tests/auth/**/*.test.js',
     '**/tests/sales/**/*.test.js',
+    '**/tests/dashboard/**/*.test.js',
   ],
   testTimeout: 120000
 };

@@ -156,7 +156,6 @@ appointmentSchema.pre('save', function(next) {
     if (primary) {
       this.slotKey = `${String(this.branchId)}:${String(primary)}:${this.startAt.toISOString()}:${this.endAt.toISOString()}`;
     } else {
-      // Omit field — unique sparse index still indexes explicit null; multiple nulls violate E11000.
       this.set('slotKey', undefined);
     }
   } else {

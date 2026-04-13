@@ -10,8 +10,10 @@ A full-repo search found **no** backend routes that call OpenAI, Google Gemini, 
 
 | Layer | Scope | Purpose |
 |--------|--------|---------|
-| **Global** | `/api/*` | Broad protection against scraping and abusive traffic |
+| **Global** | `/api/*` except auth bootstrap paths (see below) | Broad protection against scraping and abusive traffic |
 | **Auth cluster** | `/api/auth/login`, `/api/auth/staff-login`, `/api/auth/forgot-password`, `/api/auth/reset-password`, `/api/admin/login` | Brute-force / credential-stuffing resistance |
+
+**Global tier does not apply** to: `/api/auth/csrf`, `/api/auth/login`, `/api/auth/staff-login`, `/api/auth/logout`, `/api/auth/refresh`, `/api/auth/forgot-password`, `/api/auth/reset-password`, `/api/auth/verify-reset-token/*`, `/api/admin/login`. Those routes are still rate-limited by the **auth** tier (and its own keys) so they are not unlimited—only not double-counted against the global bucket (avoids lockout when the IP fallback is saturated).
 | **Exports** | `/api/reports/export/*` | Heavy PDF/CSV generation |
 | **AI (reserved)** | `/api/integrations/ai/*` | Low caps for future model proxies (billing abuse) |
 
@@ -40,6 +42,8 @@ Keys are opaque strings; `req.rateLimitKey` is set internally. **Logs never prin
 | Variable | Role |
 |----------|------|
 | `REDIS_URL` / `RATE_LIMIT_REDIS_URL` | Redis for shared rate limit state |
+| `RATE_LIMIT_GLOBAL_MAX` | Max requests per **`RATE_LIMIT_GLOBAL_WINDOW_MS`** for the global tier (default **1200**; override per deployment) |
+| `RATE_LIMIT_GLOBAL_WINDOW_MS` | Global window in ms (default **15 minutes**) |
 | `RATE_LIMIT_SKIP_SECRET` | Optional; enables internal bypass when header matches |
 | `RATE_LIMIT_ENABLED` | Set to `0` or `false` to disable limiters (local/debug only) |
 | `TRUST_PROXY` | `1`, `true`, hop count, or `0`/`false` — see `configureTrustProxy` in `rate-limit.js` |
@@ -64,7 +68,7 @@ In **`NODE_ENV=production`**, disabling rate limits via `RATE_LIMIT_ENABLED` is 
 - **`redis`**: `connected` when Redis-backed tiers report healthy circuits, otherwise **`degraded`** (no URL, circuit open, half-open probe, or permanent memory fallback)
 - **`rateLimitMetrics`** (unless `RATE_LIMIT_METRICS_IN_HEALTH=0`): aggregate **`evaluations`**, **`blocked429`**, **`redisFallbackUses`**, **`fallbackRate`** (`redisFallbackUses / evaluations`, or **`null`** if no evaluations yet), plus **`tiers`**: `{ global, auth, report, ai }` each with the same fields — in-process per Node instance
 
-Other `/api/*` routes remain behind the global limiter.
+Other `/api/*` routes remain behind the global limiter (auth bootstrap paths listed above are excluded from global only).
 
 ## Graceful shutdown
 
