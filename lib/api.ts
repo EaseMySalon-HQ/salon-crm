@@ -1,6 +1,7 @@
 // API Configuration and HTTP Client
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
+import { isPublicClientRoute } from './public-routes'
 import { getCsrfToken, setCsrfTokenPersisted, CSRF_HEADER_NAME } from './csrf'
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
@@ -116,13 +117,15 @@ function logApiResponseError(error: AxiosError | any) {
       errorInfo.code = String(error?.code || 'SETUP_ERROR')
     }
 
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : ''
+    const isPublicRoute = pathname && isPublicClientRoute(pathname)
     const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
     const urlStr = String(errorInfo.url || error?.config?.url || '')
     const isAuthProbe =
       errorInfo.status === 401 &&
       (urlStr.includes('/auth/profile') ||
         (isLoginPage && urlStr.includes('/auth/refresh')))
-    if (isLoginPage && isAuthProbe) {
+    if ((isLoginPage || isPublicRoute) && isAuthProbe) {
       // Silent: expected 401 when probing for existing session on the login page
     } else if (errorInfo.status === 404) {
       if (errorInfo.url && errorInfo.url !== 'Unknown URL') {
@@ -170,6 +173,21 @@ const apiClient: AxiosInstance = axios.create({
     'Content-Type': 'application/json',
   },
 })
+
+/** Dev-only: count outgoing API requests (read via `window.__getSalonApiRequestCount?.()` in the browser console). */
+let devApiRequestCount = 0
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+  apiClient.interceptors.request.use((config) => {
+    devApiRequestCount += 1
+    const g = globalThis as unknown as {
+      __salonApiRequestCount?: number
+      __getSalonApiRequestCount?: () => number
+    }
+    g.__salonApiRequestCount = devApiRequestCount
+    g.__getSalonApiRequestCount = () => devApiRequestCount
+    return config
+  })
+}
 
 /** Ensures sessionStorage has a CSRF mirror before mutating requests (cross-origin cannot read ems_csrf cookie). */
 let csrfBootstrapInFlight: Promise<void> | null = null
@@ -287,13 +305,17 @@ apiClient.interceptors.response.use(
     const errorMsgLower = normalizeApiErrorMessage(error?.response?.data).toLowerCase()
 
     if (statusOut === 401 || statusOut === 403) {
-      const isPublicRoute =
-        typeof window !== 'undefined' &&
-        (window.location.pathname.includes('/receipt/public/') ||
-          window.location.pathname.includes('/public/'))
-      const isLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
+      const pathname = typeof window !== 'undefined' ? window.location.pathname : ''
+      const reqUrl = String(config?.url || '')
+      const isAuthSessionProbe =
+        reqUrl.includes('/auth/profile') || reqUrl.includes('/auth/refresh')
+      const skipRedirectForAnonymousMarketing =
+        !!pathname &&
+        isPublicClientRoute(pathname) &&
+        isAuthSessionProbe &&
+        !errorMsgLower.includes('business_suspended')
 
-      if (typeof window !== 'undefined' && !isPublicRoute && !isLoginPage) {
+      if (typeof window !== 'undefined' && !skipRedirectForAnonymousMarketing) {
         if (statusOut === 403 && errorMsgLower.includes('business_suspended')) {
           if (!window.location.pathname.includes('/account-suspended')) {
             window.location.href = '/account-suspended'
@@ -1489,6 +1511,13 @@ export class ReportsAPI {
 
   static async createTipPayout(body: { staffId: string; staffName: string; amount: number; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/reports/tip-payouts', body)
+    return response.data
+  }
+}
+
+export class DashboardAPI {
+  static async getInit(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get("/dashboard/init")
     return response.data
   }
 }

@@ -58,7 +58,7 @@ export function PublicNav() {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-3">
         <div className="flex items-center justify-between gap-6">
           {/* Logo */}
-          <Link href="/dashboard" className="flex items-center gap-3 group">
+          <Link href="/" className="flex items-center gap-3 group">
             <Image
               src="/images/logo-no-background.png"
               alt="EaseMySalon"

@@ -1,11 +1,10 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { AppointmentsAPI } from "@/lib/api"
 import { Calendar } from "lucide-react"
-import { format, isAfter, isEqual, parse, parseISO, startOfDay } from "date-fns"
+import { format, parse, parseISO } from "date-fns"
+import { useDashboardInit } from "@/lib/queries/dashboard"
 
 interface RecentItem {
   id: string
@@ -19,64 +18,47 @@ interface RecentItem {
 }
 
 export function RecentAppointments() {
-  const [items, setItems] = useState<RecentItem[]>([])
   const router = useRouter()
+  const { data, isPending, isError } = useDashboardInit()
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        // Fetch latest 5 appointments regardless of date
-        const res = await AppointmentsAPI.getAll({ limit: 25 })
-        if (res.success && Array.isArray(res.data)) {
-          const todayStart = startOfDay(new Date())
+  const raw = data?.appointments?.recentUpcoming ?? []
 
-          const mapped: RecentItem[] = res.data.map((a: any) => {
-            let appointmentDateTime: Date | null = null
-
-            try {
-              if (a?.date && a?.time) {
-                appointmentDateTime = parse(`${a.date} ${a.time}`, "yyyy-MM-dd h:mm a", new Date())
-              } else if (a?.date) {
-                appointmentDateTime = parseISO(a.date)
-              }
-            } catch {
-              appointmentDateTime = null
-            }
-
-            return {
-            id: a._id,
-            name: a?.clientId?.name || "Client",
-            avatar: "/placeholder.svg",
-            service: a?.serviceId?.name || "Service",
-              timeLabel: appointmentDateTime ? format(appointmentDateTime, "MMM dd, h:mm a") : (a?.time || ""),
-              price: Number(a?.price || a?.serviceId?.price || 0),
-              status: a?.status || "scheduled",
-              dateTime: appointmentDateTime,
-            }
-          })
-
-          const upcoming = mapped
-            .filter((appointment) => {
-              if (!appointment.dateTime) return false
-              return isAfter(appointment.dateTime, todayStart) || isEqual(appointment.dateTime, todayStart)
-            })
-            .sort((a, b) => {
-              if (!a.dateTime || !b.dateTime) return 0
-              return a.dateTime.getTime() - b.dateTime.getTime()
-            })
-            .slice(0, 5)
-
-          setItems(upcoming)
-        } else {
-          setItems([])
-        }
-      } catch (error: any) {
-        if (error?.response?.status === 401 || error?.response?.status === 403) return
-        setItems([])
+  const items: RecentItem[] = (Array.isArray(raw) ? raw : []).map((a: any) => {
+    let appointmentDateTime: Date | null = null
+    try {
+      if (a?.date && a?.time) {
+        appointmentDateTime = parse(`${a.date} ${a.time}`, "yyyy-MM-dd h:mm a", new Date())
+      } else if (a?.date) {
+        appointmentDateTime = parseISO(a.date)
       }
+    } catch {
+      appointmentDateTime = null
     }
-    load()
-  }, [])
+    return {
+      id: String(a._id),
+      name: a?.clientId?.name || "Client",
+      avatar: "/placeholder.svg",
+      service: a?.serviceId?.name || "Service",
+      timeLabel: appointmentDateTime ? format(appointmentDateTime, "MMM dd, h:mm a") : a?.time || "",
+      price: Number(a?.price || a?.serviceId?.price || 0),
+      status: a?.status || "scheduled",
+      dateTime: appointmentDateTime,
+    }
+  })
+
+  if (isPending) {
+    return (
+      <div className="space-y-4">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-16 rounded-xl bg-slate-100 animate-pulse" />
+        ))}
+      </div>
+    )
+  }
+
+  if (isError) {
+    return <div className="text-sm text-muted-foreground">Could not load recent appointments.</div>
+  }
 
   return (
     <div className="space-y-4">
@@ -113,38 +95,36 @@ export function RecentAppointments() {
             onClick={() => router.push(`/appointments?appointment=${appointment.id}`)}
             className="w-full text-left"
           >
-            <div 
-          className="group flex items-center p-3 rounded-xl bg-gradient-to-r from-slate-50 to-gray-50 hover:from-blue-50 hover:to-indigo-50 transition-all duration-300 transform hover:scale-[1.02] hover:shadow-md border border-transparent hover:border-blue-200"
-          style={{ animationDelay: `${index * 100}ms` }}
-        >
-          <div className="relative">
-            <Avatar className="h-10 w-10 ring-2 ring-white shadow-sm group-hover:ring-blue-200 transition-all duration-300">
-              <AvatarImage src={appointment.avatar || "/placeholder.svg"} alt="Avatar" />
-              <AvatarFallback className="bg-gradient-to-br from-blue-500 to-indigo-600 text-white font-semibold">
-                {appointment.name.charAt(0)}
-              </AvatarFallback>
-            </Avatar>
-          </div>
-          <div className="ml-4 space-y-1 flex-1">
+            <div
+              className="group flex items-center p-3 rounded-xl bg-gradient-to-r from-slate-50 to-gray-50 hover:from-blue-50 hover:to-indigo-50 transition-all duration-300 transform hover:scale-[1.02] hover:shadow-md border border-transparent hover:border-blue-200"
+              style={{ animationDelay: `${index * 100}ms` }}
+            >
+              <div className="relative">
+                <Avatar className="h-10 w-10 ring-2 ring-white shadow-sm group-hover:ring-blue-200 transition-all duration-300">
+                  <AvatarImage src={appointment.avatar || "/placeholder.svg"} alt="Avatar" />
+                  <AvatarFallback className="bg-gradient-to-br from-blue-500 to-indigo-600 text-white font-semibold">
+                    {appointment.name.charAt(0)}
+                  </AvatarFallback>
+                </Avatar>
+              </div>
+              <div className="ml-4 space-y-1 flex-1">
                 <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold leading-none text-gray-800 group-hover:text-blue-800 transition-colors duration-300">
-              {appointment.name}
-            </p>
-                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${status.badge}`}>
-                    {status.label}
-                  </span>
+                  <p className="text-sm font-semibold leading-none text-gray-800 group-hover:text-blue-800 transition-colors duration-300">
+                    {appointment.name}
+                  </p>
+                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${status.badge}`}>{status.label}</span>
                 </div>
-            <p className="text-sm text-gray-600 group-hover:text-blue-600 transition-colors duration-300">
+                <p className="text-sm text-gray-600 group-hover:text-blue-600 transition-colors duration-300">
                   {appointment.service}
                 </p>
                 <p className="text-xs text-gray-500 group-hover:text-gray-700 transition-colors duration-300">
                   {appointment.timeLabel}
-            </p>
-          </div>
+                </p>
+              </div>
               <div className="ml-auto font-bold text-lg px-3 py-1 rounded-full bg-white/50">
                 <span className={status.amount}>₹{appointment.price}</span>
-          </div>
-        </div>
+              </div>
+            </div>
           </button>
         )
       })}

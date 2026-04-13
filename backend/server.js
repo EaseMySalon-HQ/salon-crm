@@ -24,6 +24,7 @@ const {
 const { isAdminReceiptNotificationsEnabled } = require('./lib/whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./lib/whatsapp-settings-defaults');
 const { sendAppointmentWhatsAppAfterCreate, sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('./lib/send-appointment-whatsapp');
+const { buildDashboardInitPayload, buildAppointmentsSummary } = require('./lib/dashboard-init');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -7678,6 +7679,14 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       });
     }
 
+    const invalidService = services.find(s => !s.serviceId || !s.staffId);
+    if (invalidService) {
+      return res.status(400).json({
+        success: false,
+        error: 'Each service must have a valid serviceId and staffId'
+      });
+    }
+
     const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
 
     // Helper: get primary staff ID from a service for comparison
@@ -8234,6 +8243,20 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       message: 'Appointments created successfully'
     });
   } catch (error) {
+    if (error.code === 11000 || error.codeName === 'DuplicateKey' || /duplicate key/i.test(String(error.message || ''))) {
+      logger.warn('Appointment slot conflict (duplicate slotKey):', error.message);
+      return res.status(409).json({
+        success: false,
+        error: 'This time slot is already booked for the selected staff member. Please choose a different time.'
+      });
+    }
+    if (error.name === 'ValidationError') {
+      logger.warn('Appointment validation failed:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: error.message
+      });
+    }
     logger.error('Error creating appointment:', error);
     res.status(500).json({
       success: false,
@@ -9139,6 +9162,34 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
       success: false,
       error: 'Internal server error'
     });
+  }
+});
+
+// Single aggregated payload for tenant dashboard (reduces N+1 client fetches)
+app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildDashboardInitPayload({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+      user: req.user,
+    });
+    res.json(payload);
+  } catch (error) {
+    logger.error('Error building dashboard init:', error);
+    res.status(500).json({ success: false, error: 'Failed to load dashboard' });
+  }
+});
+
+app.get('/api/dashboard/appointments-summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildAppointmentsSummary({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+    });
+    res.json(payload);
+  } catch (error) {
+    logger.error('Error building appointments summary:', error);
+    res.status(500).json({ success: false, error: 'Failed to load appointments summary' });
   }
 });
 

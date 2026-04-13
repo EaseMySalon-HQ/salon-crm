@@ -5,6 +5,7 @@ import "./globals.css"
 import { Toaster } from "@/components/ui/toaster"
 import { AuthProvider } from "@/lib/auth-context"
 import { AdminAuthProvider } from "@/lib/admin-auth-context"
+import { QueryProvider } from "@/components/providers/query-provider"
 import { CookieConsentBanner } from "@/components/gdpr/cookie-consent-banner"
 import { OrganizationSchema, SoftwareApplicationSchema } from "@/components/seo/structured-data"
 
@@ -148,11 +149,13 @@ export default function RootLayout({
         <OrganizationSchema />
         <SoftwareApplicationSchema />
         <AuthProvider>
+          <QueryProvider>
           <AdminAuthProvider>
             {children}
             <Toaster />
             <CookieConsentBanner />
           </AdminAuthProvider>
+          </QueryProvider>
         </AuthProvider>
       </body>
     </html>

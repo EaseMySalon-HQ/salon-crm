@@ -8,10 +8,12 @@ import { RecentAppointments } from "@/components/dashboard/recent-appointments"
 import { DashboardStatsCards, MembershipStatsCards, ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { ProductStatsCards } from "@/components/dashboard/stats-cards"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
+import { DashboardGate } from "@/components/dashboard/dashboard-gate"
 
 export default function DashboardPage() {
   return (
     <ProtectedLayout requiredModule="dashboard">
+      <DashboardGate>
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
         <div className="mb-8 animate-in fade-in" style={{ animationDelay: "200ms" }}>
           <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 rounded-2xl p-8 text-white shadow-2xl hover:shadow-3xl transition-all duration-500 transform hover:scale-[1.01]">
@@ -24,7 +26,7 @@ export default function DashboardPage() {
               </div>
               <div className="flex items-center gap-3">
                 <Button asChild className="bg-white/20 hover:bg-white/30 backdrop-blur-sm border-white/30 transform hover:scale-105 transition-all duration-300">
-                  <Link href="/appointments/new">
+                  <Link prefetch={false} href="/appointments/new">
                     <Calendar className="mr-2 h-4 w-4" />
                     New Appointment
                   </Link>
@@ -34,7 +36,7 @@ export default function DashboardPage() {
                   variant="secondary"
                   className="bg-white text-indigo-600 hover:bg-gray-100 transform hover:scale-105 transition-all duration-300"
                 >
-                  <Link href="/quick-sale">
+                  <Link prefetch={false} href="/quick-sale">
                     <Receipt className="mr-2 h-4 w-4" />
                     Quick Sale
                   </Link>
@@ -106,6 +108,7 @@ export default function DashboardPage() {
           <ProductStatsCards />
         </div>
       </div>
+      </DashboardGate>
     </ProtectedLayout>
   )
 }
