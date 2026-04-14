@@ -2,14 +2,15 @@
 
 import type React from "react"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
-import { ProductsAPI, SettingsAPI } from "@/lib/api"
+import { ProductsAPI } from "@/lib/api"
+import { usePaymentSettingsQuery } from "@/lib/queries/payment-settings"
 import { CategoryCombobox } from "./category-combobox"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Search, CheckCircle, AlertCircle, HelpCircle } from "lucide-react"
@@ -55,69 +56,51 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
   const [showSearchResults, setShowSearchResults] = useState(false)
   const [searchStatus, setSearchStatus] = useState<'idle' | 'searching' | 'found' | 'not-found'>('idle')
 
-  // Tax categories from settings
+  // Tax categories from settings (shared React Query cache with `useCurrency` / other consumers)
   const [taxCategories, setTaxCategories] = useState<TaxCategory[]>([])
-  const [isLoadingTaxCategories, setIsLoadingTaxCategories] = useState(false)
+  const { data: paymentRes, isPending: isLoadingTaxCategories } = usePaymentSettingsQuery()
 
-  // Load tax categories from settings
+  const defaultTaxCategories: TaxCategory[] = useMemo(
+    () => [
+      { id: "essential", name: "Essential Products", rate: 5 },
+      { id: "intermediate", name: "Intermediate Products", rate: 12 },
+      { id: "standard", name: "Standard Products", rate: 18 },
+      { id: "luxury", name: "Luxury Products", rate: 28 },
+      { id: "exempt", name: "Exempt Products", rate: 0 },
+    ],
+    []
+  )
+
   useEffect(() => {
-    loadTaxCategories()
-  }, [])
-
-  const loadTaxCategories = async () => {
-    setIsLoadingTaxCategories(true)
-    try {
-      const response = await SettingsAPI.getPaymentSettings()
-      if (response.success && response.data) {
-        // Check if taxCategories array exists in response
-        if (response.data.taxCategories && Array.isArray(response.data.taxCategories)) {
-          setTaxCategories(response.data.taxCategories)
-        } else {
-          // Fallback: Create categories from individual rate fields (backward compatibility)
-          const defaultCategories: TaxCategory[] = []
-          if (response.data.essentialProductRate !== undefined) {
-            defaultCategories.push({ id: "essential", name: "Essential Products", rate: response.data.essentialProductRate || 5 })
-          }
-          if (response.data.intermediateProductRate !== undefined) {
-            defaultCategories.push({ id: "intermediate", name: "Intermediate Products", rate: response.data.intermediateProductRate || 12 })
-          }
-          if (response.data.standardProductRate !== undefined) {
-            defaultCategories.push({ id: "standard", name: "Standard Products", rate: response.data.standardProductRate || 18 })
-          }
-          if (response.data.luxuryProductRate !== undefined) {
-            defaultCategories.push({ id: "luxury", name: "Luxury Products", rate: response.data.luxuryProductRate || 28 })
-          }
-          if (response.data.exemptProductRate !== undefined) {
-            defaultCategories.push({ id: "exempt", name: "Exempt Products", rate: response.data.exemptProductRate || 0 })
-          }
-          
-          // If no categories found, use defaults
-          if (defaultCategories.length === 0) {
-            defaultCategories.push(
-              { id: "essential", name: "Essential Products", rate: 5 },
-              { id: "intermediate", name: "Intermediate Products", rate: 12 },
-              { id: "standard", name: "Standard Products", rate: 18 },
-              { id: "luxury", name: "Luxury Products", rate: 28 },
-              { id: "exempt", name: "Exempt Products", rate: 0 }
-            )
-          }
-          setTaxCategories(defaultCategories)
-        }
+    if (!paymentRes) return
+    if (paymentRes.success && paymentRes.data) {
+      const response = paymentRes
+      const data = response.data
+      if (data.taxCategories && Array.isArray(data.taxCategories)) {
+        setTaxCategories(data.taxCategories)
+        return
       }
-    } catch (error) {
-      console.error("Error loading tax categories:", error)
-      // Use default categories on error
-      setTaxCategories([
-        { id: "essential", name: "Essential Products", rate: 5 },
-        { id: "intermediate", name: "Intermediate Products", rate: 12 },
-        { id: "standard", name: "Standard Products", rate: 18 },
-        { id: "luxury", name: "Luxury Products", rate: 28 },
-        { id: "exempt", name: "Exempt Products", rate: 0 }
-      ])
-    } finally {
-      setIsLoadingTaxCategories(false)
+      const built: TaxCategory[] = []
+      if (data.essentialProductRate !== undefined) {
+        built.push({ id: "essential", name: "Essential Products", rate: data.essentialProductRate || 5 })
+      }
+      if (data.intermediateProductRate !== undefined) {
+        built.push({ id: "intermediate", name: "Intermediate Products", rate: data.intermediateProductRate || 12 })
+      }
+      if (data.standardProductRate !== undefined) {
+        built.push({ id: "standard", name: "Standard Products", rate: data.standardProductRate || 18 })
+      }
+      if (data.luxuryProductRate !== undefined) {
+        built.push({ id: "luxury", name: "Luxury Products", rate: data.luxuryProductRate || 28 })
+      }
+      if (data.exemptProductRate !== undefined) {
+        built.push({ id: "exempt", name: "Exempt Products", rate: data.exemptProductRate || 0 })
+      }
+      setTaxCategories(built.length > 0 ? built : defaultTaxCategories)
+      return
     }
-  }
+    setTaxCategories(defaultTaxCategories)
+  }, [paymentRes, defaultTaxCategories])
 
   // Update form data when product prop changes (for edit mode)
   useEffect(() => {

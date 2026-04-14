@@ -3,6 +3,14 @@ import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios'
 import { handleSessionExpired } from './auth-utils'
 import { isPublicClientRoute } from './public-routes'
 import { getCsrfToken, setCsrfTokenPersisted, CSRF_HEADER_NAME } from './csrf'
+import type {
+  AnalyticsClientsTabData,
+  AnalyticsProductsTabData,
+  AnalyticsRevenueTabData,
+  AnalyticsServicesTabData,
+  AnalyticsStaffDrillDownData,
+  AnalyticsStaffTabData,
+} from "@/lib/types/analytics"
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
@@ -1518,6 +1526,67 @@ export class ReportsAPI {
 export class DashboardAPI {
   static async getInit(): Promise<ApiResponse<any>> {
     const response = await apiClient.get("/dashboard/init")
+    return response.data
+  }
+}
+
+export class AnalyticsAPI {
+  static async getRevenueTab(params?: {
+    dateFrom?: string
+    dateTo?: string
+    bucket?: "day" | "week" | "month"
+  }): Promise<ApiResponse<AnalyticsRevenueTabData>> {
+    const response = await apiClient.get("/analytics/revenue", { params })
+    return response.data
+  }
+
+  static async getServicesTab(params?: {
+    dateFrom?: string
+    dateTo?: string
+    bucket?: "day" | "week" | "month"
+  }): Promise<ApiResponse<AnalyticsServicesTabData>> {
+    const response = await apiClient.get("/analytics/services", { params })
+    return response.data
+  }
+
+  static async getClientsTab(params?: {
+    dateFrom?: string
+    dateTo?: string
+    bucket?: "day" | "week" | "month"
+  }): Promise<ApiResponse<AnalyticsClientsTabData>> {
+    const response = await apiClient.get("/analytics/clients", { params })
+    return response.data
+  }
+
+  static async getProductsTab(params?: {
+    dateFrom?: string
+    dateTo?: string
+    bucket?: "day" | "week" | "month"
+  }): Promise<ApiResponse<AnalyticsProductsTabData>> {
+    const response = await apiClient.get("/analytics/products", { params })
+    return response.data
+  }
+
+  static async getStaffTab(params?: {
+    dateFrom?: string
+    dateTo?: string
+    bucket?: "day" | "week" | "month"
+    lineType?: "all" | "service" | "product" | "membership" | "package"
+  }): Promise<ApiResponse<AnalyticsStaffTabData>> {
+    const response = await apiClient.get("/analytics/staff", { params })
+    return response.data
+  }
+
+  static async getStaffTrends(
+    staffId: string,
+    params?: {
+      dateFrom?: string
+      dateTo?: string
+      bucket?: "day" | "week" | "month"
+      lineType?: "all" | "service" | "product" | "membership" | "package"
+    }
+  ): Promise<ApiResponse<AnalyticsStaffDrillDownData>> {
+    const response = await apiClient.get(`/analytics/staff/${encodeURIComponent(staffId)}/trends`, { params })
     return response.data
   }
 }
