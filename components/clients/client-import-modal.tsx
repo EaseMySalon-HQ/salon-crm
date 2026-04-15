@@ -145,7 +145,12 @@ export function ClientImportModal({ isOpen, onClose, onImportComplete }: { isOpe
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) handleClose()
+      }}
+    >
       <DialogContent className="max-w-[90vw] max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

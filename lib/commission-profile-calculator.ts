@@ -13,6 +13,8 @@ export interface SaleItem {
   total: number
   /** Catalog service id when type === 'service' (ObjectId string or populated shape) */
   serviceId?: string | { _id?: string }
+  /** Catalog product id when type === 'product' */
+  productId?: string | { _id?: string }
   staffId?: string
   staffName?: string
   discount?: number
@@ -37,6 +39,30 @@ function normalizeSaleLineServiceId(
   const raw = item.serviceId as string | { _id?: string }
   if (typeof raw === 'object' && raw !== null && raw._id != null) {
     return String(raw._id)
+  }
+  return String(raw)
+}
+
+function normalizeSaleLineProductId(
+  item: Pick<SaleItem, 'type' | 'productId'>
+): string | null {
+  if (String(item.type).toLowerCase() !== 'product' || item.productId == null || item.productId === '') {
+    return null
+  }
+  const raw = item.productId as string | { _id?: string }
+  if (typeof raw === 'object' && raw !== null && raw._id != null) {
+    return String(raw._id)
+  }
+  return String(raw)
+}
+
+/** Rule or line catalog id (string ObjectId or populated `{ _id }`). */
+function normalizeCatalogId(raw: unknown): string | null {
+  if (raw == null || raw === '') return null
+  if (typeof raw === 'object' && raw !== null && '_id' in raw) {
+    const id = (raw as { _id?: unknown })._id
+    if (id == null || id === '') return null
+    return String(id)
   }
   return String(raw)
 }
@@ -112,6 +138,35 @@ export function enrichSalesWithServiceIdsFromCatalog(
       const sid = byName.get(key)
       if (sid) {
         items[i] = { ...item, serviceId: sid }
+      }
+    }
+  }
+}
+
+/**
+ * When sale lines lack productId (legacy bills), map product name to catalog id so item-based rules match.
+ */
+export function enrichSalesWithProductIdsFromCatalog(
+  sales: Array<{ items?: SaleItem[] }>,
+  products: Array<{ _id?: string; id?: string; name?: string }>
+): void {
+  const byName = new Map<string, string>()
+  for (const p of products) {
+    const id = String(p._id ?? p.id ?? '')
+    const nm = String(p.name ?? '').trim().toLowerCase()
+    if (!id || !nm) continue
+    if (!byName.has(nm)) byName.set(nm, id)
+  }
+  for (const sale of sales) {
+    const items = sale.items
+    if (!items || !Array.isArray(items)) continue
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i] as SaleItem
+      if (String(item.type).toLowerCase() !== 'product' || normalizeSaleLineProductId(item)) continue
+      const key = String(item.name ?? '').trim().toLowerCase()
+      const pid = byName.get(key)
+      if (pid) {
+        items[i] = { ...item, productId: pid }
       }
     }
   }
@@ -198,6 +253,30 @@ export class CommissionProfileCalculator {
         continue
       }
 
+      if (profile.type === 'item_based' && profile.productRules?.length) {
+        const {
+          commission: profileCommission,
+          revenue: profileRevenue,
+          itemCount: profileItemCount,
+        } = this.calculateProductBasedCommission(productItems, profile.productRules)
+
+        if (profileCommission === 0 && profileRevenue === 0) {
+          continue
+        }
+
+        totalCommission += profileCommission
+
+        profileBreakdown.push({
+          profileId,
+          profileName: profile.name,
+          profileType: 'item_based',
+          commission: profileCommission,
+          revenue: profileRevenue,
+          itemCount: profileItemCount,
+        })
+        continue
+      }
+
       const qualifying = profile.qualifyingItems ?? []
       let profileRevenue = 0
       let profileItemCount = 0
@@ -231,8 +310,12 @@ export class CommissionProfileCalculator {
 
       if (profile.type === 'target_based' && profile.targetTiers) {
         profileCommission = this.calculateTargetBasedCommission(profileRevenue, profile.targetTiers, profile.cascadingCommission)
-      } else if (profile.type === 'item_based' && profile.itemRates) {
-        profileCommission = this.calculateItemBasedCommission(profileRevenue, profile.itemRates, qualifying)
+      } else if (profile.type === 'item_based' && profile.itemRates?.length) {
+        profileCommission = this.calculateLegacyItemRatesCommission(
+          profileRevenue,
+          profile.itemRates,
+          qualifying
+        )
       }
 
       totalCommission += profileCommission
@@ -432,6 +515,56 @@ export class CommissionProfileCalculator {
    * Per-catalog-service rules: attributed pre-tax line amount × % or flat ₹ per line row.
    * Lines without serviceId or without a matching rule earn 0.
    */
+  /**
+   * Per-catalog-product rules: attributed line amount × % or flat ₹ per invoice line row.
+   */
+  private static calculateProductBasedCommission(
+    productStaffItems: Array<SaleItem & { total: number }>,
+    productRules: Array<{
+      productId: string | { _id?: string }
+      calculateBy: 'percent' | 'fixed'
+      value: number
+    }>
+  ): { commission: number; revenue: number; itemCount: number } {
+    const ruleMap = new Map<string, { calculateBy: 'percent' | 'fixed'; value: number }>()
+    for (const rule of productRules) {
+      const key = normalizeCatalogId(rule?.productId)
+      if (key) {
+        ruleMap.set(key, {
+          calculateBy: rule.calculateBy === 'fixed' ? 'fixed' : 'percent',
+          value: Number(rule.value) || 0,
+        })
+      }
+    }
+
+    let commission = 0
+    let revenue = 0
+    let itemCount = 0
+
+    for (const item of productStaffItems) {
+      const pid = normalizeSaleLineProductId(item)
+      if (!pid) continue
+      const rule = ruleMap.get(pid)
+      if (!rule || rule.value <= 0) continue
+
+      const attributed = Math.max(0, Number(item.total) || 0)
+      if (attributed <= 0) continue
+
+      let lineCommission = 0
+      if (rule.calculateBy === 'percent') {
+        lineCommission = (attributed * rule.value) / 100
+      } else {
+        lineCommission = rule.value
+      }
+
+      commission += lineCommission
+      revenue += attributed
+      itemCount += 1
+    }
+
+    return { commission, revenue, itemCount }
+  }
+
   private static calculateServiceBasedCommission(
     serviceStaffItems: Array<SaleItem & { total: number }>,
     serviceRules: Array<{
@@ -480,9 +613,9 @@ export class CommissionProfileCalculator {
   }
 
   /**
-   * Calculate item-based commission
+   * Legacy item-based: aggregate revenue × rate per qualifying item type.
    */
-  private static calculateItemBasedCommission(
+  private static calculateLegacyItemRatesCommission(
     revenue: number,
     itemRates: Array<{
       itemType: string

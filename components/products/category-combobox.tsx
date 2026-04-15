@@ -251,7 +251,7 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
       <Popover
         open={open}
         onOpenChange={setOpen}
-        modal
+        modal={false}
       >
         <PopoverTrigger asChild>
           <Button

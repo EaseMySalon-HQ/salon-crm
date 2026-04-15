@@ -15,10 +15,11 @@ import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { StaffServiceDetailDrawer } from "@/components/reports/staff-service-detail-drawer"
-import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI, ReportsAPI, ServicesAPI } from "@/lib/api"
+import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI, ReportsAPI, ServicesAPI, ProductsAPI } from "@/lib/api"
 import {
   CommissionProfileCalculator,
   StaffCommissionResult,
+  enrichSalesWithProductIdsFromCatalog,
   enrichSalesWithServiceIdsFromCatalog
 } from "@/lib/commission-profile-calculator"
 import { CommissionProfile } from "@/lib/commission-profile-types"
@@ -267,12 +268,15 @@ export function StaffPerformanceReport() {
         const { startDate, endDate } = getPerformanceFilterBounds(datePeriod, dateRange)
 
         // Paged fetch avoids one huge response; N sequential calls for large DBs. Long-term: server aggregates by staff/range.
-        const [allSales, servicesResponse] = await Promise.all([
+        const [allSales, servicesResponse, productsResponse] = await Promise.all([
           SalesAPI.getAllMergePages({ batchSize: 500 }),
-          ServicesAPI.getAll({ limit: 2000 })
+          ServicesAPI.getAll({ limit: 2000 }),
+          ProductsAPI.getAll({ limit: 2000 })
         ])
         const catalogServices =
           servicesResponse?.success && Array.isArray(servicesResponse.data) ? servicesResponse.data : []
+        const catalogProducts =
+          productsResponse?.success && Array.isArray(productsResponse.data) ? productsResponse.data : []
 
         if (Array.isArray(allSales)) {
           // Filter sales by date range
@@ -282,6 +286,7 @@ export function StaffPerformanceReport() {
           })
 
           enrichSalesWithServiceIdsFromCatalog(filteredSales, catalogServices)
+          enrichSalesWithProductIdsFromCatalog(filteredSales, catalogProducts)
 
           setSalesData(filteredSales)
 

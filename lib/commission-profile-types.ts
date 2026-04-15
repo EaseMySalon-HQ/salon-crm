@@ -6,6 +6,12 @@ export interface ServiceCommissionRule {
   value: number
 }
 
+export interface ProductCommissionRule {
+  productId: string
+  calculateBy: "percent" | "fixed"
+  value: number
+}
+
 export interface CommissionProfile {
   id?: string
   _id?: string
@@ -37,6 +43,9 @@ export interface CommissionProfile {
   // Service-Based Profile
   serviceRules?: ServiceCommissionRule[]
 
+  /** Per-catalog product rules (Commission by Item) */
+  productRules?: ProductCommissionRule[]
+
   isActive: boolean
   createdAt: string
   updatedAt: string
@@ -58,6 +67,7 @@ export interface CommissionProfileFormData {
     value: number
   }>
   serviceRules?: ServiceCommissionRule[]
+  productRules?: ProductCommissionRule[]
 }
 
 export const COMMISSION_PROFILE_TYPES = {
@@ -107,7 +117,28 @@ export function toCommissionProfileApiBody(data: CommissionProfileFormData): Rec
       cascadingCommission: false,
       targetTiers: [],
       itemRates: [],
-      serviceRules
+      serviceRules,
+      productRules: []
+    }
+  }
+
+  if (data.type === "item_based") {
+    const productRules = (data.productRules ?? [])
+      .filter((r) => r.productId && String(r.productId).trim() !== "")
+      .map((r) => ({
+        productId: String(r.productId),
+        calculateBy: r.calculateBy,
+        value: Number(r.value)
+      }))
+    return {
+      ...base,
+      qualifyingItems: [],
+      includeTax: false,
+      cascadingCommission: false,
+      targetTiers: [],
+      itemRates: [],
+      serviceRules: [],
+      productRules
     }
   }
 
@@ -118,6 +149,7 @@ export function toCommissionProfileApiBody(data: CommissionProfileFormData): Rec
     cascadingCommission: data.cascadingCommission ?? false,
     targetTiers: data.targetTiers ?? [],
     itemRates: [],
-    serviceRules: []
+    serviceRules: [],
+    productRules: []
   }
 }

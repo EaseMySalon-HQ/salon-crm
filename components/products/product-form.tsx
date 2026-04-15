@@ -539,6 +539,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
             </div>
             <div className="flex rounded-md border border-input overflow-hidden h-9">
               <Select
+                modal={false}
                 value={formData.volumeUnit}
                 onValueChange={(value) => handleChange("volumeUnit", value)}
               >
@@ -583,6 +584,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
               </Tooltip>
             </div>
             <Select
+              modal={false}
               value={formData.taxCategory}
               onValueChange={(value) => handleChange("taxCategory", value)}
               disabled={isLoadingTaxCategories}
@@ -628,6 +630,7 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
               </Tooltip>
             </div>
             <Select
+              modal={false}
               value={formData.productType}
               onValueChange={(value) => handleChange("productType", value)}
             >
