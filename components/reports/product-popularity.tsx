@@ -21,39 +21,44 @@ import { useCurrency } from "@/hooks/use-currency"
 import { AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import type { AnalyticsTopService } from "@/lib/types/analytics"
+import type { AnalyticsTopProduct } from "@/lib/types/analytics"
 
-const TOP_SERVICES_CARD_LIMIT = 10
+const TOP_PRODUCTS_CARD_LIMIT = 10
 
-type ServicePopularityProps = {
+type ProductPopularityProps = {
   isPending?: boolean
   isError?: boolean
   onRetry?: () => void
-  topServices: AnalyticsTopService[]
-  /** Full list for the selected period; when omitted, list falls back to topServices */
-  allServicesBreakdown?: AnalyticsTopService[]
-  totalServiceLineRevenue: number
+  topProducts: AnalyticsTopProduct[]
+  allProductsBreakdown?: AnalyticsTopProduct[]
+  totalProductRevenue: number
 }
 
-export function ServicePopularity({
+function pctOfRevenue(p: AnalyticsTopProduct, total: number): number {
+  if (p.percentOfProductRevenue != null) return p.percentOfProductRevenue
+  if (!total || total <= 0) return 0
+  return Math.round((p.revenue / total) * 1000) / 10
+}
+
+export function ProductPopularity({
   isPending,
   isError,
   onRetry,
-  topServices,
-  allServicesBreakdown,
-  totalServiceLineRevenue,
-}: ServicePopularityProps) {
+  topProducts,
+  allProductsBreakdown,
+  totalProductRevenue,
+}: ProductPopularityProps) {
   const { formatAmount } = useCurrency()
   const [listMode, setListMode] = useState<"top" | "all">("top")
 
-  const pieData = topServices.slice(0, 8).map((s) => ({
-    name: s.name,
-    value: Math.round(s.revenue * 100) / 100,
-    color: s.color,
+  const pieData = topProducts.slice(0, 8).map((p) => ({
+    name: p.name,
+    value: Math.round(p.revenue * 100) / 100,
+    color: p.color,
   }))
 
   const sumPie = pieData.reduce((a, b) => a + b.value, 0)
-  const other = Math.max(0, (totalServiceLineRevenue || 0) - sumPie)
+  const other = Math.max(0, (totalProductRevenue || 0) - sumPie)
   const chartRows =
     other > 0.01 && pieData.length > 0
       ? [...pieData, { name: "Other", value: Math.round(other * 100) / 100, color: ANALYTICS_PIE_COLORS[7] }]
@@ -85,7 +90,7 @@ export function ServicePopularity({
       <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex gap-2 text-amber-900 text-sm">
           <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
-          <span>Could not load service analytics.</span>
+          <span>Could not load product analytics.</span>
         </div>
         {onRetry ? (
           <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={onRetry}>
@@ -96,20 +101,20 @@ export function ServicePopularity({
     )
   }
 
-  const empty = !totalServiceLineRevenue || chartRows.length === 0
+  const empty = !totalProductRevenue || chartRows.length === 0
 
-  const listRows = allServicesBreakdown != null ? allServicesBreakdown : topServices
-  const hasFullBreakdown = allServicesBreakdown != null
-  const topServicesForCards = (allServicesBreakdown ?? topServices).slice(0, TOP_SERVICES_CARD_LIMIT)
+  const listRows = allProductsBreakdown != null ? allProductsBreakdown : topProducts
+  const hasFullBreakdown = allProductsBreakdown != null
+  const topProductsForCards = (allProductsBreakdown ?? topProducts).slice(0, TOP_PRODUCTS_CARD_LIMIT)
 
   return (
     <div className="space-y-6">
       <div className="grid gap-6 md:grid-cols-2 md:gap-8">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-muted-foreground mb-3">Revenue by service (bill line items)</p>
+          <p className="text-sm font-medium text-muted-foreground mb-3">Revenue by product (line items)</p>
           <AnalyticsDonutChart
             data={empty ? [] : donutData}
-            emptyMessage="No service sales in this period."
+            emptyMessage="No product lines in this period."
             formatTooltip={formatAmount}
           />
         </div>
@@ -117,7 +122,7 @@ export function ServicePopularity({
         <div className="min-w-0">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
             <p className="text-sm font-medium text-muted-foreground">
-              {hasFullBreakdown && listMode === "all" ? "All services in period" : "Top 10 services"}
+              {hasFullBreakdown && listMode === "all" ? "All products in period" : "Top 10 products"}
             </p>
             {hasFullBreakdown ? (
               <ToggleGroup
@@ -129,13 +134,13 @@ export function ServicePopularity({
                 variant="outline"
                 size="sm"
                 className="shrink-0 justify-start sm:justify-end"
-                aria-label="Service list view"
+                aria-label="Product list view"
               >
                 <ToggleGroupItem value="top" className="px-3">
                   Top 10
                 </ToggleGroupItem>
                 <ToggleGroupItem value="all" className="px-3">
-                  All services
+                  All products
                 </ToggleGroupItem>
               </ToggleGroup>
             ) : null}
@@ -149,30 +154,30 @@ export function ServicePopularity({
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[min(40%,280px)]">Service</TableHead>
+                    <TableHead className="w-[min(40%,280px)]">Product</TableHead>
                     <TableHead className="text-right tabular-nums">Revenue</TableHead>
                     <TableHead className="text-right tabular-nums">Share</TableHead>
                     <TableHead className="text-right tabular-nums">Units</TableHead>
-                    <TableHead className="text-right tabular-nums">Bookings</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {listRows.map((service, index) => (
-                    <TableRow key={`${service.id}-${index}`}>
+                  {listRows.map((p, index) => (
+                    <TableRow key={`${p.id}-${index}`}>
                       <TableCell className="font-medium">
                         <span className="inline-flex items-center gap-2 min-w-0">
                           <span
                             className="h-2 w-2 shrink-0 rounded-sm"
-                            style={{ backgroundColor: service.color }}
+                            style={{ backgroundColor: p.color }}
                             aria-hidden
                           />
-                          <span className="truncate">{service.name}</span>
+                          <span className="truncate">{p.name}</span>
                         </span>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(service.revenue)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{service.percentOfServiceRevenue}%</TableCell>
-                      <TableCell className="text-right tabular-nums">{service.units}</TableCell>
-                      <TableCell className="text-right tabular-nums">{service.bookings}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatAmount(p.revenue)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {pctOfRevenue(p, totalProductRevenue)}%
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{p.units}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -180,26 +185,28 @@ export function ServicePopularity({
             </div>
           ) : (
             <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
-              {topServicesForCards.map((service, index) => (
-                <Card key={`${service.id}-${index}`}>
-                  <CardContent className="p-4 flex items-center justify-between gap-3">
-                    <div className="min-w-0 flex items-start gap-2">
-                      <span
-                        className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: service.color }}
-                        aria-hidden
-                      />
-                      <div>
-                        <div className="font-medium truncate">{service.name}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {formatAmount(service.revenue)} · {service.percentOfServiceRevenue}% of service revenue
-                          {service.bookings > 0 ? ` · ${service.bookings} bookings` : ""}
+              {topProductsForCards.map((p, index) => {
+                const pct = pctOfRevenue(p, totalProductRevenue)
+                return (
+                  <Card key={`${p.id}-${index}`}>
+                    <CardContent className="p-4 flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex items-start gap-2">
+                        <span
+                          className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-sm"
+                          style={{ backgroundColor: p.color }}
+                          aria-hidden
+                        />
+                        <div>
+                          <div className="font-medium truncate">{p.name}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {formatAmount(p.revenue)} · {pct}% of product revenue · {p.units} units
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                )
+              })}
             </div>
           )}
         </div>

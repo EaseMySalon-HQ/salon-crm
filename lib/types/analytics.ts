@@ -80,6 +80,8 @@ export interface AnalyticsServicesTabData {
   services: {
     totalServicesCatalog: number
     topServices: AnalyticsTopService[]
+    /** Every distinct service line in the period (by revenue), not only the top 8 used for the pie */
+    allServicesBreakdown?: AnalyticsTopService[]
     totalServiceLineRevenue: number
     serviceTrends: AnalyticsServiceTrendPoint[]
   }
@@ -150,6 +152,8 @@ export interface AnalyticsTopProduct {
   revenue: number
   units: number
   color: string
+  /** Share of product-line revenue in range; set when returned from products analytics API */
+  percentOfProductRevenue?: number
 }
 
 export interface AnalyticsProductsTabData {
@@ -164,6 +168,8 @@ export interface AnalyticsProductsTabData {
     totalProductRevenue: number
     totalUnitsSold: number
     topProducts: AnalyticsTopProduct[]
+    /** Every distinct product line in the period (by revenue), not only the top 8 used for the pie */
+    allProductsBreakdown?: AnalyticsTopProduct[]
     productTrends: AnalyticsProductTrendPoint[]
   }
 }
