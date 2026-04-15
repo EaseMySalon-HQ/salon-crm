@@ -137,6 +137,12 @@ class WhatsAppService {
       cleaned = '91' + cleaned;
     }
 
+    // 10-digit national mobiles can start with "91" (e.g. 9102401334). That is still missing the
+    // leading country code — prepend 91 → 919102401334 (12 digits for MSG91).
+    if (cleaned.length === 10 && cleaned.startsWith('91')) {
+      cleaned = '91' + cleaned;
+    }
+
     // Duplicate country code: 9191XXXXXXXXXX → 91XXXXXXXXXX
     if (cleaned.startsWith('9191') && cleaned.length === 13) {
       cleaned = cleaned.slice(2);

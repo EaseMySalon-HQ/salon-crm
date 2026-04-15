@@ -80,6 +80,8 @@ export interface AnalyticsServicesTabData {
   services: {
     totalServicesCatalog: number
     topServices: AnalyticsTopService[]
+    /** Every distinct service line in the period (by revenue), not only the top 8 used for the pie */
+    allServicesBreakdown?: AnalyticsTopService[]
     totalServiceLineRevenue: number
     serviceTrends: AnalyticsServiceTrendPoint[]
   }

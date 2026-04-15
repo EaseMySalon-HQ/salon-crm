@@ -95,12 +95,16 @@ export function AnalyticsServicesTabPanel({ data, isPending, isError, onRetry }:
 
       <Card>
         <CardHeader>
-          <CardTitle>Top services</CardTitle>
-          <CardDescription>Revenue and units from service lines; bookings from appointments</CardDescription>
+          <CardTitle>Service revenue breakdown</CardTitle>
+          <CardDescription>
+            Chart shows top eight by revenue (plus Other). The list can show top ten or every service in range—POS line
+            revenue and appointment counts where matched.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <ServicePopularity
             topServices={services.topServices}
+            allServicesBreakdown={services.allServicesBreakdown}
             totalServiceLineRevenue={services.totalServiceLineRevenue}
           />
         </CardContent>
