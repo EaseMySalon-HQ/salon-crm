@@ -89,7 +89,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
           "flex h-16 items-center border-b border-gray-200 mb-2 pb-4 transition-all",
           isCollapsed ? "justify-center px-2" : "px-2"
         )}>
-          <Link href="/dashboard" className={cn(
+          <Link prefetch={false} href="/dashboard" className={cn(
             "flex items-center group transition-all",
             isCollapsed ? "justify-center" : "justify-center gap-3 w-full"
           )}>
@@ -129,6 +129,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Link 
+                            prefetch={false}
                             href={canAccess ? item.href : "#"} 
                             className={cn(
                               "flex items-center justify-center w-full h-12 rounded-xl transition-all duration-300 group",
@@ -171,6 +172,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                         asChild
                       >
                         <Link 
+                          prefetch={false}
                           href={canAccess ? item.href : "#"} 
                           className="flex items-center w-full"
                         >

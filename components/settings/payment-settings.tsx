@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI } from "@/lib/api"
+import { useInvalidatePaymentSettings } from "@/lib/queries/payment-settings"
 import { Settings } from "lucide-react"
 
 export function PaymentSettings() {
@@ -19,6 +20,7 @@ export function PaymentSettings() {
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const { toast } = useToast()
+  const invalidatePaymentSettings = useInvalidatePaymentSettings()
 
   // Load payment settings on component mount
   useEffect(() => {
@@ -55,6 +57,7 @@ export function PaymentSettings() {
       })
       
       if (response.success) {
+        invalidatePaymentSettings()
         toast({
           title: "Payment settings saved",
           description: "Your payment configuration has been updated.",

@@ -19,6 +19,12 @@ const serviceRuleSchema = new mongoose.Schema({
   value: { type: Number, required: true, min: 0 }
 }, { _id: false });
 
+const productRuleSchema = new mongoose.Schema({
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+  calculateBy: { type: String, enum: ['percent', 'fixed'], default: 'percent' },
+  value: { type: Number, required: true, min: 0 }
+}, { _id: false });
+
 const commissionProfileSchema = new mongoose.Schema({
   name: { type: String, required: true },
   type: { type: String, enum: ['target_based', 'item_based', 'service_based'], default: 'target_based' },
@@ -30,6 +36,7 @@ const commissionProfileSchema = new mongoose.Schema({
   targetTiers: { type: [targetTierSchema], default: [] },
   itemRates: { type: [itemRateSchema], default: [] },
   serviceRules: { type: [serviceRuleSchema], default: [] },
+  productRules: { type: [productRuleSchema], default: [] },
   isActive: { type: Boolean, default: true },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }

@@ -320,7 +320,10 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                     Add Product
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl">
+                <DialogContent
+                  className="max-w-2xl"
+                  onCloseAutoFocus={(e) => e.preventDefault()}
+                >
                   <DialogHeader>
                     <DialogTitle>Add New Product</DialogTitle>
                   </DialogHeader>
@@ -339,7 +342,10 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                     Product Out
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-md">
+                <DialogContent
+                  className="max-w-md"
+                  onCloseAutoFocus={(e) => e.preventDefault()}
+                >
                   <DialogHeader>
                     <DialogTitle>Product Out - Deduct Stock</DialogTitle>
                   </DialogHeader>
@@ -366,21 +372,35 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
           )}
         </div>
 
-        {/* Edit Product Dialog */}
+        {/* Edit Product Dialog — open/sync like Radix controlled + selection (avoids stuck overlay when unmounting) */}
         {canManageProducts && (
-          <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-            <DialogContent className="max-w-2xl">
+          <Dialog
+            open={Boolean(isEditDialogOpen && selectedProduct)}
+            onOpenChange={(open) => {
+              if (!open) {
+                setIsEditDialogOpen(false)
+                setSelectedProduct(null)
+              }
+            }}
+          >
+            <DialogContent
+              className="max-w-2xl"
+              onCloseAutoFocus={(e) => e.preventDefault()}
+            >
               <DialogHeader>
                 <DialogTitle>Edit Product</DialogTitle>
               </DialogHeader>
-              <ProductForm 
-                product={selectedProduct} 
-                onClose={() => {
-                  setIsEditDialogOpen(false)
-                  setSelectedProduct(null)
-                }}
-                onProductUpdated={fetchProducts}
-              />
+              {selectedProduct ? (
+                <ProductForm
+                  key={String(selectedProduct._id ?? selectedProduct.id ?? "edit")}
+                  product={selectedProduct}
+                  onClose={() => {
+                    setIsEditDialogOpen(false)
+                    setSelectedProduct(null)
+                  }}
+                  onProductUpdated={fetchProducts}
+                />
+              ) : null}
             </DialogContent>
           </Dialog>
         )}
@@ -518,7 +538,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                     {canManageProducts && (
                       <TableCell className="px-4 py-3">
                         <div className="flex items-center justify-center">
-                          <DropdownMenu>
+                          <DropdownMenu modal={false}>
                             <DropdownMenuTrigger asChild>
                               <Button variant="ghost" className="h-8 w-8 p-0 hover:bg-gray-100 transition-colors duration-200">
                                 <MoreHorizontal className="h-4 w-4" />

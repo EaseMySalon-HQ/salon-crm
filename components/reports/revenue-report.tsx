@@ -5,9 +5,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,143 +15,200 @@ import {
 } from "recharts"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useCurrency } from "@/hooks/use-currency"
-import { useFeature } from "@/hooks/use-entitlements"
+import { AlertCircle } from "lucide-react"
+import type { AnalyticsRevenuePoint } from "@/lib/types/analytics"
 
-// Sample data
-const monthlyData = [
-  { name: "Jan", revenue: 4500, expenses: 3200, profit: 1300 },
-  { name: "Feb", revenue: 5200, expenses: 3400, profit: 1800 },
-  { name: "Mar", revenue: 4800, expenses: 3300, profit: 1500 },
-  { name: "Apr", revenue: 6000, expenses: 3600, profit: 2400 },
-  { name: "May", revenue: 5700, expenses: 3500, profit: 2200 },
-  { name: "Jun", revenue: 6500, expenses: 3800, profit: 2700 },
-  { name: "Jul", revenue: 7000, expenses: 4000, profit: 3000 },
-  { name: "Aug", revenue: 6800, expenses: 3900, profit: 2900 },
-  { name: "Sep", revenue: 6200, expenses: 3700, profit: 2500 },
-  { name: "Oct", revenue: 6600, expenses: 3800, profit: 2800 },
-  { name: "Nov", revenue: 6100, expenses: 3600, profit: 2500 },
-  { name: "Dec", revenue: 7200, expenses: 4100, profit: 3100 },
+type ChartMetric = "revenue" | "expenses" | "net" | "all"
+
+type RevenuePointKey = keyof Pick<AnalyticsRevenuePoint, "revenue" | "expenses" | "profit">
+
+const METRIC: Record<
+  Exclude<ChartMetric, "all">,
+  { dataKey: RevenuePointKey; label: string; color: string }
+> = {
+  revenue: { dataKey: "revenue", label: "Revenue", color: "#8b5cf6" },
+  expenses: { dataKey: "expenses", label: "Expenses", color: "#94a3b8" },
+  net: { dataKey: "profit", label: "Net", color: "#10b981" },
+}
+
+const ALL_SERIES: { dataKey: RevenuePointKey; label: string; color: string }[] = [
+  { dataKey: "revenue", label: "Revenue", color: "#8b5cf6" },
+  { dataKey: "expenses", label: "Expenses", color: "#94a3b8" },
+  { dataKey: "profit", label: "Net", color: "#10b981" },
 ]
 
-const weeklyData = [
-  { name: "Week 1", revenue: 1200, expenses: 800, profit: 400 },
-  { name: "Week 2", revenue: 1400, expenses: 850, profit: 550 },
-  { name: "Week 3", revenue: 1300, expenses: 820, profit: 480 },
-  { name: "Week 4", revenue: 1500, expenses: 870, profit: 630 },
-]
+type RevenueReportProps = {
+  isPending?: boolean
+  isError?: boolean
+  onRetry?: () => void
+  series: AnalyticsRevenuePoint[]
+  totals: { totalRevenue: number; totalExpenses: number; totalProfit: number }
+  bucketLabel: string
+}
 
-export function RevenueReport() {
+export function RevenueReport({
+  isPending,
+  isError,
+  onRetry,
+  series,
+  totals,
+  bucketLabel,
+}: RevenueReportProps) {
   const { formatAmount } = useCurrency()
-  const { hasAccess: canExport } = useFeature("data_export")
-  const [timeframe, setTimeframe] = useState("monthly")
-  const [chartType, setChartType] = useState("bar")
+  const [chartType, setChartType] = useState<"bar" | "line">("bar")
+  const [metric, setMetric] = useState<ChartMetric>("all")
 
-  const data = timeframe === "monthly" ? monthlyData : weeklyData
+  const chartData = series.map((p) => ({
+    name: p.name,
+    revenue: p.revenue,
+    expenses: p.expenses,
+    profit: p.profit,
+  }))
+
+  const m = metric === "all" ? null : METRIC[metric]
+  const metricCaption =
+    metric === "all" ? "Revenue, expenses & net" : m!.label
+  const isEmpty =
+    !isPending && !isError && totals.totalRevenue === 0 && totals.totalExpenses === 0
+
+  if (isPending) {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap justify-between gap-4">
+          <div className="h-9 w-56 bg-muted rounded animate-pulse" />
+          <div className="h-10 w-[180px] bg-muted rounded animate-pulse" />
+          <div className="h-10 w-[180px] bg-muted rounded animate-pulse" />
+        </div>
+        <div className="h-[380px] bg-muted/40 rounded-lg animate-pulse" />
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex gap-2 text-amber-900 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>Could not load revenue data. Check your connection, then try again.</span>
+        </div>
+        {onRetry ? (
+          <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={onRetry}>
+            Retry
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <Select defaultValue={timeframe} onValueChange={setTimeframe}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Select timeframe" />
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{bucketLabel}</span> · {metricCaption}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={metric} onValueChange={(v) => setMetric(v as ChartMetric)}>
+            <SelectTrigger className="w-[160px]">
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="weekly">Weekly</SelectItem>
-              <SelectItem value="monthly">Monthly</SelectItem>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="revenue">Revenue</SelectItem>
+              <SelectItem value="expenses">Expenses</SelectItem>
+              <SelectItem value="net">Net</SelectItem>
             </SelectContent>
           </Select>
-
-          <Select defaultValue={chartType} onValueChange={setChartType}>
+          <Select value={chartType} onValueChange={(v) => setChartType(v as "bar" | "line")}>
             <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Select chart type" />
+              <SelectValue placeholder="Chart type" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="bar">Bar Chart</SelectItem>
-              <SelectItem value="line">Line Chart</SelectItem>
+              <SelectItem value="bar">Bar chart</SelectItem>
+              <SelectItem value="line">Line chart</SelectItem>
             </SelectContent>
           </Select>
         </div>
-
-        <div className="flex gap-2">
-          {canExport ? (
-            <>
-              <Button variant="outline" size="sm">
-                Export PDF
-              </Button>
-              <Button variant="outline" size="sm">
-                Export CSV
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="outline" size="sm" disabled title="Data export requires Professional or Enterprise plan">
-                Export PDF (Upgrade)
-              </Button>
-              <Button variant="outline" size="sm" disabled title="Data export requires Professional or Enterprise plan">
-                Export CSV (Upgrade)
-              </Button>
-            </>
-          )}
-        </div>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-3">
-        <Card>
-          <CardContent className="p-6">
-            <div className="text-2xl font-bold">
-              {formatAmount(data.reduce((sum, item) => sum + item.revenue, 0))}
-            </div>
-            <p className="text-muted-foreground">Total Revenue</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="text-2xl font-bold">
-              {formatAmount(data.reduce((sum, item) => sum + item.expenses, 0))}
-            </div>
-            <p className="text-muted-foreground">Total Expenses</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="text-2xl font-bold">
-              {formatAmount(data.reduce((sum, item) => sum + item.profit, 0))}
-            </div>
-            <p className="text-muted-foreground">Total Profit</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="h-[400px]">
-        <ResponsiveContainer width="100%" height="100%">
-          {chartType === "bar" ? (
-            <BarChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip formatter={(value) => formatAmount(Number(value))} />
-              <Legend />
-              <Bar dataKey="revenue" name="Revenue" fill="#adfa1d" />
-              <Bar dataKey="expenses" name="Expenses" fill="#888888" />
-              <Bar dataKey="profit" name="Profit" fill="#10b981" />
-            </BarChart>
-          ) : (
-            <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip formatter={(value) => formatAmount(Number(value))} />
-              <Legend />
-              <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#adfa1d" activeDot={{ r: 8 }} />
-              <Line type="monotone" dataKey="expenses" name="Expenses" stroke="#888888" />
-              <Line type="monotone" dataKey="profit" name="Profit" stroke="#10b981" />
-            </LineChart>
-          )}
-        </ResponsiveContainer>
+      <div className="h-[380px] rounded-lg border bg-card/50 p-2 sm:p-4">
+        {isEmpty ? (
+          <div className="flex h-full min-h-[260px] items-center justify-center px-4 text-center text-sm text-muted-foreground">
+            No sales or expenses in this period. Try a wider date range.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            {chartType === "bar" ? (
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 11 }}
+                  interval={0}
+                  angle={chartData.length > 8 ? -35 : 0}
+                  textAnchor={chartData.length > 8 ? "end" : "middle"}
+                  height={chartData.length > 8 ? 70 : 40}
+                />
+                <YAxis />
+                <Tooltip formatter={(value) => formatAmount(Number(value))} />
+                {metric === "all"
+                  ? ALL_SERIES.map((s) => (
+                      <Bar
+                        key={s.dataKey}
+                        dataKey={s.dataKey}
+                        name={s.label}
+                        fill={s.color}
+                        radius={[4, 4, 0, 0]}
+                      />
+                    ))
+                  : (
+                      <Bar dataKey={m!.dataKey} name={m!.label} fill={m!.color} radius={[4, 4, 0, 0]} />
+                    )}
+                {metric === "all" ? <Legend wrapperStyle={{ fontSize: 12 }} /> : null}
+              </BarChart>
+            ) : (
+              <ComposedChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 11 }}
+                  interval={0}
+                  angle={chartData.length > 8 ? -35 : 0}
+                  textAnchor={chartData.length > 8 ? "end" : "middle"}
+                  height={chartData.length > 8 ? 70 : 40}
+                />
+                <YAxis />
+                <Tooltip formatter={(value) => formatAmount(Number(value))} />
+                {metric === "all"
+                  ? ALL_SERIES.map((s) => (
+                      <Line
+                        key={s.dataKey}
+                        type="monotone"
+                        dataKey={s.dataKey}
+                        name={s.label}
+                        stroke={s.color}
+                        strokeWidth={2}
+                        dot={chartData.length <= 24}
+                        activeDot={{ r: 4 }}
+                      />
+                    ))
+                  : (
+                      <Line
+                        type="monotone"
+                        dataKey={m!.dataKey}
+                        name={m!.label}
+                        stroke={m!.color}
+                        strokeWidth={2}
+                        dot={chartData.length <= 24}
+                        activeDot={{ r: 4 }}
+                      />
+                    )}
+                {metric === "all" ? <Legend wrapperStyle={{ fontSize: 12 }} /> : null}
+              </ComposedChart>
+            )}
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   )

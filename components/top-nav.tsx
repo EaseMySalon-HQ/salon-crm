@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
 import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -54,8 +55,20 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const [showExpenseDialog, setShowExpenseDialog] = useState(false)
   const [showCashRegistryModal, setShowCashRegistryModal] = useState(false)
   const { amount: todayOnlineSales } = useTodayOnlineSales(showCashRegistryModal)
-  const [businessName, setBusinessName] = useState<string>("EaseMySalon")
-  const [isLoadingBusinessName, setIsLoadingBusinessName] = useState(true)
+  const queryClient = useQueryClient()
+  const { data: businessSettingsData, isLoading: isLoadingBusinessName } = useQuery({
+    queryKey: ["settings", "business"],
+    queryFn: async () => {
+      const response = await SettingsAPI.getBusinessSettings()
+      if (!response?.success || !response.data) {
+        throw new Error(typeof response?.error === "string" ? response.error : "Failed to load business settings")
+      }
+      return response.data
+    },
+    staleTime: 5 * 60_000,
+    enabled: !!user,
+  })
+  const businessName = businessSettingsData?.name || "EaseMySalon"
 
   const [clientSearch, setClientSearch] = useState("")
   const [clientResults, setClientResults] = useState<any[]>([])
@@ -64,47 +77,13 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const [clientDetailsDrawerOpen, setClientDetailsDrawerOpen] = useState(false)
   const [clientDetailsDrawerClient, setClientDetailsDrawerClient] = useState<Client | null>(null)
 
-  // Fetch business settings to get the business name
   useEffect(() => {
-    let isMounted = true
-
-    const fetchBusinessSettings = async () => {
-      try {
-        setIsLoadingBusinessName(true)
-        const response = await SettingsAPI.getBusinessSettings()
-        if (isMounted) {
-          if (response.success && response.data?.name) {
-            setBusinessName(response.data.name)
-          } else {
-            console.warn("Business settings response missing name:", response)
-          }
-          setIsLoadingBusinessName(false)
-        }
-      } catch (error) {
-        console.error("Failed to fetch business settings:", error)
-        // Keep default name if API call fails
-        if (isMounted) {
-          setIsLoadingBusinessName(false)
-        }
-      }
-    }
-
-    fetchBusinessSettings()
-
-    // Listen for business settings updates from other components
     const handleBusinessSettingsUpdate = () => {
-      if (isMounted) {
-        fetchBusinessSettings()
-      }
+      queryClient.invalidateQueries({ queryKey: ["settings", "business"] })
     }
-
-    window.addEventListener('business-settings-updated', handleBusinessSettingsUpdate)
-    
-    return () => {
-      isMounted = false
-      window.removeEventListener('business-settings-updated', handleBusinessSettingsUpdate)
-    }
-  }, [])
+    window.addEventListener("business-settings-updated", handleBusinessSettingsUpdate)
+    return () => window.removeEventListener("business-settings-updated", handleBusinessSettingsUpdate)
+  }, [queryClient])
 
   useEffect(() => {
     const q = clientSearch.trim()

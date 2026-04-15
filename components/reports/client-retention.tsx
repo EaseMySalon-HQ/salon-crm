@@ -3,59 +3,113 @@
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 
 import { Card, CardContent } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { AlertCircle } from "lucide-react"
 
-// Sample data
-const retentionData = [
-  { month: "Jan", newClients: 15, returningClients: 30, totalClients: 45 },
-  { month: "Feb", newClients: 18, returningClients: 34, totalClients: 52 },
-  { month: "Mar", newClients: 12, returningClients: 37, totalClients: 49 },
-  { month: "Apr", newClients: 20, returningClients: 42, totalClients: 62 },
-  { month: "May", newClients: 15, returningClients: 40, totalClients: 55 },
-  { month: "Jun", newClients: 22, returningClients: 45, totalClients: 67 },
-]
+type ClientRetentionProps = {
+  isPending?: boolean
+  isError?: boolean
+  onRetry?: () => void
+  totalClients: number
+  avgVisitsFromProfile: number
+  clientsWithTwoOrMoreVisits: number
+  newClientsSeries: { name: string; newClients: number }[]
+}
 
-const clientStats = [
-  { label: "Total Clients", value: 245, change: "+12%" },
-  { label: "New Clients (30 days)", value: 28, change: "+8%" },
-  { label: "Retention Rate", value: "76%", change: "+4%" },
-  { label: "Avg. Visits per Client", value: "2.3", change: "+0.2" },
-]
+export function ClientRetention({
+  isPending,
+  isError,
+  onRetry,
+  totalClients,
+  avgVisitsFromProfile,
+  clientsWithTwoOrMoreVisits,
+  newClientsSeries,
+}: ClientRetentionProps) {
+  const chartData = newClientsSeries.map((p) => ({
+    name: p.name,
+    newClients: p.newClients,
+  }))
 
-export function ClientRetention() {
+  if (isPending) {
+    return (
+      <div className="space-y-6">
+        <div className="grid gap-6 md:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardContent className="p-6">
+                <div className="h-4 w-24 bg-muted rounded animate-pulse mb-2" />
+                <div className="h-8 w-16 bg-muted rounded animate-pulse" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <div className="h-[400px] bg-muted/40 rounded animate-pulse" />
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex gap-2 text-amber-900 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>Could not load client metrics.</span>
+        </div>
+        {onRetry ? (
+          <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={onRetry}>
+            Retry
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
+
+  const emptySeries = chartData.every((d) => d.newClients === 0)
+
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 md:grid-cols-4">
-        {clientStats.map((stat, index) => (
-          <Card key={index}>
-            <CardContent className="p-6">
-              <div className="text-muted-foreground text-sm">{stat.label}</div>
-              <div className="text-2xl font-bold mt-1">{stat.value}</div>
-              <div className="text-xs text-green-500 mt-1">{stat.change}</div>
-            </CardContent>
-          </Card>
-        ))}
+      <div className="grid gap-6 md:grid-cols-3">
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-muted-foreground text-sm">Total clients</div>
+            <div className="text-2xl font-bold mt-1">{totalClients}</div>
+            <p className="text-xs text-muted-foreground mt-1">In your CRM</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-muted-foreground text-sm">Avg. visits (profile)</div>
+            <div className="text-2xl font-bold mt-1">{avgVisitsFromProfile}</div>
+            <p className="text-xs text-muted-foreground mt-1">From client records</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-muted-foreground text-sm">Repeat clients</div>
+            <div className="text-2xl font-bold mt-1">{clientsWithTwoOrMoreVisits}</div>
+            <p className="text-xs text-muted-foreground mt-1">With 2+ visits on profile</p>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="h-[400px]">
-        <h3 className="text-lg font-medium mb-4">Client Acquisition & Retention</h3>
-        <ResponsiveContainer width="100%" height="90%">
-          <AreaChart data={retentionData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="month" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            <Area type="monotone" dataKey="newClients" stackId="1" name="New Clients" stroke="#adfa1d" fill="#adfa1d" />
-            <Area
-              type="monotone"
-              dataKey="returningClients"
-              stackId="1"
-              name="Returning Clients"
-              stroke="#10b981"
-              fill="#10b981"
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+        <h3 className="text-lg font-medium mb-4">New clients over time</h3>
+        {emptySeries ? (
+          <div className="flex h-[320px] items-center justify-center rounded-lg border border-dashed bg-muted/30 px-4 text-center text-sm text-muted-foreground">
+            No new client profiles in this period.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="90%">
+            <AreaChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={chartData.length > 10 ? -35 : 0} textAnchor={chartData.length > 10 ? "end" : "middle"} height={chartData.length > 10 ? 70 : 40} />
+              <YAxis allowDecimals={false} />
+              <Tooltip />
+              <Legend />
+              <Area type="monotone" dataKey="newClients" name="New clients" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.25} />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   )

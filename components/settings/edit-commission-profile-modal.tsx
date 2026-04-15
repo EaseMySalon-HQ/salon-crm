@@ -9,7 +9,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Badge } from "@/components/ui/badge"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
@@ -17,9 +16,10 @@ import {
   CommissionProfileFormData,
   CALCULATION_INTERVALS,
   QUALIFYING_ITEMS,
-  ServiceCommissionRule
+  ServiceCommissionRule,
+  ProductCommissionRule
 } from "@/lib/commission-profile-types"
-import { ServicesAPI } from "@/lib/api"
+import { ProductsAPI, ServicesAPI } from "@/lib/api"
 
 interface EditCommissionProfileModalProps {
   isOpen: boolean
@@ -41,6 +41,12 @@ const emptyServiceRule = (): ServiceCommissionRule => ({
   value: 0
 })
 
+const emptyProductRule = (): ProductCommissionRule => ({
+  productId: "",
+  calculateBy: "percent",
+  value: 0
+})
+
 export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }: EditCommissionProfileModalProps) {
   const [formData, setFormData] = useState<CommissionProfileFormData>({
     name: "",
@@ -56,18 +62,28 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [isSaving, setIsSaving] = useState(false)
   const [services, setServices] = useState<Array<{ _id?: string; id?: string; name: string }>>([])
+  const [products, setProducts] = useState<Array<{ _id?: string; id?: string; name: string }>>([])
 
   useEffect(() => {
     if (!isOpen) return
     let cancelled = false
     ;(async () => {
       try {
-        const response = await ServicesAPI.getAll({ limit: 2000 })
-        if (!cancelled && response?.success && Array.isArray(response.data)) {
-          setServices(response.data)
+        const [svcRes, prodRes] = await Promise.all([
+          ServicesAPI.getAll({ limit: 2000 }),
+          ProductsAPI.getAll({ limit: 2000 })
+        ])
+        if (!cancelled && svcRes?.success && Array.isArray(svcRes.data)) {
+          setServices(svcRes.data)
+        }
+        if (!cancelled && prodRes?.success && Array.isArray(prodRes.data)) {
+          setProducts(prodRes.data)
         }
       } catch {
-        if (!cancelled) setServices([])
+        if (!cancelled) {
+          setServices([])
+          setProducts([])
+        }
       }
     })()
     return () => {
@@ -78,6 +94,7 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
   useEffect(() => {
     if (!profile) return
     const isService = profile.type === "service_based"
+    const isItem = profile.type === "item_based"
     setFormData({
       name: profile.name,
       type: profile.type,
@@ -97,6 +114,15 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
               value: r.value
             }))
           : [emptyServiceRule()]
+        : undefined,
+      productRules: isItem
+        ? profile.productRules?.length
+          ? profile.productRules.map((r) => ({
+              productId: String(r.productId),
+              calculateBy: r.calculateBy,
+              value: r.value
+            }))
+          : [emptyProductRule()]
         : undefined
     })
   }, [profile])
@@ -109,13 +135,23 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
           ...prev,
           type: "service_based",
           qualifyingItems: [],
+          productRules: undefined,
           serviceRules: prev.serviceRules?.length ? prev.serviceRules : [emptyServiceRule()]
+        }))
+      } else if (nextType === "item_based") {
+        setFormData((prev) => ({
+          ...prev,
+          type: "item_based",
+          qualifyingItems: [],
+          serviceRules: undefined,
+          productRules: prev.productRules?.length ? prev.productRules : [emptyProductRule()]
         }))
       } else {
         setFormData((prev) => ({
           ...prev,
           type: "target_based",
           serviceRules: undefined,
+          productRules: undefined,
           targetTiers: prev.targetTiers?.length ? prev.targetTiers : [defaultTier]
         }))
       }
@@ -184,6 +220,31 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
     }))
   }
 
+  const addProductRule = () => {
+    setFormData((prev) => ({
+      ...prev,
+      productRules: [...(prev.productRules ?? []), emptyProductRule()]
+    }))
+  }
+
+  const removeProductRule = (index: number) => {
+    const rules = formData.productRules ?? []
+    if (rules.length <= 1) return
+    setFormData((prev) => ({
+      ...prev,
+      productRules: rules.filter((_, i) => i !== index)
+    }))
+  }
+
+  const updateProductRule = (index: number, field: keyof ProductCommissionRule, value: unknown) => {
+    setFormData((prev) => ({
+      ...prev,
+      productRules: (prev.productRules ?? []).map((row, i) =>
+        i === index ? { ...row, [field]: value } : row
+      )
+    }))
+  }
+
   const validateForm = () => {
     const newErrors: Record<string, string> = {}
 
@@ -210,6 +271,27 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
         }
         if (rule.calculateBy === "percent" && v > 100) {
           newErrors[`service_${index}_value`] = "Percentage cannot exceed 100"
+        }
+      })
+    } else if (formData.type === "item_based") {
+      const rules = formData.productRules ?? []
+      if (rules.length === 0) {
+        newErrors.productRules = "Add at least one product"
+      }
+      const ids = rules.map((r) => r.productId).filter((id) => id && String(id).trim())
+      if (new Set(ids).size !== ids.length) {
+        newErrors.productRules = "Each product can only appear once"
+      }
+      rules.forEach((rule, index) => {
+        if (!rule.productId || !String(rule.productId).trim()) {
+          newErrors[`product_${index}`] = "Select a product"
+        }
+        const v = Number(rule.value)
+        if (!Number.isFinite(v) || v <= 0) {
+          newErrors[`product_${index}_value`] = "Commission value must be greater than 0"
+        }
+        if (rule.calculateBy === "percent" && v > 100) {
+          newErrors[`product_${index}_value`] = "Percentage cannot exceed 100"
         }
       })
     } else {
@@ -274,11 +356,34 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
     })
   }
 
-  if (!profile) return null
+  const productIdOptions = (rowIndex: number) => {
+    const rules = formData.productRules ?? []
+    const otherSelected = new Set(
+      rules
+        .map((r, i) => (i !== rowIndex && r.productId ? String(r.productId) : null))
+        .filter((x): x is string => x != null && x !== "")
+    )
+    return products.filter((p) => {
+      const pid = String(p._id ?? p.id ?? "")
+      if (!pid) return false
+      const current = rules[rowIndex]?.productId
+      if (current && String(current) === pid) return true
+      return !otherSelected.has(pid)
+    })
+  }
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+    <Dialog
+      open={Boolean(isOpen && profile)}
+      onOpenChange={(open) => {
+        if (!open) handleClose()
+      }}
+    >
+      {profile ? (
+      <DialogContent
+        className="max-w-4xl max-h-[90vh] overflow-y-auto"
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>Edit Commission Profile</DialogTitle>
           <DialogDescription>Update commission profile settings</DialogDescription>
@@ -326,16 +431,12 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
                 value="item_based"
                 checked={formData.type === "item_based"}
                 onChange={(e) => handleInputChange("type", e.target.value)}
-                disabled
-                className="w-4 h-4 text-gray-400"
-                aria-label="Commission by Item (Coming Soon)"
+                className="w-4 h-4 text-blue-600"
+                aria-label="Commission by Item"
               />
-              <Label htmlFor="edit_item_based" className="flex items-center space-x-2 cursor-not-allowed text-gray-400">
+              <Label htmlFor="edit_item_based" className="flex items-center space-x-2 cursor-pointer">
                 <Package className="h-4 w-4" />
                 <span>Commission by Item</span>
-                <Badge variant="secondary" className="text-xs">
-                  Coming Soon
-                </Badge>
               </Label>
             </div>
           </div>
@@ -356,6 +457,7 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
             <div className="space-y-2">
               <Label htmlFor="edit_interval">Calculation Interval *</Label>
               <Select
+                modal={false}
                 value={formData.calculationInterval}
                 onValueChange={(value) => handleInputChange("calculationInterval", value)}
               >
@@ -373,7 +475,7 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
             </div>
           </div>
 
-          {formData.type === "service_based" ? (
+          {formData.type === "service_based" || formData.type === "item_based" ? (
             <div className="space-y-2">
               <Label htmlFor="edit_description">Description</Label>
               <Textarea
@@ -455,6 +557,7 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
                       <TableRow key={index}>
                         <TableCell>
                           <Select
+                            modal={false}
                             value={rule.serviceId || ""}
                             onValueChange={(v) => updateServiceRule(index, "serviceId", v)}
                           >
@@ -480,6 +583,7 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
                         </TableCell>
                         <TableCell>
                           <Select
+                            modal={false}
                             value={rule.calculateBy}
                             onValueChange={(v) =>
                               updateServiceRule(index, "calculateBy", v as ServiceCommissionRule["calculateBy"])
@@ -526,6 +630,118 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
                             size="icon"
                             onClick={() => removeServiceRule(index)}
                             disabled={(formData.serviceRules ?? []).length <= 1}
+                            className="text-red-600 hover:text-red-700"
+                            aria-label="Remove row"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+
+          {formData.type === "item_based" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Product commission rules</h3>
+                <Button type="button" variant="outline" size="sm" onClick={addProductRule} className="gap-2">
+                  <Plus className="h-4 w-4" />
+                  Add Product
+                </Button>
+              </div>
+              {errors.productRules && <p className="text-sm text-red-500">{errors.productRules}</p>}
+              <div className="border rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[38%]">Product</TableHead>
+                      <TableHead className="w-[28%]">Commission type</TableHead>
+                      <TableHead className="w-[28%]">Value</TableHead>
+                      <TableHead className="w-14 text-right" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(formData.productRules ?? [emptyProductRule()]).map((rule, index) => (
+                      <TableRow key={index}>
+                        <TableCell>
+                          <Select
+                            modal={false}
+                            value={rule.productId || ""}
+                            onValueChange={(v) => updateProductRule(index, "productId", v)}
+                          >
+                            <SelectTrigger
+                              className={errors[`product_${index}`] ? "border-red-500" : ""}
+                            >
+                              <SelectValue placeholder="Select product" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {productIdOptions(index).map((p) => {
+                                const pid = String(p._id ?? p.id)
+                                return (
+                                  <SelectItem key={pid} value={pid}>
+                                    {p.name}
+                                  </SelectItem>
+                                )
+                              })}
+                            </SelectContent>
+                          </Select>
+                          {errors[`product_${index}`] && (
+                            <p className="text-xs text-red-500 mt-1">{errors[`product_${index}`]}</p>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Select
+                            modal={false}
+                            value={rule.calculateBy}
+                            onValueChange={(v) =>
+                              updateProductRule(index, "calculateBy", v as ProductCommissionRule["calculateBy"])
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="percent">Percentage (%)</SelectItem>
+                              <SelectItem value="fixed">Fixed amount (₹)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min={0}
+                              step={rule.calculateBy === "percent" ? 0.01 : 1}
+                              value={rule.value === 0 ? "" : rule.value}
+                              onChange={(e) => {
+                                const raw = e.target.value
+                                updateProductRule(
+                                  index,
+                                  "value",
+                                  raw === "" ? 0 : parseFloat(raw) || 0
+                                )
+                              }}
+                              className={errors[`product_${index}_value`] ? "border-red-500" : ""}
+                            />
+                            <span className="text-sm text-muted-foreground whitespace-nowrap shrink-0">
+                              {rule.calculateBy === "percent" ? "%" : "₹"}
+                            </span>
+                          </div>
+                          {errors[`product_${index}_value`] && (
+                            <p className="text-xs text-red-500 mt-1">{errors[`product_${index}_value`]}</p>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => removeProductRule(index)}
+                            disabled={(formData.productRules ?? []).length <= 1}
                             className="text-red-600 hover:text-red-700"
                             aria-label="Remove row"
                           >
@@ -638,6 +854,7 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
                       <div className="space-y-2">
                         <Label>Calculate By</Label>
                         <Select
+                          modal={false}
                           value={tier.calculateBy}
                           onValueChange={(value) => updateTargetTier(index, "calculateBy", value)}
                         >
@@ -680,6 +897,7 @@ export function EditCommissionProfileModal({ isOpen, onClose, onSave, profile }:
           </Button>
         </DialogFooter>
       </DialogContent>
+      ) : null}
     </Dialog>
   )
 }
