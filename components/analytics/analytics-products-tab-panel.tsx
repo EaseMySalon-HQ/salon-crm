@@ -1,14 +1,8 @@
 "use client"
 
-import { useMemo } from "react"
-
 import { AnalyticsDelta } from "@/components/analytics/analytics-delta"
-import {
-  AnalyticsDonutChart,
-  ANALYTICS_PIE_COLORS,
-  type AnalyticsDonutSlice,
-} from "@/components/analytics/analytics-donut-chart"
 import { AnalyticsMetricLineChart } from "@/components/analytics/analytics-metric-line-chart"
+import { ProductPopularity } from "@/components/reports/product-popularity"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { useCurrency } from "@/hooks/use-currency"
@@ -24,29 +18,6 @@ type Props = {
 
 export function AnalyticsProductsTabPanel({ data, isPending, isError, onRetry }: Props) {
   const { formatAmount } = useCurrency()
-
-  const productDonutData: AnalyticsDonutSlice[] = useMemo(() => {
-    const products = data?.products
-    if (!products) return []
-    const slice = products.topProducts.slice(0, 8)
-    const sum = slice.reduce((a, p) => a + p.revenue, 0)
-    const other = Math.max(0, (products.totalProductRevenue || 0) - sum)
-    const rows = [...slice.map((p) => ({ name: p.name, value: p.revenue, fill: p.color }))]
-    if (other > 0.01 && rows.length > 0) {
-      rows.push({
-        name: "Other",
-        value: Math.round(other * 100) / 100,
-        fill: ANALYTICS_PIE_COLORS[7],
-      })
-    }
-    return rows
-      .filter((r) => r.value > 0)
-      .map((r) => ({
-        name: r.name,
-        value: Math.round(r.value * 100) / 100,
-        fill: r.fill,
-      }))
-  }, [data])
 
   if (isPending && !data) {
     return (
@@ -86,7 +57,7 @@ export function AnalyticsProductsTabPanel({ data, isPending, isError, onRetry }:
     value: p.productRevenue,
   }))
 
-  const noProducts = !products.totalProductRevenue || products.topProducts.length === 0
+  const distinctProductLines = (products.allProductsBreakdown ?? products.topProducts).length
 
   return (
     <div className="space-y-6">
@@ -111,9 +82,9 @@ export function AnalyticsProductsTabPanel({ data, isPending, isError, onRetry }:
         </Card>
         <Card>
           <CardContent className="p-6">
-            <div className="text-muted-foreground text-sm">Top product lines</div>
-            <div className="text-2xl font-bold mt-1">{products.topProducts.length}</div>
-            <p className="text-xs text-muted-foreground mt-1">Tracked SKUs in range</p>
+            <div className="text-muted-foreground text-sm">Product lines</div>
+            <div className="text-2xl font-bold mt-1">{distinctProductLines}</div>
+            <p className="text-xs text-muted-foreground mt-1">Distinct SKUs in range</p>
           </CardContent>
         </Card>
       </div>
@@ -129,58 +100,22 @@ export function AnalyticsProductsTabPanel({ data, isPending, isError, onRetry }:
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Package className="h-4 w-4 text-sky-600" />
-            Top products
+            Product revenue breakdown
           </CardTitle>
-          <CardDescription>By revenue from product line items</CardDescription>
+          <CardDescription>
+            Chart shows top eight by revenue (plus Other). Use Top 10 / All products to switch the list—revenue and
+            units from POS product lines.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-6 md:grid-cols-2 md:gap-8">
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-muted-foreground mb-3">Revenue by product (line items)</p>
-              <AnalyticsDonutChart
-                data={noProducts ? [] : productDonutData}
-                emptyMessage="No product lines in this period."
-                formatTooltip={formatAmount}
-              />
-            </div>
-            <div className="space-y-3 text-sm min-w-0 max-h-[320px] overflow-y-auto pr-1">
-              {products.topProducts.slice(0, 20).map((p, i) => {
-                const pct =
-                  products.totalProductRevenue > 0
-                    ? Math.round((p.revenue / products.totalProductRevenue) * 1000) / 10
-                    : 0
-                return (
-                  <div key={`${p.id}-${i}`}>
-                    <div className="flex justify-between gap-2 mb-1">
-                      <span className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                          style={{ backgroundColor: p.color }}
-                          aria-hidden
-                        />
-                        <span className="truncate font-medium">{p.name}</span>
-                      </span>
-                      <span className="text-muted-foreground shrink-0 tabular-nums">
-                        {formatAmount(p.revenue)} ({pct}%) · {p.units} units
-                      </span>
-                    </div>
-                    <div className="h-2 rounded-full bg-muted overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-[width]"
-                        style={{
-                          width: `${Math.min(100, pct)}%`,
-                          backgroundColor: p.color,
-                        }}
-                      />
-                    </div>
-                  </div>
-                )
-              })}
-              {products.topProducts.length === 0 ? (
-                <p className="text-muted-foreground text-sm">No product lines in this period.</p>
-              ) : null}
-            </div>
-          </div>
+          <ProductPopularity
+            topProducts={products.topProducts}
+            allProductsBreakdown={products.allProductsBreakdown}
+            totalProductRevenue={products.totalProductRevenue}
+            isPending={isPending}
+            isError={isError}
+            onRetry={onRetry}
+          />
         </CardContent>
       </Card>
     </div>

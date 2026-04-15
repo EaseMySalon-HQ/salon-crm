@@ -876,7 +876,6 @@ async function buildAnalyticsProductsTab({ branchId, businessModels, query = {} 
         },
       },
       { $sort: { revenue: -1 } },
-      { $limit: 50 },
     ]),
     Sale.aggregate([
       { $match: salesMatch },
@@ -931,7 +930,7 @@ async function buildAnalyticsProductsTab({ branchId, businessModels, query = {} 
   const prevRevenue = prevRow.revenue || 0;
   const prevUnits = prevRow.units || 0;
 
-  let topProducts = topProductsAgg.map((row) => {
+  let mergedProducts = topProductsAgg.map((row) => {
     const key = row._id != null ? String(row._id) : '';
     return {
       id: key,
@@ -941,8 +940,21 @@ async function buildAnalyticsProductsTab({ branchId, businessModels, query = {} 
     };
   });
 
-  topProducts = mergeLineItemRowsByNormalizedName(topProducts, new Map(), null).map((row, idx) => ({
+  mergedProducts = mergeLineItemRowsByNormalizedName(mergedProducts, new Map(), null, null);
+
+  const productRevenueSum =
+    mergedProducts.reduce((s, t) => s + t.revenue, 0) || totalProductRevenue || 1;
+  const pctDen = totalProductRevenue > 0 ? totalProductRevenue : productRevenueSum;
+
+  const topForPie = mergedProducts.slice(0, 8).map((row, idx) => ({
     ...row,
+    percentOfProductRevenue: Math.round(((row.revenue || 0) / pctDen) * 1000) / 10,
+    color: PIE_COLORS[idx % PIE_COLORS.length],
+  }));
+
+  const allProductsBreakdown = mergedProducts.map((row, idx) => ({
+    ...row,
+    percentOfProductRevenue: Math.round(((row.revenue || 0) / pctDen) * 1000) / 10,
     color: PIE_COLORS[idx % PIE_COLORS.length],
   }));
 
@@ -965,7 +977,8 @@ async function buildAnalyticsProductsTab({ branchId, businessModels, query = {} 
     products: {
       totalProductRevenue,
       totalUnitsSold,
-      topProducts,
+      topProducts: topForPie,
+      allProductsBreakdown,
       productTrends,
     },
   };
