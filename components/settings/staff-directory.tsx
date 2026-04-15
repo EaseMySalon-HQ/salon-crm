@@ -3,6 +3,7 @@
 import { StaffTable } from "@/components/staff/staff-table"
 import { StaffWorkingHoursContent } from "@/components/staff/staff-working-hours-content"
 import { CommissionProfileList } from "@/components/settings/commission-profile-list"
+import { StaffCommissionAssignments } from "@/components/settings/staff-commission-assignments"
 import { FeatureGate } from "@/components/ui/feature-gate"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Users, Clock, Award } from "lucide-react"
@@ -55,7 +56,18 @@ export function StaffDirectory() {
               featureId="staff_commissions"
               upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to configure commission profiles and track staff commissions."
             >
-              <CommissionProfileList />
+              <Tabs defaultValue="profiles" className="space-y-6">
+                <TabsList className="grid w-full max-w-md grid-cols-2 h-auto">
+                  <TabsTrigger value="profiles">Commission profiles</TabsTrigger>
+                  <TabsTrigger value="assignments">Staff &amp; profiles</TabsTrigger>
+                </TabsList>
+                <TabsContent value="profiles" className="mt-0 outline-none">
+                  <CommissionProfileList />
+                </TabsContent>
+                <TabsContent value="assignments" className="mt-0 outline-none">
+                  <StaffCommissionAssignments />
+                </TabsContent>
+              </Tabs>
             </FeatureGate>
           </TabsContent>
         </div>

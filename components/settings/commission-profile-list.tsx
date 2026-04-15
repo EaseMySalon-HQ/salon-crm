@@ -248,7 +248,7 @@ export function CommissionProfileList() {
                     {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : "—"}
                   </TableCell>
                   <TableCell className="text-right py-4 px-6">
-                    <DropdownMenu>
+                    <DropdownMenu modal={false}>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" className="h-9 w-9 p-0 hover:bg-slate-100 rounded-lg transition-all duration-200">
                           <MoreHorizontal className="h-4 w-4" />
