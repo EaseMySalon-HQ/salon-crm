@@ -73,6 +73,8 @@ class SMSService {
     let cleaned = String(phone).replace(/\D/g, '');
     if (cleaned.startsWith('0')) cleaned = cleaned.substring(1);
     if (!cleaned.startsWith('91') && cleaned.length === 10) cleaned = '91' + cleaned;
+    if (cleaned.length === 10 && cleaned.startsWith('91')) cleaned = '91' + cleaned;
+    if (cleaned.startsWith('9191') && cleaned.length === 13) cleaned = cleaned.slice(2);
     if (cleaned.length !== 12) return null;
     return cleaned;
   }

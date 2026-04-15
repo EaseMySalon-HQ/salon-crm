@@ -144,8 +144,9 @@ function isAnalyticsObjectIdKey(id) {
  * @param {Array<{ id: string, name: string, revenue: number, units: number, bookings?: number }>} rows
  * @param {Map<string, string>} nameById
  * @param {Map<string, number>|null} bookingMap - null for product lines (no bookings)
+ * @param {number|null|undefined} maxMergedRows - undefined = 50; null or Infinity = no cap
  */
-function mergeLineItemRowsByNormalizedName(rows, nameById, bookingMap) {
+function mergeLineItemRowsByNormalizedName(rows, nameById, bookingMap, maxMergedRows) {
   const byNorm = new Map();
   for (const row of rows) {
     const nk = normalizeLineItemLabel(row.name);
@@ -184,7 +185,9 @@ function mergeLineItemRowsByNormalizedName(rows, nameById, bookingMap) {
     out.push(row);
   }
   out.sort((a, b) => b.revenue - a.revenue);
-  return out.slice(0, 50);
+  const cap = maxMergedRows === undefined ? 50 : maxMergedRows;
+  if (cap === null || cap === Infinity) return out;
+  return out.slice(0, cap);
 }
 
 async function buildAnalyticsRevenueTab({ branchId, businessModels, query = {} }) {
@@ -421,7 +424,6 @@ async function buildAnalyticsServicesTab({ branchId, businessModels, query = {} 
         },
       },
       { $sort: { revenue: -1 } },
-      { $limit: 50 },
     ]),
     Appointment.aggregate([
       {
@@ -497,11 +499,20 @@ async function buildAnalyticsServicesTab({ branchId, businessModels, query = {} 
     };
   });
 
-  topServices = mergeLineItemRowsByNormalizedName(topServices, nameById, bookingMap);
+  topServices = mergeLineItemRowsByNormalizedName(topServices, nameById, bookingMap, null);
 
   const serviceRevenueSum = topServices.reduce((s, t) => s + t.revenue, 0) || 1;
   const topForPie = topServices.slice(0, 8).map((s, idx) => ({
     ...s,
+    percentOfServiceRevenue: Math.round((s.revenue / serviceRevenueSum) * 1000) / 10,
+    color: PIE_COLORS[idx % PIE_COLORS.length],
+  }));
+  const allServicesBreakdown = topServices.map((s, idx) => ({
+    id: s.id,
+    name: s.name,
+    revenue: s.revenue,
+    units: s.units,
+    bookings: s.bookings,
     percentOfServiceRevenue: Math.round((s.revenue / serviceRevenueSum) * 1000) / 10,
     color: PIE_COLORS[idx % PIE_COLORS.length],
   }));
@@ -533,6 +544,7 @@ async function buildAnalyticsServicesTab({ branchId, businessModels, query = {} 
     services: {
       totalServicesCatalog,
       topServices: topForPie,
+      allServicesBreakdown,
       totalServiceLineRevenue,
       serviceTrends,
     },
