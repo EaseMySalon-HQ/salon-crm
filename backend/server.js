@@ -25,6 +25,14 @@ const { isAdminReceiptNotificationsEnabled } = require('./lib/whatsapp-admin-gat
 const { getWhatsAppSettingsWithDefaults } = require('./lib/whatsapp-settings-defaults');
 const { sendAppointmentWhatsAppAfterCreate, sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('./lib/send-appointment-whatsapp');
 const { buildDashboardInitPayload, buildAppointmentsSummary } = require('./lib/dashboard-init');
+const {
+  buildAnalyticsRevenueTab,
+  buildAnalyticsServicesTab,
+  buildAnalyticsClientsTab,
+  buildAnalyticsProductsTab,
+  buildAnalyticsStaffTab,
+  buildAnalyticsStaffDrillDown,
+} = require('./lib/analytics-tabs');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -9177,6 +9185,83 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
   } catch (error) {
     logger.error('Error building dashboard init:', error);
     res.status(500).json({ success: false, error: 'Failed to load dashboard' });
+  }
+});
+
+function handleAnalyticsTabError(res, error, label) {
+  if (error && error.code === 'INVALID_RANGE') {
+    return res.status(400).json({ success: false, error: error.message || 'Invalid date range' });
+  }
+  logger.error(`Error building ${label}:`, error);
+  return res.status(500).json({ success: false, error: `Failed to load ${label}` });
+}
+
+const analyticsTabOpts = (req) => ({
+  branchId: req.user.branchId,
+  businessModels: req.businessModels,
+  query: req.query,
+});
+
+app.get('/api/analytics/revenue', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildAnalyticsRevenueTab(analyticsTabOpts(req));
+    res.json(payload);
+  } catch (error) {
+    return handleAnalyticsTabError(res, error, 'revenue analytics');
+  }
+});
+
+app.get('/api/analytics/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildAnalyticsServicesTab(analyticsTabOpts(req));
+    res.json(payload);
+  } catch (error) {
+    return handleAnalyticsTabError(res, error, 'services analytics');
+  }
+});
+
+app.get('/api/analytics/clients', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildAnalyticsClientsTab(analyticsTabOpts(req));
+    res.json(payload);
+  } catch (error) {
+    return handleAnalyticsTabError(res, error, 'clients analytics');
+  }
+});
+
+app.get('/api/analytics/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildAnalyticsProductsTab(analyticsTabOpts(req));
+    res.json(payload);
+  } catch (error) {
+    return handleAnalyticsTabError(res, error, 'products analytics');
+  }
+});
+
+app.get('/api/analytics/staff', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildAnalyticsStaffTab(analyticsTabOpts(req));
+    res.json(payload);
+  } catch (error) {
+    return handleAnalyticsTabError(res, error, 'staff analytics');
+  }
+});
+
+app.get('/api/analytics/staff/:staffId/trends', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildAnalyticsStaffDrillDown({
+      ...analyticsTabOpts(req),
+      staffId: req.params.staffId,
+    });
+    res.json(payload);
+  } catch (error) {
+    if (error && error.code === 'NOT_FOUND') {
+      return res.status(404).json({ success: false, error: 'Staff not found' });
+    }
+    if (error && error.code === 'INVALID_STAFF') {
+      return res.status(400).json({ success: false, error: 'Invalid staff id' });
+    }
+    return handleAnalyticsTabError(res, error, 'staff analytics drill-down');
   }
 });
 

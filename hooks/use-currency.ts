@@ -1,55 +1,33 @@
-import { useState, useEffect } from 'react'
-import { formatCurrency, formatAmountWithSymbol, getCurrencySymbol, getCurrencyDisplay, type CurrencySettings } from '@/lib/currency'
-import { SettingsAPI } from '@/lib/api'
+import { useMemo } from "react"
+import { useQueryClient } from "@tanstack/react-query"
+import {
+  formatCurrency,
+  formatAmountWithSymbol,
+  getCurrencySymbol,
+  getCurrencyDisplay,
+  type CurrencySettings,
+} from "@/lib/currency"
+import {
+  PAYMENT_SETTINGS_QUERY_KEY,
+  usePaymentSettingsQuery,
+} from "@/lib/queries/payment-settings"
 
 export function useCurrency() {
-  const [currencySettings, setCurrencySettings] = useState<CurrencySettings>({
-    currency: 'INR',
-    enableCurrency: true
-  })
-  const [isLoading, setIsLoading] = useState(true)
+  const queryClient = useQueryClient()
+  const { data: response, isPending } = usePaymentSettingsQuery()
 
-  useEffect(() => {
-    loadCurrencySettings()
-  }, [])
-
-  const loadCurrencySettings = async () => {
-    try {
-      // Skip API call on public routes (like public receipt page)
-      if (typeof window !== 'undefined') {
-        const isPublicRoute = window.location.pathname.includes('/receipt/public/') ||
-                             window.location.pathname.includes('/public/')
-        if (isPublicRoute) {
-          setIsLoading(false)
-          return
-        }
-        
-        // On login/public pages, skip the API call (cookies handle auth automatically)
-        if (window.location.pathname.includes('/login')) {
-          setIsLoading(false)
-          return
-        }
+  const currencySettings = useMemo((): CurrencySettings => {
+    if (response?.success && response.data) {
+      return {
+        currency: response.data.currency || "INR",
+        enableCurrency: response.data.enableCurrency !== false,
       }
-      
-      const response = await SettingsAPI.getPaymentSettings()
-      if (response.success) {
-        setCurrencySettings({
-          currency: response.data.currency || 'INR',
-          enableCurrency: response.data.enableCurrency !== false
-        })
-      }
-    } catch (error: any) {
-      // Silently handle 401 errors (user not authenticated)
-      if (error?.response?.status === 401) {
-        // User is not authenticated, keep default values
-      } else {
-        console.error('Failed to load currency settings:', error)
-      }
-      // Keep default values
-    } finally {
-      setIsLoading(false)
     }
-  }
+    return {
+      currency: "INR",
+      enableCurrency: true,
+    }
+  }, [response])
 
   const formatAmount = (amount: number) => {
     return formatCurrency(amount, currencySettings)
@@ -68,16 +46,16 @@ export function useCurrency() {
   }
 
   const refreshSettings = () => {
-    loadCurrencySettings()
+    void queryClient.invalidateQueries({ queryKey: PAYMENT_SETTINGS_QUERY_KEY })
   }
 
   return {
     currencySettings,
-    isLoading,
+    isLoading: isPending,
     formatAmount,
     formatAmountWithSymbolOnly,
     getSymbol,
     getDisplay,
-    refreshSettings
+    refreshSettings,
   }
 }

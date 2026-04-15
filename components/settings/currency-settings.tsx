@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI } from "@/lib/api"
+import { useInvalidatePaymentSettings } from "@/lib/queries/payment-settings"
 import { DollarSign } from "lucide-react"
 
 const CURRENCY_OPTIONS = [
@@ -78,6 +79,7 @@ export function CurrencySettings() {
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const { toast } = useToast()
+  const invalidatePaymentSettings = useInvalidatePaymentSettings()
 
   // Load currency settings on component mount
   useEffect(() => {
@@ -114,6 +116,7 @@ export function CurrencySettings() {
       })
 
       if (response.success) {
+        invalidatePaymentSettings()
         toast({
           title: "Success",
           description: "Currency settings updated successfully!",

@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI, ServicesAPI } from "@/lib/api"
+import { useInvalidatePaymentSettings } from "@/lib/queries/payment-settings"
 import { Receipt, Plus, Pencil, Trash2 } from "lucide-react"
 
 const TAX_TYPES = [
@@ -66,6 +67,7 @@ export function TaxSettings() {
   const [editingCategory, setEditingCategory] = useState<TaxCategory | null>(null)
   const [categoryForm, setCategoryForm] = useState({ name: "", rate: "", description: "" })
   const { toast } = useToast()
+  const invalidatePaymentSettings = useInvalidatePaymentSettings()
 
   // Load tax settings on component mount
   useEffect(() => {
@@ -137,6 +139,7 @@ export function TaxSettings() {
       })
 
       if (response.success) {
+        invalidatePaymentSettings()
         toast({
           title: "Success",
           description: "Tax settings updated successfully!",

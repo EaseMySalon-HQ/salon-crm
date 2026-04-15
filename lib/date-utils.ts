@@ -82,3 +82,25 @@ export function getStartOfDayIST(dateStr: string): string {
 export function getEndOfDayIST(dateStr: string): string {
   return `${dateStr}T23:59:59.999+05:30`
 }
+
+/** Add signed calendar days to a YYYY-MM-DD string (interpreted in IST). */
+export function addCalendarDaysIST(ymd: string, deltaDays: number): string {
+  const d = new Date(`${ymd}T12:00:00+05:30`)
+  d.setDate(d.getDate() + deltaDays)
+  return toDateStringIST(d)
+}
+
+/** Inclusive number of calendar days from `ymdFrom` through `ymdTo` (IST). */
+export function daysInclusiveRange(ymdFrom: string, ymdTo: string): number {
+  if (!ymdFrom || !ymdTo || ymdFrom > ymdTo) return 0
+  const a = new Date(`${ymdFrom}T12:00:00+05:30`)
+  const b = new Date(`${ymdTo}T12:00:00+05:30`)
+  return Math.floor((b.getTime() - a.getTime()) / 86400000) + 1
+}
+
+/** First calendar day of the month containing `ymd` (IST). */
+export function getFirstDayOfMonthIST(ymd: string): string {
+  const y = Number(ymd.slice(0, 4))
+  const m = Number(ymd.slice(5, 7))
+  return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-01`
+}
