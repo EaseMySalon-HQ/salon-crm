@@ -39,6 +39,16 @@ interface Category {
   isActive?: boolean
 }
 
+/** Backend list payloads are sometimes `T[]` or nested `{ data: T[] }`; `PaginatedResponse` types `data` as an array only, so avoid unreachable branches on `response.data.data`. */
+function normalizeListResponse<T>(data: unknown): T[] {
+  if (Array.isArray(data)) return data as T[]
+  if (data && typeof data === "object" && "data" in data) {
+    const inner = (data as { data?: unknown }).data
+    if (Array.isArray(inner)) return inner as T[]
+  }
+  return []
+}
+
 interface CategoryComboboxProps {
   value: string
   onChange: (value: string) => void
@@ -98,7 +108,7 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
         try {
           const response = await ProductsAPI.getAll({ limit: 10000 })
           if (response.success && response.data) {
-            const products = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+            const products = normalizeListResponse<any>(response.data as unknown)
             products.forEach((product: any) => {
               if (product.category && product.category.trim()) {
                 const categoryName = product.category.trim()
@@ -123,7 +133,7 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
         try {
           const response = await ServicesAPI.getAll({ limit: 10000 })
           if (response.success && response.data) {
-            const services = Array.isArray(response.data) ? response.data : (response.data?.data || [])
+            const services = normalizeListResponse<any>(response.data as unknown)
             services.forEach((service: any) => {
               if (service.category && service.category.trim()) {
                 const categoryName = service.category.trim()
@@ -248,11 +258,7 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
 
   return (
     <>
-      <Popover
-        open={open}
-        onOpenChange={setOpen}
-        modal={false}
-      >
+      <Popover open={open} onOpenChange={setOpen} modal>
         <PopoverTrigger asChild>
           <Button
             variant="outline"
@@ -265,7 +271,13 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-full p-0" align="start">
+        <PopoverContent
+          className="w-full p-0"
+          align="start"
+          // Popover is portaled to body while parent can be inside a Radix Dialog; the dialog
+          // focus trap otherwise fights focus moving into the popover and it closes instantly.
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
           <Command shouldFilter={false}>
             <CommandInput
               placeholder="Search categories..."

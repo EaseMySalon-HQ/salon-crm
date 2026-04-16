@@ -34,7 +34,8 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
       newAppointments: false,
       confirmations: false,
       reminders: false,
-      reschedule: false,
+      /** Default on when appointment notifications are used; explicit false in DB still disables. */
+      reschedule: true,
       cancellations: false
     },
     systemAlerts: {
@@ -97,6 +98,22 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
         };
       }
     }
+  }
+
+  // If appointment notifications are enabled but `reschedule` was never stored, prefer on (matches empty-object defaults).
+  const apptRaw = whatsappSettings && whatsappSettings.appointmentNotifications;
+  if (
+    merged.enabled &&
+    merged.appointmentNotifications &&
+    merged.appointmentNotifications.enabled &&
+    apptRaw &&
+    typeof apptRaw === 'object' &&
+    !Object.prototype.hasOwnProperty.call(apptRaw, 'reschedule')
+  ) {
+    merged.appointmentNotifications = {
+      ...merged.appointmentNotifications,
+      reschedule: true
+    };
   }
 
   return merged;
