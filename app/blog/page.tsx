@@ -58,7 +58,7 @@ export default function BlogPage() {
           <h1 className="text-4xl font-semibold text-slate-900">Salon growth playbooks</h1>
           <p className="text-lg text-slate-600">Actionable tips from the EaseMySalon community. Subscribe to get monthly updates in your inbox.</p>
           <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9]">
-            <a href="mailto:hello@easemysalon.in">Subscribe to newsletter</a>
+            <a href="mailto:support@easemysalon.in">Subscribe to newsletter</a>
           </Button>
         </div>
       </section>

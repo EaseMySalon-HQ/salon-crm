@@ -212,11 +212,28 @@ function createLevelFn(level) {
   };
 }
 
+/**
+ * Security/audit lines: always written to stdout (ignores LOG_LEVEL) so operators can
+ * retain login/logout visibility when production uses LOG_LEVEL=warn.
+ */
+function audit(...args) {
+  const { msg, data } = buildPayload(args);
+  const normalized = normalizeDataField(data);
+  const payload =
+    normalized !== undefined && isPlainObject(normalized)
+      ? { ...normalized, audit: true }
+      : normalized === undefined
+        ? { audit: true }
+        : { audit: true, detail: normalized };
+  writeLog('info', msg, payload);
+}
+
 const logger = {
   error: createLevelFn('error'),
   warn: createLevelFn('warn'),
   info: createLevelFn('info'),
   debug: createLevelFn('debug'),
+  audit,
   rateLimited: rateLimitedLog,
 };
 

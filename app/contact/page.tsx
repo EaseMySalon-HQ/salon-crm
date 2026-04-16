@@ -1,12 +1,9 @@
 import type { Metadata } from "next"
-import Link from "next/link"
-import { ArrowRight, CheckCircle2, MessageCircle, Phone, Mail, MapPin, Clock, Users, Sparkles } from "lucide-react"
+import { CheckCircle2, MessageCircle, Mail, MapPin, Clock, Users } from "lucide-react"
 
 import { PublicShell } from "@/components/layout/public-shell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ContactForm } from "@/components/marketing/contact-form"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
   title: "Contact & Book Demo | Salon Software Consultation",
@@ -114,37 +111,16 @@ export default function ContactPage() {
                 </Card>
               ))}
               
-              <Card className="border border-slate-200 shadow-sm">
-                <CardHeader>
-                  <CardTitle className="text-lg font-semibold text-slate-900">Chat on WhatsApp</CardTitle>
-                  <CardDescription className="text-sm text-slate-600">We typically reply in under 5 minutes.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Button asChild className="w-full bg-[#25D366] hover:bg-[#1FB55B] text-white">
-                    <a href="https://wa.me/916360019041?text=Hi%20Ease%20My%20Salon!%20We%20would%20like%20a%20demo." target="_blank" rel="noreferrer">
-                      Start WhatsApp chat
-                    </a>
-                  </Button>
-                </CardContent>
-              </Card>
-              
               <Card className="border-2 border-slate-100 shadow-lg">
                 <CardHeader>
                   <CardTitle className="text-lg font-bold">Other Ways to Reach Us</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="flex items-start gap-3">
-                    <Phone className="h-5 w-5 text-[#7C3AED] mt-0.5" />
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">Phone</p>
-                      <a href="tel:+916360019041" className="text-sm text-slate-600 hover:text-[#7C3AED]">+91 63600 19041</a>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
                     <Mail className="h-5 w-5 text-[#7C3AED] mt-0.5" />
                     <div>
                       <p className="text-sm font-semibold text-slate-900">Email</p>
-                      <a href="mailto:hello@easemysalon.in" className="text-sm text-slate-600 hover:text-[#7C3AED]">hello@easemysalon.in</a>
+                      <a href="mailto:support@easemysalon.in" className="text-sm text-slate-600 hover:text-[#7C3AED]">support@easemysalon.in</a>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
