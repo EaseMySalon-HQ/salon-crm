@@ -436,7 +436,7 @@ async function rescheduleAppointment(models, businessDoc, appointmentId, { scope
 
     if (scope === 'this') {
       await runOne(aptInTxn, start, end, session);
-      return { updated: 1 };
+      return { updated: 1, updatedAppointmentIds: [aptInTxn._id] };
     }
 
     const now = new Date();
@@ -494,7 +494,7 @@ async function rescheduleAppointment(models, businessDoc, appointmentId, { scope
         }, session ? { session } : {});
       }
     }
-    return { updated: toMove.length };
+    return { updated: toMove.length, updatedAppointmentIds: toMove.map((a) => a._id) };
   };
 
   if (opts.session) {
