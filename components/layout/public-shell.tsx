@@ -2,7 +2,6 @@ import type { ReactNode } from "react"
 
 import { PublicNav } from "@/components/layout/public-nav"
 import { PublicFooter } from "@/components/layout/public-footer"
-import { FloatingCTA } from "@/components/layout/floating-cta"
 
 export function PublicShell({ children }: { children: ReactNode }) {
   return (
@@ -10,7 +9,6 @@ export function PublicShell({ children }: { children: ReactNode }) {
       <PublicNav />
       <main className="flex-1">{children}</main>
       <PublicFooter />
-      <FloatingCTA />
     </div>
   )
 }

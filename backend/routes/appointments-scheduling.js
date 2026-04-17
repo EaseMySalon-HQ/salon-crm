@@ -37,9 +37,15 @@ router.patch('/:id/reschedule', auth, async (req, res) => {
 
     try {
       const { Appointment } = req.businessModels;
-      const rescheduled = out.updated || [];
-      for (const item of rescheduled) {
-        const apptId = item._id || item.id;
+      /** booking-service returns `updated` as a count, not an array; use `updatedAppointmentIds` when present */
+      const idList =
+        Array.isArray(out.updatedAppointmentIds) && out.updatedAppointmentIds.length > 0
+          ? out.updatedAppointmentIds
+          : typeof out.updated === 'number' && out.updated > 0
+            ? [req.params.id]
+            : [];
+      for (const rawId of idList) {
+        const apptId = rawId && (rawId._id || rawId.id || rawId);
         if (!apptId) continue;
         const populated = await Appointment.findById(apptId)
           .populate('clientId', 'name phone email')

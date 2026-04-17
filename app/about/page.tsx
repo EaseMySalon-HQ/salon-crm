@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
   title: "About Us - Built for Indian Salons | EaseMySalon",
-  description: "Learn why we built EaseMySalon, our mission to digitize every Indian salon, and the team behind the platform. Built by industry leaders from Accenture and SaaS unicorns.",
+  description: "Learn why we built EaseMySalon, our mission to digitize every Indian salon, and the team behind the platform. Built by industry leaders from MNCs and SaaS unicorns.",
   keywords: [
     "about salon software",
     "salon management company",
@@ -119,7 +119,7 @@ export default function AboutPage() {
             <Sparkles className="h-12 w-12 mx-auto mb-4 text-white/80" />
             <h2 className="text-3xl sm:text-4xl font-bold mb-4">Built by Industry Leaders</h2>
             <p className="text-xl text-slate-300 mb-8 max-w-3xl mx-auto leading-relaxed">
-              Led by operators, builders and designers from <span className="font-semibold text-white">Accenture, SaaS unicorns and top salons</span>. Product management, UI/UX and full-stack engineering come together with real salon experience to ship features that matter.
+              Led by operators, builders and designers from <span className="font-semibold text-white">MNCs, SaaS unicorns and top salons</span>. Product management, UI/UX and full-stack engineering come together with real salon experience to ship features that matter.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button size="lg" asChild className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white px-8 py-6 h-auto text-lg font-semibold shadow-2xl">

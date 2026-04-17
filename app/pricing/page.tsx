@@ -8,32 +8,50 @@ import { PublicShell } from "@/components/layout/public-shell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion"
 
-const planCards = [
+/** Section label (renders as a non-bullet row) or a standard feature line */
+type PlanFeatureLine = string | { heading: string }
+
+function isFeatureHeading(line: PlanFeatureLine): line is { heading: string } {
+  return typeof line === "object" && line !== null && "heading" in line
+}
+
+const planCards: Array<{
+  title: string
+  description: string
+  monthlyPrice?: number
+  yearlyPrice?: number
+  price?: string
+  includes: PlanFeatureLine[]
+  popular?: boolean
+  comingSoon?: boolean
+}> = [
   {
     title: "Starter",
     monthlyPrice: 999,
     yearlyPrice: 9590, // 20% discount: 999 * 12 * 0.8 = 9590.4, rounded to 9590 (₹799/month)
-    description: "Perfect for small salons just getting started.",
+    description:
+      "Operations layer for small salons (1–3 staff). Everything you need to run your salon daily.",
     includes: [
-      "Unlimited staff",
-      "POS & Billing",
-      "Appointment Management",
-      "Client Management",
-      "Service & Product Management",
-      "Incentive Management",
-      "Inventory Management",
-      "Basic Reports",
-      "WhatsApp Receipts",
-      "Staff Login and access management",
-      "Cash Register Management",
-      "Email and Phone Support",
+      { heading: "Users & permissions" },
+      "Admin + Staff roles (basic); limited permissions (no advanced control)",
+      { heading: "Clients (CRM — Basic)" },
+      "Client CRUD, basic info, basic visit history",
+      { heading: "Appointments" },
+      "Create, update & delete; calendar view; basic booking",
+      { heading: "POS / Billing" },
+      "Services & product billing; basic discounts; single staff assignment per bill",
+      { heading: "Products & inventory (Basic)" },
+      "Product list; manual stock updates",
+      { heading: "Staff (Basic)" },
+      "Staff profiles; login access",
+      { heading: "Cash & expenses" },
+      "Basic cash tracking (limited)",
+      { heading: "Reports (Basic)" },
+      "Daily revenue & basic summaries",
+      { heading: "Notifications" },
+      "WhatsApp receipts & basic reminders",
+      "Marketing & campaigns not included",
     ],
     popular: false,
   },
@@ -41,20 +59,31 @@ const planCards = [
     title: "Professional",
     monthlyPrice: 2499,
     yearlyPrice: 23990, // 20% discount: 2499 * 12 * 0.8 = 23990.4, rounded to 23990 (₹1999/month)
-    description: "For growing salons with multiple staff.",
+    description:
+      "Growth layer for growing salons (4–10+ staff). Increase revenue, retention, and efficiency.",
     includes: [
       "Everything in Starter",
-      "Advanced Inventory Management",
-      "Customer CRM with History",
-      "Advanced Analytics & Reports",
-      "Staff Commission Tracking",
-      "500 SMS/month",
-      "Priority Email & Phone Support",
-      "Custom Receipt Templates",
-      "Data Export (Excel/PDF)",
-      "More features On the way",
+      { heading: "Advanced permissions" },
+      "Admin / Manager / Staff; full permission matrix & feature toggles",
+      { heading: "Advanced CRM" },
+      "Client analytics; visit history insights; CSV import; client segmentation",
+      { heading: "Advanced appointments" },
+      "Multi-staff & group bookings; lead → appointment conversion",
+      { heading: "POS / Billing (Advanced)" },
+      "Split payments; staff commission split; packages & memberships billing",
+      { heading: "Inventory (Advanced)" },
+      "Suppliers; purchase orders; inventory tracking; stock alerts",
+      { heading: "Staff management" },
+      "Commission system; performance tracking; working hours & schedules",
+      { heading: "Memberships & packages" },
+      "Full module access; redemption tracking; reports",
+      { heading: "Advanced analytics" },
+      "Revenue trends; service & staff performance; client insights",
+      { heading: "Marketing & campaigns" },
+      "WhatsApp campaigns; templates; segmentation; campaign stats",
+      { heading: "Automation" },
+      "Smart reminders; automated campaigns; retention nudges",
     ],
-    comingSoon: true,
     popular: true,
   },
   {
@@ -245,14 +274,25 @@ export default function PricingPage() {
                   </CardHeader>
                   <CardContent className="flex flex-col flex-grow space-y-6">
                     <ul className="space-y-3 flex-grow">
-                      {plan.includes.map((item, idx) => (
-                        <li key={idx} className="flex items-start gap-3">
-                          <CheckCircle2 className="h-5 w-5 text-emerald-500 flex-shrink-0 mt-0.5" />
-                          <span className={`text-sm text-slate-700 ${item === "More features On the way" ? "font-bold" : "font-medium"}`}>
-                            {item}
-                          </span>
-                        </li>
-                      ))}
+                      {plan.includes.map((item, idx) =>
+                        isFeatureHeading(item) ? (
+                          <li
+                            key={`h-${idx}`}
+                            className="list-none pt-2 first:pt-0"
+                          >
+                            <p className="text-xs font-semibold uppercase tracking-wide text-[#7C3AED]">
+                              {item.heading}
+                            </p>
+                          </li>
+                        ) : (
+                          <li key={idx} className="flex items-start gap-3">
+                            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
+                            <span className="text-sm font-medium text-slate-700">
+                              {item}
+                            </span>
+                          </li>
+                        )
+                      )}
                     </ul>
                     <div className="mt-auto">
                       {plan.comingSoon ? (
@@ -329,29 +369,25 @@ export default function PricingPage() {
             <h2 className="text-3xl sm:text-4xl font-bold text-slate-900">Everything You Need to Know</h2>
             <p className="text-lg text-slate-600">Transparent answers to help you make the right decision for your salon.</p>
           </div>
-          <div className="max-w-5xl mx-auto">
-            <Accordion type="single" collapsible className="space-y-4">
-              {pricingFaq.map((item, idx) => (
-                <AccordionItem
-                  key={idx}
-                  value={`faq-${idx}`}
-                  className="border-2 border-slate-100 rounded-2xl px-4 shadow-sm hover:shadow-lg transition-all"
-                >
-                  <AccordionTrigger className="py-4 text-left font-semibold text-slate-900 hover:no-underline group">
-                    <div className="flex items-center gap-3 text-base">
-                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-purple-100 text-[#7C3AED] text-sm font-bold">
-                        {idx + 1}
-                      </span>
-                      <span className="flex-1">{item.q}</span>
-                      <ChevronDown className="h-4 w-4 text-slate-500 transition-transform group-data-[state=open]:rotate-180" />
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent className="pb-4 pl-11 text-sm text-slate-700 leading-relaxed">
-                    {item.a}
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
-            </Accordion>
+          <div className="max-w-5xl mx-auto space-y-4">
+            {/* Native <details> avoids Radix useId / aria-controls hydration mismatches with Next.js SSR */}
+            {pricingFaq.map((item, idx) => (
+              <details
+                key={idx}
+                className="group border-2 border-slate-100 rounded-2xl px-4 shadow-sm hover:shadow-lg transition-all open:shadow-md"
+              >
+                <summary className="flex cursor-pointer list-none items-center gap-3 py-4 text-left font-semibold text-slate-900 [&::-webkit-details-marker]:hidden">
+                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-purple-100 text-sm font-bold text-[#7C3AED]">
+                    {idx + 1}
+                  </span>
+                  <span className="flex-1 text-base">{item.q}</span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 group-open:rotate-180" />
+                </summary>
+                <div className="border-t border-slate-100 pb-4 pl-11 pt-2 text-sm leading-relaxed text-slate-700">
+                  {item.a}
+                </div>
+              </details>
+            ))}
           </div>
           
           {/* Final CTA */}
@@ -359,7 +395,7 @@ export default function PricingPage() {
             <Sparkles className="h-12 w-12 mx-auto mb-4 text-white/80" />
             <h2 className="text-3xl sm:text-4xl font-bold mb-4">Still Have Questions?</h2>
             <p className="text-xl text-purple-100 mb-8 max-w-2xl mx-auto">
-              Our team is here to help. Book a personalized demo or chat with us on WhatsApp.
+              Our team is here to help. Book a personalized demo and get your questions answered.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
@@ -367,15 +403,6 @@ export default function PricingPage() {
                   Book a Free Demo
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Link>
-              </Button>
-              <Button
-                size="lg"
-                asChild
-                className="bg-white text-[#25D366] hover:bg-emerald-50 px-8 py-6 h-auto text-lg font-semibold shadow-2xl"
-              >
-                <a href="https://wa.me/916360019041" target="_blank" rel="noreferrer">
-                  Chat on WhatsApp
-                </a>
               </Button>
             </div>
           </div>

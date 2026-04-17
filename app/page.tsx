@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import Image from "next/image"
-import { ArrowRight, CheckCircle2, Shield, Sparkles, TrendingUp, Users, BarChart3, Calendar, Receipt, MessageCircle, Star, Zap, Award, Clock, DollarSign, Target, ChevronDown } from "lucide-react"
+import { ArrowRight, CheckCircle2, Shield, Sparkles, TrendingUp, Users, BarChart3, Calendar, Receipt, MessageCircle, Star, Zap, Award, Clock, DollarSign, Target } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -111,64 +111,6 @@ const testimonials = [
     location: "Delhi",
     metric: "3 locations, 28 staff",
     rating: 5
-  },
-]
-
-const plans = [
-  {
-    name: "Starter",
-    price: "₹999",
-    subtitle: "Perfect for small salons just getting started.",
-    features: [
-      "Up to 3 staff members",
-      "POS & Billing",
-      "Appointment Management",
-      "Basic Reports",
-      "WhatsApp Receipts",
-      "100 SMS/month",
-      "Email Support",
-      "Mobile App Access",
-    ],
-    savings: null,
-    featured: false,
-  },
-  {
-    name: "Professional",
-    price: "₹2,499",
-    subtitle: "For growing salons with multiple staff.",
-    features: [
-      "Up to 10 staff members",
-      "Everything in Starter",
-      "Inventory Management",
-      "Customer CRM with History",
-      "Advanced Analytics & Reports",
-      "Staff Commission Tracking",
-      "500 SMS/month",
-      "Priority Email & Phone Support",
-      "Custom Receipt Templates",
-      "Data Export (Excel/PDF)",
-    ],
-    featured: true,
-    savings: "Save ₹3,000/year",
-  },
-  {
-    name: "Enterprise",
-    price: "Custom",
-    subtitle: "For salon chains and large businesses.",
-    features: [
-      "Unlimited staff members",
-      "Everything in Professional",
-      "Multi-location Support",
-      "Centralized Reporting",
-      "Custom Integrations & API",
-      "Unlimited SMS",
-      "Dedicated Account Manager",
-      "On-site Training & Onboarding",
-      "24/7 Priority Phone Support",
-      "Custom Feature Development",
-    ],
-    savings: "Best value for chains",
-    featured: false,
   },
 ]
 
@@ -413,109 +355,6 @@ export default function MarketingHome() {
                 <p className="text-sm text-slate-600 leading-relaxed">{tile.desc}</p>
               </div>
             ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="py-20 bg-slate-50">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center max-w-3xl mx-auto space-y-4">
-            <Badge className="bg-blue-50 text-blue-700">Pricing</Badge>
-            <h2 className="text-3xl font-semibold text-slate-900">Transparent plans for every stage</h2>
-            <p className="text-lg text-slate-600">Start with a 14-day free trial. No credit card needed. Switch plans anytime.</p>
-          </div>
-          <div className="mt-12 grid gap-6 lg:grid-cols-3">
-            {plans.map((plan) => {
-              const previewCount = 5
-              const primaryFeatures = plan.features.slice(0, previewCount)
-              const remainingFeatures = plan.features.slice(previewCount)
-
-              return (
-                <Card
-                  key={plan.name}
-                  className={`border-2 relative ${plan.featured ? "border-[#7C3AED] shadow-2xl scale-[1.02] lg:scale-105" : "border-slate-100 shadow-sm"} hover:shadow-xl transition-all`}
-                >
-                {plan.featured && (
-                  <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
-                    <Badge className="bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white px-4 py-1 shadow-lg">
-                      ⭐ Most Popular
-                    </Badge>
-                  </div>
-                )}
-                <CardHeader className="space-y-3 pt-6">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-2xl font-bold">{plan.name}</CardTitle>
-                  </div>
-                  <p className="text-sm text-slate-600">{plan.subtitle}</p>
-                  <div>
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-4xl font-bold text-slate-900">{plan.price}</span>
-                      {plan.price !== "Custom" && <span className="text-base text-slate-500">/month</span>}
-                      {plan.price === "Custom" && <span className="text-base text-slate-500">/contact us</span>}
-                    </div>
-                    {plan.savings && (
-                      <p className="text-sm font-semibold text-emerald-600 mt-1">{plan.savings}</p>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <ul className="space-y-3 text-sm text-slate-700">
-                    {primaryFeatures.map((item, idx) => (
-                      <li key={idx} className="flex items-start gap-3">
-                        <CheckCircle2 className="h-5 w-5 text-emerald-500 flex-shrink-0 mt-0.5" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  {remainingFeatures.length > 0 && (
-                    <details className="group rounded-2xl border border-dashed border-slate-200 bg-white/60 p-3">
-                      <summary className="flex items-center justify-center gap-2 cursor-pointer text-sm font-semibold text-[#7C3AED]">
-                        <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
-                        <span className="group-open:hidden">Show {remainingFeatures.length} more features</span>
-                        <span className="hidden group-open:inline">Hide extra features</span>
-                      </summary>
-                      <ul className="mt-3 space-y-3 text-sm text-slate-700">
-                        {remainingFeatures.map((item, idx) => (
-                          <li key={`extra-${plan.name}-${idx}`} className="flex items-start gap-3">
-                            <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0 mt-0.5" />
-                            <span>{item}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                  <Button 
-                    asChild 
-                    size="lg"
-                    className={`w-full ${plan.featured ? "bg-[#7C3AED] hover:bg-[#6D28D9] text-white shadow-lg" : "border-2"}`}
-                    variant={plan.featured ? "default" : "outline"}
-                  >
-                    <Link href="/contact">
-                      {plan.price === "Custom" ? "Contact Sales" : "Book a Demo"}
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Link>
-                  </Button>
-                  {plan.price !== "Custom" && (
-                    <p className="text-xs text-center text-slate-500">
-                      ✓ 14-day free trial • ✓ No credit card • ✓ Cancel anytime
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-              )
-            })}
-          </div>
-          
-          {/* Pricing CTA */}
-          <div className="mt-12 text-center p-8 rounded-2xl bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-100">
-            <p className="text-lg font-semibold text-slate-900 mb-2">Not sure which plan is right for you?</p>
-            <p className="text-slate-600 mb-4">Book a free consultation and we'll help you choose the perfect plan.</p>
-            <Button size="lg" asChild className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white">
-              <Link href="/contact">
-                Get Free Consultation
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
           </div>
         </div>
       </section>

@@ -50,7 +50,7 @@ export function WhatsAppBusinessSettings() {
       newAppointments: false,
       confirmations: false,
       reminders: false,
-      reschedule: false,
+      reschedule: true,
       cancellations: false
     },
     systemAlerts: {

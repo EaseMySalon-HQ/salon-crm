@@ -62,6 +62,11 @@ const BillArchive = require('./models/BillArchive').model;
 
 const ACTIVITY_ACTIONS = require('./constants/activity-log-actions');
 const { scheduleActivityLog, tenantActorTypeFromRole } = require('./utils/activity-logger');
+const {
+  logTenantLoginSuccess,
+  logTenantLogoutSuccess,
+  logTenantRefreshFailure,
+} = require('./utils/auth-audit-log');
 
 // Import Routes
 const cashRegistryRoutes = require('./routes/cashRegistry');
@@ -589,6 +594,13 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
       );
     }
 
+    logTenantLoginSuccess(req, {
+      subjectType: 'user',
+      userId: user._id,
+      email: user.email,
+      branchId: user.branchId,
+    });
+
     res.json({
       success: true,
       data: {
@@ -709,6 +721,14 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
       req
     );
 
+    logTenantLoginSuccess(req, {
+      subjectType: 'staff',
+      userId: staff._id,
+      email: staff.email,
+      branchId: effectiveBranchId,
+      businessCode: businessCode,
+    });
+
     res.json({
       success: true,
       data: {
@@ -746,11 +766,13 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
 });
 
 app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  let refreshFamilyId;
   try {
     const refreshCookie = req.cookies && req.cookies[COOKIE.tenantRefresh];
     if (refreshCookie) {
       const decoded = jwt.decode(refreshCookie);
       if (decoded && decoded.familyId) {
+        refreshFamilyId = String(decoded.familyId);
         const mainConnection = await databaseManager.getMainConnection();
         await revokeRefreshFamily(mainConnection, decoded.familyId);
       }
@@ -758,6 +780,7 @@ app.post('/api/auth/logout', authenticateToken, async (req, res) => {
   } catch (err) {
     logger.warn('[auth/logout] Failed to revoke refresh family:', err);
   }
+  logTenantLogoutSuccess(req, refreshFamilyId ? { refreshFamilyId } : {});
   clearTenantAuthCookies(res);
   res.json({
     success: true,
@@ -780,9 +803,26 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       try {
         rdecoded = jwt.verify(refreshCookie, JWT_SECRET);
       } catch (e) {
+        const opaque = jwt.decode(refreshCookie);
+        logTenantRefreshFailure(req, {
+          path: 'refresh_cookie',
+          reason: 'refresh_jwt_verify_failed',
+          statusCode: 401,
+          userId: opaque?.id != null ? String(opaque.id) : undefined,
+          branchId: opaque?.branchId != null ? String(opaque.branchId) : undefined,
+          refreshFamilyId: opaque?.familyId != null ? String(opaque.familyId) : undefined,
+          verifyErrorName: e && e.name ? String(e.name) : undefined,
+        });
         return res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
       }
       if (rdecoded.tokenUse !== TOKEN_USE.tenantRefresh || !rdecoded.id) {
+        logTenantRefreshFailure(req, {
+          path: 'refresh_cookie',
+          reason: 'refresh_invalid_claims',
+          statusCode: 403,
+          tokenUse: rdecoded.tokenUse,
+          hasId: Boolean(rdecoded.id),
+        });
         return res.status(403).json({ success: false, error: 'Invalid refresh token' });
       }
 
@@ -790,6 +830,15 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       if (rdecoded.jti && rdecoded.familyId) {
         const rotated = await rotateRefreshSession(mainConnection, rdecoded);
         if (!rotated.ok) {
+          logTenantRefreshFailure(req, {
+            path: 'refresh_cookie',
+            reason: 'refresh_rotation_failed',
+            statusCode: 401,
+            rotationReason: rotated.reason,
+            userId: String(rdecoded.id),
+            branchId: rdecoded.branchId != null ? String(rdecoded.branchId) : undefined,
+            refreshFamilyId: String(rdecoded.familyId),
+          });
           return res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
         }
         newRefreshToken = rotated.refreshToken;
@@ -805,12 +854,27 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         } else {
           const bid = rdecoded.branchId;
           if (!bid) {
+            logTenantRefreshFailure(req, {
+              path: 'refresh_cookie',
+              reason: 'refresh_jti_migration_missing_branch',
+              statusCode: 403,
+              userId: String(rdecoded.id),
+            });
             return res.status(403).json({ success: false, error: 'Invalid or expired token' });
           }
           const businessDb = await databaseManager.getConnection(bid, mainConnection);
           const StaffModel = businessDb.model('Staff', require('./models/Staff').schema);
           const staffTry = await StaffModel.findById(rdecoded.id).select('-password');
           if (!staffTry || !staffTry.isActive || !staffTry.hasLoginAccess) {
+            logTenantRefreshFailure(req, {
+              path: 'refresh_cookie',
+              reason: 'refresh_jti_migration_staff_denied',
+              statusCode: 403,
+              userId: String(rdecoded.id),
+              branchId: String(bid),
+              staffActive: staffTry ? staffTry.isActive : false,
+              staffHasLoginAccess: staffTry ? staffTry.hasLoginAccess : false,
+            });
             return res.status(403).json({ success: false, error: 'Invalid or expired token' });
           }
           const business = await BusinessModel.findById(bid);
@@ -840,12 +904,27 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
 
       const businessId = rdecoded.branchId;
       if (!businessId) {
+        logTenantRefreshFailure(req, {
+          path: 'refresh_cookie',
+          reason: 'refresh_staff_missing_branch',
+          statusCode: 403,
+          userId: String(rdecoded.id),
+        });
         return res.status(403).json({ success: false, error: 'Invalid or expired token' });
       }
       const businessDb = await databaseManager.getConnection(businessId, mainConnection);
       const StaffModel = businessDb.model('Staff', require('./models/Staff').schema);
       const staff = await StaffModel.findById(rdecoded.id).select('-password');
       if (!staff || !staff.isActive || !staff.hasLoginAccess) {
+        logTenantRefreshFailure(req, {
+          path: 'refresh_cookie',
+          reason: 'refresh_staff_denied',
+          statusCode: 403,
+          userId: String(rdecoded.id),
+          branchId: String(businessId),
+          staffActive: staff ? staff.isActive : false,
+          staffHasLoginAccess: staff ? staff.hasLoginAccess : false,
+        });
         return res.status(403).json({ success: false, error: 'Invalid or expired token' });
       }
       const business = await BusinessModel.findById(businessId);
@@ -871,6 +950,12 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.split(' ')[1];
     if (!token || token.startsWith('mock-token-')) {
+      logTenantRefreshFailure(req, {
+        path: 'legacy_access',
+        reason: 'legacy_no_access_token',
+        statusCode: 401,
+        hasMockToken: Boolean(token && token.startsWith('mock-token-')),
+      });
       return res.status(401).json({ success: false, error: 'Access token required' });
     }
 
@@ -879,20 +964,45 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
       decoded = jwt.verify(token, JWT_SECRET);
     } catch (err) {
       if (err.name !== 'TokenExpiredError') {
+        logTenantRefreshFailure(req, {
+          path: 'legacy_access',
+          reason: 'legacy_access_jwt_invalid',
+          statusCode: 403,
+          verifyErrorName: err.name,
+        });
         return res.status(403).json({ success: false, error: 'Invalid or expired token' });
       }
       decoded = jwt.decode(token);
       const nowSec = Math.floor(Date.now() / 1000);
       if (!decoded || !decoded.exp || decoded.exp < nowSec - JWT_REFRESH_GRACE_SEC) {
+        logTenantRefreshFailure(req, {
+          path: 'legacy_access',
+          reason: 'legacy_access_expired_beyond_grace',
+          statusCode: 403,
+          userId: decoded?.id != null ? String(decoded.id) : undefined,
+          exp: decoded?.exp,
+          nowSec,
+          graceSec: JWT_REFRESH_GRACE_SEC,
+        });
         return res.status(403).json({ success: false, error: 'Invalid or expired token' });
       }
     }
 
     if (decoded.tokenUse === TOKEN_USE.tenantRefresh) {
+      logTenantRefreshFailure(req, {
+        path: 'legacy_access',
+        reason: 'legacy_refresh_token_in_authorization_header',
+        statusCode: 403,
+      });
       return res.status(403).json({ success: false, error: 'Use refresh token cookie or legacy access token' });
     }
 
     if (!decoded.id) {
+      logTenantRefreshFailure(req, {
+        path: 'legacy_access',
+        reason: 'legacy_missing_subject_id',
+        statusCode: 403,
+      });
       return res.status(403).json({ success: false, error: 'Invalid or expired token' });
     }
 
@@ -922,6 +1032,12 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
 
     const businessId = decoded.branchId;
     if (!businessId) {
+      logTenantRefreshFailure(req, {
+        path: 'legacy_access',
+        reason: 'legacy_staff_path_missing_branch',
+        statusCode: 403,
+        userId: String(decoded.id),
+      });
       return res.status(403).json({ success: false, error: 'Invalid or expired token' });
     }
 
@@ -929,6 +1045,15 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
     const StaffModel = businessDb.model('Staff', require('./models/Staff').schema);
     const staff = await StaffModel.findById(decoded.id).select('-password');
     if (!staff || !staff.isActive || !staff.hasLoginAccess) {
+      logTenantRefreshFailure(req, {
+        path: 'legacy_access',
+        reason: 'legacy_staff_denied',
+        statusCode: 403,
+        userId: String(decoded.id),
+        branchId: String(businessId),
+        staffActive: staff ? staff.isActive : false,
+        staffHasLoginAccess: staff ? staff.hasLoginAccess : false,
+      });
       return res.status(403).json({ success: false, error: 'Invalid or expired token' });
     }
 
@@ -955,6 +1080,12 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
     const csrfTokenLegacyStaff = setCsrfCookie(res);
     return res.json({ success: true, csrfToken: csrfTokenLegacyStaff });
   } catch (error) {
+    logTenantRefreshFailure(req, {
+      path: 'unknown',
+      reason: 'refresh_internal_error',
+      statusCode: 500,
+      errorName: error && error.name ? String(error.name) : undefined,
+    });
     logger.error('[auth/refresh]', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
   }
