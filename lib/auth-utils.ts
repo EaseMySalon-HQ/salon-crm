@@ -77,10 +77,93 @@ export function clearRememberedBusinessCode(): void {
   localStorage.removeItem(REMEMBERED_BUSINESS_CODE_KEY)
 }
 
+export interface SessionExpiredContext {
+  /** Origin of the forced logout — `api_interceptor`, `auth_context_check`, etc. */
+  source?: string
+  /** HTTP status that triggered the cascade (usually 401/403). */
+  status?: number
+  /** URL of the request whose failure triggered the cascade. */
+  requestUrl?: string
+  /** Server-provided error message (already normalized upstream). */
+  errorMessage?: string
+}
+
 /**
- * Handle session expired: clear storage, set flag, dispatch event, redirect.
+ * Fire-and-forget audit beacon so the backend can record _this specific browser_ being
+ * forced to /login after a 401/403 cascade that our own /logout endpoint never sees.
+ * Uses navigator.sendBeacon (survives unload) with a fetch+keepalive fallback.
+ * Must be called BEFORE clearAuthStorage so we can still read the cached user.
  */
-export function handleSessionExpired(redirectTo = '/login'): void {
+function sendSessionExpiredBeacon(context: SessionExpiredContext): void {
+  if (typeof window === 'undefined') return
+
+  const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+  const url = `${base}/auth/session-expired-beacon`
+
+  let userId: string | undefined
+  let email: string | undefined
+  try {
+    const stored = localStorage.getItem('salon-auth-user')
+    if (stored) {
+      const u = JSON.parse(stored) as { _id?: unknown; email?: unknown }
+      if (typeof u?._id === 'string') userId = u._id
+      if (typeof u?.email === 'string') email = u.email
+    }
+  } catch {
+    /* ignore malformed cache */
+  }
+
+  const payload = {
+    source: context.source,
+    status: context.status,
+    requestUrl: context.requestUrl,
+    errorMessage: context.errorMessage,
+    pathname: window.location?.pathname,
+    userId,
+    email,
+    ts: new Date().toISOString(),
+  }
+  const body = JSON.stringify(payload)
+
+  /**
+   * Use text/plain so this is a "CORS-safelisted request" — no preflight OPTIONS needed.
+   * application/json triggers preflight, and preflight is commonly cancelled by browsers when
+   * the page is about to unload (which is exactly when we fire this beacon).
+   */
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      const blob = new Blob([body], { type: 'text/plain;charset=UTF-8' })
+      if (navigator.sendBeacon(url, blob)) return
+    }
+  } catch {
+    /* fall through to fetch */
+  }
+
+  try {
+    fetch(url, {
+      method: 'POST',
+      keepalive: true,
+      credentials: 'include',
+      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+      body,
+    }).catch(() => {})
+  } catch {
+    /* nothing more we can do — proceed with redirect */
+  }
+}
+
+/**
+ * Handle session expired: audit beacon → clear storage → set flag → dispatch event → redirect.
+ */
+export function handleSessionExpired(
+  redirectTo = '/login',
+  context: SessionExpiredContext = {}
+): void {
+  try {
+    sendSessionExpiredBeacon(context)
+  } catch {
+    /* best-effort logging; never block the redirect */
+  }
   clearAuthStorage()
   setSessionExpiredFlag()
   dispatchAuthLogout()

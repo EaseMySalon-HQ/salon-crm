@@ -68,8 +68,8 @@ export function useSessionTimeout({
       // Call custom timeout handler
       onTimeout?.()
       
-      // Logout user
-      logout()
+      // Logout user — tag source so backend audit log can distinguish inactivity from button click
+      logout('session_timeout')
     }, logoutTime)
   }, [timeoutMinutes, warningMinutes, logout, onTimeout, onWarning])
 

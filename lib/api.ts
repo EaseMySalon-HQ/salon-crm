@@ -346,7 +346,12 @@ apiClient.interceptors.response.use(
           if (process.env.NODE_ENV === 'development') {
             console.log('🔐 API Response Interceptor: Session invalid (', statusOut, '), redirecting to login')
           }
-          handleSessionExpired('/login')
+          handleSessionExpired('/login', {
+            source: 'api_interceptor',
+            status: statusOut,
+            requestUrl: String(config?.url || ''),
+            errorMessage: errorMsgLower,
+          })
         }
         // Other 403s (validation, cross-branch, etc.): do not logout — let callers show the error
       }
@@ -386,8 +391,14 @@ export class AuthAPI {
     return response.data
   }
 
-  static async logout(): Promise<ApiResponse> {
-    const response = await apiClient.post('/auth/logout')
+  /**
+   * @param reason — optional short tag explaining the source. The backend writes this into
+   * the tenant_logout_success audit line so we can distinguish user-initiated logouts from
+   * session-timeout or interceptor-driven ones in production.
+   */
+  static async logout(reason?: string): Promise<ApiResponse> {
+    const body = reason && typeof reason === 'string' ? { reason } : {}
+    const response = await apiClient.post('/auth/logout', body)
     return response.data
   }
 

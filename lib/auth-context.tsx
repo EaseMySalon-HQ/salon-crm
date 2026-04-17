@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { AuthAPI } from "@/lib/api"
 import { SETTINGS_MODULES } from "@/lib/permission-mappings"
@@ -43,7 +43,7 @@ interface AuthContextType {
     password: string,
     businessCode: string
   ) => Promise<{ success: boolean; businessSuspended?: boolean }>
-  logout: () => void
+  logout: (reason?: string) => void
   exitImpersonation: () => void
   updateUser: (userData: Partial<User>) => void
   isLoading: boolean
@@ -92,6 +92,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const router = useRouter()
+  /**
+   * Guard against duplicate `/api/auth/logout` calls when the button is double-clicked,
+   * when the session-timeout timer fires at the same time as a manual logout, or when
+   * `AUTH_LOGOUT_EVENT` is dispatched concurrently with a user click.
+   */
+  const logoutInFlightRef = useRef(false)
 
   // Listen for auth logout event (from API interceptor on 401/403)
   useEffect(() => {
@@ -296,7 +302,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const logout = useCallback(async () => {
+  const logout = useCallback(async (reason?: string) => {
+    if (logoutInFlightRef.current) return
+    logoutInFlightRef.current = true
+    const logoutReason = reason || 'user_initiated'
     try {
       setUser(null)
       setIsLoading(true)
@@ -313,7 +322,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       
       try {
-        await AuthAPI.logout()
+        await AuthAPI.logout(logoutReason)
       } catch {
         // Server may be unreachable — proceed with client-side cleanup
       }

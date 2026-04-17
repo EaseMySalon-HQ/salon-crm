@@ -108,6 +108,8 @@ const GLOBAL_API_SKIP_PREFIXES = [
   '/api/auth/forgot-password',
   '/api/auth/reset-password',
   '/api/auth/verify-reset-token',
+  /** Fire-and-forget client audit beacon; volume tracks 401/403 cascades, not abuse. */
+  '/api/auth/session-expired-beacon',
   '/api/admin/login',
 ];
 
