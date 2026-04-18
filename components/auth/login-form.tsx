@@ -14,7 +14,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
-import { getRememberedBusinessCode, setRememberedBusinessCode, clearRememberedBusinessCode } from "@/lib/auth-utils"
+import {
+  getRememberedBusinessCode,
+  setRememberedBusinessCode,
+  clearRememberedBusinessCode,
+  getSafeReturnUrl,
+} from "@/lib/auth-utils"
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -50,6 +55,11 @@ export function LoginForm() {
     }
   }, [searchParams])
 
+  function postAuthDestination(): string {
+    const raw = searchParams.get("returnUrl")
+    return getSafeReturnUrl(raw) ?? "/dashboard"
+  }
+
   async function onSubmit(values: z.infer<typeof loginSchema>) {
     setIsSubmitting(true)
     try {
@@ -75,7 +85,7 @@ export function LoginForm() {
               title: "Login successful",
               description: "Welcome back to EaseMySalon!",
             })
-            router.push("/")
+            router.push(postAuthDestination())
           }
         } else {
           toast({
@@ -94,7 +104,7 @@ export function LoginForm() {
               title: "Login successful",
               description: "Welcome back to EaseMySalon!",
             })
-            router.push("/")
+            router.push(postAuthDestination())
           }
         } else {
           toast({

@@ -10,7 +10,7 @@ import { LoginForm } from "@/components/auth/login-form"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { useToast } from "@/hooks/use-toast"
-import { consumeSessionExpiredFlag } from "@/lib/auth-utils"
+import { consumeSessionExpiredFlag, getSafeReturnUrl } from "@/lib/auth-utils"
 
 export default function LoginPage() {
   const { user, isLoading } = useAuth()
@@ -19,7 +19,12 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && user) {
-      router.push("/dashboard")
+      if (typeof window === "undefined") {
+        router.replace("/dashboard")
+        return
+      }
+      const next = getSafeReturnUrl(new URLSearchParams(window.location.search).get("returnUrl"))
+      router.replace(next || "/dashboard")
     }
   }, [user, isLoading, router])
 
@@ -34,7 +39,10 @@ export default function LoginPage() {
         variant: "destructive",
       })
       if (fromQuery && typeof window !== "undefined") {
-        window.history.replaceState({}, "", "/login")
+        const u = new URL(window.location.href)
+        u.searchParams.delete("session_expired")
+        const qs = u.searchParams.toString()
+        window.history.replaceState({}, "", `${u.pathname}${qs ? `?${qs}` : ""}`)
       }
     }
   }, [toast])

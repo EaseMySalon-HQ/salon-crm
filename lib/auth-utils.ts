@@ -152,6 +152,38 @@ function sendSessionExpiredBeacon(context: SessionExpiredContext): void {
   }
 }
 
+/** Query param on `/login` storing where to send the user after a successful sign-in. */
+export const LOGIN_RETURN_PARAM = 'returnUrl'
+
+/**
+ * Returns a safe in-app path+search for post-login navigation, or null if untrusted or disallowed.
+ */
+export function getSafeReturnUrl(raw: string | null | undefined): string | null {
+  if (raw == null || typeof raw !== 'string') return null
+  const s = raw.trim()
+  if (!s.startsWith('/') || s.startsWith('//')) return null
+  if (/^[a-zA-Z][a-zA-Z+.-]*:/.test(s)) return null
+  const pathOnly = (s.split('#')[0] ?? '').split('?')[0] ?? ''
+  if (
+    pathOnly === '/login' ||
+    pathOnly === '/admin/login' ||
+    pathOnly === '/forgot-password' ||
+    pathOnly === '/reset-password'
+  ) {
+    return null
+  }
+  if (pathOnly.startsWith('/api')) return null
+  return s
+}
+
+/** Client-only: `/login?returnUrl=…` for the current location (tenant app pages). */
+export function buildLoginRedirectHref(): string {
+  if (typeof window === 'undefined') return '/login'
+  const safe = getSafeReturnUrl(window.location.pathname + window.location.search)
+  if (!safe) return '/login'
+  return `/login?${LOGIN_RETURN_PARAM}=${encodeURIComponent(safe)}`
+}
+
 /**
  * Handle session expired: audit beacon → clear storage → set flag → dispatch event → redirect.
  */
@@ -168,7 +200,14 @@ export function handleSessionExpired(
   setSessionExpiredFlag()
   dispatchAuthLogout()
   try {
-    window.location.href = redirectTo.includes('?') ? redirectTo : `${redirectTo}?session_expired=1`
+    const base = (redirectTo.split('?')[0] || '/login').trim() || '/login'
+    const params = new URLSearchParams()
+    params.set('session_expired', '1')
+    if (typeof window !== 'undefined') {
+      const safe = getSafeReturnUrl(window.location.pathname + window.location.search)
+      if (safe) params.set(LOGIN_RETURN_PARAM, safe)
+    }
+    window.location.href = `${base}?${params.toString()}`
   } catch {
     window.location.href = redirectTo
   }

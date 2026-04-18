@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Settings, Building2, Calendar, CreditCard, Bell, ChevronRight, Receipt, DollarSign, Calculator, Wallet, Wrench, Package } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
+import { buildLoginRedirectHref } from "@/lib/auth-utils"
 import { useRouter } from "next/navigation"
 import { GeneralSettings } from "./general-settings"
 import { BusinessSettings } from "./business-settings"
@@ -29,6 +30,26 @@ import { Scissors, FolderTree, Truck, Layers } from "lucide-react"
 
 import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
 
+const SETTINGS_SECTION_IDS = [
+  "general",
+  "business",
+  "appointments",
+  "currency",
+  "tax",
+  "payments",
+  "pos",
+  "notifications",
+  "plan-billing",
+  "membership",
+  "services",
+  "products",
+  "packages",
+] as const
+
+function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
+  return id != null && (SETTINGS_SECTION_IDS as readonly string[]).includes(id)
+}
+
 const settingsCategories = [
   { id: "general", title: "General Settings", description: "Basic application preferences and configurations", icon: Settings },
   { id: "business", title: "Business Settings", description: "Company information, branding, and business details", icon: Building2 },
@@ -48,21 +69,25 @@ const settingsCategories = [
 export function SettingsPage() {
   const searchParams = useSearchParams()
   const sectionParam = searchParams.get("section")
-  const [activeSection, setActiveSection] = useState<string | null>(sectionParam || null)
+  const [activeSection, setActiveSection] = useState<string | null>(() =>
+    isSettingsSectionId(sectionParam) ? sectionParam : null
+  )
   const { user, isLoading, hasPermission } = useAuth()
   const router = useRouter()
 
-  // Sync activeSection from URL when section param changes
+  // Keep UI in sync with ?section= (refresh, back/forward, external links)
   useEffect(() => {
-    if (sectionParam && ["general", "business", "appointments", "currency", "tax", "payments", "pos", "notifications", "plan-billing", "membership", "services", "products", "packages"].includes(sectionParam)) {
+    if (isSettingsSectionId(sectionParam)) {
       setActiveSection(sectionParam)
+    } else {
+      setActiveSection(null)
     }
   }, [sectionParam])
 
   // Basic authentication check
   useEffect(() => {
     if (!isLoading && !user) {
-      router.replace("/login")
+      router.replace(buildLoginRedirectHref())
     }
   }, [user, isLoading, router])
 
@@ -201,7 +226,10 @@ export function SettingsPage() {
                 return (
                   <button
                     key={category.id}
-                    onClick={() => setActiveSection(category.id)}
+                    onClick={() => {
+                      if (!hasAccess) return
+                      router.push(`/settings?section=${encodeURIComponent(category.id)}`)
+                    }}
                     className={`group w-full rounded-2xl border text-left transition-all duration-300 ${
                       activeSection === category.id
                         ? "border-blue-200 bg-gradient-to-br from-blue-50 to-white shadow-md ring-2 ring-blue-100"
@@ -257,7 +285,8 @@ export function SettingsPage() {
         /* After Selection: Content only, with back button */
         <div className="space-y-6">
           <button
-            onClick={() => setActiveSection(null)}
+            type="button"
+            onClick={() => router.replace("/settings")}
             className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"
           >
             <ChevronRight className="h-4 w-4 rotate-180" />

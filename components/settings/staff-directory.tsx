@@ -1,5 +1,7 @@
 "use client"
 
+import { useSearchParams, useRouter } from "next/navigation"
+
 import { StaffTable } from "@/components/staff/staff-table"
 import { StaffWorkingHoursContent } from "@/components/staff/staff-working-hours-content"
 import { CommissionProfileList } from "@/components/settings/commission-profile-list"
@@ -8,9 +10,67 @@ import { FeatureGate } from "@/components/ui/feature-gate"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Users, Clock, Award } from "lucide-react"
 
+const MAIN_TABS = ["staff-list", "working-hours", "commission"] as const
+type MainTab = (typeof MAIN_TABS)[number]
+
+const COMMISSION_PANELS = ["profiles", "assignments"] as const
+type CommissionPanel = (typeof COMMISSION_PANELS)[number]
+
+function isMainTab(v: string | null): v is MainTab {
+  return v != null && (MAIN_TABS as readonly string[]).includes(v)
+}
+
+function isCommissionPanel(v: string | null): v is CommissionPanel {
+  return v != null && (COMMISSION_PANELS as readonly string[]).includes(v)
+}
+
 export function StaffDirectory() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const tabParam = searchParams.get("tab")
+  const panelParam = searchParams.get("panel")
+
+  const activeMainTab: MainTab = isMainTab(tabParam) ? tabParam : "staff-list"
+  const commissionPanel: CommissionPanel =
+    activeMainTab === "commission" && isCommissionPanel(panelParam) ? panelParam : "profiles"
+
+  const pushStaffUrl = (params: URLSearchParams) => {
+    const q = params.toString()
+    router.push(q ? `/staff?${q}` : "/staff")
+  }
+
+  const onMainTabChange = (value: string) => {
+    if (!isMainTab(value)) return
+    const params = new URLSearchParams(searchParams.toString())
+    if (value === "staff-list") {
+      params.delete("tab")
+      params.delete("panel")
+    } else if (value === "working-hours") {
+      params.set("tab", value)
+      params.delete("panel")
+    } else {
+      params.set("tab", "commission")
+      if (!isCommissionPanel(params.get("panel"))) {
+        params.delete("panel")
+      }
+    }
+    pushStaffUrl(params)
+  }
+
+  const onCommissionPanelChange = (value: string) => {
+    if (!isCommissionPanel(value)) return
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", "commission")
+    if (value === "profiles") {
+      params.delete("panel")
+    } else {
+      params.set("panel", value)
+    }
+    pushStaffUrl(params)
+  }
+
   return (
-    <Tabs defaultValue="staff-list" className="w-full space-y-6">
+    <Tabs value={activeMainTab} onValueChange={onMainTabChange} className="w-full space-y-6">
       {/* Header card: title and description only */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-6">
@@ -56,7 +116,11 @@ export function StaffDirectory() {
               featureId="staff_commissions"
               upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to configure commission profiles and track staff commissions."
             >
-              <Tabs defaultValue="profiles" className="space-y-6">
+              <Tabs
+                value={commissionPanel}
+                onValueChange={onCommissionPanelChange}
+                className="space-y-6"
+              >
                 <TabsList className="grid w-full max-w-md grid-cols-2 h-auto">
                   <TabsTrigger value="profiles">Commission profiles</TabsTrigger>
                   <TabsTrigger value="assignments">Staff &amp; profiles</TabsTrigger>

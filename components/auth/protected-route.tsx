@@ -5,6 +5,7 @@ import type React from "react"
 import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { buildLoginRedirectHref } from "@/lib/auth-utils"
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -19,7 +20,7 @@ export function ProtectedRoute({ children, requiredModule }: ProtectedRouteProps
   useEffect(() => {
     if (!isLoading) {
       if (!user) {
-        router.replace("/login")
+        router.replace(buildLoginRedirectHref())
         return
       }
       if (user.businessSuspended) {
