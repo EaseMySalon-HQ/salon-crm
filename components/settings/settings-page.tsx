@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { useSearchParams } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Settings, Building2, Calendar, CreditCard, Bell, ChevronRight, Receipt, DollarSign, Calculator, Wallet, Wrench, Package } from "lucide-react"
+import { Settings, Building2, Calendar, CreditCard, Bell, ChevronRight, Receipt, DollarSign, Calculator, Wallet, Wrench, Package, BarChart2, Zap } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
 import { useRouter } from "next/navigation"
@@ -19,6 +19,8 @@ import { POSSettings } from "./pos-settings"
 import { PlanBilling } from "./plan-billing"
 import { MembershipPlansTable } from "@/components/membership/membership-plans-table"
 import { PackagesSettingsPanel } from "@/components/packages/PackagesSettingsPanel"
+import { ChannelUsageSettings } from "./channel-usage-settings"
+import RechargeSettings from "./recharge-settings"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { ProductsTable } from "@/components/products/products-table"
@@ -44,6 +46,8 @@ const SETTINGS_SECTION_IDS = [
   "services",
   "products",
   "packages",
+  "channel-usage",
+  "recharge",
 ] as const
 
 function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
@@ -64,6 +68,8 @@ const settingsCategories = [
   { id: "services", title: "Services", description: "Manage salon services, pricing, and categories", icon: Wrench },
   { id: "products", title: "Products", description: "Product inventory, stock levels, and suppliers", icon: Package },
   { id: "packages", title: "Packages", description: "Bundle services into sellable packages, track sittings and redemptions", icon: Layers },
+  { id: "channel-usage", title: "Channel Usage", description: "WhatsApp, SMS and Email delivery stats and logs", icon: BarChart2 },
+  { id: "recharge", title: "Recharge", description: "Top up your messaging wallet for SMS and WhatsApp", icon: Zap },
 ]
 
 export function SettingsPage() {
@@ -200,6 +206,10 @@ export function SettingsPage() {
         )
       case "packages":
         return <PackagesSettingsPanel />
+      case "channel-usage":
+        return <ChannelUsageSettings />
+      case "recharge":
+        return <RechargeSettings />
       default:
         return null
     }

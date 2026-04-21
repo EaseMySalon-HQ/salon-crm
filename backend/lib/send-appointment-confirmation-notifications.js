@@ -3,6 +3,8 @@
 const { logger } = require('../utils/logger');
 const { isAdminAppointmentNotificationsEnabled } = require('./whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
+const { logSmsMessage, logEmailMessage } = require('./channel-logs');
+const { canDeductSms, deductSms, canDeductWhatsApp, deductWhatsApp } = require('./wallet-deduction');
 
 async function sendAppointmentConfirmationNotifications(req, createdAppointments, getEmailSettingsWithDefaults) {
   // Send email notifications if enabled
@@ -202,6 +204,20 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
                 logger.error(`Failed to send appointment email to ${clientEmail}:`, emailResult?.error || 'Unknown error');
                 logger.debug('Full email result:', JSON.stringify(emailResult, null, 2));
               }
+              logEmailMessage({
+                businessId: business?._id,
+                recipientEmail: clientEmail,
+                messageType: 'appointment',
+                result: {
+                  success: emailResult && emailResult.success !== false,
+                  error: emailResult?.error,
+                  data: emailResult?.data,
+                },
+                subject: 'Appointment Confirmation',
+                provider: emailService?.provider,
+                relatedEntityId: appointment?._id,
+                relatedEntityType: 'Appointment',
+              });
             } catch (clientEmailError) {
               logger.error('Error sending appointment confirmation to client:', clientEmailError);
               logger.error('Error details:', {
@@ -323,14 +339,38 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
               }
             }
             
-            await emailService.sendAppointmentNotification({
+            const staffEmailResult = await emailService.sendAppointmentNotification({
               to: recipient.email,
               appointmentCount: createdAppointments.length,
               businessName: business.name,
               appointmentDetails: appointmentDetails
             });
             logger.debug(`Appointment notification sent to: ${recipient.email}`);
+            logEmailMessage({
+              businessId: business?._id,
+              recipientEmail: recipient.email,
+              messageType: 'appointment',
+              result: {
+                success: staffEmailResult ? staffEmailResult.success !== false : true,
+                error: staffEmailResult?.error,
+                data: staffEmailResult?.data,
+              },
+              subject: 'New Appointment Notification',
+              provider: emailService?.provider,
+              relatedEntityId: firstAppointment?._id,
+              relatedEntityType: 'Appointment',
+            });
           } catch (emailError) {
+            logEmailMessage({
+              businessId: business?._id,
+              recipientEmail: recipient.email,
+              messageType: 'appointment',
+              result: { success: false, error: emailError?.message || String(emailError) },
+              subject: 'New Appointment Notification',
+              provider: emailService?.provider,
+              relatedEntityId: createdAppointments?.[0]?._id,
+              relatedEntityType: 'Appointment',
+            });
             logger.error(`Error sending appointment notification to ${recipient.email}:`, emailError);
             logger.error('Error details:', {
               message: emailError.message,
@@ -510,8 +550,8 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       const adminSettings = await AdminSettings.getSettings();
       const smsEnabled = adminSettings?.notifications?.sms?.enabled === true && (adminSettings?.notifications?.sms?.provider === 'msg91' || !!(adminSettings?.notifications?.sms?.msg91AuthKey && String(adminSettings.notifications.sms.msg91AuthKey).trim()));
       if (smsEnabled) {
-        const business = await Business.findById(req.user.branchId).lean();
-        if (canUseAddon(business, 'sms')) {
+        let business = await Business.findById(req.user.branchId).lean();
+        if (canUseAddon(business, 'sms') || canDeductSms(business)) {
           const { Client, Staff } = req.businessModels;
           for (const appointment of createdAppointments) {
             let client = null;
@@ -538,6 +578,10 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
               staffName = staff?.name || 'Not assigned';
             }
             const businessSettingsForSms = await req.businessModels.BusinessSettings.findOne().lean().catch(() => null);
+            const useAddon = canUseAddon(business, 'sms');
+            if (!useAddon && !canDeductSms(business)) {
+              break;
+            }
             const result = await smsService.sendAppointmentConfirmation({
               to: client.phone,
               clientName: client.name || 'Client',
@@ -553,11 +597,27 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
               }
             });
             if (result.success) {
-              await Business.updateOne(
-                { _id: business._id },
-                { $inc: { 'plan.addons.sms.used': 1 } }
-              );
+              if (useAddon) {
+                await Business.updateOne(
+                  { _id: business._id },
+                  { $inc: { 'plan.addons.sms.used': 1 } }
+                );
+              } else {
+                await deductSms(business._id, {
+                  description: 'SMS appointment confirmation',
+                  relatedEntity: { id: appointment?._id, type: 'Appointment' },
+                });
+                business = await Business.findById(business._id).lean();
+              }
             }
+            logSmsMessage({
+              businessId: business._id,
+              recipientPhone: client.phone,
+              messageType: 'appointment',
+              result,
+              relatedEntityId: appointment?._id,
+              relatedEntityType: 'Appointment',
+            });
           }
         }
       }

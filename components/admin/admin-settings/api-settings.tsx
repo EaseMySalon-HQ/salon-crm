@@ -103,7 +103,12 @@ export function APISettings({ settings: propSettings, onSettingsChange, jwtSecre
         stripeWebhookSecret: "",
         razorpayKeyId: "",
         razorpayKeySecret: "",
-        razorpayWebhookSecret: ""
+        razorpayWebhookSecret: "",
+        zohoClientId: "",
+        zohoClientSecret: "",
+        zohoRefreshToken: "",
+        zohoOrganizationId: "",
+        zohoReturnUrl: ""
       },
       emailService: {
         enabled: true,
@@ -164,19 +169,18 @@ export function APISettings({ settings: propSettings, onSettingsChange, jwtSecre
   }, [propSettings])
 
   const handleSettingChange = (path: string, value: any) => {
-    setSettings(prev => {
-      const newSettings = { ...prev }
-      const keys = path.split('.')
-      let current: any = newSettings
-      for (let i = 0; i < keys.length - 1; i++) {
-        const k = keys[i]
-        if (current[k] == null || typeof current[k] !== 'object') current[k] = {}
-        current = current[k]
-      }
-      current[keys[keys.length - 1]] = value
-      onSettingsChange(newSettings)
-      return newSettings
-    })
+    const newSettings: any = { ...settings }
+    const keys = path.split('.')
+    let current: any = newSettings
+    for (let i = 0; i < keys.length - 1; i++) {
+      const k = keys[i]
+      if (current[k] == null || typeof current[k] !== 'object') current[k] = { ...(current[k] || {}) }
+      else current[k] = { ...current[k] }
+      current = current[k]
+    }
+    current[keys[keys.length - 1]] = value
+    setSettings(newSettings)
+    onSettingsChange(newSettings)
   }
 
   const handleWebhookChange = (id: number, field: string, value: any) => {
@@ -788,6 +792,7 @@ export function APISettings({ settings: propSettings, onSettingsChange, jwtSecre
                     <SelectContent>
                       <SelectItem value="stripe">Stripe</SelectItem>
                       <SelectItem value="razorpay">Razorpay</SelectItem>
+                      <SelectItem value="zoho">Zoho Pay</SelectItem>
                       <SelectItem value="paypal">PayPal</SelectItem>
                       <SelectItem value="square">Square</SelectItem>
                     </SelectContent>
@@ -868,6 +873,75 @@ export function APISettings({ settings: propSettings, onSettingsChange, jwtSecre
                         className="w-full"
                         placeholder="Your webhook secret"
                       />
+                    </div>
+                  </div>
+                )}
+
+                {settings.integrations?.paymentGateway?.provider === "zoho" && (
+                  <div className="space-y-4">
+                    <div className="rounded-md border border-blue-100 bg-blue-50/60 p-3 text-xs text-blue-900">
+                      Zoho Pay uses OAuth 2.0. Create a Self Client at
+                      {' '}<a className="underline" href="https://api-console.zoho.in/" target="_blank" rel="noreferrer">api-console.zoho.in</a>{' '}
+                      with scope <code>ZohoPay.payments.ALL</code>, then generate a refresh token.
+                      Grab your Organization ID from the Zoho Payments dashboard.
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="zohoClientId">Zoho Client ID</Label>
+                        <Input
+                          id="zohoClientId"
+                          value={settings.integrations?.paymentGateway?.zohoClientId ?? ''}
+                          onChange={(e) => handleSettingChange('integrations.paymentGateway.zohoClientId', e.target.value)}
+                          className="w-full"
+                          placeholder="1000.XXXXXXXXXXXXXXXX"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="zohoClientSecret">Zoho Client Secret</Label>
+                        <Input
+                          id="zohoClientSecret"
+                          type="password"
+                          value={settings.integrations?.paymentGateway?.zohoClientSecret ?? ''}
+                          onChange={(e) => handleSettingChange('integrations.paymentGateway.zohoClientSecret', e.target.value)}
+                          className="w-full"
+                          placeholder="Client secret from Zoho API Console"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="zohoRefreshToken">Zoho Refresh Token</Label>
+                        <Input
+                          id="zohoRefreshToken"
+                          type="password"
+                          value={settings.integrations?.paymentGateway?.zohoRefreshToken ?? ''}
+                          onChange={(e) => handleSettingChange('integrations.paymentGateway.zohoRefreshToken', e.target.value)}
+                          className="w-full"
+                          placeholder="1000.xxxxx.yyyyy"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="zohoOrganizationId">Zoho Organization ID</Label>
+                        <Input
+                          id="zohoOrganizationId"
+                          value={settings.integrations?.paymentGateway?.zohoOrganizationId ?? ''}
+                          onChange={(e) => handleSettingChange('integrations.paymentGateway.zohoOrganizationId', e.target.value)}
+                          className="w-full"
+                          placeholder="60000000"
+                        />
+                      </div>
+
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="zohoReturnUrl">Return URL (redirect after payment)</Label>
+                        <Input
+                          id="zohoReturnUrl"
+                          value={settings.integrations?.paymentGateway?.zohoReturnUrl ?? ''}
+                          onChange={(e) => handleSettingChange('integrations.paymentGateway.zohoReturnUrl', e.target.value)}
+                          className="w-full"
+                          placeholder="https://yourdomain.com/settings?section=recharge&zoho_redirect=1"
+                        />
+                      </div>
                     </div>
                   </div>
                 )}

@@ -175,9 +175,7 @@ export function PlanInfo() {
                 <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
                   <span className="text-sm text-gray-700">WhatsApp Receipts</span>
                   <span className="text-xs text-gray-500">
-                    {planInfo.addons.whatsapp.quota === Infinity 
-                      ? 'Unlimited' 
-                      : `${planInfo.addons.whatsapp.used || 0}/${planInfo.addons.whatsapp.quota} used`}
+                    Billed per message from wallet
                   </span>
                 </div>
               )}
@@ -185,9 +183,7 @@ export function PlanInfo() {
                 <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
                   <span className="text-sm text-gray-700">SMS Notifications</span>
                   <span className="text-xs text-gray-500">
-                    {planInfo.addons.sms.quota === Infinity 
-                      ? 'Unlimited' 
-                      : `${planInfo.addons.sms.used || 0}/${planInfo.addons.sms.quota} used`}
+                    Billed per message from wallet
                   </span>
                 </div>
               )}

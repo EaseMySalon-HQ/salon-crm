@@ -2121,6 +2121,205 @@ export class WhatsAppAPI {
   }
 }
 
+// ── Channel Usage API ─────────────────────────────────────────────────────────
+export type ChannelKind = "whatsapp" | "sms" | "email"
+
+export interface ChannelUsageLog {
+  _id: string
+  recipientPhone?: string
+  recipientEmail?: string
+  messageType: string
+  status: "sent" | "failed" | "pending"
+  subject?: string | null
+  error?: string | null
+  timestamp: string
+}
+
+export interface ChannelUsageResponse {
+  quota: number | null
+  used: number
+  remaining: number | null
+  percentUsed: number
+  unlimited?: boolean
+  stats: {
+    total: number
+    sent: number
+    failed: number
+  }
+  logs: ChannelUsageLog[]
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+
+export interface ChannelUsageFilters {
+  page?: number
+  limit?: number
+  status?: "sent" | "failed" | "pending"
+  messageType?: string
+  dateFrom?: string
+  dateTo?: string
+}
+
+function buildChannelUsageParams(filters?: ChannelUsageFilters) {
+  const params = new URLSearchParams()
+  if (filters?.page) params.append("page", String(filters.page))
+  if (filters?.limit) params.append("limit", String(filters.limit))
+  if (filters?.status) params.append("status", filters.status)
+  if (filters?.messageType) params.append("messageType", filters.messageType)
+  if (filters?.dateFrom) params.append("dateFrom", filters.dateFrom)
+  if (filters?.dateTo) params.append("dateTo", filters.dateTo)
+  return params
+}
+
+export class ChannelUsageAPI {
+  static async getWhatsAppUsage(
+    filters?: ChannelUsageFilters
+  ): Promise<ApiResponse<ChannelUsageResponse>> {
+    const params = buildChannelUsageParams(filters)
+    const qs = params.toString()
+    const response = await apiClient.get(
+      qs ? `/channel-usage/whatsapp?${qs}` : "/channel-usage/whatsapp"
+    )
+    return response.data
+  }
+
+  static async getSmsUsage(
+    filters?: ChannelUsageFilters
+  ): Promise<ApiResponse<ChannelUsageResponse>> {
+    const params = buildChannelUsageParams(filters)
+    const qs = params.toString()
+    const response = await apiClient.get(
+      qs ? `/channel-usage/sms?${qs}` : "/channel-usage/sms"
+    )
+    return response.data
+  }
+
+  static async getEmailUsage(
+    filters?: ChannelUsageFilters
+  ): Promise<ApiResponse<ChannelUsageResponse>> {
+    const params = buildChannelUsageParams(filters)
+    const qs = params.toString()
+    const response = await apiClient.get(
+      qs ? `/channel-usage/email?${qs}` : "/channel-usage/email"
+    )
+    return response.data
+  }
+}
+
+// ── Wallet / Recharge API ────────────────────────────────────────────────────
+
+export type WalletProvider = "razorpay" | "stripe" | "zoho"
+
+export interface WalletBalance {
+  balancePaise: number
+  balanceRupees: number
+}
+
+export interface WalletTransaction {
+  _id: string
+  type: "credit" | "debit"
+  amountPaise: number
+  amountRupees: number
+  // GST fields — populated only on `credit` rows where GST was charged.
+  gstPaise?: number
+  gstRupees?: number
+  gstRate?: number
+  totalChargedPaise?: number
+  totalChargedRupees?: number
+  channel: "sms" | "whatsapp" | null
+  messageCategory: "promotional" | "transactional" | null
+  provider: WalletProvider | "system"
+  description: string | null
+  balanceAfterPaise: number
+  balanceAfterRupees: number
+  timestamp: string
+}
+
+export interface WalletTransactionsResponse {
+  logs: WalletTransaction[]
+  pagination: { page: number; limit: number; total: number; totalPages: number }
+}
+
+export interface RechargeOrder {
+  provider: WalletProvider
+  orderId?: string
+  clientSecret?: string
+  sessionUrl?: string
+  // `amountPaise` is the GST-inclusive total captured by the gateway.
+  amountPaise: number
+  currency: string
+  publicKey: string
+  // Breakdown shown to the user. `baseAmountPaise` is the wallet credit (pre-GST).
+  baseAmountPaise?: number
+  gstPaise?: number
+  totalAmountPaise?: number
+  gstRate?: number
+}
+
+export interface RechargeVerifyPayload {
+  provider: WalletProvider
+  orderId?: string
+  paymentId?: string
+  signature?: string
+  amountRupees?: number
+}
+
+export interface RechargeVerifyResponse {
+  newBalancePaise: number
+  newBalanceRupees?: number
+  amountPaise?: number
+  alreadyCredited?: boolean
+  basePaise?: number
+  gstPaise?: number
+  gstRate?: number
+  totalChargedPaise?: number
+}
+
+export class WalletAPI {
+  static async getBalance(): Promise<ApiResponse<WalletBalance>> {
+    const response = await apiClient.get("/wallet/balance")
+    return response.data
+  }
+
+  static async getTransactions(filters?: {
+    page?: number
+    limit?: number
+    type?: "credit" | "debit"
+    channel?: "sms" | "whatsapp"
+  }): Promise<ApiResponse<WalletTransactionsResponse>> {
+    const params = new URLSearchParams()
+    if (filters?.page) params.append("page", String(filters.page))
+    if (filters?.limit) params.append("limit", String(filters.limit))
+    if (filters?.type) params.append("type", filters.type)
+    if (filters?.channel) params.append("channel", filters.channel)
+    const qs = params.toString()
+    const response = await apiClient.get(
+      qs ? `/wallet/transactions?${qs}` : "/wallet/transactions"
+    )
+    return response.data
+  }
+
+  static async createRechargeOrder(
+    amountRupees: number
+  ): Promise<ApiResponse<RechargeOrder>> {
+    const response = await apiClient.post("/wallet/recharge/order", {
+      amountRupees,
+    })
+    return response.data
+  }
+
+  static async verifyRecharge(
+    payload: RechargeVerifyPayload
+  ): Promise<ApiResponse<RechargeVerifyResponse>> {
+    const response = await apiClient.post("/wallet/recharge/verify", payload)
+    return response.data
+  }
+}
+
 // ── Packages API ─────────────────────────────────────────────────────────────
 
 export class PackagesAPI {
