@@ -231,6 +231,11 @@ const adminSettingsSchema = new mongoose.Schema({
   },
   
   // API & Integration
+  // Note: the admin UI's "API & Integration" category submits several sibling
+  // keys (authentication, rateLimiting, integrations, webhooks, security) that
+  // are merged into `api` by updateSettings(). Those keys are declared Mixed so
+  // the full payload (payment gateway credentials, webhook configs, etc.) is
+  // actually persisted — otherwise strict mode silently drops them on save.
   api: {
     version: { type: String, default: 'v1' },
     baseUrl: { type: String, default: 'https://api.ease-my-salon.com' },
@@ -240,7 +245,12 @@ const adminSettingsSchema = new mongoose.Schema({
     allowedOrigins: [{ type: String }],
     enableRateLimiting: { type: Boolean, default: true },
     enableLogging: { type: Boolean, default: true },
-    enableMetrics: { type: Boolean, default: true }
+    enableMetrics: { type: Boolean, default: true },
+    authentication: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+    rateLimiting: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+    integrations: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+    webhooks: { type: mongoose.Schema.Types.Mixed, default: () => [] },
+    security: { type: mongoose.Schema.Types.Mixed, default: () => ({}) }
   }
 }, {
   timestamps: true
@@ -425,7 +435,19 @@ adminSettingsSchema.statics.updateSettings = async function(category, updates) {
   } else {
     deepMerge(settings, updates);
   }
-  
+
+  // The `api` category stores several Mixed sub-paths (integrations,
+  // authentication, rateLimiting, webhooks, security). Mongoose cannot auto-
+  // detect writes inside Mixed fields, so we must mark them modified
+  // explicitly — otherwise razorpay/stripe/zoho credentials silently fail to save.
+  if (category === 'api') {
+    ['authentication', 'rateLimiting', 'integrations', 'webhooks', 'security'].forEach(key => {
+      if (updates && Object.prototype.hasOwnProperty.call(updates, key)) {
+        settings.markModified(`api.${key}`);
+      }
+    });
+  }
+
   await settings.save();
   return settings;
 };

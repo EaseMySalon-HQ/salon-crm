@@ -42,7 +42,9 @@
     "pdfkit": "^0.17.2",
     "puppeteer": "^24.31.0",
     "rate-limit-redis": "^4.3.1",
+    "razorpay": "^2.9.6",
     "resend": "^6.5.2",
+    "stripe": "^22.0.2",
     "uuid": "^9.0.1",
     "xlsx": "^0.18.5",
     "zod": "^4.3.6"

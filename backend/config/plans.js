@@ -26,7 +26,10 @@ const PLANS = {
     limits: {
       locations: 1,
       staff: Infinity, // Unlimited
-      whatsappMessages: 0, // Not included, can be added as addon
+      // whatsappMessages / smsMessages are DEPRECATED — every message is
+      // billed per-message from the business wallet (see lib/wallet-deduction).
+      // Kept at 0 for backward-compat with consumers that still read them.
+      whatsappMessages: 0,
       smsMessages: 0,
     },
     support: {
@@ -61,8 +64,9 @@ const PLANS = {
     limits: {
       locations: 3,
       staff: Infinity,
-      whatsappMessages: 500, // Per month
-      smsMessages: 500,
+      // DEPRECATED — see starter plan note. Wallet-billed per message.
+      whatsappMessages: 0,
+      smsMessages: 0,
     },
     support: {
       email: true,
@@ -101,8 +105,9 @@ const PLANS = {
     limits: {
       locations: Infinity,
       staff: Infinity,
-      whatsappMessages: Infinity,
-      smsMessages: Infinity,
+      // DEPRECATED — see starter plan note. Wallet-billed per message.
+      whatsappMessages: 0,
+      smsMessages: 0,
     },
     support: {
       email: true,
@@ -255,18 +260,22 @@ const FEATURES = {
 /**
  * Addon definitions
  */
+// NOTE: SMS and WhatsApp addons no longer ship with any free quota — every
+// message is debited from the business wallet (see lib/wallet-deduction.js).
+// `defaultQuota` is retained at 0 purely for backward compatibility with any
+// caller that still reads the value.
 const ADDONS = {
   whatsapp: {
     id: 'whatsapp',
     name: 'WhatsApp Receipts',
-    description: 'Send receipts via WhatsApp',
-    defaultQuota: 500, // Per month
+    description: 'Send receipts via WhatsApp (billed per message from wallet)',
+    defaultQuota: 0,
   },
   sms: {
     id: 'sms',
     name: 'SMS Notifications',
-    description: 'Send SMS notifications',
-    defaultQuota: 500, // Per month
+    description: 'Send SMS notifications (billed per message from wallet)',
+    defaultQuota: 0,
   },
 };
 

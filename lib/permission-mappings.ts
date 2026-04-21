@@ -79,6 +79,8 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   packages: "packages",
   services: "services",
   products: "products",
+  "channel-usage": "notification_settings",
+  recharge: "plan_billing",
 }
 
 // All settings modules (for "has any settings access" check)

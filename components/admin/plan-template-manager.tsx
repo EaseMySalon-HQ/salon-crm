@@ -473,36 +473,11 @@ export function PlanTemplateManager() {
                     placeholder="Unlimited"
                   />
                 </div>
-                <div>
-                  <Label>WhatsApp Messages (monthly)</Label>
-                  <Input
-                    type="number"
-                    value={formData.limits.whatsappMessages === Infinity ? 'Unlimited' : formData.limits.whatsappMessages}
-                    onChange={(e) => setFormData({
-                      ...formData,
-                      limits: {
-                        ...formData.limits,
-                        whatsappMessages: e.target.value === 'Unlimited' ? Infinity : parseInt(e.target.value) || 0,
-                      },
-                    })}
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <Label>SMS Messages (monthly)</Label>
-                  <Input
-                    type="number"
-                    value={formData.limits.smsMessages === Infinity ? 'Unlimited' : formData.limits.smsMessages}
-                    onChange={(e) => setFormData({
-                      ...formData,
-                      limits: {
-                        ...formData.limits,
-                        smsMessages: e.target.value === 'Unlimited' ? Infinity : parseInt(e.target.value) || 0,
-                      },
-                    })}
-                    placeholder="0"
-                  />
-                </div>
+              </div>
+              <div className="rounded-md border border-blue-100 bg-blue-50/60 p-3 text-xs text-blue-900">
+                WhatsApp and SMS messages are billed per message from the
+                business wallet (₹0.20 SMS / ₹0.20 transactional WhatsApp /
+                ₹1.20 campaign WhatsApp). No free plan quota.
               </div>
 
               <div className="space-y-3 pt-4 border-t">

@@ -428,7 +428,12 @@ let adminSettingsFallback = {
         stripeWebhookSecret: "",
         razorpayKeyId: "",
         razorpayKeySecret: "",
-        razorpayWebhookSecret: ""
+        razorpayWebhookSecret: "",
+        zohoClientId: "",
+        zohoClientSecret: "",
+        zohoRefreshToken: "",
+        zohoOrganizationId: "",
+        zohoReturnUrl: ""
       },
       emailService: {
         enabled: true,

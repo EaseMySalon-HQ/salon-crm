@@ -191,13 +191,17 @@ const businessSchema = new mongoose.Schema({
       expiresAt: { type: Date }, // Optional expiry for promo features
       notes: { type: String }, // Reason for override
     },
-    // Add-ons (e.g., WhatsApp, SMS)
+    // Add-ons (e.g., WhatsApp, SMS).
+    // NOTE: `quota` / `used` / `lastResetAt` on whatsapp/sms are DEPRECATED.
+    // Those channels are now billed per-message from `wallet.balancePaise`
+    // (see backend/lib/wallet-deduction.js). Fields are retained only to
+    // avoid breaking older documents and any legacy read paths.
     addons: {
       whatsapp: {
         enabled: { type: Boolean, default: false },
-        quota: { type: Number, default: 0 }, // Monthly quota
-        used: { type: Number, default: 0 }, // Current month usage
-        lastResetAt: { type: Date }, // Last quota reset date
+        quota: { type: Number, default: 0 },
+        used: { type: Number, default: 0 },
+        lastResetAt: { type: Date },
       },
       sms: {
         enabled: { type: Boolean, default: false },
@@ -207,7 +211,12 @@ const businessSchema = new mongoose.Schema({
       },
     },
   },
-  
+
+  // Prepaid messaging wallet (balance in paise; 100 paise = 1 rupee)
+  wallet: {
+    balancePaise: { type: Number, default: 0, min: 0 },
+  },
+
   // Timestamps
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }

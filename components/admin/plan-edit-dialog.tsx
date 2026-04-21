@@ -369,19 +369,9 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                     />
                   </div>
                   {formData.addons.whatsapp.enabled && (
-                    <div>
-                      <Label>Monthly Quota</Label>
-                      <Input
-                        type="number"
-                        value={formData.addons.whatsapp.quota}
-                        onChange={(e) => setFormData({
-                          ...formData,
-                          addons: {
-                            ...formData.addons,
-                            whatsapp: { ...formData.addons.whatsapp, quota: parseInt(e.target.value) || 0 },
-                          },
-                        })}
-                      />
+                    <div className="rounded-md border border-blue-100 bg-blue-50/60 p-3 text-xs text-blue-900">
+                      WhatsApp messages are billed per message from the business
+                      wallet (₹0.20 transactional, ₹1.20 campaign). No free quota.
                     </div>
                   )}
 
@@ -402,19 +392,9 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                     />
                   </div>
                   {formData.addons.sms.enabled && (
-                    <div>
-                      <Label>Monthly Quota</Label>
-                      <Input
-                        type="number"
-                        value={formData.addons.sms.quota}
-                        onChange={(e) => setFormData({
-                          ...formData,
-                          addons: {
-                            ...formData.addons,
-                            sms: { ...formData.addons.sms, quota: parseInt(e.target.value) || 0 },
-                          },
-                        })}
-                      />
+                    <div className="rounded-md border border-blue-100 bg-blue-50/60 p-3 text-xs text-blue-900">
+                      SMS messages are billed per message from the business
+                      wallet (₹0.20 per message). No free quota.
                     </div>
                   )}
                 </div>

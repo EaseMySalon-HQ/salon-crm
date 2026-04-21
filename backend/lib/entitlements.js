@@ -127,12 +127,21 @@ function getAddonStatus(business, addonId) {
 }
 
 /**
- * Check if addon is enabled and has quota remaining
+ * Check if addon is enabled and has quota remaining.
+ *
+ * SMS and WhatsApp no longer have any "free quota" — every message is billed
+ * per-message from the business wallet (see `lib/wallet-deduction.js`). We
+ * short-circuit the addon path for those channels so every send-site naturally
+ * falls through to the wallet deduction flow.
+ *
  * @param {Object} business - Business document
  * @param {String} addonId - Addon ID
  * @returns {Boolean}
  */
 function canUseAddon(business, addonId) {
+  if (addonId === 'sms' || addonId === 'whatsapp') {
+    return false;
+  }
   const status = getAddonStatus(business, addonId);
   return status.enabled && status.remaining > 0;
 }
