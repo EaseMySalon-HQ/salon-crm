@@ -2,6 +2,7 @@
 
 import { ReactNode } from "react"
 import { useAuth } from "@/lib/auth-context"
+import { buildLoginRedirectHref } from "@/lib/auth-utils"
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 
@@ -23,7 +24,7 @@ export function RoleGuard({
 
   useEffect(() => {
     if (!isLoading && !user) {
-      router.push(redirectTo)
+      router.push(redirectTo === "/login" ? buildLoginRedirectHref() : redirectTo)
     }
   }, [user, isLoading, router, redirectTo])
 

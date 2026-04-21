@@ -7,7 +7,8 @@
  *     that haven't already received a reminder (reminderSentAt is null)
  *  3. Sends the appointmentReminder MSG91 template via whatsapp-service
  *  4. Stamps reminderSentAt on each appointment so it's never sent twice
- *  5. Logs to WhatsAppMessageLog and increments quota
+ *  5. Logs to WhatsAppMessageLog and debits the business wallet at the
+ *     WhatsApp transactional rate (see lib/wallet-deduction.js)
  */
 
 const cron = require('node-cron');
@@ -16,7 +17,7 @@ const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
 const { isAdminAppointmentNotificationsEnabled } = require('../lib/whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('../lib/whatsapp-settings-defaults');
-const { canUseAddon } = require('../lib/entitlements');
+const { canDeductWhatsApp, deductWhatsApp } = require('../lib/wallet-deduction');
 
 const ACTIVE_STATUSES = ['scheduled', 'confirmed'];
 const DEFAULT_REMINDER_HOURS = 24;
@@ -67,7 +68,10 @@ async function runAppointmentReminders() {
 
   for (const business of businesses) {
     try {
-      if (!canUseAddon(business, 'whatsapp')) continue;
+      if (!canDeductWhatsApp(business, 'appointment_reminder')) {
+        logger.debug(`[AppointmentReminder] Skipping ${business.name} — insufficient wallet balance`);
+        continue;
+      }
 
       const rawWs = business.settings?.whatsappNotificationSettings;
       const ws = getWhatsAppSettingsWithDefaults(rawWs);
@@ -164,10 +168,10 @@ async function runAppointmentReminders() {
           });
 
           if (result.success) {
-            await Business.updateOne(
-              { _id: business._id },
-              { $inc: { 'plan.addons.whatsapp.used': 1 } }
-            );
+            await deductWhatsApp(business._id, 'appointment_reminder', {
+              description: 'WhatsApp appointment reminder',
+              relatedEntity: { id: apt._id, type: 'Appointment' },
+            });
             totalSent++;
           } else {
             logger.error(`[AppointmentReminder] Failed for ${client.phone}:`, result.error);

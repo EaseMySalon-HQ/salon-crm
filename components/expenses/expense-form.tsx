@@ -54,16 +54,16 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
     notes: expense?.notes || "",
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [showDescription, setShowDescription] = useState(!!(expense?.description))
 
   const showTransactionId = ["Card", "UPI", "Bank Transfer", "Cheque"].includes(formData.paymentMode)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!formData.category || !formData.paymentMode || !formData.amount) {
+    const trimmedDescription = (formData.description || "").trim()
+    if (!formData.category || !formData.paymentMode || !formData.amount || !trimmedDescription) {
       toast({
         title: "Validation Error",
-        description: "Please fill in Category, Payment Mode, and Amount.",
+        description: "Please fill in Category, Payment Mode, Amount, and Description.",
         variant: "destructive",
       })
       return
@@ -74,7 +74,7 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
       const expenseData: Record<string, unknown> = {
         category: formData.category,
         paymentMode: formData.paymentMode,
-        description: (formData.description || "").trim() || "No description",
+        description: trimmedDescription,
         amount: parseFloat(formData.amount),
         date: format(formData.date, "yyyy-MM-dd"),
         status: expense?.status || "pending",
@@ -240,32 +240,21 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
         </div>
       )}
 
-      {/* Row 4: Add Description (expandable) */}
+      {/* Row 4: Description (required) */}
       <div className="space-y-2">
-        {showDescription ? (
-          <>
-            <Label htmlFor="description">Description</Label>
-            <Textarea
-              id="description"
-              value={formData.description}
-              onChange={(e) => handleChange("description", e.target.value)}
-              placeholder="Enter expense description..."
-              rows={3}
-              maxLength={200}
-            />
-            <div className="text-right text-sm text-muted-foreground">
-              Approx. chars. left: {remainingChars}
-            </div>
-          </>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowDescription(true)}
-            className="text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
-          >
-            Add Description
-          </button>
-        )}
+        <Label htmlFor="description">Description *</Label>
+        <Textarea
+          id="description"
+          value={formData.description}
+          onChange={(e) => handleChange("description", e.target.value)}
+          placeholder="Enter expense description..."
+          rows={3}
+          maxLength={200}
+          required
+        />
+        <div className="text-right text-sm text-muted-foreground">
+          Approx. chars. left: {remainingChars}
+        </div>
       </div>
 
       <div className="flex justify-end space-x-2">

@@ -1,6 +1,8 @@
 const { logger } = require('../utils/logger');
 const { isAdminAppointmentNotificationsEnabled } = require('./whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
+const { canUseAddon } = require('./entitlements');
+const { canDeductWhatsApp, deductWhatsApp } = require('./wallet-deduction');
 
 /**
  * Send appointment-confirmation WhatsApp (MSG91 template from Admin → appointmentConfirmation)
@@ -117,6 +119,13 @@ async function sendAppointmentWhatsAppAfterCreate(req, createdAppointments) {
         }
 
         const businessSettingsForWhatsApp = await req.businessModels.BusinessSettings.findOne().lean().catch(() => null);
+        const freshBusiness = await Business.findById(business._id).lean();
+        const useAddon = canUseAddon(freshBusiness, 'whatsapp');
+        const useWallet = !useAddon && canDeductWhatsApp(freshBusiness, 'appointment');
+        if (!useAddon && !useWallet) {
+          logger.info('📱 [WhatsApp] Skipping appointment confirmation (quota exhausted, wallet insufficient)');
+          continue;
+        }
         const result = await whatsappService.sendAppointmentConfirmation({
           to: client.phone,
           clientName: client.name || 'Client',
@@ -145,10 +154,17 @@ async function sendAppointmentWhatsAppAfterCreate(req, createdAppointments) {
 
         if (result.success) {
           try {
-            await Business.updateOne(
-              { _id: business._id },
-              { $inc: { 'plan.addons.whatsapp.used': 1 } }
-            );
+            if (useWallet) {
+              await deductWhatsApp(business._id, 'appointment', {
+                description: 'WhatsApp appointment confirmation',
+                relatedEntity: { id: appointment._id, type: 'Appointment' },
+              });
+            } else {
+              await Business.updateOne(
+                { _id: business._id },
+                { $inc: { 'plan.addons.whatsapp.used': 1 } }
+              );
+            }
             logger.debug(`📊 WhatsApp quota incremented for business: ${business._id}`);
           } catch (quotaError) {
             logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
@@ -265,6 +281,13 @@ async function sendAppointmentRescheduleWhatsApp(req, appointment) {
     }
 
     const businessSettingsForWhatsApp = await req.businessModels.BusinessSettings.findOne().lean().catch(() => null);
+    const freshBusiness = await Business.findById(business._id).lean();
+    const useAddon = canUseAddon(freshBusiness, 'whatsapp');
+    const useWallet = !useAddon && canDeductWhatsApp(freshBusiness, 'appointment_reschedule');
+    if (!useAddon && !useWallet) {
+      logger.info('📱 [WhatsApp] Skipping appointment reschedule (quota exhausted, wallet insufficient)');
+      return;
+    }
     const result = await whatsappService.sendAppointmentReschedule({
       to: client.phone,
       clientName: client.name || 'Client',
@@ -293,10 +316,17 @@ async function sendAppointmentRescheduleWhatsApp(req, appointment) {
 
     if (result.success) {
       try {
-        await Business.updateOne(
-          { _id: business._id },
-          { $inc: { 'plan.addons.whatsapp.used': 1 } }
-        );
+        if (useWallet) {
+          await deductWhatsApp(business._id, 'appointment_reschedule', {
+            description: 'WhatsApp appointment reschedule',
+            relatedEntity: { id: appointment._id, type: 'Appointment' },
+          });
+        } else {
+          await Business.updateOne(
+            { _id: business._id },
+            { $inc: { 'plan.addons.whatsapp.used': 1 } }
+          );
+        }
       } catch (quotaError) {
         logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
       }
@@ -391,6 +421,13 @@ async function sendAppointmentCancellationWhatsApp(req, appointment, reason) {
     }
 
     const businessSettingsForWhatsApp = await req.businessModels.BusinessSettings.findOne().lean().catch(() => null);
+    const freshBusiness = await Business.findById(business._id).lean();
+    const useAddon = canUseAddon(freshBusiness, 'whatsapp');
+    const useWallet = !useAddon && canDeductWhatsApp(freshBusiness, 'appointment_cancellation');
+    if (!useAddon && !useWallet) {
+      logger.info('📱 [WhatsApp] Skipping appointment cancellation (quota exhausted, wallet insufficient)');
+      return;
+    }
     const result = await whatsappService.sendAppointmentCancellation({
       to: client.phone,
       clientName: client.name || 'Client',
@@ -419,10 +456,17 @@ async function sendAppointmentCancellationWhatsApp(req, appointment, reason) {
 
     if (result.success) {
       try {
-        await Business.updateOne(
-          { _id: business._id },
-          { $inc: { 'plan.addons.whatsapp.used': 1 } }
-        );
+        if (useWallet) {
+          await deductWhatsApp(business._id, 'appointment_cancellation', {
+            description: 'WhatsApp appointment cancellation',
+            relatedEntity: { id: appointment._id, type: 'Appointment' },
+          });
+        } else {
+          await Business.updateOne(
+            { _id: business._id },
+            { $inc: { 'plan.addons.whatsapp.used': 1 } }
+          );
+        }
       } catch (quotaError) {
         logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
       }

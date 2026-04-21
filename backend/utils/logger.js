@@ -58,6 +58,10 @@ function isPlainObject(value) {
 
 const SENSITIVE_KEY_SUBSTR = ['password', 'secret', 'token', 'authorization', 'cookie', 'apikey', 'api_key'];
 
+/**
+ * Redact values whose _key_ hints at a secret. Boolean and numeric values are never tokens,
+ * so we let them through (e.g. `hasMockToken: false` stays readable instead of `[REDACTED]`).
+ */
 function redactSensitive(value) {
   if (value === null || value === undefined) return value;
   if (Array.isArray(value)) return value.map(redactSensitive);
@@ -65,11 +69,14 @@ function redactSensitive(value) {
   const out = {};
   for (const [k, v] of Object.entries(value)) {
     const lower = k.toLowerCase();
-    const sensitive =
+    const keyLooksSensitive =
       SENSITIVE_KEY_SUBSTR.some((s) => lower.includes(s)) ||
       lower === 'jwt' ||
       lower === 'bearer';
-    if (sensitive) {
+    /** Only opaque types (strings, bigint, or nested objects) can carry secret material. */
+    const valueCouldBeSecret =
+      typeof v === 'string' || typeof v === 'bigint' || (typeof v === 'object' && v !== null);
+    if (keyLooksSensitive && valueCouldBeSecret) {
       out[k] = '[REDACTED]';
     } else if (typeof v === 'object' && v !== null) {
       out[k] = redactSensitive(v);

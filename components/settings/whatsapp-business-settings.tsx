@@ -193,7 +193,7 @@ export function WhatsAppBusinessSettings() {
                     <p>Admin Configuration: {adminConfig.adminEnabled ? "✅ Enabled" : "❌ Disabled"}</p>
                     <p>Business Addon: {adminConfig.addonEnabled ? "✅ Enabled" : "❌ Disabled"}</p>
                     {adminConfig.addonEnabled && (
-                      <p>Quota: {addonStatus.used || 0} / {addonStatus.quota === Infinity ? "Unlimited" : addonStatus.quota} messages used</p>
+                      <p>Billing: Per-message from wallet (₹0.20 transactional, ₹1.20 campaign)</p>
                     )}
                   </div>
                 )}
@@ -214,7 +214,7 @@ export function WhatsAppBusinessSettings() {
                   ? "WhatsApp must be configured by the system administrator before you can use it."
                   : !adminConfig?.addonEnabled
                   ? "WhatsApp addon is not enabled for your business. Please contact support to enable it."
-                  : "WhatsApp quota has been exhausted. Please contact support."}
+                  : "Your wallet balance is too low to send WhatsApp messages. Please top up from Settings → Recharge."}
               </p>
             </div>
           </CardContent>

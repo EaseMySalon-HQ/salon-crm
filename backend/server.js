@@ -24,6 +24,8 @@ const {
 const { isAdminReceiptNotificationsEnabled } = require('./lib/whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./lib/whatsapp-settings-defaults');
 const { sendAppointmentWhatsAppAfterCreate, sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('./lib/send-appointment-whatsapp');
+const { logSmsMessage, logEmailMessage } = require('./lib/channel-logs');
+const { canDeductSms, deductSms, canDeductWhatsApp, deductWhatsApp } = require('./lib/wallet-deduction');
 const { buildDashboardInitPayload, buildAppointmentsSummary } = require('./lib/dashboard-init');
 const {
   buildAnalyticsRevenueTab,
@@ -66,6 +68,7 @@ const {
   logTenantLoginSuccess,
   logTenantLogoutSuccess,
   logTenantRefreshFailure,
+  logTenantSessionExpiredClient,
 } = require('./utils/auth-audit-log');
 
 // Import Routes
@@ -313,6 +316,8 @@ app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
+app.use('/api/channel-usage', require('./routes/channel-usage'));
+app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/packages', require('./routes/packages'));
 app.use('/api/bookings', require('./routes/bookings'));
@@ -764,6 +769,38 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
     });
   }
 });
+
+/**
+ * Unauthenticated beacon: the SPA posts here right before redirecting to /login after a 401/403
+ * cascade, so the server-side audit trail captures forced/unexpected logouts even though the
+ * client's /logout call never happens.
+ *
+ * Accepts `text/plain` bodies specifically — a JSON Blob would trigger CORS preflight, which
+ * browsers routinely cancel during page unload. The client sends a JSON-encoded string with
+ * Content-Type text/plain, and we parse it here. Still accepts application/json for resilience.
+ * All body fields are untrusted — the helper sanitizes and caps lengths.
+ */
+app.post(
+  '/api/auth/session-expired-beacon',
+  express.text({ type: ['text/plain', 'application/json'], limit: '4kb' }),
+  (req, res) => {
+    try {
+      if (typeof req.body === 'string' && req.body) {
+        try {
+          req.body = JSON.parse(req.body);
+        } catch {
+          req.body = {};
+        }
+      } else if (!req.body || typeof req.body !== 'object') {
+        req.body = {};
+      }
+      logTenantSessionExpiredClient(req);
+    } catch (err) {
+      logger.warn('[auth/session-expired-beacon] logging failed:', err);
+    }
+    res.status(204).end();
+  }
+);
 
 app.post('/api/auth/logout', authenticateToken, async (req, res) => {
   let refreshFamilyId;
@@ -8149,6 +8186,20 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                   logger.error(`❌ Failed to send appointment email to ${clientEmail}:`, emailResult?.error || 'Unknown error');
                   logger.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
                 }
+                logEmailMessage({
+                  businessId: business?._id,
+                  recipientEmail: clientEmail,
+                  messageType: 'appointment',
+                  result: {
+                    success: emailResult && emailResult.success !== false,
+                    error: emailResult?.error,
+                    data: emailResult?.data,
+                  },
+                  subject: 'Appointment Confirmation',
+                  provider: emailService?.provider,
+                  relatedEntityId: appointment?._id,
+                  relatedEntityType: 'Appointment',
+                });
               } catch (clientEmailError) {
                 logger.error('❌ Error sending appointment confirmation to client:', clientEmailError);
                 logger.error('❌ Error details:', {
@@ -8276,14 +8327,38 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                 }
               }
               
-              await emailService.sendAppointmentNotification({
+              const staffApptEmailResult = await emailService.sendAppointmentNotification({
                 to: recipient.email,
                 appointmentCount: createdAppointments.length,
                 businessName: business.name,
                 appointmentDetails: appointmentDetails
               });
               logger.debug(`✅ Appointment notification sent to: ${recipient.email}`);
+              logEmailMessage({
+                businessId: business?._id,
+                recipientEmail: recipient.email,
+                messageType: 'appointment',
+                result: {
+                  success: staffApptEmailResult ? staffApptEmailResult.success !== false : true,
+                  error: staffApptEmailResult?.error,
+                  data: staffApptEmailResult?.data,
+                },
+                subject: 'New Appointment Notification',
+                provider: emailService?.provider,
+                relatedEntityId: firstAppointment?._id,
+                relatedEntityType: 'Appointment',
+              });
             } catch (emailError) {
+              logEmailMessage({
+                businessId: business?._id,
+                recipientEmail: recipient.email,
+                messageType: 'appointment',
+                result: { success: false, error: emailError?.message || String(emailError) },
+                subject: 'New Appointment Notification',
+                provider: emailService?.provider,
+                relatedEntityId: createdAppointments?.[0]?._id,
+                relatedEntityType: 'Appointment',
+              });
               logger.error(`❌ Error sending appointment notification to ${recipient.email}:`, emailError);
               logger.error('❌ Error details:', {
                 message: emailError.message,
@@ -8323,8 +8398,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         const adminSettings = await AdminSettings.getSettings();
         const smsEnabled = adminSettings?.notifications?.sms?.enabled === true && (adminSettings?.notifications?.sms?.provider === 'msg91' || !!(adminSettings?.notifications?.sms?.msg91AuthKey && String(adminSettings.notifications.sms.msg91AuthKey).trim()));
         if (smsEnabled) {
-          const business = await Business.findById(req.user.branchId).lean();
-          if (canUseAddon(business, 'sms')) {
+          let business = await Business.findById(req.user.branchId).lean();
+          if (canUseAddon(business, 'sms') || canDeductSms(business)) {
             const { Client, Staff } = req.businessModels;
             for (const appointment of createdAppointments) {
               let client = null;
@@ -8350,6 +8425,10 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                 const staff = await Staff.findById(appointment.staffId);
                 staffName = staff?.name || 'Not assigned';
               }
+              const useAddon = canUseAddon(business, 'sms');
+              if (!useAddon && !canDeductSms(business)) {
+                break;
+              }
               const result = await smsService.sendAppointmentConfirmation({
                 to: client.phone,
                 clientName: client.name || 'Client',
@@ -8363,11 +8442,27 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
                 }
               });
               if (result.success) {
-                await Business.updateOne(
-                  { _id: business._id },
-                  { $inc: { 'plan.addons.sms.used': 1 } }
-                );
+                if (useAddon) {
+                  await Business.updateOne(
+                    { _id: business._id },
+                    { $inc: { 'plan.addons.sms.used': 1 } }
+                  );
+                } else {
+                  await deductSms(business._id, {
+                    description: 'SMS appointment confirmation',
+                    relatedEntity: { id: appointment?._id, type: 'Appointment' },
+                  });
+                  business = await Business.findById(business._id).lean();
+                }
               }
+              logSmsMessage({
+                businessId: business._id,
+                recipientPhone: client.phone,
+                messageType: 'appointment',
+                result,
+                relatedEntityId: appointment?._id,
+                relatedEntityType: 'Appointment',
+              });
             }
           }
         }
@@ -8581,6 +8676,20 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
               } else {
                 logger.error(`❌ Failed to send receipt email to ${client.email}:`, emailResult?.error || 'Unknown error');
               }
+              logEmailMessage({
+                businessId: business?._id,
+                recipientEmail: client.email,
+                messageType: 'receipt',
+                result: {
+                  success: emailResult && emailResult.success !== false,
+                  error: emailResult?.error,
+                  data: emailResult?.data,
+                },
+                subject: `Receipt ${savedReceipt?.receiptNumber || ''}`.trim(),
+                provider: emailService?.provider,
+                relatedEntityId: savedReceipt?._id,
+                relatedEntityType: 'Receipt',
+              });
             } catch (clientEmailError) {
               logger.error('❌ Error sending receipt email to client:', clientEmailError);
               logger.error('❌ Error details:', {
@@ -8603,14 +8712,38 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
             
             for (const staff of recipients) {
               try {
-                await emailService.sendSystemAlert({
+                const staffReceiptEmailResult = await emailService.sendSystemAlert({
                   to: staff.email,
                   alertType: 'Receipt Generated',
                   message: `A new receipt ${savedReceipt.receiptNumber} has been generated for ₹${savedReceipt.total}`,
                   businessName: business.name
                 });
                 logger.debug(`✅ Receipt notification sent to staff: ${staff.email}`);
+                logEmailMessage({
+                  businessId: business?._id,
+                  recipientEmail: staff.email,
+                  messageType: 'receipt',
+                  result: {
+                    success: staffReceiptEmailResult ? staffReceiptEmailResult.success !== false : true,
+                    error: staffReceiptEmailResult?.error,
+                    data: staffReceiptEmailResult?.data,
+                  },
+                  subject: `Receipt Generated: ${savedReceipt?.receiptNumber || ''}`.trim(),
+                  provider: emailService?.provider,
+                  relatedEntityId: savedReceipt?._id,
+                  relatedEntityType: 'Receipt',
+                });
               } catch (staffEmailError) {
+                logEmailMessage({
+                  businessId: business?._id,
+                  recipientEmail: staff.email,
+                  messageType: 'receipt',
+                  result: { success: false, error: staffEmailError?.message || String(staffEmailError) },
+                  subject: `Receipt Generated: ${savedReceipt?.receiptNumber || ''}`.trim(),
+                  provider: emailService?.provider,
+                  relatedEntityId: savedReceipt?._id,
+                  relatedEntityType: 'Receipt',
+                });
                 logger.error('Error sending receipt notification to staff:', staffEmailError);
               }
             }
@@ -8661,6 +8794,15 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
               
               if (client?.phone) {
                 try {
+                  const { canUseAddon } = require('./lib/entitlements');
+                  const mainConnectionForQuota = await databaseManager.getMainConnection();
+                  const BusinessMain = mainConnectionForQuota.model('Business', require('./models/Business').schema);
+                  const freshBusiness = await BusinessMain.findById(business._id).lean();
+                  const useAddon = canUseAddon(freshBusiness, 'whatsapp');
+                  const useWallet = !useAddon && canDeductWhatsApp(freshBusiness, 'receipt');
+                  if (!useAddon && !useWallet) {
+                    logger.info('📱 WhatsApp receipt skipped: quota exhausted, wallet insufficient');
+                  } else {
                   // Get receipt link
                   let receiptLink = null;
                   try {
@@ -8699,14 +8841,19 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                   });
                   
                   if (result.success) {
-                    // Increment WhatsApp quota usage
+                    // Increment WhatsApp quota usage (or deduct from wallet)
                     try {
-                      const mainConnection = await databaseManager.getMainConnection();
-                      const Business = mainConnection.model('Business', require('./models/Business').schema);
-                      await Business.updateOne(
-                        { _id: business._id },
-                        { $inc: { 'plan.addons.whatsapp.used': 1 } }
-                      );
+                      if (useWallet) {
+                        await deductWhatsApp(business._id, 'receipt', {
+                          description: 'WhatsApp receipt',
+                          relatedEntity: { id: savedReceipt._id, type: 'Receipt' },
+                        });
+                      } else {
+                        await BusinessMain.updateOne(
+                          { _id: business._id },
+                          { $inc: { 'plan.addons.whatsapp.used': 1 } }
+                        );
+                      }
                       logger.debug(`📊 WhatsApp quota incremented for business: ${business._id}`);
                     } catch (quotaError) {
                       logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
@@ -8716,6 +8863,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                     logger.debug(`✅ Receipt WhatsApp sent to client: ${client.phone}`);
                   } else {
                     logger.error(`❌ Failed to send receipt WhatsApp to ${client.phone}:`, result.error);
+                  }
                   }
                 } catch (whatsappError) {
                   logger.error('❌ Error sending receipt WhatsApp to client:', whatsappError);
@@ -8758,6 +8906,11 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
               canSendSms = true;
             }
           }
+          let useWalletForSms = false;
+          if (!canSendSms && canDeductSms(business)) {
+            canSendSms = true;
+            useWalletForSms = true;
+          }
           if (canSendSms) {
             const { Client } = req.businessModels;
             const client = await Client.findById(clientId);
@@ -8779,11 +8932,26 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                 receiptLink
               });
               if (result.success) {
-                await Business.updateOne(
-                  { _id: business._id },
-                  { $inc: { 'plan.addons.sms.used': 1 } }
-                );
+                if (useWalletForSms) {
+                  await deductSms(business._id, {
+                    description: 'SMS receipt',
+                    relatedEntity: { id: savedReceipt?._id, type: 'Receipt' },
+                  });
+                } else {
+                  await Business.updateOne(
+                    { _id: business._id },
+                    { $inc: { 'plan.addons.sms.used': 1 } }
+                  );
+                }
               }
+              logSmsMessage({
+                businessId: business._id,
+                recipientPhone: client.phone,
+                messageType: 'receipt',
+                result,
+                relatedEntityId: savedReceipt?._id,
+                relatedEntityType: 'Receipt',
+              });
             }
           }
         }
@@ -9024,6 +9192,20 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
               if (emailResult && emailResult.success === false) {
                 logger.error('Failed to send cancellation email:', emailResult?.error || emailResult);
               }
+              logEmailMessage({
+                businessId: business?._id,
+                recipientEmail: clientEmail,
+                messageType: 'appointment',
+                result: {
+                  success: emailResult && emailResult.success !== false,
+                  error: emailResult?.error,
+                  data: emailResult?.data,
+                },
+                subject: 'Appointment Cancellation',
+                provider: emailService?.provider,
+                relatedEntityId: updatedAppointment?._id,
+                relatedEntityType: 'Appointment',
+              });
 
               // Send SMS appointment cancellation if enabled
               if (client?.phone) {
@@ -9038,7 +9220,9 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                     const smsEnabled = adminSettings?.notifications?.sms?.enabled === true && (adminSettings?.notifications?.sms?.provider === 'msg91' || !!(adminSettings?.notifications?.sms?.msg91AuthKey && String(adminSettings.notifications.sms.msg91AuthKey).trim()));
                     if (smsEnabled) {
                       const businessForSms = await Business.findById(req.user.branchId).lean();
-                      if (canUseAddon(businessForSms, 'sms')) {
+                      const useAddon = canUseAddon(businessForSms, 'sms');
+                      const useWallet = !useAddon && canDeductSms(businessForSms);
+                      if (useAddon || useWallet) {
                         const result = await smsService.sendAppointmentCancellation({
                           to: client.phone,
                           clientName: client.name || 'Client',
@@ -9051,11 +9235,26 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                           cancellationReason: 'Cancelled'
                         });
                         if (result.success) {
-                          await Business.updateOne(
-                            { _id: businessForSms._id },
-                            { $inc: { 'plan.addons.sms.used': 1 } }
-                          );
+                          if (useWallet) {
+                            await deductSms(businessForSms._id, {
+                              description: 'SMS appointment cancellation',
+                              relatedEntity: { id: updatedAppointment?._id, type: 'Appointment' },
+                            });
+                          } else {
+                            await Business.updateOne(
+                              { _id: businessForSms._id },
+                              { $inc: { 'plan.addons.sms.used': 1 } }
+                            );
+                          }
                         }
+                        logSmsMessage({
+                          businessId: businessForSms._id,
+                          recipientPhone: client.phone,
+                          messageType: 'appointment',
+                          result,
+                          relatedEntityId: updatedAppointment?._id,
+                          relatedEntityType: 'Appointment',
+                        });
                       }
                     }
                   }
@@ -9130,7 +9329,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
               if (i > 0) await new Promise(r => setTimeout(r, cancelDelayMs));
               const recipient = recipients[i];
               try {
-                await emailService.sendAppointmentCancellationNotification({
+                const cancellationStaffResult = await emailService.sendAppointmentCancellationNotification({
                   to: recipient.email,
                   appointmentCount: 1,
                   businessName: business?.name || 'Business',
@@ -9141,7 +9340,31 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
                     serviceName: serviceNameForStaff
                   }
                 });
+                logEmailMessage({
+                  businessId: business?._id,
+                  recipientEmail: recipient.email,
+                  messageType: 'appointment',
+                  result: {
+                    success: cancellationStaffResult ? cancellationStaffResult.success !== false : true,
+                    error: cancellationStaffResult?.error,
+                    data: cancellationStaffResult?.data,
+                  },
+                  subject: 'Appointment Cancellation Notification',
+                  provider: emailService?.provider,
+                  relatedEntityId: updatedAppointment?._id,
+                  relatedEntityType: 'Appointment',
+                });
               } catch (error) {
+                logEmailMessage({
+                  businessId: business?._id,
+                  recipientEmail: recipient.email,
+                  messageType: 'appointment',
+                  result: { success: false, error: error?.message || String(error) },
+                  subject: 'Appointment Cancellation Notification',
+                  provider: emailService?.provider,
+                  relatedEntityId: updatedAppointment?._id,
+                  relatedEntityType: 'Appointment',
+                });
                 logger.error(`Error sending cancellation notification to ${recipient.email}:`, error);
               }
             }
@@ -10065,6 +10288,20 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                 logger.error(`❌ Full email result:`, JSON.stringify(emailResult, null, 2));
                 emailStatus.error = emailResult?.error || 'Unknown error';
               }
+              logEmailMessage({
+                businessId: business?._id,
+                recipientEmail: saleForEmail.customerEmail,
+                messageType: 'receipt',
+                result: {
+                  success: emailResult && emailResult.success !== false,
+                  error: emailResult?.error,
+                  data: emailResult?.data,
+                },
+                subject: `Receipt ${saleForEmail?.billNo || ''}`.trim(),
+                provider: emailService?.provider,
+                relatedEntityId: (savedSale || sale)?._id,
+                relatedEntityType: 'Sale',
+              });
             } catch (clientEmailError) {
               logger.error('❌ Error sending receipt email to client:', clientEmailError);
               logger.error('❌ Error details:', {
@@ -10153,6 +10390,15 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
               
               if (customerPhone) {
                 try {
+                  const { canUseAddon: canUseAddonWa } = require('./lib/entitlements');
+                  const mainConnectionForWaQuota = await databaseManager.getMainConnection();
+                  const BusinessMainWa = mainConnectionForWaQuota.model('Business', require('./models/Business').schema);
+                  const freshBusinessWa = await BusinessMainWa.findById(business._id).lean();
+                  const useAddonWa = canUseAddonWa(freshBusinessWa, 'whatsapp');
+                  const useWalletWa = !useAddonWa && canDeductWhatsApp(freshBusinessWa, 'receipt');
+                  if (!useAddonWa && !useWalletWa) {
+                    logger.info('📱 [WhatsApp] Sale receipt skipped: quota exhausted, wallet insufficient');
+                  } else {
                   // Generate receipt link for WhatsApp (use savedSale which has shareToken)
                   let whatsappReceiptLink = null;
                   const saleForWhatsapp = savedSale || sale;
@@ -10189,14 +10435,19 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                   });
                   
                   if (result.success) {
-                    // Increment WhatsApp quota usage
+                    // Increment WhatsApp quota usage (or deduct wallet)
                     try {
-                      const mainConnection = await databaseManager.getMainConnection();
-                      const Business = mainConnection.model('Business', require('./models/Business').schema);
-                      await Business.updateOne(
-                        { _id: business._id },
-                        { $inc: { 'plan.addons.whatsapp.used': 1 } }
-                      );
+                      if (useWalletWa) {
+                        await deductWhatsApp(business._id, 'receipt', {
+                          description: 'WhatsApp sale receipt',
+                          relatedEntity: { id: savedSale?._id || sale._id, type: 'Sale' },
+                        });
+                      } else {
+                        await BusinessMainWa.updateOne(
+                          { _id: business._id },
+                          { $inc: { 'plan.addons.whatsapp.used': 1 } }
+                        );
+                      }
                       logger.debug(`📊 WhatsApp quota incremented for business: ${business._id}`);
                     } catch (quotaError) {
                       logger.error('❌ Error incrementing WhatsApp quota:', quotaError);
@@ -10219,6 +10470,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                   } else {
                     logger.error(`❌ Failed to send sale receipt WhatsApp to ${customerPhone}:`, result.error);
                     whatsappStatus.error = result.error;
+                  }
                   }
                 } catch (whatsappError) {
                   logger.error('❌ Error sending sale receipt WhatsApp to client:', whatsappError);
@@ -10297,6 +10549,11 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
               canSendSms = true;
             }
           }
+          let useWalletForSaleSms = false;
+          if (!canSendSms && canDeductSms(business)) {
+            canSendSms = true;
+            useWalletForSaleSms = true;
+          }
           if (canSendSms) {
             const customerPhone = sale?.customerPhone || sale?.customerMobile;
             if (!customerPhone) {
@@ -10317,14 +10574,29 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                 receiptLink
               });
               if (result.success) {
-                await Business.updateOne(
-                  { _id: business._id },
-                  { $inc: { 'plan.addons.sms.used': 1 } }
-                );
+                if (useWalletForSaleSms) {
+                  await deductSms(business._id, {
+                    description: 'SMS sale receipt',
+                    relatedEntity: { id: savedSale?._id || sale?._id, type: 'Sale' },
+                  });
+                } else {
+                  await Business.updateOne(
+                    { _id: business._id },
+                    { $inc: { 'plan.addons.sms.used': 1 } }
+                  );
+                }
                 logger.debug('📱 [SMS] Sale receipt sent to', customerPhone);
               } else {
                 logger.warn('📱 [SMS] Sale receipt failed:', result.error);
               }
+              logSmsMessage({
+                businessId: business?._id,
+                recipientPhone: customerPhone,
+                messageType: 'receipt',
+                result,
+                relatedEntityId: (savedSale || sale)?._id,
+                relatedEntityType: 'Sale',
+              });
             }
           }
         }
@@ -14163,14 +14435,34 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
         for (const recipient of recipients) {
           try {
             logger.debug(`📧 Sending export file to ${recipient.role}: ${recipient.email}`);
-            await emailService.sendExportReady({
+            const exportEmailResult = await emailService.sendExportReady({
               to: recipient.email,
               exportType: 'User Data Export',
               businessName: business?.name || 'Business',
               attachments: [attachment]
             });
             logger.debug(`✅ Export file sent to ${recipient.email}`);
+            logEmailMessage({
+              businessId: business?._id,
+              recipientEmail: recipient.email,
+              messageType: 'system',
+              result: {
+                success: exportEmailResult ? exportEmailResult.success !== false : true,
+                error: exportEmailResult?.error,
+                data: exportEmailResult?.data,
+              },
+              subject: 'User Data Export Ready',
+              provider: emailService?.provider,
+            });
           } catch (emailError) {
+            logEmailMessage({
+              businessId: business?._id,
+              recipientEmail: recipient.email,
+              messageType: 'system',
+              result: { success: false, error: emailError?.message || String(emailError) },
+              subject: 'User Data Export Ready',
+              provider: emailService?.provider,
+            });
             logger.error(`❌ Error sending export file to ${recipient.email}:`, emailError);
             logger.error(`❌ Error details:`, {
               message: emailError.message,

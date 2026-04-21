@@ -112,7 +112,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
 
   const handleQuickAdd = (path: string) => {
     if (path === "/expenses/new") {
-      setShowExpenseDialog(true)
+      window.setTimeout(() => setShowExpenseDialog(true), 0)
     } else {
       router.push(path)
     }

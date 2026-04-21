@@ -33,6 +33,8 @@ const SKIP_PREFIXES = [
   /** Refresh uses HttpOnly rotation cookie; SameSite + short-lived access reduce CSRF risk. */
   '/api/auth/refresh',
   '/api/auth/logout',
+  /** Unauthenticated audit beacon — fired after session already invalid, no CSRF state to check. */
+  '/api/auth/session-expired-beacon',
   '/api/admin/login',
 ];
 
