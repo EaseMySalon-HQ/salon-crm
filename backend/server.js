@@ -66,6 +66,7 @@ const {
   logTenantLoginSuccess,
   logTenantLogoutSuccess,
   logTenantRefreshFailure,
+  logTenantSessionExpiredClient,
 } = require('./utils/auth-audit-log');
 
 // Import Routes
@@ -764,6 +765,38 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
     });
   }
 });
+
+/**
+ * Unauthenticated beacon: the SPA posts here right before redirecting to /login after a 401/403
+ * cascade, so the server-side audit trail captures forced/unexpected logouts even though the
+ * client's /logout call never happens.
+ *
+ * Accepts `text/plain` bodies specifically — a JSON Blob would trigger CORS preflight, which
+ * browsers routinely cancel during page unload. The client sends a JSON-encoded string with
+ * Content-Type text/plain, and we parse it here. Still accepts application/json for resilience.
+ * All body fields are untrusted — the helper sanitizes and caps lengths.
+ */
+app.post(
+  '/api/auth/session-expired-beacon',
+  express.text({ type: ['text/plain', 'application/json'], limit: '4kb' }),
+  (req, res) => {
+    try {
+      if (typeof req.body === 'string' && req.body) {
+        try {
+          req.body = JSON.parse(req.body);
+        } catch {
+          req.body = {};
+        }
+      } else if (!req.body || typeof req.body !== 'object') {
+        req.body = {};
+      }
+      logTenantSessionExpiredClient(req);
+    } catch (err) {
+      logger.warn('[auth/session-expired-beacon] logging failed:', err);
+    }
+    res.status(204).end();
+  }
+);
 
 app.post('/api/auth/logout', authenticateToken, async (req, res) => {
   let refreshFamilyId;

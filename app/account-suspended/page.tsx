@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { buildLoginRedirectHref } from "@/lib/auth-utils"
 import { AccountSuspended } from "@/components/auth/account-suspended"
 
 export default function AccountSuspendedPage() {
@@ -11,7 +12,7 @@ export default function AccountSuspendedPage() {
 
   useEffect(() => {
     if (!isLoading && !user) {
-      router.replace("/login")
+      router.replace(buildLoginRedirectHref())
     }
   }, [isLoading, user, router])
 

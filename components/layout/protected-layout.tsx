@@ -1,6 +1,7 @@
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
+import { buildLoginRedirectHref } from "@/lib/auth-utils"
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 import { SideNav } from "@/components/side-nav"
@@ -73,8 +74,7 @@ export function ProtectedLayout({ children, requiredModule, topNavQuickAdd = tru
 
   useEffect(() => {
     if (!isLoading && !user) {
-      // Use replace instead of push to prevent back button issues
-      router.replace("/login")
+      router.replace(buildLoginRedirectHref())
     }
   }, [user, isLoading, router])
 
