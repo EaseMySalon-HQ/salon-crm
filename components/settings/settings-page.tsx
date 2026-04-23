@@ -419,7 +419,13 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50/80 p-4 sm:p-6 md:p-8">
+    <div
+      className={
+        activeSection
+          ? "min-h-screen w-full max-w-none bg-slate-50/80 px-0 py-4 sm:py-6 md:py-8"
+          : "min-h-screen bg-slate-50/80 p-4 sm:p-6 md:p-8"
+      }
+    >
       {!activeSection ? (
         <div className="mx-auto max-w-6xl space-y-8">
           {/* Header + search */}
@@ -555,7 +561,9 @@ export function SettingsPage() {
           )}
         </div>
       ) : (
-        <div className="mx-auto max-w-6xl space-y-4">
+        <>
+          {/* Bleed to full width of main (p-6): -mx-6 + calc cancels horizontal padding */}
+          <div className="-mx-6 w-[calc(100%+3rem)] max-w-none space-y-4 px-6">
           <button
             type="button"
             onClick={() => router.replace("/settings")}
@@ -564,8 +572,8 @@ export function SettingsPage() {
             <ChevronRight className="h-4 w-4 rotate-180" aria-hidden />
             Back to settings
           </button>
-          <Card className="border-slate-200/90 bg-white shadow-sm">
-            <CardContent className="p-4 sm:p-6">
+          <Card className="w-full max-w-none border-slate-200/90 bg-white shadow-sm">
+            <CardContent className="p-4 sm:p-6 lg:p-8">
               {activeSection && !canAccessSetting(activeSection) ? (
                 <p className="text-sm text-slate-600">You don&apos;t have permission to access this setting.</p>
               ) : (
@@ -574,6 +582,7 @@ export function SettingsPage() {
             </CardContent>
           </Card>
         </div>
+        </>
       )}
     </div>
   )
