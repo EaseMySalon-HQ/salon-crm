@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useState } from "react"
+import Script from "next/script"
 import { useEntitlements } from "@/hooks/use-entitlements"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -21,15 +22,43 @@ import {
   Sparkles,
   ArrowUp,
   ArrowDown,
-  Zap
+  Zap,
+  Clock,
+  X
 } from "lucide-react"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import Link from "next/link"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
+import {
+  PlanCheckoutAPI,
+  type PlanBillingPeriod,
+  type PlanCheckoutOrder,
+  type PlanSubscriptionId,
+  type PlanTransaction,
+} from "@/lib/api"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Loader2, Download, History } from "lucide-react"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+
+// Same rate as wallet recharge — server is the source of truth; this is
+// purely for display in the pre-checkout breakdown.
+const PLAN_GST_RATE = 0.18
+
+declare global {
+  interface Window {
+    Razorpay?: any
+  }
+}
 
 interface BusinessInfo {
   _id: string
@@ -65,17 +94,21 @@ interface Plan {
 }
 
 export function PlanBilling() {
-  const { planInfo, isLoading: planLoading, error: planError } = useEntitlements()
+  const { planInfo, isLoading: planLoading, error: planError, refetch: refetchPlan } = useEntitlements()
   const { user } = useAuth()
   const { toast } = useToast()
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo | null>(null)
   const [isLoadingBusiness, setIsLoadingBusiness] = useState(true)
   const [isRenewing, setIsRenewing] = useState(false)
+  const [isCancellingDowngrade, setIsCancellingDowngrade] = useState(false)
   const [selectedBillingPeriod, setSelectedBillingPeriod] = useState<'monthly' | 'yearly'>('monthly')
   const [availablePlans, setAvailablePlans] = useState<Plan[]>([])
   const [isLoadingPlans, setIsLoadingPlans] = useState(true)
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
   const [showChangePlan, setShowChangePlan] = useState(false)
+  const [razorpayReady, setRazorpayReady] = useState(false)
+  // Bumped after a successful checkout so the Billing History card refetches.
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0)
 
   useEffect(() => {
     fetchBusinessInfo()
@@ -137,50 +170,202 @@ export function PlanBilling() {
     }
   }
 
+  // ── Payment-gateway openers ──────────────────────────────────────────────
+  // These mirror the wallet-recharge flow (components/settings/recharge-settings.tsx).
+  // A successful verify call is what actually mutates the plan — the modals
+  // themselves can be cancelled without side effects.
+
+  const openRazorpayCheckout = useCallback(
+    (order: PlanCheckoutOrder) =>
+      new Promise<void>((resolve, reject) => {
+        if (!window.Razorpay) {
+          reject(new Error("Razorpay SDK is still loading. Please try again."))
+          return
+        }
+        const rzp = new window.Razorpay({
+          key: order.publicKey,
+          amount: order.amountPaise,
+          currency: order.currency || "INR",
+          order_id: order.orderId,
+          name: "Plan Subscription",
+          description: `${order.planId} plan · ${order.billingPeriod}`,
+          handler: async (resp: any) => {
+            try {
+              const verify = await PlanCheckoutAPI.verify({
+                provider: "razorpay",
+                orderId: resp.razorpay_order_id,
+                paymentId: resp.razorpay_payment_id,
+                signature: resp.razorpay_signature,
+                planId: order.planId,
+                billingPeriod: order.billingPeriod,
+              })
+              if (verify?.success) {
+                resolve()
+              } else {
+                reject(new Error(verify?.error || "Verification failed"))
+              }
+            } catch (err: any) {
+              reject(err)
+            }
+          },
+          modal: {
+            ondismiss: () => resolve(),
+          },
+          theme: { color: "#2563eb" },
+        })
+        rzp.on("payment.failed", (resp: any) => {
+          reject(new Error(resp?.error?.description || "Payment failed"))
+        })
+        rzp.open()
+      }),
+    []
+  )
+
+  const openStripeCheckout = useCallback(async (order: PlanCheckoutOrder) => {
+    if (!order.clientSecret) throw new Error("Missing Stripe client secret")
+    const { loadStripe } = await import("@stripe/stripe-js")
+    const stripe = await loadStripe(order.publicKey)
+    if (!stripe) throw new Error("Stripe failed to initialise")
+    const returnUrl =
+      typeof window !== "undefined"
+        ? `${window.location.origin}${window.location.pathname}?section=plan-billing&stripe_redirect=1`
+        : undefined
+    const { error, paymentIntent } = await stripe.confirmPayment({
+      clientSecret: order.clientSecret,
+      confirmParams: returnUrl ? { return_url: returnUrl } : undefined,
+      redirect: "if_required",
+    } as any)
+    if (error) throw new Error(error.message || "Stripe payment failed")
+    const verify = await PlanCheckoutAPI.verify({
+      provider: "stripe",
+      orderId: order.orderId,
+      paymentId: paymentIntent?.id || order.orderId,
+      planId: order.planId,
+      billingPeriod: order.billingPeriod,
+    })
+    if (!verify?.success) {
+      throw new Error(verify?.error || "Stripe verification failed")
+    }
+  }, [])
+
+  const openZohoCheckout = useCallback((order: PlanCheckoutOrder) => {
+    if (!order.sessionUrl) throw new Error("Missing Zoho session URL")
+    toast({
+      title: "Redirecting to Zoho Pay",
+      description: "Complete the payment on the Zoho page.",
+    })
+    window.location.href = order.sessionUrl
+  }, [toast])
+
   const handleRenew = async () => {
+    if (!planInfo) return
+
+    const selectedPlan = availablePlans.find(p => p.id === selectedPlanId) || null
+    const planName = selectedPlan?.name || selectedPlanId
+    const planIdTyped = selectedPlanId as PlanSubscriptionId
+    const periodTyped = selectedBillingPeriod as PlanBillingPeriod
+
+    // ── Branch 1: Downgrade → schedule for next renewal, no charge ────────
+    if (isDowngrade) {
+      try {
+        setIsRenewing(true)
+        const res = await PlanCheckoutAPI.scheduleDowngrade(planIdTyped, periodTyped)
+        if (!res?.success) {
+          throw new Error(res?.error || "Could not schedule downgrade")
+        }
+        const effective = res.data?.pendingEffectiveAt
+        toast({
+          title: "Downgrade scheduled",
+          description: effective
+            ? `Your plan will switch to ${planName} on ${formatDate(effective)}.`
+            : `Your plan will switch to ${planName} on your next renewal.`,
+        })
+        setShowChangePlan(false)
+        setSelectedPlanId(planInfo.planId)
+        await refetchPlan()
+      } catch (err: any) {
+        toast({
+          variant: "destructive",
+          title: "Could not schedule downgrade",
+          description: err?.message || "Please try again",
+        })
+      } finally {
+        setIsRenewing(false)
+      }
+      return
+    }
+
+    // ── Branch 2: Renewal / upgrade → create order + open gateway modal ───
     try {
       setIsRenewing(true)
-      
-      const isPlanChange = selectedPlanId !== planInfo.planId
-      const selectedPlan = availablePlans.find(p => p.id === selectedPlanId)
-      
-      // Prepare renewal data
-      const renewalData = {
-        billingPeriod: selectedBillingPeriod,
-        amount: renewalAmount,
-        planId: selectedPlanId,
-        isPlanChange,
-        previousPlanId: planInfo.planId,
+      const orderRes = await PlanCheckoutAPI.createOrder(planIdTyped, periodTyped)
+      if (!orderRes?.success || !orderRes.data) {
+        throw new Error(orderRes?.error || "Failed to create checkout order")
       }
-      
-      // TODO: Implement renewal logic - redirect to checkout or payment page
-      // This would typically:
-      // 1. Create a payment session with the selected billing period and plan
-      // 2. Handle prorating if changing plans mid-cycle
-      // 3. Redirect to payment gateway
-      // 4. Update plan after successful payment
-      
-      const actionText = isPlanChange 
-        ? `changing to ${selectedPlan?.name || selectedPlanId} plan with ${selectedBillingPeriod} billing`
-        : `renewing ${selectedBillingPeriod} billing`
-      
+      const order = orderRes.data
+
+      if (order.provider === "razorpay") {
+        await openRazorpayCheckout(order)
+      } else if (order.provider === "stripe") {
+        await openStripeCheckout(order)
+      } else if (order.provider === "zoho") {
+        openZohoCheckout(order)
+        return
+      } else {
+        throw new Error(`Unsupported provider: ${(order as any).provider}`)
+      }
+
       toast({
-        title: "Renewal Initiated",
-        description: `Redirecting to checkout for ${actionText}...`,
+        title: "Payment successful",
+        description: isPlanChange
+          ? `You're now on the ${planName} plan (${selectedBillingPeriod}). A tax invoice has been emailed and is available below.`
+          : `${planName} subscription renewed. A tax invoice has been emailed and is available below.`,
       })
-      
-      // For now, just show a message
-      // In production, this would redirect to a payment/checkout page
-      // Example: window.location.href = `/checkout?plan=${selectedPlanId}&period=${selectedBillingPeriod}&amount=${renewalAmount}`
-    } catch (error) {
-      console.error('Error initiating renewal:', error)
-      toast({
-        title: "Error",
-        description: "Failed to initiate renewal. Please try again.",
-        variant: "destructive",
-      })
+      await refetchPlan()
+      setHistoryRefreshKey(k => k + 1)
+    } catch (err: any) {
+      const msg = String(err?.message || "")
+      // User dismissed the Razorpay modal — treat as a quiet cancel.
+      if (!msg || /payment failed/i.test(msg) || /verification failed/i.test(msg) || /could not be verified/i.test(msg)) {
+        if (msg) {
+          toast({
+            variant: "destructive",
+            title: "Payment could not be completed",
+            description: msg,
+          })
+        }
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Checkout failed",
+          description: msg || "Please try again",
+        })
+      }
     } finally {
       setIsRenewing(false)
+    }
+  }
+
+  const handleCancelDowngrade = async () => {
+    try {
+      setIsCancellingDowngrade(true)
+      const res = await PlanCheckoutAPI.cancelScheduledDowngrade()
+      if (!res?.success) {
+        throw new Error(res?.error || "Failed to cancel scheduled downgrade")
+      }
+      toast({
+        title: "Downgrade cancelled",
+        description: "Your plan will continue as-is after renewal.",
+      })
+      await refetchPlan()
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Could not cancel downgrade",
+        description: err?.message || "Please try again",
+      })
+    } finally {
+      setIsCancellingDowngrade(false)
     }
   }
 
@@ -341,8 +526,75 @@ export function PlanBilling() {
     : (planInfo.monthlyPrice || 0)
   const newPrice = renewalAmount || 0
 
+  // Pre-checkout GST breakdown for the selected plan/period (server is the
+  // source of truth; this is just for the pricing block).
+  const renewalBasePaise = renewalAmount ? Math.round(renewalAmount * 100) : 0
+  const renewalGstPaise = Math.round(renewalBasePaise * PLAN_GST_RATE)
+  const renewalTotalPaise = renewalBasePaise + renewalGstPaise
+  const renewalGstRupees = renewalGstPaise / 100
+  const renewalTotalRupees = renewalTotalPaise / 100
+
+  // Pending downgrade (scheduled, not yet applied) — only populated by the
+  // /checkout/schedule-downgrade endpoint.
+  const hasPendingDowngrade = !!(
+    planInfo.pendingPlanId && planInfo.pendingEffectiveAt
+  )
+  const pendingPlanName =
+    availablePlans.find(p => p.id === planInfo.pendingPlanId)?.name ||
+    planInfo.pendingPlanId
+
   return (
     <div className="space-y-6">
+      <Script
+        src="https://checkout.razorpay.com/v1/checkout.js"
+        strategy="lazyOnload"
+        onReady={() => setRazorpayReady(true)}
+        onLoad={() => setRazorpayReady(true)}
+      />
+
+      {/* Pending-downgrade banner */}
+      {hasPendingDowngrade && (
+        <Card className="border-orange-200 bg-orange-50">
+          <CardContent className="pt-6">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2 bg-white rounded-lg border border-orange-200">
+                  <Clock className="h-5 w-5 text-orange-600" />
+                </div>
+                <div>
+                  <p className="font-semibold text-orange-900">
+                    Downgrade to {pendingPlanName} scheduled
+                  </p>
+                  <p className="text-sm text-orange-800 mt-1">
+                    Your plan will switch on{" "}
+                    <span className="font-medium">
+                      {formatDate(planInfo.pendingEffectiveAt || null)}
+                    </span>
+                    . You'll keep all current features until then.
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCancelDowngrade}
+                disabled={isCancellingDowngrade}
+                className="border-orange-300 text-orange-900 hover:bg-orange-100"
+              >
+                {isCancellingDowngrade ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <X className="h-4 w-4 mr-1" />
+                    Cancel
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Plan Details Card */}
       <Card>
         <CardHeader>
@@ -764,11 +1016,21 @@ export function PlanBilling() {
                   )}
                 </>
               )}
+              {!isDowngrade && renewalBasePaise > 0 && (
+                <div className="flex items-center justify-between text-sm pt-2 border-t border-blue-200">
+                  <span className="text-gray-600">GST ({Math.round(PLAN_GST_RATE * 100)}%)</span>
+                  <span className="text-gray-700 font-medium">
+                    {formatPrice(renewalGstRupees)}
+                  </span>
+                </div>
+              )}
               <div className="flex items-center gap-2 text-xs text-gray-600 pt-2 border-t border-blue-200">
                 <CheckCircle2 className="h-3 w-3 text-green-600" />
                 <span>
-                  {isPlanChange 
-                    ? `Plan change will take effect on ${formatDate(nextRenewalDate.toISOString())}. Next renewal date: ${formatDate(postPaymentRenewalDate.toISOString())}`
+                  {isDowngrade
+                    ? `Downgrade will take effect on ${formatDate(nextRenewalDate.toISOString())}. No charge now — you keep your current features until then.`
+                    : isPlanChange
+                    ? `Plan change will take effect on payment. Next renewal date: ${formatDate(postPaymentRenewalDate.toISOString())}`
                     : `All current features will remain active. Next renewal date: ${formatDate(postPaymentRenewalDate.toISOString())}`
                   }
                 </span>
@@ -777,23 +1039,40 @@ export function PlanBilling() {
 
             <div className="space-y-3">
               <div className="flex items-center justify-between bg-gray-50 rounded-lg p-3">
-                <span className="text-base font-semibold text-gray-900">Total Amount</span>
+                <span className="text-base font-semibold text-gray-900">
+                  {isDowngrade ? 'Amount Due Now' : 'Total Amount (incl. GST)'}
+                </span>
                 <span className="text-2xl font-bold text-blue-600">
-                  {renewalAmount ? formatPrice(renewalAmount) : 'Custom'}
+                  {isDowngrade
+                    ? formatPrice(0)
+                    : renewalAmount
+                    ? formatPrice(renewalTotalRupees)
+                    : 'Custom'}
                 </span>
               </div>
 
               <div className="flex justify-end">
                 <Button
                   onClick={handleRenew}
-                  disabled={isRenewing || !renewalAmount}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  disabled={
+                    isRenewing ||
+                    (!isDowngrade && !renewalAmount) ||
+                    (!isDowngrade && hasPendingDowngrade && !isPlanChange)
+                  }
+                  className={isDowngrade ? "bg-orange-600 hover:bg-orange-700 text-white" : "bg-blue-600 hover:bg-blue-700 text-white"}
                   size="default"
+                  title={!renewalAmount && !isDowngrade ? 'This plan has custom pricing — please contact sales.' : undefined}
                 >
                 {isRenewing ? (
                   <>
                     <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
                     Processing...
+                  </>
+                ) : isDowngrade ? (
+                  <>
+                    <Clock className="h-4 w-4 mr-2" />
+                    Schedule Downgrade
+                    <ArrowRight className="h-4 w-4 ml-2" />
                   </>
                 ) : (
                   <>
@@ -806,8 +1085,15 @@ export function PlanBilling() {
               </div>
 
               <p className="text-xs text-gray-500 text-center">
-                By proceeding, you agree to {isPlanChange ? 'change your plan and ' : ''}renew your subscription for {selectedBillingPeriod === 'yearly' ? '1 year' : '1 month'} at the selected billing period
+                {isDowngrade
+                  ? `Downgrades switch on your next renewal and don't carry a charge. Current features remain active until ${formatDate(nextRenewalDate.toISOString())}.`
+                  : `By proceeding, you agree to ${isPlanChange ? 'change your plan and ' : ''}pay for ${selectedBillingPeriod === 'yearly' ? '1 year' : '1 month'} of the ${selectedPlan.name} plan. 18% GST is added on top; a tax invoice is emailed after payment.`}
               </p>
+              {!razorpayReady && !isDowngrade && (
+                <p className="text-xs text-gray-400 text-center">
+                  Razorpay loads on demand — first click may take a moment.
+                </p>
+              )}
               <div className="text-center mt-2">
                 <Link href="/pricing" className="text-sm text-blue-600 hover:text-blue-700 underline">
                   View all plans and features →
@@ -817,7 +1103,222 @@ export function PlanBilling() {
           </div>
         </CardContent>
       </Card>
+
+      <BillingHistory refreshKey={historyRefreshKey} />
     </div>
+  )
+}
+
+// ── Billing history ───────────────────────────────────────────────────────
+// Lists past plan-checkout payments (renewals, upgrades, plan changes) so
+// the owner can re-download the GST tax invoice PDF for any of them. The
+// invoice PDF is fetched from `GET /api/plan/invoice/:transactionId` via
+// `PlanCheckoutAPI.downloadInvoice`, which also streams the browser save
+// dialog.
+function BillingHistory({ refreshKey }: { refreshKey: number }) {
+  const { toast } = useToast()
+  const [loading, setLoading] = useState(false)
+  const [items, setItems] = useState<PlanTransaction[]>([])
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
+
+  const load = useCallback(async (targetPage: number) => {
+    setLoading(true)
+    try {
+      const res = await PlanCheckoutAPI.listTransactions({
+        page: targetPage,
+        limit: 10,
+      })
+      if (res?.success && res.data) {
+        setItems(res.data.items)
+        setTotalPages(res.data.pagination.totalPages)
+        setPage(res.data.pagination.page)
+      } else {
+        setItems([])
+      }
+    } catch (err: any) {
+      console.error("Failed to load plan transactions:", err)
+      setItems([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    load(1)
+  }, [load, refreshKey])
+
+  const handleDownload = useCallback(
+    async (transactionId: string) => {
+      setDownloadingId(transactionId)
+      try {
+        await PlanCheckoutAPI.downloadInvoice(transactionId)
+      } catch (err: any) {
+        toast({
+          variant: "destructive",
+          title: "Download failed",
+          description: err?.message || "Could not download invoice",
+        })
+      } finally {
+        setDownloadingId(null)
+      }
+    },
+    [toast]
+  )
+
+  const formatRupees = (paise: number) =>
+    `₹${(Math.round(Number(paise) || 0) / 100).toLocaleString("en-IN", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`
+
+  const formatDateTime = (iso: string | null | undefined) => {
+    if (!iso) return "—"
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return "—"
+    return d.toLocaleString("en-IN", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  }
+
+  const kindLabel = (kind: PlanTransaction["kind"]) => {
+    switch (kind) {
+      case "new":
+        return "New"
+      case "renewal":
+        return "Renewal"
+      case "upgrade":
+        return "Upgrade"
+      case "change":
+        return "Plan change"
+      default:
+        return kind
+    }
+  }
+
+  const planLabel = (planId: string) =>
+    planId
+      ? planId.charAt(0).toUpperCase() + planId.slice(1)
+      : "—"
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-indigo-50 rounded-lg">
+            <History className="h-6 w-6 text-indigo-600" />
+          </div>
+          <div>
+            <CardTitle>Billing History</CardTitle>
+            <CardDescription>
+              Past subscription payments with downloadable GST tax invoices
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Date</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Plan</TableHead>
+              <TableHead>Provider</TableHead>
+              <TableHead className="text-right">Amount (incl. GST)</TableHead>
+              <TableHead className="text-right">Invoice</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center py-10">
+                  <Loader2 className="h-5 w-5 animate-spin inline" />
+                </TableCell>
+              </TableRow>
+            ) : items.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center py-10 text-muted-foreground text-sm">
+                  No subscription payments yet. Your first renewal or upgrade will appear here.
+                </TableCell>
+              </TableRow>
+            ) : (
+              items.map(t => (
+                <TableRow key={t._id}>
+                  <TableCell className="text-sm whitespace-nowrap">
+                    {formatDateTime(t.timestamp)}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="capitalize">
+                      {kindLabel(t.kind)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {planLabel(t.planId)}{" "}
+                    <span className="text-muted-foreground">
+                      ({t.billingPeriod === "yearly" ? "annual" : "monthly"})
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-sm capitalize">{t.provider}</TableCell>
+                  <TableCell className="text-right font-medium whitespace-nowrap">
+                    {formatRupees(t.totalChargedPaise || t.amountPaise + t.gstPaise)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => handleDownload(t._id)}
+                      disabled={downloadingId === t._id}
+                      title={
+                        t.invoiceNumber
+                          ? `Download ${t.invoiceNumber}`
+                          : "Download GST invoice"
+                      }
+                    >
+                      {downloadingId === t._id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Download className="h-4 w-4" />
+                      )}
+                      <span className="sr-only">Download invoice</span>
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+
+        {totalPages > 1 && (
+          <div className="flex items-center justify-end gap-2 p-3 border-t">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading || page <= 1}
+              onClick={() => load(Math.max(1, page - 1))}
+            >
+              Previous
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Page {page} of {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading || page >= totalPages}
+              onClick={() => load(Math.min(totalPages, page + 1))}
+            >
+              Next
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

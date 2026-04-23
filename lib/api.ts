@@ -290,10 +290,17 @@ apiClient.interceptors.response.use(
 
     if (typeof window !== 'undefined' && config && !config.__retryAfterRefresh) {
       const url = String(config.url || '')
+      /**
+       * /auth/logout failing with 401 means the access token is already gone —
+       * trying to refresh is pointless and creates `tenant_refresh_failure` +
+       * `tenant_session_expired_client` audit noise. Treat it as a successful
+       * local logout instead.
+       */
       const skipRefresh =
         url.includes('/auth/refresh') ||
         url.includes('/auth/login') ||
-        url.includes('/auth/staff-login')
+        url.includes('/auth/staff-login') ||
+        url.includes('/auth/logout')
       if (!skipRefresh && isTokenAuthFailure(status, errorMsg)) {
         config.__retryAfterRefresh = true
         const refreshed = await refreshAuthTokenOnce()
@@ -317,13 +324,20 @@ apiClient.interceptors.response.use(
       const reqUrl = String(config?.url || '')
       const isAuthSessionProbe =
         reqUrl.includes('/auth/profile') || reqUrl.includes('/auth/refresh')
+      /**
+       * A 401 on /auth/logout just means the session was already gone — the caller
+       * (AuthProvider.logout) already clears storage and redirects. Don't fire the
+       * handleSessionExpired cascade; it would spam `session_expired_client` audit
+       * events and interfere with the in-progress logout redirect.
+       */
+      const isLogoutCall = reqUrl.includes('/auth/logout')
       const skipRedirectForAnonymousMarketing =
         !!pathname &&
         isPublicClientRoute(pathname) &&
         isAuthSessionProbe &&
         !errorMsgLower.includes('business_suspended')
 
-      if (typeof window !== 'undefined' && !skipRedirectForAnonymousMarketing) {
+      if (typeof window !== 'undefined' && !skipRedirectForAnonymousMarketing && !isLogoutCall) {
         if (statusOut === 403 && errorMsgLower.includes('business_suspended')) {
           if (!window.location.pathname.includes('/account-suspended')) {
             window.location.href = '/account-suspended'
@@ -2317,6 +2331,250 @@ export class WalletAPI {
   ): Promise<ApiResponse<RechargeVerifyResponse>> {
     const response = await apiClient.post("/wallet/recharge/verify", payload)
     return response.data
+  }
+
+  /**
+   * Fetch the GST tax-invoice PDF for a recharge transaction and trigger a
+   * browser download. Returns the filename that was saved (useful for tests /
+   * toasts), or throws on non-PDF responses (e.g. 404 / 403 come back as JSON).
+   */
+  static async downloadInvoice(transactionId: string): Promise<string> {
+    const response = await apiClient.get(`/wallet/invoice/${transactionId}`, {
+      responseType: "blob",
+    })
+
+    const contentType = String(response.headers?.["content-type"] || "")
+    if (!contentType.includes("application/pdf")) {
+      let message = "Failed to download invoice"
+      try {
+        const text = await (response.data as Blob).text()
+        const parsed = JSON.parse(text)
+        message = parsed?.error || message
+      } catch {
+        // keep default message
+      }
+      throw new Error(message)
+    }
+
+    const disposition = String(response.headers?.["content-disposition"] || "")
+    const match = disposition.match(/filename="?([^"]+)"?/i)
+    const filename = match?.[1] || `invoice-${transactionId}.pdf`
+
+    const blob = new Blob([response.data as BlobPart], { type: "application/pdf" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    return filename
+  }
+}
+
+// ── Plan Checkout API ────────────────────────────────────────────────────────
+// Self-service plan renewal / upgrade / scheduled-downgrade endpoints. Mirrors
+// the wallet-recharge flow — the same Razorpay / Stripe / Zoho providers are
+// supported; the UI opens the same modal and posts to `/plan/checkout/verify`
+// instead of `/wallet/recharge/verify`.
+
+export type PlanCheckoutKind = "renewal" | "upgrade" | "change" | "new"
+export type PlanBillingPeriod = "monthly" | "yearly"
+export type PlanSubscriptionId = "starter" | "professional" | "enterprise"
+
+export interface PlanCheckoutOrder {
+  provider: WalletProvider
+  orderId?: string
+  clientSecret?: string
+  sessionUrl?: string
+  amountPaise: number
+  currency: string
+  publicKey: string
+  planId: PlanSubscriptionId
+  billingPeriod: PlanBillingPeriod
+  baseAmountPaise: number
+  gstPaise: number
+  totalAmountPaise: number
+  gstRate: number
+}
+
+export interface PlanCheckoutVerifyPayload {
+  provider: WalletProvider
+  orderId?: string
+  paymentId?: string
+  signature?: string
+  planId: PlanSubscriptionId
+  billingPeriod: PlanBillingPeriod
+}
+
+export interface PlanCheckoutVerifyResponse {
+  transactionId?: string
+  kind?: PlanCheckoutKind
+  planId?: PlanSubscriptionId
+  billingPeriod?: PlanBillingPeriod
+  newRenewalDate?: string
+  alreadyApplied?: boolean
+  invoiceNumber?: string
+  amounts?: {
+    basePaise: number
+    gstPaise: number
+    totalChargedPaise: number
+    gstRate: number
+  }
+  plan?: {
+    planId: PlanSubscriptionId
+    billingPeriod: PlanBillingPeriod
+    renewalDate: string
+    isTrial: boolean
+    pendingPlanId: PlanSubscriptionId | null
+    pendingBillingPeriod: PlanBillingPeriod | null
+    pendingEffectiveAt: string | null
+  }
+}
+
+export interface PlanPendingDowngrade {
+  pendingPlanId: PlanSubscriptionId | null
+  pendingBillingPeriod: PlanBillingPeriod | null
+  pendingEffectiveAt: string | null
+}
+
+export interface PlanCheckoutStatus {
+  plan: Record<string, any> | null
+  pending: PlanPendingDowngrade
+  lastTransaction: {
+    _id: string
+    kind: PlanCheckoutKind
+    planId: PlanSubscriptionId
+    billingPeriod: PlanBillingPeriod
+    invoiceNumber: string | null
+    totalChargedPaise: number
+    timestamp: string
+  } | null
+}
+
+export interface PlanTransaction {
+  _id: string
+  kind: PlanCheckoutKind
+  planId: PlanSubscriptionId
+  billingPeriod: PlanBillingPeriod
+  amountPaise: number
+  gstPaise: number
+  gstRate: number
+  totalChargedPaise: number
+  provider: WalletProvider | "system"
+  providerOrderId: string | null
+  providerPaymentId: string | null
+  invoiceNumber: string | null
+  previousRenewalDate: string | null
+  newRenewalDate: string | null
+  previousPlanId: PlanSubscriptionId | null
+  previousBillingPeriod: PlanBillingPeriod | null
+  description: string | null
+  timestamp: string
+}
+
+export interface PlanTransactionsResponse {
+  items: PlanTransaction[]
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+
+export class PlanCheckoutAPI {
+  static async createOrder(
+    planId: PlanSubscriptionId,
+    billingPeriod: PlanBillingPeriod
+  ): Promise<ApiResponse<PlanCheckoutOrder>> {
+    const response = await apiClient.post("/plan/checkout/order", {
+      planId,
+      billingPeriod,
+    })
+    return response.data
+  }
+
+  static async verify(
+    payload: PlanCheckoutVerifyPayload
+  ): Promise<ApiResponse<PlanCheckoutVerifyResponse>> {
+    const response = await apiClient.post("/plan/checkout/verify", payload)
+    return response.data
+  }
+
+  static async scheduleDowngrade(
+    planId: PlanSubscriptionId,
+    billingPeriod: PlanBillingPeriod
+  ): Promise<ApiResponse<PlanPendingDowngrade>> {
+    const response = await apiClient.post("/plan/schedule-downgrade", {
+      planId,
+      billingPeriod,
+    })
+    return response.data
+  }
+
+  static async cancelScheduledDowngrade(): Promise<
+    ApiResponse<PlanPendingDowngrade>
+  > {
+    const response = await apiClient.delete("/plan/schedule-downgrade")
+    return response.data
+  }
+
+  static async getStatus(): Promise<ApiResponse<PlanCheckoutStatus>> {
+    const response = await apiClient.get("/plan/checkout/status")
+    return response.data
+  }
+
+  static async listTransactions(
+    params: { page?: number; limit?: number } = {}
+  ): Promise<ApiResponse<PlanTransactionsResponse>> {
+    const qs = new URLSearchParams()
+    if (params.page) qs.append("page", String(params.page))
+    if (params.limit) qs.append("limit", String(params.limit))
+    const query = qs.toString()
+    const response = await apiClient.get(
+      query ? `/plan/transactions?${query}` : "/plan/transactions"
+    )
+    return response.data
+  }
+
+  /**
+   * Download a GST tax-invoice PDF for a past plan-checkout transaction and
+   * trigger a browser download. Returns the filename, or throws on error.
+   */
+  static async downloadInvoice(transactionId: string): Promise<string> {
+    const response = await apiClient.get(`/plan/invoice/${transactionId}`, {
+      responseType: "blob",
+    })
+
+    const contentType = String(response.headers?.["content-type"] || "")
+    if (!contentType.includes("application/pdf")) {
+      let message = "Failed to download invoice"
+      try {
+        const text = await (response.data as Blob).text()
+        const parsed = JSON.parse(text)
+        message = parsed?.error || message
+      } catch {
+        // keep default message
+      }
+      throw new Error(message)
+    }
+
+    const disposition = String(response.headers?.["content-disposition"] || "")
+    const match = disposition.match(/filename="?([^"]+)"?/i)
+    const filename = match?.[1] || `invoice-${transactionId}.pdf`
+
+    const blob = new Blob([response.data as BlobPart], { type: "application/pdf" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    return filename
   }
 }
 

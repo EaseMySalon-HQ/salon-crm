@@ -1,59 +1,20 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useRouter, usePathname } from "next/navigation"
-import {
-  LayoutDashboard,
-  Building2,
-  Users,
-  CreditCard,
-  Shield,
-  FileText,
-  Settings,
-  Bell,
-  LogOut,
-  Menu,
-  X,
-  Plus,
-  ChevronRight,
-} from "lucide-react"
+import { useState, useEffect, Suspense } from "react"
+import { useRouter } from "next/navigation"
+import { Building2, LogOut, Menu, X, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAdminAuth } from "@/lib/admin-auth-context"
 import { cn } from "@/lib/utils"
+import { AdminSidebarNav, AdminSidebarNavSkeleton } from "@/components/admin/admin-sidebar-nav"
 
 interface AdminLayoutProps {
   children: React.ReactNode
 }
 
-const navGroups = [
-  {
-    label: "Overview",
-    items: [
-      { title: "Dashboard", href: "/admin", icon: LayoutDashboard },
-    ],
-  },
-  {
-    label: "Business",
-    items: [
-      { title: "Businesses", href: "/admin/businesses", icon: Building2 },
-      { title: "Settings", href: "/admin/notifications", icon: Bell },
-    ],
-  },
-  {
-    label: "Platform",
-    items: [
-      { title: "Settings", href: "/admin/settings", icon: Settings },
-      { title: "Plans", href: "/admin/plans", icon: CreditCard },
-      { title: "Access", href: "/admin/users", icon: Shield },
-      { title: "Logs", href: "/admin/logs", icon: FileText },
-    ],
-  },
-]
-
 export function AdminLayout({ children }: AdminLayoutProps) {
   const { admin, logout, isLoading } = useAdminAuth()
   const router = useRouter()
-  const pathname = usePathname()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   useEffect(() => {
@@ -120,44 +81,11 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           </Button>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-5 px-3">
-          {navGroups.map((group) => (
-            <div key={group.label} className="mb-8">
-              <div className="px-3 mb-2.5">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
-                  {group.label}
-                </span>
-              </div>
-              <ul className="space-y-1">
-                {group.items.map((item) => {
-                  const isActive = pathname === item.href || (item.href !== "/admin" && pathname.startsWith(item.href))
-                  const Icon = item.icon
-                  return (
-                    <li key={item.href}>
-                      <button
-                        onClick={() => {
-                          router.push(item.href)
-                          setSidebarOpen(false)
-                        }}
-                        className={cn(
-                          "group w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-all duration-150",
-                          isActive
-                            ? "bg-slate-100 text-slate-900"
-                            : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                        )}
-                      >
-                        <Icon className={cn("h-4 w-4 shrink-0", isActive ? "text-slate-700" : "text-slate-400")} />
-                        <span className="flex-1">{item.title}</span>
-                        <ChevronRight className={cn("h-4 w-4 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity", isActive && "opacity-70")} />
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
-          ))}
-        </nav>
+        <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+          <Suspense fallback={<AdminSidebarNavSkeleton />}>
+            <AdminSidebarNav onNavigate={() => setSidebarOpen(false)} />
+          </Suspense>
+        </div>
 
         {/* Bottom: CTA + User */}
         <div className="shrink-0 border-t border-slate-200/80 p-3 space-y-2">

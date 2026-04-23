@@ -10,6 +10,7 @@ const {
   JWT_SECRET,
   accessExpires,
   refreshExpires,
+  refreshExpiresMs,
   legacyAccessExpires,
 } = require('../config/jwt');
 
@@ -61,8 +62,13 @@ function accessMaxAgeMs() {
   return 4 * 60 * 60 * 1000;
 }
 
+/**
+ * Keep the browser-side cookie lifetime aligned with the JWT's signed `exp` claim.
+ * Previously hardcoded to 24h, which silently capped effective session length
+ * regardless of JWT_REFRESH_EXPIRES and forced daily re-logins.
+ */
 function refreshMaxAgeMs() {
-  return 24 * 60 * 60 * 1000;
+  return refreshExpiresMs;
 }
 
 /**

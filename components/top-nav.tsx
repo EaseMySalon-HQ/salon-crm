@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
-import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search } from "lucide-react"
+import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -22,7 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
-import { SettingsAPI, ClientsAPI } from "@/lib/api"
+import { SettingsAPI, ClientsAPI, WalletAPI } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { useTodayOnlineSales } from "@/hooks/use-today-online-sales"
 import { ExpenseForm } from "@/components/expenses/expense-form"
@@ -69,6 +69,28 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
     enabled: !!user,
   })
   const businessName = businessSettingsData?.name || "EaseMySalon"
+
+  const { data: walletBalance, isLoading: isLoadingWallet, isError: walletError } = useQuery({
+    queryKey: ["wallet", "balance"],
+    queryFn: async () => {
+      const res = await WalletAPI.getBalance()
+      if (!res?.success || res.data == null) {
+        throw new Error(typeof res?.error === "string" ? res.error : "Failed to load wallet")
+      }
+      return res.data
+    },
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    enabled: !!user,
+    retry: 1,
+  })
+
+  const walletDisplay = (() => {
+    if (isLoadingWallet) return null
+    if (walletError) return "—"
+    const r = Number(walletBalance?.balanceRupees ?? 0)
+    return `₹${r.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  })()
 
   const [clientSearch, setClientSearch] = useState("")
   const [clientResults, setClientResults] = useState<any[]>([])
@@ -140,8 +162,8 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   return (
     <header className="sticky top-0 z-30 shrink-0 border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30 backdrop-blur-sm w-full px-8 py-4 shadow-sm">
       <div className="flex items-center justify-between">
-        {/* Left section - Business Name */}
-        <div className="flex items-center">
+        {/* Left — business name + messaging wallet balance */}
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
           <div className="group relative flex items-center gap-3 px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 hover:from-indigo-100 hover:via-purple-100 hover:to-pink-100 border border-indigo-100/50 hover:border-indigo-200/70 transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-indigo-500/20 cursor-pointer overflow-hidden">
             {/* Animated background overlay */}
             <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 via-purple-500/5 to-pink-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
@@ -168,6 +190,26 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
             {/* Hover effect line */}
             <div className="absolute bottom-0 left-0 w-0 h-0.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 group-hover:w-full transition-all duration-300 ease-out"></div>
           </div>
+
+          <button
+            type="button"
+            onClick={() => router.push("/settings?section=recharge")}
+            className="group inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200/90 bg-white/95 px-2.5 text-left shadow-sm transition-all hover:border-emerald-300/60 hover:shadow-sm hover:bg-emerald-50/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 focus-visible:ring-offset-1"
+            aria-label="Messaging wallet balance, open recharge"
+          >
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-emerald-100 bg-emerald-50 text-emerald-700 group-hover:bg-emerald-100/80">
+              <Wallet className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+            </span>
+            <span className="min-w-0 flex items-center pr-0.5">
+              {isLoadingWallet ? (
+                <span className="block h-3.5 w-[4.5rem] rounded bg-slate-200/80" aria-hidden />
+              ) : (
+                <span className="text-sm font-semibold leading-none tabular-nums text-slate-900">
+                  {walletDisplay ?? "—"}
+                </span>
+              )}
+            </span>
+          </button>
         </div>
 
         {/* Right side - Quick Add, Notifications, and User */}

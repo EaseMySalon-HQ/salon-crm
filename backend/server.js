@@ -311,6 +311,7 @@ function getEmailSettingsWithDefaults(emailSettings) {
 // Register Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/settings', require('./routes/admin-settings'));
+app.use('/api/admin/gst', require('./routes/admin-gst-reports'));
 app.use('/api/admin/plans', require('./routes/admin-plans'));
 app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
@@ -318,6 +319,7 @@ app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
 app.use('/api/wallet', require('./routes/wallet'));
+app.use('/api/plan', require('./routes/plan-checkout'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/packages', require('./routes/packages'));
 app.use('/api/bookings', require('./routes/bookings'));
@@ -802,7 +804,48 @@ app.post(
   }
 );
 
-app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+/**
+ * Logout is intentionally auth-tolerant: if the access token is missing or expired
+ * (common after session timeout or when called from the post-401 cascade on /login)
+ * we still revoke the refresh family (if the refresh cookie is intact) and clear all
+ * auth cookies. Requiring authenticateToken here caused spurious 401s that fed the
+ * client interceptor into a refresh/session-expired cascade, producing phantom
+ * `tenant_refresh_failure` + `tenant_session_expired_client` audit entries for what
+ * is actually a normal logout.
+ */
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const accessTokenRaw =
+      (req.headers['authorization'] && req.headers['authorization'].split(' ')[1]) ||
+      (req.cookies && req.cookies[COOKIE.tenantAccess]) ||
+      null;
+    if (accessTokenRaw && !accessTokenRaw.startsWith('mock-token-')) {
+      try {
+        const decodedAccess = jwt.verify(accessTokenRaw, JWT_SECRET);
+        if (
+          decodedAccess &&
+          decodedAccess.tokenUse !== TOKEN_USE.tenantRefresh &&
+          decodedAccess.tokenUse !== TOKEN_USE.platformAdmin
+        ) {
+          req.user = {
+            _id: decodedAccess.id,
+            id: decodedAccess.id,
+            email: decodedAccess.email,
+            role: decodedAccess.role,
+            branchId: decodedAccess.branchId,
+            authSubject: decodedAccess.branchId ? 'staff' : 'user',
+            isImpersonation: Boolean(decodedAccess.isImpersonation),
+            impersonatedBy: decodedAccess.impersonatedBy,
+          };
+        }
+      } catch {
+        /* expired/invalid access token on logout is fine — proceed best-effort */
+      }
+    }
+  } catch {
+    /* ignore — logout must never fail */
+  }
+
   let refreshFamilyId;
   try {
     const refreshCookie = req.cookies && req.cookies[COOKIE.tenantRefresh];
@@ -1225,6 +1268,26 @@ app.get('/api/business/plan', authenticateToken, async (req, res) => {
         success: false,
         error: 'Business not found'
       });
+    }
+
+    // Apply a scheduled downgrade if its effective date (= prior renewal
+    // date) has now passed. This is the cheapest place to do it — reads
+    // of the plan surface trigger the switch, no cron required.
+    try {
+      const plan = business.plan || {};
+      const pendingAt = plan.pendingEffectiveAt ? new Date(plan.pendingEffectiveAt) : null;
+      if (plan.pendingPlanId && pendingAt && pendingAt <= new Date()) {
+        business.plan.planId = plan.pendingPlanId;
+        if (plan.pendingBillingPeriod) {
+          business.plan.billingPeriod = plan.pendingBillingPeriod;
+        }
+        business.plan.pendingPlanId = null;
+        business.plan.pendingBillingPeriod = null;
+        business.plan.pendingEffectiveAt = null;
+        await business.save();
+      }
+    } catch (applyErr) {
+      logger.warn('Could not apply pending plan change:', applyErr?.message || applyErr);
     }
 
     const { getPlanInfo } = require('./lib/entitlements');

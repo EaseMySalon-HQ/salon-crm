@@ -120,13 +120,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         const pathname = window.location.pathname
+        /**
+         * Admin routes use AdminAuthProvider; tenant AuthProvider must not probe
+         * /auth/profile there or it creates phantom `refresh_failure` /
+         * `session_expired_client` audit noise for admins who never had a tenant session.
+         */
+        const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/')
         const isPublicRoute = pathname === '/login' ||
-                             pathname === '/admin/login' ||
                              pathname === '/forgot-password' ||
                              pathname === '/reset-password' ||
                              pathname.includes('/receipt/public/') ||
                              pathname.includes('/public/')
-        if (isPublicRoute) {
+        if (isAdminRoute || isPublicRoute) {
           setIsLoading(false)
           return
         }
@@ -432,7 +437,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isManager, 
       isStaff 
     }}>
-      <SessionTimeoutManager />
+      {/**
+       * Only run the 3h idle-timeout watcher while a tenant user is signed in.
+       * Previously this mounted unconditionally, so a tab left open on /login or any
+       * public page would eventually fire AuthAPI.logout() after 3h of idleness,
+       * producing the post-logout 401/refresh cascade seen in audit logs.
+       */}
+      {user ? <SessionTimeoutManager /> : null}
       {children}
     </AuthContext.Provider>
   )

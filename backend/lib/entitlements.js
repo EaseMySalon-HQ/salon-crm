@@ -181,6 +181,11 @@ function getPlanInfo(business) {
     hasOverrides: overrides.features && overrides.features.length > 0,
     overridesExpiresAt: overrides.expiresAt,
     addons: business.plan.addons || {},
+    // Queued downgrade (only populated when a self-service downgrade is
+    // waiting to apply at next renewal; otherwise all `null`).
+    pendingPlanId: business.plan.pendingPlanId || null,
+    pendingBillingPeriod: business.plan.pendingBillingPeriod || null,
+    pendingEffectiveAt: business.plan.pendingEffectiveAt || null,
   };
 }
 

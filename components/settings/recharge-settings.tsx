@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertCircle,
+  Download,
 } from "lucide-react"
 
 import {
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
+import { useQueryClient } from "@tanstack/react-query"
 import {
   WalletAPI,
   type WalletTransaction,
@@ -426,11 +428,32 @@ function RechargeForm({
 }
 
 function TransactionHistory({ refreshKey }: { refreshKey: number }) {
+  const { toast } = useToast()
   const [loading, setLoading] = React.useState(false)
   const [logs, setLogs] = React.useState<WalletTransaction[]>([])
   const [page, setPage] = React.useState(1)
   const [totalPages, setTotalPages] = React.useState(1)
+  const [downloadingId, setDownloadingId] = React.useState<string | null>(null)
   const limit = 10
+
+  const handleDownload = React.useCallback(
+    async (txId: string) => {
+      if (!txId || downloadingId) return
+      setDownloadingId(txId)
+      try {
+        await WalletAPI.downloadInvoice(txId)
+      } catch (err) {
+        toast({
+          title: "Couldn't download invoice",
+          description: err instanceof Error ? err.message : "Please try again.",
+          variant: "destructive",
+        })
+      } finally {
+        setDownloadingId(null)
+      }
+    },
+    [downloadingId, toast]
+  )
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -471,19 +494,20 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
                 <TableHead>Provider</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
                 <TableHead className="text-right">Balance after</TableHead>
+                <TableHead className="text-right">Invoice</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-10">
+                  <TableCell colSpan={8} className="text-center py-10">
                     <Loader2 className="h-4 w-4 animate-spin inline mr-2" />
                     Loading…
                   </TableCell>
                 </TableRow>
               ) : logs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
                     No transactions yet.
                   </TableCell>
                 </TableRow>
@@ -522,6 +546,27 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
                     <TableCell className="text-right tabular-nums">
                       {formatRupees(t.balanceAfterRupees)}
                     </TableCell>
+                    <TableCell className="text-right">
+                      {t.type === "credit" ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2"
+                          onClick={() => handleDownload(t._id)}
+                          disabled={downloadingId === t._id}
+                          title="Download GST invoice"
+                        >
+                          {downloadingId === t._id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Download className="h-4 w-4" />
+                          )}
+                          <span className="sr-only">Download invoice</span>
+                        </Button>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))
               )}
@@ -558,6 +603,7 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
 
 export default function RechargeSettings() {
   const { toast } = useToast()
+  const queryClient = useQueryClient()
   const [balanceRupees, setBalanceRupees] = React.useState(0)
   const [balanceLoading, setBalanceLoading] = React.useState(true)
   const [refreshKey, setRefreshKey] = React.useState(0)
@@ -568,6 +614,7 @@ export default function RechargeSettings() {
       const res = await WalletAPI.getBalance()
       if (res?.success && res.data) {
         setBalanceRupees(res.data.balanceRupees)
+        queryClient.invalidateQueries({ queryKey: ["wallet", "balance"] })
       }
     } catch (err: any) {
       toast({
@@ -578,7 +625,7 @@ export default function RechargeSettings() {
     } finally {
       setBalanceLoading(false)
     }
-  }, [toast])
+  }, [toast, queryClient])
 
   React.useEffect(() => {
     loadBalance()
