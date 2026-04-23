@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -13,7 +14,7 @@ import {
   Bell, 
   Zap, 
   Save,
-  RotateCcw
+  RotateCcw,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
@@ -23,7 +24,6 @@ import { UserSettings } from "./admin-settings/user-settings"
 import { DatabaseSettings } from "./admin-settings/database-settings"
 import { NotificationSettings } from "./admin-settings/notification-settings"
 import { APISettings } from "./admin-settings/api-settings"
-
 const settingsCategories = [
   {
     id: "system",
@@ -72,10 +72,17 @@ const settingsCategories = [
     icon: Zap,
     color: "bg-indigo-500",
     features: ["API Settings", "Rate Limiting", "Webhooks", "External Services"]
-  }
+  },
 ]
+/* Invoice & GST and GST Reports live under Finance: /admin/finance/invoice-gst and /admin/finance/gst-reports */
+
+const SETTINGS_TAB_IDS = new Set(
+  settingsCategories.map((c) => c.id)
+)
 
 export function AdminSettingsPage() {
+  const searchParams = useSearchParams()
+  const router = useRouter()
   const [activeCategory, setActiveCategory] = useState("system")
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -91,6 +98,22 @@ export function AdminSettingsPage() {
   useEffect(() => {
     loadSettings()
   }, [])
+
+  // Sync ?tab= with platform sections only. Legacy / finance tabs get separate routes.
+  useEffect(() => {
+    const t = searchParams.get("tab")
+    if (t === "invoice") {
+      router.replace("/admin/finance/invoice-gst", { scroll: false })
+      return
+    }
+    if (t === "gst-reports") {
+      router.replace("/admin/finance/gst-reports", { scroll: false })
+      return
+    }
+    if (t && SETTINGS_TAB_IDS.has(t)) {
+      setActiveCategory(t)
+    }
+  }, [searchParams, router])
 
   useEffect(() => {
     let cancelled = false
@@ -142,6 +165,7 @@ export function AdminSettingsPage() {
     }
     setActiveCategory(categoryId)
     setHasUnsavedChanges(false)
+    router.replace(`/admin/settings?tab=${encodeURIComponent(categoryId)}`, { scroll: false })
   }
 
   /** Defense in depth: JWT signing material must only live in server env (JWT_SECRET) */
@@ -363,7 +387,6 @@ export function AdminSettingsPage() {
                 <CardContent className="p-6">
                   {renderSettingsContent(category.id)}
                 </CardContent>
-                {/* Per-section action bar */}
                 <div className="border-t border-slate-100 px-6 py-4 bg-slate-50/30 flex flex-wrap items-center justify-end gap-2">
                   <Button
                     variant="outline"

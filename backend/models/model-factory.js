@@ -165,7 +165,11 @@ class ModelFactory {
       PlanChangeLog: this.getModel('PlanChangeLog', require('./PlanChangeLog').schema, connection),
       PlanTemplate: this.getModel('PlanTemplate', require('./PlanTemplate').schema, connection),
       RefreshToken: this.getModel('RefreshToken', require('./RefreshToken').schema, connection),
-      ActivityLog: this.getModel('ActivityLog', require('./ActivityLog').schema, connection)
+      ActivityLog: this.getModel('ActivityLog', require('./ActivityLog').schema, connection),
+      InvoiceCounter: this.getModel('InvoiceCounter', require('./InvoiceCounter').schema, connection),
+      PlanInvoiceTransaction: this.getModel('PlanInvoiceTransaction', require('./PlanInvoiceTransaction').schema, connection),
+      Invoice: this.getModel('Invoice', require('./Invoice').schema, connection),
+      GstFiling: this.getModel('GstFiling', require('./GstFiling').schema, connection)
     };
   }
 

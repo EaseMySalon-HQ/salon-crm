@@ -17,6 +17,10 @@ const { authenticateToken } = require('../middleware/auth');
 const { setupMainDatabase } = require('../middleware/business-db');
 const databaseManager = require('../config/database-manager');
 const paymentGateway = require('../lib/payment-gateway');
+const {
+  sendWalletRechargeInvoice,
+  buildInvoicePDFForTransaction,
+} = require('../lib/send-wallet-invoice');
 
 const MIN_RECHARGE_RUPEES = 10;
 const MAX_RECHARGE_RUPEES = 50000;
@@ -293,7 +297,7 @@ router.post('/recharge/verify', authenticateToken, setupMainDatabase, async (req
         ? ` (incl. ₹${(gstPaise / 100).toFixed(2)} GST @ ${(gstRateApplied * 100).toFixed(0)}%)`
         : '';
 
-    await WalletTransaction.create({
+    const creditTxn = await WalletTransaction.create({
       businessId,
       type: 'credit',
       amountPaise: basePaise,
@@ -308,6 +312,22 @@ router.post('/recharge/verify', authenticateToken, setupMainDatabase, async (req
       description: `Wallet recharge via ${provider}${gstSuffix}`,
       balanceAfterPaise: newBalancePaise,
       timestamp: new Date(),
+    });
+
+    // Fire-and-forget: generate GST invoice PDF and email it to the
+    // business owner (+ the user who initiated the recharge, if different).
+    // Any failure is logged inside the orchestrator and must never block
+    // the recharge success response or roll back the credit.
+    setImmediate(() => {
+      sendWalletRechargeInvoice({
+        transactionId: creditTxn._id,
+        triggeredByEmail: req.user?.email || null,
+      }).catch(err => {
+        logger.error(
+          '[wallet-invoice] fire-and-forget send failed:',
+          err?.message || err
+        );
+      });
     });
 
     res.json({
@@ -327,6 +347,65 @@ router.post('/recharge/verify', authenticateToken, setupMainDatabase, async (req
     res.status(500).json({
       success: false,
       error: err?.message || 'Failed to verify recharge',
+    });
+  }
+});
+
+/**
+ * GET /api/wallet/invoice/:transactionId
+ *
+ * Re-generates the GST tax-invoice PDF for a wallet-recharge transaction
+ * and streams it as an attachment. Auth-scoped to the caller's business so
+ * users can only download invoices for their own recharges.
+ */
+router.get('/invoice/:transactionId', authenticateToken, setupMainDatabase, async (req, res) => {
+  try {
+    const businessId = req.user?.branchId;
+    if (!businessId) {
+      return res.status(400).json({ success: false, error: 'Business ID not found' });
+    }
+
+    const { transactionId } = req.params;
+    if (!transactionId || !/^[a-f\d]{24}$/i.test(String(transactionId))) {
+      return res.status(400).json({ success: false, error: 'Invalid transaction id' });
+    }
+
+    let built;
+    try {
+      built = await buildInvoicePDFForTransaction({
+        transactionId,
+        businessIdScope: businessId,
+      });
+    } catch (err) {
+      const code = err?.code;
+      if (code === 'NOT_FOUND') {
+        return res.status(404).json({ success: false, error: err.message });
+      }
+      if (code === 'FORBIDDEN') {
+        return res.status(403).json({ success: false, error: err.message });
+      }
+      if (code === 'INVALID_TYPE') {
+        return res.status(400).json({ success: false, error: err.message });
+      }
+      throw err;
+    }
+
+    const { pdfBuffer, invoiceNumber } = built;
+    const safeFilename = `${String(invoiceNumber).replace(/[^A-Za-z0-9_-]+/g, '_')}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${safeFilename}"`
+    );
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.end(pdfBuffer);
+  } catch (err) {
+    logger.error('Error generating invoice PDF:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to generate invoice',
     });
   }
 });

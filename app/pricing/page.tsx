@@ -2,386 +2,330 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { CheckCircle2, ArrowRight, Sparkles, Zap, Shield, TrendingUp, ChevronDown } from "lucide-react"
+import {
+  ArrowRight,
+  CheckCircle2,
+  Headphones,
+  ShieldCheck,
+  Sparkles,
+  ChevronDown,
+  Building2,
+} from "lucide-react"
 
 import { PublicShell } from "@/components/layout/public-shell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { PricingFeatureMatrix } from "@/components/pricing/pricing-feature-matrix"
+import { FEATURE_CATEGORIES, PRICING_PLANS, type PricingPlan } from "@/lib/pricing-matrix"
 
-/** Section label (renders as a non-bullet row) or a standard feature line */
-type PlanFeatureLine = string | { heading: string }
-
-function isFeatureHeading(line: PlanFeatureLine): line is { heading: string } {
-  return typeof line === "object" && line !== null && "heading" in line
+function formatInr(n: number) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(n)
 }
 
-const planCards: Array<{
-  title: string
-  description: string
-  monthlyPrice?: number
-  yearlyPrice?: number
-  price?: string
-  includes: PlanFeatureLine[]
-  popular?: boolean
-  comingSoon?: boolean
-}> = [
-  {
-    title: "Starter",
-    monthlyPrice: 999,
-    yearlyPrice: 9590, // 20% discount: 999 * 12 * 0.8 = 9590.4, rounded to 9590 (₹799/month)
-    description:
-      "Operations layer for small salons (1–3 staff). Everything you need to run your salon daily.",
-    includes: [
-      { heading: "Users & permissions" },
-      "Admin + Staff roles (basic); limited permissions (no advanced control)",
-      { heading: "Clients (CRM — Basic)" },
-      "Client CRUD, basic info, basic visit history",
-      { heading: "Appointments" },
-      "Create, update & delete; calendar view; basic booking",
-      { heading: "POS / Billing" },
-      "Services & product billing; basic discounts; single staff assignment per bill",
-      { heading: "Products & inventory (Basic)" },
-      "Product list; manual stock updates",
-      { heading: "Staff (Basic)" },
-      "Staff profiles; login access",
-      { heading: "Cash & expenses" },
-      "Basic cash tracking (limited)",
-      { heading: "Reports (Basic)" },
-      "Daily revenue & basic summaries",
-      { heading: "Notifications" },
-      "WhatsApp receipts & basic reminders",
-      "Marketing & campaigns not included",
-    ],
-    popular: false,
-  },
-  {
-    title: "Professional",
-    monthlyPrice: 2499,
-    yearlyPrice: 23990, // 20% discount: 2499 * 12 * 0.8 = 23990.4, rounded to 23990 (₹1999/month)
-    description:
-      "Growth layer for growing salons (4–10+ staff). Increase revenue, retention, and efficiency.",
-    includes: [
-      "Everything in Starter",
-      { heading: "Advanced permissions" },
-      "Admin / Manager / Staff; full permission matrix & feature toggles",
-      { heading: "Advanced CRM" },
-      "Client analytics; visit history insights; CSV import; client segmentation",
-      { heading: "Advanced appointments" },
-      "Multi-staff & group bookings; lead → appointment conversion",
-      { heading: "POS / Billing (Advanced)" },
-      "Split payments; staff commission split; packages & memberships billing",
-      { heading: "Inventory (Advanced)" },
-      "Suppliers; purchase orders; inventory tracking; stock alerts",
-      { heading: "Staff management" },
-      "Commission system; performance tracking; working hours & schedules",
-      { heading: "Memberships & packages" },
-      "Full module access; redemption tracking; reports",
-      { heading: "Advanced analytics" },
-      "Revenue trends; service & staff performance; client insights",
-      { heading: "Marketing & campaigns" },
-      "WhatsApp campaigns; templates; segmentation; campaign stats",
-      { heading: "Automation" },
-      "Smart reminders; automated campaigns; retention nudges",
-    ],
-    popular: true,
-  },
-  {
-    title: "Enterprise",
-    price: "Custom",
-    description: "For salon chains and large businesses.",
-    includes: [
-      "Unlimited staff members",
-      "Everything in Professional",
-      "Multi-location Support",
-      "Centralized Reporting",
-      "Custom Integrations & API",
-      "Unlimited SMS",
-      "Dedicated Account Manager",
-      "On-site Training & Onboarding",
-      "24/7 Priority Phone Support",
-      "Custom Feature Development",
-    ],
-    popular: false,
-  },
-]
+const TRUST_ITEMS = [
+  { icon: ShieldCheck, label: "99.99% uptime SLA" },
+  { icon: Sparkles, label: "Free setup, training & data migration" },
+  { icon: Headphones, label: "24/7 support available" },
+] as const
+
+const PLAN_HIGHLIGHTS: Record<PricingPlan["id"], string[]> = {
+  starter: [
+    "Single outlet — run day-to-day smoothly",
+    "Core appointments, billing & client records",
+    "Basic reports & cash tracking",
+  ],
+  growth: [
+    "Scale operations with richer scheduling & alerts",
+    "Stronger billing, inventory & lead workflows",
+    "Advanced analytics & marketing filters",
+  ],
+  professional: [
+    "Multi-outlet: centralized dashboards & consolidation",
+    "Memberships, packages & incentive engines",
+    "Premium support options for chains",
+  ],
+}
 
 const pricingFaq = [
-  { q: "Is there a free trial?", a: "Yes, every plan comes with a 14-day full-featured trial. No credit card required." },
-  { q: "Can I upgrade or downgrade anytime?", a: "Absolutely. Plans can be changed instantly and invoices are prorated." },
-  { q: "Do you offer annual billing?", a: "Annual commitments receive up to 20% savings plus onboarding credits." },
-  { q: "What about data migration?", a: "Our concierge team imports clients, services, price lists and packages for free." },
-  { q: "Is support included?", a: "Starter includes email support. Professional adds WhatsApp + phone. Enterprise gets 24/7 concierge." },
+  {
+    q: "Are prices inclusive of GST?",
+    a: "All figures are per outlet and GST exclusive, as shown on our official pricing matrix. GST is applied at checkout as per applicable law.",
+  },
+  {
+    q: "Is there a free trial?",
+    a: "Yes. Start with a full-featured trial before you commit. No credit card required to explore the product.",
+  },
+  {
+    q: "Can we switch between monthly and annual billing?",
+    a: "You can move between monthly and annual billing according to your agreement. Annual plans are billed upfront and include the savings shown on each tier.",
+  },
+  {
+    q: "What happens to our data if we upgrade or downgrade?",
+    a: "Your data stays yours. You can move between Starter, Growth, and Professional — we never sell or share your salon data.",
+  },
+  {
+    q: "Do you support custom multi-outlet or enterprise pricing?",
+    a: "Yes. For larger chains or custom agreements, contact our sales team — we’ll tailor rollout, training, and commercials.",
+  },
 ]
 
 export default function PricingPage() {
-  const [billingPeriod, setBillingPeriod] = useState<"monthly" | "yearly">("monthly")
-
-  const formatPrice = (price: number) => {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0,
-    }).format(price)
-  }
-
-  const getMonthlyEquivalent = (yearlyPrice: number) => {
-    return Math.round(yearlyPrice / 12)
-  }
+  const [billingPeriod, setBillingPeriod] = useState<"monthly" | "yearly">("yearly")
 
   return (
     <PublicShell>
-      <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
+      {/* Hero */}
+      <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-16 sm:py-20 lg:py-28">
         <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
-          <div className="absolute bottom-0 left-0 w-80 h-80 bg-white rounded-full blur-3xl" />
+          <div className="absolute top-0 right-0 h-96 w-96 rounded-full bg-white blur-3xl" />
+          <div className="absolute bottom-0 left-0 h-80 w-80 rounded-full bg-white blur-3xl" />
         </div>
-        <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 text-center max-w-4xl space-y-8">
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight">
-            Simple Pricing That Grows With Your Business
-          </h1>
-          <p className="text-xl sm:text-2xl text-purple-100 leading-relaxed">
-            Start with a <span className="font-semibold text-white">14-day free trial</span>. No credit card required. Switch plans anytime—we'll prorate your invoice.
+        <div className="container relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-purple-200/90">
+            EaseMySalon · Salon OS for India
           </p>
-          <div className="grid gap-4 sm:grid-cols-2 text-sm text-left text-white/80">
-            <div className="rounded-2xl border border-white/20 bg-white/10 p-4">
-              <p className="text-base font-semibold text-white">Transparent by design</p>
-              <p>No setup fees. No hidden charges. Honest invoices every month.</p>
-            </div>
-            <div className="rounded-2xl border border-white/20 bg-white/10 p-4">
-              <p className="text-base font-semibold text-white">Switch plans anytime</p>
-              <p>Pause, upgrade or downgrade in a click. Billing prorates instantly across all branches.</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap justify-center gap-4 pt-4 text-sm text-purple-100">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-300" />
-              <span>14-day free trial</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-300" />
-              <span>No credit card required</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-300" />
-              <span>Cancel anytime</span>
-            </div>
+          <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
+            Three tiers. Built for Indian salons &amp; spas.
+          </h1>
+          <p className="mx-auto mt-5 max-w-2xl text-lg text-purple-100 sm:text-xl">
+            Start lean, scale as you grow, or go full-power across every outlet. All prices in ₹ per outlet,{" "}
+            <span className="font-medium text-white">GST exclusive</span> — effective April&nbsp;2026.
+          </p>
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-3 sm:gap-4">
+            {TRUST_ITEMS.map(({ icon: Icon, label }) => (
+              <div
+                key={label}
+                className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm text-purple-100 backdrop-blur-sm"
+              >
+                <Icon className="h-4 w-4 shrink-0 text-emerald-300" aria-hidden />
+                <span>{label}</span>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
-      <section className="py-20 bg-white">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-          {/* Billing Period Toggle */}
-          <div className="flex justify-center mb-12">
-            <div className="inline-flex items-center gap-4 p-1.5 bg-slate-100 rounded-full border border-slate-200">
+      {/* Plans */}
+      <section className="border-b border-slate-200 bg-slate-50/80 py-16 sm:py-20">
+        <div className="container mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-between sm:gap-6">
+            <div className="text-center sm:text-left">
+              <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Pick your tier</h2>
+              <p className="mt-1 max-w-xl text-sm text-slate-600 sm:text-base">
+                Upgrade or downgrade anytime — your data stays yours. Annual billing saves more at every tier.
+              </p>
+            </div>
+            <div
+              className="inline-flex shrink-0 rounded-full border border-slate-200 bg-white p-1 shadow-sm"
+              role="group"
+              aria-label="Billing period"
+            >
               <button
+                type="button"
                 onClick={() => setBillingPeriod("monthly")}
-                className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-all duration-200 ${
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
                   billingPeriod === "monthly"
-                    ? "bg-white text-slate-900 shadow-md"
+                    ? "bg-slate-900 text-white shadow-md"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 Monthly
               </button>
               <button
+                type="button"
                 onClick={() => setBillingPeriod("yearly")}
-                className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-all duration-200 relative ${
+                className={`relative rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
                   billingPeriod === "yearly"
-                    ? "bg-white text-slate-900 shadow-md"
+                    ? "bg-[#7C3AED] text-white shadow-md"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
-                Yearly
-                <span className="absolute -top-2 -right-2 bg-emerald-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                  Save 20%
+                Annual
+                <span className="absolute -right-1 -top-2 rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow">
+                  Save
                 </span>
               </button>
             </div>
           </div>
 
-          <div className="grid gap-8 lg:grid-cols-3">
-            {planCards.map((plan) => {
-              const isCustom = plan.price === "Custom"
-              const monthlyEquivalent = !isCustom && billingPeriod === "yearly"
-                ? getMonthlyEquivalent(plan.yearlyPrice!)
-                : null
-              
-              // For yearly: show monthly equivalent as main price, yearly total below
-              const displayPrice = isCustom
-                ? "Custom"
-                : billingPeriod === "monthly"
-                ? formatPrice(plan.monthlyPrice!)
-                : formatPrice(monthlyEquivalent!)
-              const displayPer = isCustom
-                ? "contact us"
-                : billingPeriod === "monthly"
-                ? "per month"
-                : "per month"
-              const yearlyTotal = !isCustom && billingPeriod === "yearly"
-                ? formatPrice(plan.yearlyPrice!)
-                : null
+          <div className="mt-12 grid gap-6 lg:grid-cols-3 lg:gap-8">
+            {PRICING_PLANS.map((plan) => {
+              const isYearly = billingPeriod === "yearly"
+              const headlineAmount = isYearly ? Math.round(plan.annualInr / 12) : plan.monthlyInr
+              const displayMain = formatInr(headlineAmount)
+              const subLine = isYearly
+                ? `${formatInr(plan.annualInr)} per outlet / year · Save ${formatInr(plan.annualSavingsInr)} vs paying monthly`
+                : "Billed monthly per outlet · Cancel anytime"
 
               return (
                 <Card
-                  key={plan.title}
-                  className={`relative border-2 transition-all hover:shadow-2xl flex flex-col ${
+                  key={plan.id}
+                  className={`relative flex flex-col overflow-hidden border-2 transition-shadow hover:shadow-xl ${
                     plan.popular
-                      ? "border-[#7C3AED] shadow-2xl scale-[1.02] lg:-mt-4 lg:mb-4"
-                      : "border-slate-200 hover:border-[#7C3AED]/50 shadow-lg"
+                      ? "border-[#7C3AED] shadow-lg ring-2 ring-[#7C3AED]/20 lg:-translate-y-1"
+                      : "border-slate-200 bg-white"
                   }`}
                 >
-                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 flex gap-2">
-                    {plan.popular && (
-                      <Badge className="bg-gradient-to-r from-[#7C3AED] to-[#8B5CF6] text-white px-4 py-1.5 text-sm font-semibold shadow-lg">
-                        Most Popular
-                      </Badge>
-                    )}
-                    {plan.comingSoon && (
-                      <Badge className="bg-amber-500 text-white px-4 py-1.5 text-sm font-semibold shadow-lg">
-                        Coming Soon
-                      </Badge>
-                    )}
-                  </div>
-                  <CardHeader className="space-y-4 pt-8">
+                  {plan.popular && (
+                    <div className="absolute right-4 top-4">
+                      <Badge className="bg-[#7C3AED] text-white hover:bg-[#7C3AED]">Most popular</Badge>
+                    </div>
+                  )}
+                  <CardHeader className="space-y-3 pb-4 pt-8">
                     <div>
-                      <CardTitle className="text-3xl font-bold text-slate-900">
-                        {plan.title}
-                      </CardTitle>
-                      <CardDescription className="text-base text-slate-600 mt-2">
-                        {plan.description}
-                      </CardDescription>
+                      <CardTitle className="text-2xl font-bold text-slate-900">{plan.name}</CardTitle>
+                      <CardDescription className="mt-2 text-base text-slate-600">{plan.tagline}</CardDescription>
                     </div>
-                    <div className="space-y-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-5xl font-bold text-slate-900">{displayPrice}</span>
-                        <span className="text-lg text-slate-500 font-normal">/{displayPer}</span>
-                      </div>
-                      {yearlyTotal && (
-                        <p className="text-sm text-slate-600 font-medium">
-                          {yearlyTotal}/per Year
-                        </p>
-                      )}
-                      {!isCustom && (
-                        <p className="text-sm text-slate-500">
-                          {billingPeriod === "monthly"
-                            ? "Billed monthly • Cancel anytime"
-                            : "Billed annually • Save 20%"}
-                        </p>
-                      )}
+                    <div className="flex flex-wrap items-baseline gap-2">
+                      <span className="text-4xl font-bold tracking-tight text-slate-900 tabular-nums sm:text-5xl">
+                        {displayMain}
+                      </span>
+                      <span className="text-base font-medium text-slate-500">/mo</span>
+                      <span className="w-full text-xs font-normal text-slate-500 sm:text-sm">
+                        {isYearly ? "effective when billed annually" : "per outlet"}
+                      </span>
                     </div>
+                    <p className="text-sm font-medium leading-snug text-[#6D28D9]">{subLine}</p>
                   </CardHeader>
-                  <CardContent className="flex flex-col flex-grow space-y-6">
-                    <ul className="space-y-3 flex-grow">
-                      {plan.includes.map((item, idx) =>
-                        isFeatureHeading(item) ? (
-                          <li
-                            key={`h-${idx}`}
-                            className="list-none pt-2 first:pt-0"
-                          >
-                            <p className="text-xs font-semibold uppercase tracking-wide text-[#7C3AED]">
-                              {item.heading}
-                            </p>
-                          </li>
-                        ) : (
-                          <li key={idx} className="flex items-start gap-3">
-                            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
-                            <span className="text-sm font-medium text-slate-700">
-                              {item}
-                            </span>
-                          </li>
-                        )
-                      )}
+                  <CardContent className="flex flex-1 flex-col gap-6 pt-0">
+                    <ul className="flex-1 space-y-3">
+                      {PLAN_HIGHLIGHTS[plan.id].map((line) => (
+                        <li key={line} className="flex gap-3 text-sm text-slate-700">
+                          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" aria-hidden />
+                          <span>{line}</span>
+                        </li>
+                      ))}
                     </ul>
-                    <div className="mt-auto">
-                      {plan.comingSoon ? (
-                        <Button
-                          size="lg"
-                          disabled
-                          className="w-full py-6 text-base font-semibold bg-slate-400 cursor-not-allowed text-white"
-                        >
-                          Coming Soon
-                        </Button>
-                      ) : (
-                        <Button
-                          asChild
-                          size="lg"
-                          className={`w-full py-6 text-base font-semibold ${
-                            plan.popular
-                              ? "bg-[#7C3AED] hover:bg-[#6D28D9] text-white shadow-lg shadow-purple-200"
-                              : "bg-slate-900 hover:bg-slate-800 text-white"
-                          }`}
-                        >
-                          <Link href="/contact">
-                            {isCustom ? "Contact Sales" : "Start Free Trial"}
-                            <ArrowRight className="ml-2 h-4 w-4" />
-                          </Link>
-                        </Button>
-                      )}
-                      {!isCustom && !plan.comingSoon && (
-                        <p className="text-xs text-center text-slate-500 mt-2">
-                          14-day free trial • No credit card required
-                        </p>
-                      )}
-                      {isCustom && (
-                        <p className="text-xs text-center text-slate-500 mt-2">
-                          Custom pricing for your business needs
-                        </p>
-                      )}
-                      {plan.comingSoon && (
-                        <p className="text-xs text-center text-slate-500 mt-2">
-                          We're working on this plan. Stay tuned!
-                        </p>
-                      )}
+                    <div className="mt-auto space-y-2">
+                      <Button
+                        asChild
+                        size="lg"
+                        className={`h-12 w-full text-base font-semibold ${
+                          plan.popular
+                            ? "bg-[#7C3AED] hover:bg-[#6D28D9]"
+                            : "bg-slate-900 hover:bg-slate-800"
+                        }`}
+                      >
+                        <Link href="/contact">
+                          Start free trial
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Link>
+                      </Button>
+                      <p className="text-center text-xs text-slate-500">14-day trial · No credit card required</p>
                     </div>
                   </CardContent>
                 </Card>
               )
             })}
           </div>
-          
-          {/* Value Proposition */}
-          <div className="mt-16 grid gap-6 md:grid-cols-3">
-            <div className="text-center p-6 rounded-2xl bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-100">
-              <Zap className="h-8 w-8 text-[#7C3AED] mx-auto mb-3" />
-              <h3 className="font-semibold text-slate-900 mb-2">Setup in 24 Hours</h3>
-              <p className="text-sm text-slate-600">We migrate your data, train your team, and launch you in under a day.</p>
+
+          <p className="mt-10 text-center text-xs text-slate-500 sm:text-sm">
+            Annual plans are billed upfront. Figures may change with notice — for enterprise or custom multi-outlet
+            agreements,{" "}
+            <Link href="/contact" className="font-medium text-[#7C3AED] underline-offset-2 hover:underline">
+              contact sales
+            </Link>
+            .
+          </p>
+        </div>
+      </section>
+
+      {/* Feature matrix */}
+      <section className="bg-white py-16 sm:py-20">
+        <div className="container mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-3xl text-center">
+            <Badge variant="secondary" className="mb-3 font-normal">
+              Feature matrix
+            </Badge>
+            <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">What&apos;s included</h2>
+            <p className="mt-3 text-slate-600">
+              What&apos;s included at every tier — condensed from our April 2026 matrix. Integrations marked Add-on
+              are available as paid extras where noted.
+            </p>
+          </div>
+
+          <div className="mx-auto mt-10 max-w-5xl">
+            <div className="mb-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-xs text-slate-600 sm:text-sm">
+              <span className="inline-flex items-center gap-2">
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700" />
+                </span>
+                Included in tier
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <span className="text-lg font-light text-slate-300">—</span>
+                Not included
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <Badge variant="secondary" className="text-[10px]">
+                  Add-on
+                </Badge>
+                Paid add-on
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <Badge className="bg-purple-100 text-[#5B21B6] hover:bg-purple-100 text-[10px]">Free</Badge>
+                Complimentary where shown
+              </span>
             </div>
-            <div className="text-center p-6 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-100">
-              <Shield className="h-8 w-8 text-emerald-600 mx-auto mb-3" />
-              <h3 className="font-semibold text-slate-900 mb-2">Enterprise-Grade Security</h3>
-              <p className="text-sm text-slate-600">Bank-level encryption, GDPR compliant, and daily backups included.</p>
-            </div>
-            <div className="text-center p-6 rounded-2xl bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-100">
-              <TrendingUp className="h-8 w-8 text-blue-600 mx-auto mb-3" />
-              <h3 className="font-semibold text-slate-900 mb-2">ROI Guaranteed</h3>
-              <p className="text-sm text-slate-600">Most salons see 3x ROI within 90 days through reduced wastage and better retention.</p>
+
+            <PricingFeatureMatrix categories={FEATURE_CATEGORIES} />
+
+            <p className="mt-6 text-center text-xs text-slate-500">
+              For the full printable matrix and the latest line-by-line availability, ask our team or refer to your
+              order form. Product roadmap may extend features over time.
+            </p>
+
+            <div className="mt-10 flex justify-center">
+              <Button variant="outline" asChild className="border-[#7C3AED]/25 text-[#7C3AED] hover:bg-purple-50">
+                <Link href="/features">Explore product features</Link>
+              </Button>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="py-20 bg-gradient-to-b from-slate-50 to-white">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
-          <div className="text-center space-y-4 max-w-3xl mx-auto">
-            <Badge className="bg-purple-100 text-[#7C3AED]">Common Questions</Badge>
-            <h2 className="text-3xl sm:text-4xl font-bold text-slate-900">Everything You Need to Know</h2>
-            <p className="text-lg text-slate-600">Transparent answers to help you make the right decision for your salon.</p>
+      {/* Enterprise strip */}
+      <section className="border-y border-slate-200 bg-slate-50 py-12">
+        <div className="container mx-auto flex max-w-4xl flex-col items-center gap-4 px-4 text-center sm:px-6 lg:px-8">
+          <Building2 className="h-10 w-10 text-[#7C3AED]" aria-hidden />
+          <h2 className="text-2xl font-bold text-slate-900">Chains &amp; enterprise</h2>
+          <p className="max-w-2xl text-slate-600">
+            Professional covers full multi-outlet power. For custom commercials, SLAs, or dedicated rollout — we
+            build agreements that match how you operate.
+          </p>
+          <Button asChild size="lg" variant="secondary" className="mt-2">
+            <Link href="/contact">
+              Talk to sales
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Link>
+          </Button>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section className="bg-white py-16 pb-20 sm:py-20 sm:pb-24">
+        <div className="container mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold text-slate-900 sm:text-3xl">Questions</h2>
+            <p className="mt-2 text-slate-600">Straight answers — same tone as our pricing matrix.</p>
           </div>
-          <div className="max-w-5xl mx-auto space-y-4">
-            {/* Native <details> avoids Radix useId / aria-controls hydration mismatches with Next.js SSR */}
+          <div className="mt-10 space-y-3">
             {pricingFaq.map((item, idx) => (
               <details
-                key={idx}
-                className="group border-2 border-slate-100 rounded-2xl px-4 shadow-sm hover:shadow-lg transition-all open:shadow-md"
+                key={item.q}
+                className="group rounded-xl border border-slate-200 bg-slate-50/50 px-4 shadow-sm open:bg-white open:shadow-md"
               >
                 <summary className="flex cursor-pointer list-none items-center gap-3 py-4 text-left font-semibold text-slate-900 [&::-webkit-details-marker]:hidden">
-                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-purple-100 text-sm font-bold text-[#7C3AED]">
+                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-purple-100 text-sm font-bold text-[#6D28D9]">
                     {idx + 1}
                   </span>
-                  <span className="flex-1 text-base">{item.q}</span>
-                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 group-open:rotate-180" />
+                  <span className="flex-1 pr-2">{item.q}</span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-180" />
                 </summary>
                 <div className="border-t border-slate-100 pb-4 pl-11 pt-2 text-sm leading-relaxed text-slate-700">
                   {item.a}
@@ -389,26 +333,8 @@ export default function PricingPage() {
               </details>
             ))}
           </div>
-          
-          {/* Final CTA */}
-          <div className="rounded-3xl bg-gradient-to-r from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white p-10 lg:p-16 text-center shadow-2xl max-w-4xl mx-auto">
-            <Sparkles className="h-12 w-12 mx-auto mb-4 text-white/80" />
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">Still Have Questions?</h2>
-            <p className="text-xl text-purple-100 mb-8 max-w-2xl mx-auto">
-              Our team is here to help. Book a personalized demo and get your questions answered.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
-                <Link href="/contact">
-                  Book a Free Demo
-                  <ArrowRight className="ml-2 h-5 w-5" />
-                </Link>
-              </Button>
-            </div>
-          </div>
         </div>
       </section>
     </PublicShell>
   )
 }
-

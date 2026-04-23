@@ -1,31 +1,27 @@
 import type { Metadata } from "next"
 
 export const metadata: Metadata = {
-  title: "Salon Software Pricing | Affordable Plans Starting ₹999/month",
-  description: "Transparent salon management software pricing. Starter plan ₹999/month, Professional ₹2,499/month, Enterprise custom pricing. 14-day free trial, no credit card required. Switch plans anytime.",
+  title: "Salon Software Pricing India | Starter, Growth & Professional | EaseMySalon",
+  description:
+    "EaseMySalon pricing April 2026: Starter from ₹899/mo, Growth ₹2,099/mo, Professional ₹3,999/mo per outlet (GST exclusive). Annual plans save up to ₹12,000. 99.99% uptime SLA, free setup & migration, 24/7 support.",
   keywords: [
-    "salon software pricing",
-    "salon management software cost",
-    "affordable salon software",
-    "salon software price",
-    "salon POS pricing",
-    "salon CRM pricing",
-    "salon software subscription",
-    "salon software plans",
     "salon software pricing India",
-    "best value salon software",
+    "salon management software cost",
+    "EaseMySalon pricing",
+    "salon POS subscription",
+    "salon CRM pricing India",
+    "GST exclusive salon software",
+    "multi outlet salon software pricing",
+    "salon software annual plan",
     "salon software free trial",
-    "salon software monthly cost",
-    "salon software annual pricing",
-    "cheap salon management software",
-    "salon software pricing comparison"
   ],
   openGraph: {
-    title: "Salon Software Pricing | EaseMySalon",
-    description: "Transparent pricing starting at ₹999/month. 14-day free trial, no credit card required. Perfect for salons of all sizes.",
+    title: "Salon Software Pricing | Starter, Growth, Professional | EaseMySalon",
+    description:
+      "Three tiers for Indian salons: Starter, Growth, Professional. Per-outlet pricing, GST exclusive. Free setup, migration & training.",
   },
   alternates: {
-    canonical: '/pricing',
+    canonical: "/pricing",
   },
 }
 

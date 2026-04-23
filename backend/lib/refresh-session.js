@@ -4,18 +4,11 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { signTenantRefresh, TOKEN_USE } = require('./auth-tokens');
-const { refreshExpires } = require('../config/jwt');
+const { refreshExpiresMs } = require('../config/jwt');
 
+/** Single source of truth: cookie maxAge, JWT exp, and DB expiresAt all use the same value. */
 function msFromRefreshExpires() {
-  const m = String(refreshExpires).match(/^(\d+)([dhms])$/i);
-  if (!m) return 7 * 24 * 60 * 60 * 1000;
-  const n = parseInt(m[1], 10);
-  const u = m[2].toLowerCase();
-  if (u === 'd') return n * 86400000;
-  if (u === 'h') return n * 3600000;
-  if (u === 'm') return n * 60000;
-  if (u === 's') return n * 1000;
-  return 7 * 24 * 60 * 60 * 1000;
+  return refreshExpiresMs;
 }
 
 /**

@@ -495,6 +495,22 @@ let adminSettingsFallback = {
       enableRequestValidation: true,
       enableResponseValidation: true
     }
+  },
+
+  // Tax-invoice issuer (wallet recharges)
+  invoice: {
+    seller: {
+      name: "EaseMySalon",
+      address: "",
+      gstin: "",
+      state: "",
+      stateCode: "",
+      email: "billing@easemysalon.in",
+      phone: "",
+      website: "https://easemysalon.in"
+    },
+    invoicePrefix: "EMS/WLT",
+    gstRate: 0.18
   }
 };
 
@@ -818,6 +834,211 @@ router.get('/meta/security', authenticateAdmin, setupMainDatabase, (req, res) =>
       jwtSecretConfigured: Boolean(secret && String(secret).trim().length > 0)
     }
   });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Invoice counter management (wallet-recharge tax invoices)
+//
+// These must be declared BEFORE `/:category` otherwise the category
+// param-validator will reject `invoice` / `counters` as paths.
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/admin/settings/invoice/counters
+ * Returns every per-fiscal-year counter so admin can audit numbering.
+ */
+router.get('/invoice/counters', authenticateAdmin, setupMainDatabase, async (req, res) => {
+  try {
+    const { InvoiceCounter } = req.mainModels;
+    const counters = await InvoiceCounter.find({}).sort({ key: -1 }).lean();
+    res.json({
+      success: true,
+      data: counters.map(c => ({
+        key: c.key,
+        seq: Number(c.seq || 0),
+        updatedAt: c.updatedAt,
+        createdAt: c.createdAt,
+      })),
+    });
+  } catch (error) {
+    logger.error('Error fetching invoice counters:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch invoice counters' });
+  }
+});
+
+/**
+ * POST /api/admin/settings/invoice/counters/reset
+ * Body: { key: "WLT/2026-27", seq: 0 }
+ *
+ * Sets the sequence for a given counter key to the provided `seq` value.
+ * The NEXT invoice allocated for that key will be `seq + 1`. Passing
+ * `seq: 0` means "start from 1 on the next recharge". Upserts the counter
+ * if it doesn't exist yet (useful for seeding a migration starting point).
+ */
+router.post('/invoice/counters/reset', authenticateAdmin, setupMainDatabase, async (req, res) => {
+  try {
+    const { key, seq } = req.body || {};
+    if (!key || typeof key !== 'string') {
+      return res.status(400).json({ success: false, error: 'key is required' });
+    }
+    const trimmedKey = key.trim();
+    if (!trimmedKey) {
+      return res.status(400).json({ success: false, error: 'key is required' });
+    }
+    const seqNum = Number(seq);
+    if (!Number.isFinite(seqNum) || seqNum < 0 || !Number.isInteger(seqNum)) {
+      return res.status(400).json({ success: false, error: 'seq must be a non-negative integer' });
+    }
+    if (seqNum > 10_000_000) {
+      return res.status(400).json({ success: false, error: 'seq is too large' });
+    }
+
+    const { InvoiceCounter } = req.mainModels;
+    const updated = await InvoiceCounter.findOneAndUpdate(
+      { key: trimmedKey },
+      { $set: { seq: seqNum } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    logger.info(
+      `[invoice-counter] Admin ${req.admin?.email || req.admin?._id || 'unknown'} set ${trimmedKey} seq=${seqNum}`
+    );
+
+    res.json({
+      success: true,
+      data: {
+        key: updated.key,
+        seq: Number(updated.seq || 0),
+        updatedAt: updated.updatedAt,
+      },
+      message: `Counter ${trimmedKey} set to ${seqNum}`,
+    });
+  } catch (error) {
+    logger.error('Error resetting invoice counter:', error);
+    res.status(500).json({ success: false, error: 'Failed to reset invoice counter' });
+  }
+});
+
+/**
+ * POST /api/admin/settings/invoice/test-send
+ * Body: { email: "admin@example.com" }
+ *
+ * Generates a SAMPLE invoice PDF using the currently-saved seller details
+ * and emails it to the given address. Uses a fake transaction — does NOT
+ * touch the counter, wallet, or WalletTransaction collection.
+ */
+router.post('/invoice/test-send', authenticateAdmin, setupMainDatabase, async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email || typeof email !== 'string' || !/^\S+@\S+\.\S+$/.test(email.trim())) {
+      return res.status(400).json({ success: false, error: 'A valid email address is required' });
+    }
+    const recipient = email.trim();
+
+    const { AdminSettings } = req.mainModels;
+    const adminSettings = await AdminSettings.getSettings();
+    const invoiceSettings = adminSettings?.invoice || {};
+    const seller = invoiceSettings.seller || {};
+    const prefix = (invoiceSettings.invoicePrefix || 'EMS/WLT').trim() || 'EMS/WLT';
+
+    const { generateWalletInvoicePDF } = require('../utils/wallet-invoice-pdf');
+    const emailService = require('../services/email-service');
+
+    const now = new Date();
+    const invoiceNumber = `${prefix.replace(/\/+$/, '')}/SAMPLE/${now.getTime().toString(36).toUpperCase()}`;
+    const basePaise = 100000; // ₹1,000.00
+    const gstRate = Number(invoiceSettings.gstRate || 0.18);
+    const gstPaise = Math.round(basePaise * gstRate);
+    const totalPaise = basePaise + gstPaise;
+
+    const addressLines = String(seller.address || '')
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const context = {
+      seller: {
+        name: seller.name || 'EaseMySalon',
+        addressLines,
+        gstin: seller.gstin || '',
+        state: seller.state || '',
+        stateCode: seller.stateCode || '',
+        email: seller.email || '',
+        phone: seller.phone || '',
+        website: seller.website || '',
+      },
+      buyer: {
+        name: 'Sample Salon (Preview)',
+        addressLines: ['123 Sample Street', 'Bengaluru - 560001', 'Karnataka, India'],
+        gstin: '',
+        state: 'Karnataka',
+        stateCode: 'Karnataka',
+        email: recipient,
+        phone: '',
+      },
+      invoice: {
+        number: invoiceNumber,
+        date: now,
+        placeOfSupply: 'Karnataka',
+      },
+      amounts: { basePaise, gstPaise, gstRate, totalPaise },
+      payment: {
+        provider: 'razorpay',
+        orderId: 'order_sample_preview',
+        paymentId: 'pay_sample_preview',
+        capturedAt: now,
+      },
+    };
+
+    const pdfBuffer = await generateWalletInvoicePDF(context);
+
+    try {
+      await emailService.initialize();
+    } catch {
+      // non-fatal, sendEmail will surface the config issue below
+    }
+    if (!emailService.enabled) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email service is not configured. Configure it under Notifications & Alerts first.',
+      });
+    }
+
+    const result = await emailService.sendEmail({
+      to: recipient,
+      subject: `[TEST] Sample Tax Invoice ${invoiceNumber}`,
+      html: `<p>Hi,</p>
+        <p>This is a <strong>preview</strong> of the wallet-recharge GST invoice layout using your current seller settings. No money has moved and no invoice number has been allocated.</p>
+        <p>Invoice #: ${invoiceNumber}</p>
+        <p>— EaseMySalon</p>`,
+      text: `This is a preview of the wallet-recharge GST invoice. No money has moved. Invoice #: ${invoiceNumber}`,
+      attachments: [
+        {
+          filename: `${invoiceNumber.replace(/[^A-Za-z0-9_-]+/g, '_')}.pdf`,
+          content: pdfBuffer,
+        },
+      ],
+    });
+
+    if (!result?.success) {
+      return res.status(500).json({
+        success: false,
+        error: result?.error?.message || 'Failed to send test invoice',
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Test invoice sent to ${recipient}`,
+      data: { invoiceNumber },
+    });
+  } catch (error) {
+    logger.error('Error sending test invoice:', error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || 'Failed to send test invoice',
+    });
+  }
 });
 
 // GET /api/admin/settings/:category - Get specific category settings

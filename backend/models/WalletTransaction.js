@@ -36,6 +36,12 @@ const walletTransactionSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  // GST tax-invoice number emitted for this recharge (null for debits / legacy rows).
+  invoiceNumber: {
+    type: String,
+    default: null,
+    index: true
+  },
   channel: {
     type: String,
     enum: ['sms', 'whatsapp', null],
