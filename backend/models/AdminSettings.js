@@ -251,6 +251,28 @@ const adminSettingsSchema = new mongoose.Schema({
     integrations: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
     webhooks: { type: mongoose.Schema.Types.Mixed, default: () => [] },
     security: { type: mongoose.Schema.Types.Mixed, default: () => ({}) }
+  },
+
+  // Tax-invoice issuer (wallet recharges). Global — there's one invoice
+  // issuer for the whole platform (EaseMySalon), which is what bills each
+  // business for wallet top-ups. Reader: backend/lib/send-wallet-invoice.js.
+  invoice: {
+    seller: {
+      name: { type: String, default: '' },
+      address: { type: String, default: '' }, // multi-line, \n-separated
+      gstin: { type: String, default: '' },
+      state: { type: String, default: '' },
+      stateCode: { type: String, default: '' },
+      email: { type: String, default: '' },
+      phone: { type: String, default: '' },
+      website: { type: String, default: '' },
+    },
+    // Prefix applied to the generated number (e.g. "EMS/WLT/2026-27/00042").
+    // Keep structure `<prefix>/<fiscalYear>/<seq>` — only the leading token
+    // is configurable so downstream parsers don't break.
+    invoicePrefix: { type: String, default: 'EMS/WLT' },
+    // GST rate applied on top of the wallet-credit base. 0.18 → 18%.
+    gstRate: { type: Number, default: 0.18, min: 0, max: 1 },
   }
 }, {
   timestamps: true
@@ -446,6 +468,13 @@ adminSettingsSchema.statics.updateSettings = async function(category, updates) {
         settings.markModified(`api.${key}`);
       }
     });
+  }
+
+  // Invoice subdoc — mark the whole branch modified so nested changes (e.g.
+  // a single seller field) are always persisted even if Mongoose doesn't
+  // pick up the diff through deepMerge on a freshly-initialised subdoc.
+  if (category === 'invoice') {
+    settings.markModified('invoice');
   }
 
   await settings.save();

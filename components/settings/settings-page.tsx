@@ -1,10 +1,33 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useSearchParams } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Settings, Building2, Calendar, CreditCard, Bell, ChevronRight, Receipt, DollarSign, Calculator, Wallet, Wrench, Package, BarChart2, Zap } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Settings,
+  Building2,
+  Calendar,
+  CreditCard,
+  Bell,
+  ChevronRight,
+  Receipt,
+  DollarSign,
+  Calculator,
+  Wallet,
+  Wrench,
+  Package,
+  BarChart2,
+  Zap,
+  Scissors,
+  FolderTree,
+  Truck,
+  Layers,
+  Search,
+  IdCard,
+} from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
 import { useRouter } from "next/navigation"
@@ -28,9 +51,9 @@ import { ProductStatsCards } from "@/components/dashboard/stats-cards"
 import { CategoryManagement } from "@/components/categories/category-management"
 import { SuppliersAndOrdersTab } from "@/components/suppliers/suppliers-and-orders-tab"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Scissors, FolderTree, Truck, Layers } from "lucide-react"
 
 import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
+import type { LucideIcon } from "lucide-react"
 
 const SETTINGS_SECTION_IDS = [
   "general",
@@ -54,23 +77,183 @@ function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_
   return id != null && (SETTINGS_SECTION_IDS as readonly string[]).includes(id)
 }
 
-const settingsCategories = [
-  { id: "general", title: "General Settings", description: "Basic application preferences and configurations", icon: Settings },
-  { id: "business", title: "Business Settings", description: "Company information, branding, and business details", icon: Building2 },
-  { id: "appointments", title: "Appointment Settings", description: "Booking rules, time slots, and appointment preferences", icon: Calendar },
-  { id: "currency", title: "Currency Settings", description: "Default currency, symbols, and formatting options", icon: DollarSign },
-  { id: "tax", title: "Tax Settings", description: "Tax rates, GST configuration, and calculation methods", icon: Calculator },
-  { id: "payments", title: "Payment Settings", description: "Payment methods and processing configuration", icon: CreditCard },
-  { id: "pos", title: "POS Settings", description: "Invoice sequence management and custom prefix configuration", icon: Receipt },
-  { id: "notifications", title: "Notifications", description: "Email alerts, SMS notifications, and reminder settings", icon: Bell },
-  { id: "plan-billing", title: "Plan & Billing", description: "View plan details, billing information, and manage subscription", icon: Wallet },
-  { id: "membership", title: "Membership", description: "Create tier-based plans and assign memberships to customers", icon: CreditCard },
-  { id: "services", title: "Services", description: "Manage salon services, pricing, and categories", icon: Wrench },
-  { id: "products", title: "Products", description: "Product inventory, stock levels, and suppliers", icon: Package },
-  { id: "packages", title: "Packages", description: "Bundle services into sellable packages, track sittings and redemptions", icon: Layers },
-  { id: "channel-usage", title: "Channel Usage", description: "WhatsApp, SMS and Email delivery stats and logs", icon: BarChart2 },
-  { id: "recharge", title: "Recharge", description: "Top up your messaging wallet for SMS and WhatsApp", icon: Zap },
+type SettingsItemId = (typeof SETTINGS_SECTION_IDS)[number]
+
+type SettingsItem = {
+  id: SettingsItemId
+  title: string
+  description: string
+  icon: LucideIcon
+  /** Extra strings matched by search (e.g. synonyms, acronyms) */
+  searchTerms?: string[]
+}
+
+type SettingsSection = {
+  id: string
+  title: string
+  description: string
+  items: SettingsItem[]
+}
+
+const SETTINGS_SECTIONS: SettingsSection[] = [
+  {
+    id: "business-setup",
+    title: "Business setup",
+    description: "Identity, compliance, and financial basics for your business.",
+    items: [
+      {
+        id: "business",
+        title: "Business settings",
+        description: "Company name, contact, branding, and business profile.",
+        icon: Building2,
+        searchTerms: ["company", "logo", "profile", "store"],
+      },
+      {
+        id: "tax",
+        title: "Tax settings",
+        description: "GST, tax rates, and how tax is applied on sales.",
+        icon: Calculator,
+        searchTerms: ["gst", "vat", "hst"],
+      },
+      {
+        id: "currency",
+        title: "Currency settings",
+        description: "Default currency, symbols, and how amounts are shown.",
+        icon: DollarSign,
+        searchTerms: ["money", "inr", "format"],
+      },
+    ],
+  },
+  {
+    id: "operations",
+    title: "Operations",
+    description: "Day-to-day salon workflows, catalog, and sellable offers.",
+    items: [
+      {
+        id: "appointments",
+        title: "Appointment settings",
+        description: "Booking rules, time slots, and scheduling preferences.",
+        icon: Calendar,
+        searchTerms: ["booking", "schedule", "calendar"],
+      },
+      {
+        id: "services",
+        title: "Services",
+        description: "Service menu, pricing, and service categories.",
+        icon: Wrench,
+        searchTerms: ["menu", "scissors", "categories"],
+      },
+      {
+        id: "products",
+        title: "Products",
+        description: "Retail products, stock, categories, and suppliers.",
+        icon: Package,
+        searchTerms: ["inventory", "retail", "stock"],
+      },
+      {
+        id: "packages",
+        title: "Packages",
+        description: "Bundles, sittings, redemptions, and package sales.",
+        icon: Layers,
+        searchTerms: ["bundle", "deals"],
+      },
+    ],
+  },
+  {
+    id: "billing",
+    title: "Billing & payments",
+    description: "Checkout, in-store sales, plans, and recurring revenue.",
+    items: [
+      {
+        id: "pos",
+        title: "POS settings",
+        description: "Invoice numbers, bill prefixes, and point-of-sale flow.",
+        icon: Receipt,
+        searchTerms: ["invoice", "bill", "counter"],
+      },
+      {
+        id: "payments",
+        title: "Payment settings",
+        description: "Tender types, payment methods, and how you get paid.",
+        icon: CreditCard,
+        searchTerms: ["upi", "card", "methods"],
+      },
+      {
+        id: "membership",
+        title: "Membership",
+        description: "Membership tiers, benefits, and customer subscriptions.",
+        icon: IdCard,
+        searchTerms: ["subscription", "tiers", "loyalty"],
+      },
+      {
+        id: "plan-billing",
+        title: "Plan & billing",
+        description: "Your EaseMySalon plan, usage, and subscription checkout.",
+        icon: Wallet,
+        searchTerms: ["saas", "subscription", "invoice"],
+      },
+    ],
+  },
+  {
+    id: "communication",
+    title: "Communication",
+    description: "Alerts to customers and internal usage for messaging channels.",
+    items: [
+      {
+        id: "notifications",
+        title: "Notifications",
+        description: "Email, SMS, and reminder preferences for your team and clients.",
+        icon: Bell,
+        searchTerms: ["alerts", "reminders", "email"],
+      },
+      {
+        id: "channel-usage",
+        title: "Channel usage",
+        description: "WhatsApp, SMS, and email delivery stats and message logs.",
+        icon: BarChart2,
+        searchTerms: ["whatsapp", "logs", "delivered"],
+      },
+      {
+        id: "recharge",
+        title: "Recharge",
+        description: "Top up your messaging wallet for SMS and WhatsApp.",
+        icon: Zap,
+        searchTerms: ["wallet", "credits", "top up"],
+      },
+    ],
+  },
+  {
+    id: "system",
+    title: "System",
+    description: "Application-level preferences and defaults.",
+    items: [
+      {
+        id: "general",
+        title: "General settings",
+        description: "Locale, theme, and basic app behavior.",
+        icon: Settings,
+        searchTerms: ["preferences", "language", "theme"],
+      },
+    ],
+  },
 ]
+
+const ALL_SETTING_ITEMS: SettingsItem[] = SETTINGS_SECTIONS.flatMap((s) => s.items)
+
+function itemMatchesQuery(item: SettingsItem, q: string): boolean {
+  if (!q.trim()) return true
+  const needle = q.trim().toLowerCase()
+  const hay = [item.title, item.description, ...(item.searchTerms || [])]
+    .join(" ")
+    .toLowerCase()
+  return hay.includes(needle)
+}
+
+function sectionAfterSearch(section: SettingsSection, q: string): SettingsSection | null {
+  const items = section.items.filter((it) => itemMatchesQuery(it, q))
+  if (items.length === 0) return null
+  return { ...section, items }
+}
 
 export function SettingsPage() {
   const searchParams = useSearchParams()
@@ -78,6 +261,7 @@ export function SettingsPage() {
   const [activeSection, setActiveSection] = useState<string | null>(() =>
     isSettingsSectionId(sectionParam) ? sectionParam : null
   )
+  const [search, setSearch] = useState("")
   const { user, isLoading, hasPermission } = useAuth()
   const router = useRouter()
 
@@ -97,13 +281,21 @@ export function SettingsPage() {
     }
   }, [user, isLoading, router])
 
+  const filteredSections = useMemo(
+    () => SETTINGS_SECTIONS.map((s) => sectionAfterSearch(s, search)).filter(Boolean) as SettingsSection[],
+    [search]
+  )
+
   // Show loading while checking authentication
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-slate-600 font-medium">Loading settings...</p>
+          <div
+            className="animate-spin rounded-full h-9 w-9 border-2 border-slate-200 border-t-slate-600 mx-auto mb-3"
+            aria-hidden
+          />
+          <p className="text-sm text-slate-600">Loading settings…</p>
         </div>
       </div>
     )
@@ -116,11 +308,14 @@ export function SettingsPage() {
 
   const canAccessSetting = (categoryId: string) => {
     if (!user) return false
-
-    // Permission-only check
     const permissionModule = SETTINGS_PERMISSION_MAP[categoryId]
     if (!permissionModule) return false
     return hasPermission(permissionModule, "view")
+  }
+
+  const navigateToSection = (id: string) => {
+    if (!canAccessSetting(id)) return
+    router.push(`/settings?section=${encodeURIComponent(id)}`)
   }
 
   const renderSettingComponent = () => {
@@ -164,12 +359,16 @@ export function SettingsPage() {
             </TabsList>
             <TabsContent value="services" className="space-y-6">
               <ServiceStatsCards />
-              <div className="rounded-xl border border-gray-200 overflow-hidden">
+              <div className="rounded-xl border border-slate-200/80 overflow-hidden">
                 <ServicesTable />
               </div>
             </TabsContent>
             <TabsContent value="categories">
-              <CategoryManagement type="service" title="Service Categories" description="Manage categories for your salon services" />
+              <CategoryManagement
+                type="service"
+                title="Service categories"
+                description="Manage categories for your salon services"
+              />
             </TabsContent>
           </Tabs>
         )
@@ -187,17 +386,21 @@ export function SettingsPage() {
               </TabsTrigger>
               <TabsTrigger value="suppliers" className="gap-2">
                 <Truck className="h-4 w-4" />
-                Suppliers & Orders
+                Suppliers & orders
               </TabsTrigger>
             </TabsList>
             <TabsContent value="products" className="space-y-6">
               <ProductStatsCards />
-              <div className="rounded-xl border border-gray-200 overflow-hidden">
+              <div className="rounded-xl border border-slate-200/80 overflow-hidden">
                 <ProductsTable />
               </div>
             </TabsContent>
             <TabsContent value="categories">
-              <CategoryManagement type="product" title="Product Categories" description="Manage categories for your salon products" />
+              <CategoryManagement
+                type="product"
+                title="Product categories"
+                description="Manage categories for your salon products"
+              />
             </TabsContent>
             <TabsContent value="suppliers">
               <SuppliersAndOrdersTab />
@@ -216,96 +419,155 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
+    <div className="min-h-screen bg-slate-50/80 p-4 sm:p-6 md:p-8">
       {!activeSection ? (
-        /* Initial State: Categories as Cards in Grid */
-        <div className="rounded-3xl border border-slate-100 bg-white/90 p-6 shadow-sm backdrop-blur">
-          <div className="p-6">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <h2 className="text-xl font-semibold text-slate-800 flex items-center gap-2">
-                <Settings className="h-5 w-5 text-blue-600" />
-                Settings Categories
-              </h2>
-              <p className="text-sm text-slate-500">Switch between modules effortlessly</p>
-            </div>
-            <div className="mt-6 grid gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {settingsCategories.map((category) => {
-                const Icon = category.icon
-                const hasAccess = canAccessSetting(category.id)
+        <div className="mx-auto max-w-6xl space-y-8">
+          {/* Header + search */}
+          <header className="space-y-1">
+            <h1 className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl">
+              Settings
+            </h1>
+            <p className="text-sm text-slate-500 max-w-2xl">
+              Configure your business, operations, and billing. Use search to jump to a module quickly.
+            </p>
+          </header>
 
-                return (
-                  <button
-                    key={category.id}
-                    onClick={() => {
-                      if (!hasAccess) return
-                      router.push(`/settings?section=${encodeURIComponent(category.id)}`)
-                    }}
-                    className={`group w-full rounded-2xl border text-left transition-all duration-300 ${
-                      activeSection === category.id
-                        ? "border-blue-200 bg-gradient-to-br from-blue-50 to-white shadow-md ring-2 ring-blue-100"
-                        : hasAccess
-                        ? "border-slate-200 bg-slate-50/60 hover:border-blue-200 hover:bg-blue-50/40 hover:shadow-md"
-                        : "border-slate-100 bg-slate-100/60 text-slate-400 cursor-not-allowed"
-                    }`}
-                    disabled={!hasAccess}
-                  >
-                    <div className="flex flex-col gap-4 p-5">
-                      <div className="flex items-center justify-between">
-                        <div
-                          className={`rounded-2xl p-2.5 shadow-sm ${
-                            activeSection === category.id
-                              ? "bg-white text-blue-600"
-                              : "bg-white text-blue-500"
-                          }`}
-                        >
-                          <Icon className="h-5 w-5" />
-                        </div>
-                        <ChevronRight
-                          className={`h-4 w-4 transition-transform ${
-                            activeSection === category.id
-                              ? "text-blue-600 rotate-90"
-                              : "text-slate-400"
-                          }`}
-                        />
-                      </div>
-                      <div>
-                        <div className="font-semibold text-sm text-slate-900">
-                          {category.title}
-                        </div>
-                        <div className="text-xs text-slate-500 leading-relaxed">
-                          {category.description}
-                        </div>
-                      </div>
-                      {!hasAccess && (
-                        <Badge
-                          variant="secondary"
-                          className="self-start text-xs bg-white text-slate-600"
-                        >
-                          restricted
-                        </Badge>
-                      )}
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
+          <div
+            className="relative"
+            role="search"
+            aria-label="Filter settings by name or topic"
+          >
+            <Label htmlFor="settings-search" className="sr-only">
+              Search settings
+            </Label>
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              aria-hidden
+            />
+            <Input
+              id="settings-search"
+              type="search"
+              autoComplete="off"
+              placeholder="Search settings…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-10 pl-9 pr-3 border-slate-200 bg-white text-sm shadow-sm placeholder:text-slate-400 focus-visible:ring-1 focus-visible:ring-slate-400/30"
+            />
           </div>
+
+          {/* Sections */}
+          {filteredSections.length === 0 ? (
+            <p className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-200 rounded-xl bg-white">
+              No settings match your search. Try a different term.
+            </p>
+          ) : (
+            filteredSections.map((section, sectionIndex) => (
+              <section
+                key={section.id}
+                className={`space-y-3 ${sectionIndex > 0 ? "pt-8 border-t border-slate-200/80" : ""}`}
+                aria-labelledby={`section-${section.id}`}
+              >
+                <div>
+                  <h2
+                    id={`section-${section.id}`}
+                    className="text-base font-semibold text-slate-900 tracking-tight"
+                  >
+                    {section.title}
+                  </h2>
+                  <p className="mt-0.5 text-sm text-slate-500 max-w-3xl">
+                    {section.description}
+                  </p>
+                </div>
+
+                <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 list-none p-0 m-0">
+                  {section.items.map((item) => {
+                    const Icon = item.icon
+                    const hasAccess = canAccessSetting(item.id)
+                    return (
+                      <li key={item.id} className="min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => navigateToSection(item.id)}
+                          disabled={!hasAccess}
+                          className={[
+                            "group w-full text-left rounded-xl border p-3.5 min-h-[88px] transition-all",
+                            "focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50",
+                            hasAccess
+                              ? "border-slate-200/90 bg-white shadow-sm hover:border-slate-300 hover:shadow-md active:scale-[0.99]"
+                              : "border-slate-100 bg-slate-50/80 cursor-not-allowed opacity-70",
+                          ].join(" ")}
+                          aria-label={
+                            hasAccess
+                              ? `Open ${item.title}`
+                              : `${item.title} (restricted)`
+                          }
+                        >
+                          <div className="flex items-start gap-3">
+                            <span
+                              className={[
+                                "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border",
+                                hasAccess
+                                  ? "border-slate-200/80 bg-slate-50 text-slate-700 group-hover:border-slate-300 group-hover:bg-white"
+                                  : "border-slate-200 text-slate-400",
+                              ].join(" ")}
+                            >
+                              <Icon className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <h3 className="text-sm font-medium text-slate-900 leading-snug pr-1">
+                                  {item.title}
+                                </h3>
+                                {hasAccess && (
+                                  <ChevronRight
+                                    className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600 mt-0.5"
+                                    aria-hidden
+                                  />
+                                )}
+                              </div>
+                              <p className="mt-0.5 text-xs text-slate-500 leading-relaxed line-clamp-2">
+                                {item.description}
+                              </p>
+                              {!hasAccess && (
+                                <Badge
+                                  variant="secondary"
+                                  className="mt-2 h-5 text-[10px] font-medium uppercase tracking-wide text-slate-500 border-slate-200"
+                                >
+                                  No access
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </section>
+            ))
+          )}
+
+          {search.trim() && filteredSections.length > 0 && (
+            <p className="text-xs text-slate-400">
+              {filteredSections.reduce((n, s) => n + s.items.length, 0)} of {ALL_SETTING_ITEMS.length}{" "}
+              settings shown
+            </p>
+          )}
         </div>
       ) : (
-        /* After Selection: Content only, with back button */
-        <div className="space-y-6">
+        <div className="mx-auto max-w-6xl space-y-4">
           <button
             type="button"
             onClick={() => router.replace("/settings")}
-            className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors -ml-0.5"
           >
-            <ChevronRight className="h-4 w-4 rotate-180" />
-            Back to Settings
+            <ChevronRight className="h-4 w-4 rotate-180" aria-hidden />
+            Back to settings
           </button>
-          <Card className="border border-slate-200 bg-white/90 shadow-sm backdrop-blur">
-            <CardContent className="p-6">
+          <Card className="border-slate-200/90 bg-white shadow-sm">
+            <CardContent className="p-4 sm:p-6">
               {activeSection && !canAccessSetting(activeSection) ? (
-                <p className="text-slate-600">You don&apos;t have permission to access this setting.</p>
+                <p className="text-sm text-slate-600">You don&apos;t have permission to access this setting.</p>
               ) : (
                 renderSettingComponent()
               )}

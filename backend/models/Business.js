@@ -185,6 +185,23 @@ const businessSchema = new mongoose.Schema({
     renewalDate: { type: Date },
     isTrial: { type: Boolean, default: false },
     trialEndsAt: { type: Date },
+    // Scheduled downgrade: when a business picks a lower-tier plan from
+    // the self-service checkout, we do NOT charge — instead we stamp the
+    // target here and switch the live plan at renewal time.
+    // `pendingEffectiveAt` is set to the current `renewalDate` at queue time;
+    // keep it in sync if `renewalDate` changes later (e.g. a renewal happens
+    // while a downgrade is queued — in that case we clear the queue).
+    pendingPlanId: {
+      type: String,
+      enum: ['starter', 'professional', 'enterprise', null],
+      default: null,
+    },
+    pendingBillingPeriod: {
+      type: String,
+      enum: ['monthly', 'yearly', null],
+      default: null,
+    },
+    pendingEffectiveAt: { type: Date, default: null },
     // Promotional feature overrides
     overrides: {
       features: [{ type: String }], // Array of feature IDs

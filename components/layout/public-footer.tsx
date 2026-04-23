@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { Mail, MapPin, Linkedin, Instagram, Facebook, MessageCircle } from "lucide-react"
+import { Mail, MapPin, Linkedin, Instagram, Facebook } from "lucide-react"
 
 
 const footerLinks = [
@@ -91,7 +91,6 @@ export function PublicFooter() {
                 { Icon: Linkedin, href: "https://www.linkedin.com/company/easemysalon/", label: "LinkedIn" },
                 { Icon: Instagram, href: "https://www.instagram.com/easemysalon_official/", label: "Instagram" },
                 { Icon: Facebook, href: "#", label: "Facebook" },
-                { Icon: MessageCircle, href: "https://wa.me/916360019041?text=Hi%20Ease%20My%20Salon!%20We%20would%20like%20a%20demo.", label: "WhatsApp" },
               ].map(({ Icon, href, label }) => (
                 <a
                   key={label}

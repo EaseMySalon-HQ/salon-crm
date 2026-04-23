@@ -39,6 +39,7 @@ const adminSettingsCategorySchema = z.enum([
   'database',
   'notifications',
   'api',
+  'invoice',
 ]);
 
 const adminSettingsCategoryParamSchema = z
@@ -328,6 +329,71 @@ const adminRoleUpdateBodySchema = z
   })
   .passthrough();
 
+// ──────────────────────────────────────────────────────────────────────────
+// GST reports
+// ──────────────────────────────────────────────────────────────────────────
+
+const gstPeriodSchema = z
+  .string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Period must be YYYY-MM');
+
+const gstSourceSchema = z.enum(['wallet', 'plan', 'all']);
+const gstProviderSchema = z.enum(['razorpay', 'stripe', 'zoho', 'system', 'all']);
+const gstStatusSchema = z.enum(['generated', 'reported', 'filed', 'all']);
+const gstBuyerTypeSchema = z.enum(['B2B', 'B2C', 'all']);
+
+// ISO date string (YYYY-MM-DD) or empty.
+const gstDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
+
+const gstInvoicesQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).max(10000).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+    from: gstDateSchema.optional(),
+    to: gstDateSchema.optional(),
+    period: gstPeriodSchema.optional(),
+    source: gstSourceSchema.optional(),
+    provider: gstProviderSchema.optional(),
+    status: gstStatusSchema.optional(),
+    buyerType: gstBuyerTypeSchema.optional(),
+    search: z.string().trim().max(200).optional(),
+  })
+  .strict();
+
+const gstSummaryQuerySchema = z
+  .object({
+    period: gstPeriodSchema.optional(),
+  })
+  .strict();
+
+const gstExportBodySchema = z
+  .object({
+    from: gstDateSchema.optional(),
+    to: gstDateSchema.optional(),
+    period: gstPeriodSchema.optional(),
+    source: gstSourceSchema.optional(),
+    provider: gstProviderSchema.optional(),
+    status: gstStatusSchema.optional(),
+    buyerType: gstBuyerTypeSchema.optional(),
+    search: z.string().trim().max(200).optional(),
+    format: z.enum(['csv', 'xlsx', 'gstr1']).default('xlsx'),
+  })
+  .strict();
+
+const gstFilingBodySchema = z
+  .object({
+    period: gstPeriodSchema,
+  })
+  .strict();
+
+const gstStatusBodySchema = z
+  .object({
+    status: z.enum(['generated', 'reported']),
+  })
+  .strict();
+
 module.exports = {
   tenantLoginSchema,
   staffLoginSchema,
@@ -359,4 +425,9 @@ module.exports = {
   adminUserIdParamSchema,
   adminRoleCreateBodySchema,
   adminRoleUpdateBodySchema,
+  gstInvoicesQuerySchema,
+  gstSummaryQuerySchema,
+  gstExportBodySchema,
+  gstFilingBodySchema,
+  gstStatusBodySchema,
 };

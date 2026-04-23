@@ -29,6 +29,13 @@ interface PlanInfo {
     whatsapp?: { enabled: boolean; quota: number; used: number }
     sms?: { enabled: boolean; quota: number; used: number }
   }
+  monthlyPrice?: number | null
+  yearlyPrice?: number | null
+  name?: string
+  // Scheduled downgrade waiting to apply at the next renewal.
+  pendingPlanId?: string | null
+  pendingBillingPeriod?: string | null
+  pendingEffectiveAt?: string | null
 }
 
 interface Entitlements {
@@ -39,6 +46,7 @@ interface Entitlements {
   getAddonStatus: (addonId: string) => { enabled: boolean; quota: number; used: number; remaining: number }
   isLoading: boolean
   error: string | null
+  refetch: () => Promise<void>
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
@@ -132,6 +140,7 @@ export function useEntitlements(): Entitlements {
     getAddonStatus,
     isLoading,
     error,
+    refetch: fetchPlanInfo,
   }
 }
 

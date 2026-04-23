@@ -1,175 +1,123 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { ArrowRight, CheckCircle2, TrendingUp, Zap, Clock } from "lucide-react"
+import { ArrowRight, Building2, Headphones, ShieldCheck, Sparkles } from "lucide-react"
 
 import { PublicShell } from "@/components/layout/public-shell"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ProductCapabilitiesExplorer } from "@/components/features/product-capabilities-explorer"
 
 export const metadata: Metadata = {
-  title: "Salon Management Software Features | POS, CRM, Appointments & Analytics",
-  description: "Complete salon management software features: POS system with GST, appointment booking, CRM & client management, inventory tracking, staff management, commission tracking, salon analytics, and multi-location support. Built for Indian salons.",
+  title: "Salon Software Features | Dashboard, POS, CRM & More | EaseMySalon",
+  description:
+    "EaseMySalon — Salon OS for India: dashboards, analytics, appointments, GST billing & invoicing, client CRM, memberships & packages, inventory, staff, cash register, multi-outlet reports, and integrations. Compare tiers on pricing.",
   keywords: [
-    "salon POS features",
+    "salon software features India",
+    "salon POS GST",
+    "salon appointment software",
     "salon CRM features",
-    "salon appointment features",
-    "salon inventory features",
-    "salon staff management features",
-    "salon analytics features",
-    "salon billing software features",
-    "salon management system features",
-    "salon software capabilities",
-    "salon POS with GST",
-    "WhatsApp salon booking",
-    "salon commission tracking",
     "salon inventory management",
-    "salon client management",
-    "salon reports and analytics",
-    "multi-location salon software",
-    "salon cash registry",
-    "salon receipt software",
-    "salon membership management",
-    "salon package management"
+    "multi outlet salon software",
+    "salon commission tracking",
+    "salon analytics dashboard",
+    "EaseMySalon features",
+    "salon billing WhatsApp",
   ],
   openGraph: {
-    title: "Complete Salon Management Software Features | EaseMySalon",
-    description: "Explore all features: POS with GST, appointment booking, CRM, inventory, staff management, analytics, and more. Built for Indian salons.",
+    title: "Salon OS for India — Product Features | EaseMySalon",
+    description:
+      "Explore dashboards, appointments, billing, CRM, inventory, staff, and chain-ready reporting. Plans: Starter, Growth, Professional.",
   },
   alternates: {
-    canonical: '/features',
+    canonical: "/features",
   },
 }
 
-const featureSections = [
-  {
-    title: "Point of Sale (POS)",
-    description: "Blazing fast, GST-compliant POS built for front desk speed with split payments and upsell prompts.",
-    bullets: ["Custom combos & memberships", "Wallets, UPI, cards, cash in a single receipt", "Smart upsell recommendations at checkout"],
-  },
-  {
-    title: "Appointments & CRM",
-    description: "Drag-and-drop calendar synced with WhatsApp. Manage stylists, waitlists and VIP preferences effortlessly.",
-    bullets: ["Auto reminders & confirmations", "Colour-coded staff calendars", "Client notes, tags and preferences"],
-  },
-  {
-    title: "Inventory & procurement",
-    description: "Track every SKU with expiry, vendor, reorder alerts and multi-warehouse visibility.",
-    bullets: ["Low-stock + pilferage alerts", "GRN, purchase orders and approvals", "Kit & bundle tracking"],
-  },
-  {
-    title: "Staff, payroll & roles",
-    description: "Single source of truth for attendance, rosters, commissions and access permissions.",
-    bullets: ["Commission rules per service/product", "Digital rosters & shift swaps", "Granular roles for branches and HQ"],
-  },
-  {
-    title: "Reports & analytics",
-    description: "50+ dashboards covering revenue, channels, repeat clients, utilisation and stock health.",
-    bullets: ["Branch comparisons with benchmarking", "Subscription & membership insights", "Export-ready for finance & investors"],
-  },
-  {
-    title: "Receipts & cash registry",
-    description: "Professional GST invoices, paperless signatures, cash drawer reconciliation and night audits.",
-    bullets: ["Thermal & A4 templates", "Multi-currency tips & settlements", "Daily open-close workflows"],
-  },
-  {
-    title: "Admin & multi-location control",
-    description: "Centralise offers, pricing, catalogues and SOPs while branches retain local agility.",
-    bullets: ["Branch-specific taxes and pricing", "Approval flows for discounts", "Central content + assets"],
-  },
-  {
-    title: "Security & compliance",
-    description: "Enterprise-grade security, audit trails and compliance with GDPR/DPDP readiness.",
-    bullets: ["Role-based access, SSO ready", "Field-level encryption", "Comprehensive activity logs"],
-  },
-]
+const trustStrip = [
+  { icon: ShieldCheck, text: "99.99% uptime SLA" },
+  { icon: Sparkles, text: "Free setup, training & migration" },
+  { icon: Headphones, text: "Help articles, tickets & WhatsApp assistance" },
+] as const
 
 export default function FeaturesPage() {
   return (
     <PublicShell>
-      <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
+      <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-14 sm:py-16 lg:py-20">
         <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
-          <div className="absolute bottom-0 left-0 w-80 h-80 bg-white rounded-full blur-3xl" />
+          <div className="absolute top-0 right-0 h-96 w-96 rounded-full bg-white blur-3xl" />
+          <div className="absolute bottom-0 left-0 h-80 w-80 rounded-full bg-white blur-3xl" />
         </div>
-        <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 space-y-6 text-center">
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight max-w-4xl mx-auto">
-            Everything You Need to Run a High-Growth Salon Business
-          </h1>
-          <p className="text-xl sm:text-2xl text-purple-100 max-w-3xl mx-auto leading-relaxed">
-            One powerful platform that replaces spreadsheets, legacy POS, and disconnected apps.
+        <div className="container relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-purple-200/90">
+            EaseMySalon · Salon OS for India
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
-            <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
+          <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
+            One platform for appointments, billing, stock &amp; staff
+          </h1>
+          <p className="mx-auto mt-4 max-w-2xl text-base text-purple-100 sm:text-lg">
+            Replace fragmented tools with a single stack built for Indian salons and spas. Feature depth grows with{" "}
+            <Link href="/pricing" className="font-semibold text-white underline-offset-2 hover:underline">
+              Starter, Growth, and Professional
+            </Link>
+            .
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-2 sm:gap-3">
+            {trustStrip.map(({ icon: Icon, text }) => (
+              <span
+                key={text}
+                className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs text-purple-100 backdrop-blur-sm sm:text-sm sm:px-4 sm:py-2"
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0 text-emerald-300 sm:h-4 sm:w-4" aria-hidden />
+                {text}
+              </span>
+            ))}
+          </div>
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row sm:gap-4">
+            <Button
+              size="lg"
+              asChild
+              className="h-11 bg-white px-7 text-base font-semibold text-[#7C3AED] shadow-xl hover:bg-gray-100 sm:h-12 sm:px-8"
+            >
               <Link href="/contact#get-in-touch">
-                See It In Action - Book Demo
-                <ArrowRight className="ml-2 h-5 w-5" />
+                Book a live demo
+                <ArrowRight className="ml-2 h-4 w-4 sm:h-5 sm:w-5" />
               </Link>
             </Button>
-            <Button size="lg" variant="outline" asChild className="border-2 border-white/60 bg-white/10 text-white hover:bg-white/20 backdrop-blur-sm px-8 py-6 h-auto text-lg font-semibold">
-              <Link href="/pricing">View Salon Software Pricing Plans</Link>
+            <Button
+              size="lg"
+              variant="outline"
+              asChild
+              className="h-11 border-2 border-white/50 bg-white/5 px-7 text-base font-semibold text-white backdrop-blur-sm hover:bg-white/10 sm:h-12 sm:px-8"
+            >
+              <Link href="/pricing">See plans &amp; pricing</Link>
             </Button>
           </div>
         </div>
       </section>
 
-      <section className="py-20 bg-white">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 grid gap-8">
-          {featureSections.map((section, idx) => (
-            <Card key={section.title} className="border-2 border-slate-100 shadow-lg hover:shadow-2xl transition-all group hover:border-[#7C3AED]/30">
-              <CardHeader className="flex flex-col md:flex-row md:items-start md:justify-between gap-6 pb-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-purple-50 to-indigo-50 text-[#7C3AED] flex items-center justify-center group-hover:scale-110 transition-transform">
-                      <span className="text-xl font-bold">{idx + 1}</span>
-                    </div>
-                    <CardTitle className="text-2xl">{section.title}</CardTitle>
-                  </div>
-                  <CardDescription className="text-base text-slate-700 max-w-3xl leading-relaxed">
-                    {section.description}
-                  </CardDescription>
-                </div>
-                <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white shadow-lg">
-                  <Link href="/contact">
-                    See Live Demo
-                    <ArrowRight className="ml-2 h-4 w-4" />
-                  </Link>
-                </Button>
-              </CardHeader>
-              <CardContent>
-                <ul className="grid gap-4 text-sm text-slate-700 md:grid-cols-3">
-                  {section.bullets.map((bullet, bulletIdx) => (
-                    <li key={bulletIdx} className="flex items-start gap-3 rounded-2xl bg-gradient-to-br from-slate-50 to-white p-4 border border-slate-100 hover:border-[#7C3AED]/30 transition-all group/item">
-                      <CheckCircle2 className="h-5 w-5 text-emerald-500 flex-shrink-0 mt-0.5 group-hover/item:scale-110 transition-transform" />
-                      <span className="font-medium">{bullet}</span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        
-        {/* CTA Section */}
-        <div className="mt-16 container mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="rounded-3xl bg-gradient-to-r from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white p-10 lg:p-16 text-center shadow-2xl">
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">Ready to Experience All Features?</h2>
-            <p className="text-xl text-purple-100 mb-8 max-w-2xl mx-auto">
-              Book a personalized demo and see exactly how EaseMySalon can transform your salon operations.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Button
-                  size="lg"
-                  asChild
-                  className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl"
-                >
-                  <Link href="/pricing">View Salon Management Software Pricing</Link>
-                </Button>
-            </div>
+      <section className="border-b border-slate-100 bg-white py-12 sm:py-16 lg:py-20">
+        <ProductCapabilitiesExplorer />
+      </section>
+
+      <section className="bg-slate-50 py-12 sm:py-16">
+        <div className="container mx-auto max-w-3xl px-4 text-center sm:px-6 lg:px-8">
+          <Building2 className="mx-auto mb-3 h-9 w-9 text-[#7C3AED]" aria-hidden />
+          <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">Ready to go deeper?</h2>
+          <p className="mt-2 text-sm text-slate-600 sm:text-base">
+            Walk through the modules that matter, then match them to your tier on the pricing page.
+          </p>
+          <div className="mt-6 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:justify-center">
+            <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9]">
+              <Link href="/contact#get-in-touch">
+                Book a personalized demo
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
+            <Button variant="outline" asChild className="border-[#7C3AED]/30 bg-white text-[#7C3AED] hover:bg-purple-50">
+              <Link href="/pricing">Compare plans &amp; matrix</Link>
+            </Button>
           </div>
         </div>
       </section>
     </PublicShell>
   )
 }
-
