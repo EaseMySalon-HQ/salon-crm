@@ -184,8 +184,12 @@ appointmentSchema.methods.getAllStaff = function() {
 // Indexes: calendar lists, client/staff filters, booking groups
 appointmentSchema.index({ branchId: 1, date: 1, time: 1 });
 appointmentSchema.index({ branchId: 1, status: 1, date: 1 });
+// Compound index covering the most common analytics query pattern: branch + date + status
+appointmentSchema.index({ branchId: 1, date: 1, status: 1 });
 appointmentSchema.index({ branchId: 1, createdAt: -1 });
 appointmentSchema.index({ clientId: 1, branchId: 1 });
+// Legacy staffId field — used in filters and aggregation pipelines
+appointmentSchema.index({ staffId: 1, branchId: 1 }, { sparse: true });
 appointmentSchema.index({ 'staffAssignments.staffId': 1, branchId: 1 });
 appointmentSchema.index({ bookingGroupId: 1 }, { sparse: true });
 appointmentSchema.index({ branchId: 1, parentBookingId: 1 }, { sparse: true });

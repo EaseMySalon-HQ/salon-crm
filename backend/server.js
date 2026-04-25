@@ -35,6 +35,7 @@ const {
   buildAnalyticsStaffTab,
   buildAnalyticsStaffDrillDown,
 } = require('./lib/analytics-tabs');
+const { analyticsCache, salesSummaryCache } = require('./lib/query-cache');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -9619,9 +9620,24 @@ const analyticsTabOpts = (req) => ({
   query: req.query,
 });
 
+/**
+ * Build a deterministic cache key for an analytics tab request.
+ * Keyed by branchId + tab name + the full query string so different date
+ * ranges and filters each get their own cache slot.
+ */
+function analyticsTabCacheKey(tab, req) {
+  const branchId = String(req.user.branchId || '');
+  const qs = new URLSearchParams(req.query).toString();
+  return `analytics:${tab}:${branchId}:${qs}`;
+}
+
 app.get('/api/analytics/revenue', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const started = Date.now();
   try {
-    const payload = await buildAnalyticsRevenueTab(analyticsTabOpts(req));
+    const cacheKey = analyticsTabCacheKey('revenue', req);
+    const payload = await analyticsCache.getOrSet(cacheKey, () => buildAnalyticsRevenueTab(analyticsTabOpts(req)));
+    const durationMs = Date.now() - started;
+    if (durationMs > 500) logger.warn('Slow GET /api/analytics/revenue', { durationMs });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'revenue analytics');
@@ -9629,8 +9645,12 @@ app.get('/api/analytics/revenue', authenticateToken, setupBusinessDatabase, requ
 });
 
 app.get('/api/analytics/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const started = Date.now();
   try {
-    const payload = await buildAnalyticsServicesTab(analyticsTabOpts(req));
+    const cacheKey = analyticsTabCacheKey('services', req);
+    const payload = await analyticsCache.getOrSet(cacheKey, () => buildAnalyticsServicesTab(analyticsTabOpts(req)));
+    const durationMs = Date.now() - started;
+    if (durationMs > 500) logger.warn('Slow GET /api/analytics/services', { durationMs });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'services analytics');
@@ -9638,8 +9658,12 @@ app.get('/api/analytics/services', authenticateToken, setupBusinessDatabase, req
 });
 
 app.get('/api/analytics/clients', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const started = Date.now();
   try {
-    const payload = await buildAnalyticsClientsTab(analyticsTabOpts(req));
+    const cacheKey = analyticsTabCacheKey('clients', req);
+    const payload = await analyticsCache.getOrSet(cacheKey, () => buildAnalyticsClientsTab(analyticsTabOpts(req)));
+    const durationMs = Date.now() - started;
+    if (durationMs > 500) logger.warn('Slow GET /api/analytics/clients', { durationMs });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'clients analytics');
@@ -9647,8 +9671,12 @@ app.get('/api/analytics/clients', authenticateToken, setupBusinessDatabase, requ
 });
 
 app.get('/api/analytics/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const started = Date.now();
   try {
-    const payload = await buildAnalyticsProductsTab(analyticsTabOpts(req));
+    const cacheKey = analyticsTabCacheKey('products', req);
+    const payload = await analyticsCache.getOrSet(cacheKey, () => buildAnalyticsProductsTab(analyticsTabOpts(req)));
+    const durationMs = Date.now() - started;
+    if (durationMs > 500) logger.warn('Slow GET /api/analytics/products', { durationMs });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'products analytics');
@@ -9656,8 +9684,12 @@ app.get('/api/analytics/products', authenticateToken, setupBusinessDatabase, req
 });
 
 app.get('/api/analytics/staff', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const started = Date.now();
   try {
-    const payload = await buildAnalyticsStaffTab(analyticsTabOpts(req));
+    const cacheKey = analyticsTabCacheKey('staff', req);
+    const payload = await analyticsCache.getOrSet(cacheKey, () => buildAnalyticsStaffTab(analyticsTabOpts(req)));
+    const durationMs = Date.now() - started;
+    if (durationMs > 500) logger.warn('Slow GET /api/analytics/staff', { durationMs });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'staff analytics');
@@ -9665,11 +9697,14 @@ app.get('/api/analytics/staff', authenticateToken, setupBusinessDatabase, requir
 });
 
 app.get('/api/analytics/staff/:staffId/trends', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  const started = Date.now();
   try {
     const payload = await buildAnalyticsStaffDrillDown({
       ...analyticsTabOpts(req),
       staffId: req.params.staffId,
     });
+    const durationMs = Date.now() - started;
+    if (durationMs > 500) logger.warn('Slow GET /api/analytics/staff/:staffId/trends', { durationMs, staffId: req.params.staffId });
     res.json(payload);
   } catch (error) {
     if (error && error.code === 'NOT_FOUND') {
@@ -9861,10 +9896,14 @@ app.get('/api/sales/summary', authenticateToken, setupBusinessDatabase, requireS
   try {
     const { Sale } = req.businessModels;
     const branchId = req.user.branchId;
-    const split = buildSalesListDuePaymentSplitMatches(branchId, req.query);
-    const totals = split
-      ? await computeSalesSummaryTotalsSplit(Sale, split.matchInvoice, split.matchPaymentOnly)
-      : await computeSalesSummaryTotals(Sale, buildSalesListMatch(branchId, req.query));
+    const qs = new URLSearchParams(req.query).toString();
+    const cacheKey = `sales:summary:${String(branchId)}:${qs}`;
+    const totals = await salesSummaryCache.getOrSet(cacheKey, async () => {
+      const split = buildSalesListDuePaymentSplitMatches(branchId, req.query);
+      return split
+        ? computeSalesSummaryTotalsSplit(Sale, split.matchInvoice, split.matchPaymentOnly)
+        : computeSalesSummaryTotals(Sale, buildSalesListMatch(branchId, req.query));
+    });
     const durationMs = Date.now() - started;
     if (durationMs > 500) {
       logger.warn('Slow GET /api/sales/summary', { durationMs });

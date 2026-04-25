@@ -119,6 +119,8 @@ const staffSchema = new mongoose.Schema({
 staffSchema.index({ branchId: 1, isActive: 1 });
 staffSchema.index({ branchId: 1, role: 1 });
 staffSchema.index({ branchId: 1, createdAt: -1 });
+// Branch-scoped email lookup (staff login, duplicate-check within a branch)
+staffSchema.index({ branchId: 1, email: 1 });
 
 // Export both schema and model for flexibility
 module.exports = {
