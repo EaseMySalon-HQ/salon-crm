@@ -124,7 +124,7 @@ export default function PublicReceiptPage() {
                   : [
                       {
                         type: (String(saleData.paymentMode || "cash").split(",")[0]?.trim().toLowerCase() ||
-                          "unknown") as "cash" | "card" | "online" | "unknown",
+                          "unknown") as "cash" | "card" | "online" | "wallet" | "unknown",
                         amount: saleData.grossTotal,
                         recordedAt: new Date(saleData.date).toISOString(),
                       },
@@ -251,7 +251,7 @@ export default function PublicReceiptPage() {
               tax: receipt.taxAmount,
               total: receipt.grossTotal,
               payments: receipt.payments?.map(payment => ({
-                type: (payment?.type || 'unknown') as "cash" | "card" | "online",
+                type: (payment?.type || 'unknown') as "cash" | "card" | "online" | "wallet" | "unknown",
                 amount: payment?.amount || 0,
                 recordedAt: payment?.recordedAt,
               })) || [],

@@ -281,6 +281,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
             if (payment.type === 'cash') displayName = 'Cash'
             if (payment.type === 'card') displayName = 'Card'
             if (payment.type === 'online') displayName = 'Online'
+            if (payment.type === 'wallet') displayName = 'Wallet'
             if (payment.type === 'unknown') displayName = 'Unknown'
             
             const dateLabel = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)

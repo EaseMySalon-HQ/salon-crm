@@ -379,7 +379,7 @@ ${publicUrl}`
       roundOff: 0,
       total: receipt.grossTotal + (receipt.tip || 0),
       payments: receipt.payments.map(payment => ({
-        type: payment.type as "cash" | "card" | "online",
+        type: payment.type as "cash" | "card" | "online" | "wallet" | "unknown",
         amount: payment.amount,
         recordedAt: payment.recordedAt,
       })),
@@ -502,7 +502,7 @@ ${publicUrl}`
               tax: receipt.taxAmount,
               total: receipt.grossTotal + (receipt.tip || 0),
               payments: receipt.payments?.map(payment => ({
-                type: (payment?.type || 'unknown') as "cash" | "card" | "online",
+                type: (payment?.type || 'unknown') as "cash" | "card" | "online" | "wallet" | "unknown",
                 amount: payment?.amount || 0,
                 recordedAt: payment?.recordedAt,
               })) || [],

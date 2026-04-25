@@ -136,7 +136,15 @@ const businessSchema = new mongoose.Schema({
         enabled: { type: Boolean, default: false },
         lowInventory: { type: Boolean, default: false },
         paymentFailures: { type: Boolean, default: false }
-      }
+      },
+      /** WhatsApp when a client prepaid wallet is credited/debited/adjusted */
+      clientWalletTransactionNotifications: {
+        enabled: { type: Boolean, default: true },
+      },
+      /** WhatsApp template for 30/15/7-day prepaid wallet expiry reminders (requires admin template) */
+      clientWalletExpiryReminderNotifications: {
+        enabled: { type: Boolean, default: true },
+      },
     },
     
     // Branding
@@ -227,6 +235,21 @@ const businessSchema = new mongoose.Schema({
         lastResetAt: { type: Date },
       },
     },
+  },
+
+  /** Client prepaid wallet (salon-issued service credit) — not the messaging wallet */
+  clientWalletSettings: {
+    allowCouponStacking: { type: Boolean, default: false },
+    gracePeriodDays: { type: Number, default: 0, min: 0, max: 90 },
+    allowMultiBranch: { type: Boolean, default: false },
+    refundPolicy: {
+      type: String,
+      enum: ['service_credit_only', 'no_refunds'],
+      default: 'service_credit_only',
+    },
+    minRechargeAmount: { type: Number, default: 500, min: 0 },
+    /** SMS / WhatsApp expiry reminders (30 / 15 / 7 days before wallet expiryDate) */
+    expiryAlertsEnabled: { type: Boolean, default: true },
   },
 
   // Prepaid messaging wallet (balance in paise; 100 paise = 1 rupee)

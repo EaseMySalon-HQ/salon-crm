@@ -11,6 +11,8 @@ export interface TaxSettings {
   membershipTaxRate?: number
   /** GST % for package lines (Quick Sale); defaults to serviceTaxRate if unset */
   packageTaxRate?: number
+  /** GST % for prepaid wallet plan lines (Quick Sale); defaults to serviceTaxRate if unset */
+  prepaidWalletTaxRate?: number
   essentialProductRate: number
   intermediateProductRate: number
   standardProductRate: number
@@ -237,6 +239,7 @@ export function createTaxCalculator(settings: Partial<TaxSettings> = {}): TaxCal
     serviceTaxRate: 5,
     membershipTaxRate: 5,
     packageTaxRate: 5,
+    prepaidWalletTaxRate: 5,
     essentialProductRate: 5,
     intermediateProductRate: 12,
     standardProductRate: 18,

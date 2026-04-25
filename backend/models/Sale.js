@@ -9,7 +9,7 @@ const staffContributionSchema = new mongoose.Schema({
 
 const itemSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  type: { type: String, enum: ['service', 'product', 'membership', 'package'], required: true },
+  type: { type: String, enum: ['service', 'product', 'membership', 'package', 'prepaid_wallet'], required: true },
   quantity: { type: Number, required: true },
   price: { type: Number, required: true },
   total: { type: Number, required: true },
@@ -18,6 +18,8 @@ const itemSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' }, // For products only
   // Service reference for auto consumption (type === 'service')
   serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
+  /** When type === 'prepaid_wallet', catalog plan sold on this line */
+  prepaidPlanId: { type: mongoose.Schema.Types.ObjectId, ref: 'PrepaidPlan' },
   variantKey: { type: String, default: '' }, // e.g. 'short'|'medium'|'long' for variant-based rules
   autoConsumptionProcessedAt: { type: Date }, // Set when consumption run for this line; cleared on reversal
   // Legacy fields for backward compatibility
@@ -39,7 +41,7 @@ const itemSchema = new mongoose.Schema({
 const paymentHistorySchema = new mongoose.Schema({
   date: { type: Date, required: true, default: Date.now },
   amount: { type: Number, required: true, min: 0 },
-  method: { type: String, enum: ['Cash', 'Card', 'Online'], required: true },
+  method: { type: String, enum: ['Cash', 'Card', 'Online', 'Wallet'], required: true },
   notes: { type: String, default: '' },
   collectedBy: { type: String, default: '' }
 }, { _id: false });
@@ -73,7 +75,7 @@ const saleSchema = new mongoose.Schema({
   // Support for split payments (legacy and enhanced)
   paymentMode: { type: String, default: '' }, // Can be "Cash", "Card", "Online", or "Cash, Card", etc.
   payments: [{
-    mode: { type: String, enum: ['Cash', 'Card', 'Online'], required: true },
+    mode: { type: String, enum: ['Cash', 'Card', 'Online', 'Wallet'], required: true },
     amount: { type: Number, required: true, min: 0 }
   }],
   

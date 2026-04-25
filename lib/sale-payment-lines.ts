@@ -31,16 +31,18 @@ export function normalizePaymentModeLabel(modeOrType: string | undefined | null)
   if (lower === "cash") return "Cash"
   if (lower === "card") return "Card"
   if (lower === "online") return "Online"
+  if (lower === "wallet") return "Wallet"
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
 }
 
 export function modeStringToReceiptType(
   mode: string
-): "cash" | "card" | "online" | "unknown" {
+): "cash" | "card" | "online" | "wallet" | "unknown" {
   const m = String(mode || "").toLowerCase()
   if (m === "cash") return "cash"
   if (m === "card") return "card"
   if (m === "online") return "online"
+  if (m === "wallet") return "wallet"
   return "unknown"
 }
 
@@ -123,7 +125,7 @@ export function formatPaymentRecordedDateLabelFromIso(iso: string | undefined): 
 
 /** Receipt / API payload: lowercase type + ISO recordedAt for each split. */
 export function buildReceiptPaymentsFromSale(sale: SalePaymentSource): Array<{
-  type: "cash" | "card" | "online" | "unknown"
+  type: "cash" | "card" | "online" | "wallet" | "unknown"
   amount: number
   recordedAt: string
 }> {

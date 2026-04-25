@@ -139,6 +139,15 @@ class ModelFactory {
       PackageNotification: this.getModel('PackageNotification', require('./PackageNotification').schema, connection),
       PackageAuditLog: this.getModel('PackageAuditLog', require('./PackageAuditLog').schema, connection),
 
+      // Client prepaid wallet (salon service credit)
+      PrepaidPlan: this.getModel('PrepaidPlan', require('./PrepaidPlan').schema, connection),
+      ClientWallet: this.getModel('ClientWallet', require('./ClientWallet').schema, connection),
+      ClientWalletTransaction: this.getModel(
+        'ClientWalletTransaction',
+        require('./ClientWalletTransaction').schema,
+        connection
+      ),
+
       // Scheduling (package sessions + holds + availability)
       PackageSession: this.getModel('PackageSession', require('./PackageSession').schema, connection),
       BookingHold: this.getModel('BookingHold', require('./BookingHold').schema, connection),

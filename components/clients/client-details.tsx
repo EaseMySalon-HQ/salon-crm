@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
-import { ArrowLeft, Edit, Save, X } from "lucide-react"
+import { ArrowLeft, Edit, Save, Wallet, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { clientStore, type Client } from "@/lib/client-store"
 import { ClientsAPI } from "@/lib/api"
@@ -192,10 +192,18 @@ export function ClientDetailsPage({
         )}
         <div className="flex flex-wrap items-center gap-2">
           {!isEditMode && (
-            <Button onClick={handleEdit} variant="outline" size="sm">
-              <Edit className="mr-2 h-4 w-4" />
-              Edit
-            </Button>
+            <>
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/clients/${clientId}/wallet`}>
+                  <Wallet className="mr-2 h-4 w-4" />
+                  Wallet
+                </Link>
+              </Button>
+              <Button onClick={handleEdit} variant="outline" size="sm">
+                <Edit className="mr-2 h-4 w-4" />
+                Edit
+              </Button>
+            </>
           )}
           {isEditMode && (
             <>

@@ -24,7 +24,7 @@ import { getAdminAuthToken } from "@/lib/admin-auth-storage"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ChevronDown, HelpCircle } from "lucide-react"
-import { WhatsAppAdminSettings } from "./whatsapp-admin-settings"
+import { WhatsAppAdminSettings, EMPTY_WHATSAPP_TEMPLATE_SLOTS } from "./whatsapp-admin-settings"
 
 const TEMPLATE_VARIABLES = [
   "{businessCode}", "{days}", "{alertType}", "{message}", "{clientName}", "{receiptNumber}",
@@ -135,7 +135,7 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
     provider: "msg91",
     msg91ApiKey: "",
     msg91SenderId: "",
-    templates: {},
+    templates: { ...EMPTY_WHATSAPP_TEMPLATE_SLOTS },
     templateVariables: {},
     templateJavaScriptCodes: {}
   }
@@ -160,7 +160,25 @@ function mergeWithDefaults(prop?: any) {
       quietHours: { ...def.preferences.quietHours, ...(prop.preferences?.quietHours || {}) },
       channels: { ...def.preferences.channels, ...(prop.preferences?.channels || {}) }
     },
-    whatsapp: prop.whatsapp ? { ...def.whatsapp, ...prop.whatsapp } : def.whatsapp
+    whatsapp: prop.whatsapp
+      ? {
+          ...def.whatsapp,
+          ...prop.whatsapp,
+          templates: {
+            ...EMPTY_WHATSAPP_TEMPLATE_SLOTS,
+            ...(def.whatsapp.templates || {}),
+            ...(prop.whatsapp.templates || {}),
+          },
+          templateVariables: {
+            ...(def.whatsapp.templateVariables || {}),
+            ...(prop.whatsapp.templateVariables || {}),
+          },
+          templateJavaScriptCodes: {
+            ...(def.whatsapp.templateJavaScriptCodes || {}),
+            ...(prop.whatsapp.templateJavaScriptCodes || {}),
+          },
+        }
+      : def.whatsapp
   }))
 }
 

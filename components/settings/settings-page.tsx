@@ -27,6 +27,7 @@ import {
   Layers,
   Search,
   IdCard,
+  CircleDollarSign,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -44,6 +45,7 @@ import { MembershipPlansTable } from "@/components/membership/membership-plans-t
 import { PackagesSettingsPanel } from "@/components/packages/PackagesSettingsPanel"
 import { ChannelUsageSettings } from "./channel-usage-settings"
 import RechargeSettings from "./recharge-settings"
+import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { ProductsTable } from "@/components/products/products-table"
@@ -71,6 +73,7 @@ const SETTINGS_SECTION_IDS = [
   "packages",
   "channel-usage",
   "recharge",
+  "prepaid-wallet",
 ] as const
 
 function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
@@ -156,6 +159,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "Bundles, sittings, redemptions, and package sales.",
         icon: Layers,
         searchTerms: ["bundle", "deals"],
+      },
+      {
+        id: "prepaid-wallet",
+        title: "Prepaid wallet",
+        description: "Client wallet plans, credit rules, liability, and expiry alerts.",
+        icon: CircleDollarSign,
+        searchTerms: ["prepaid", "credit", "wallet plans", "liability"],
       },
     ],
   },
@@ -413,6 +423,8 @@ export function SettingsPage() {
         return <ChannelUsageSettings />
       case "recharge":
         return <RechargeSettings />
+      case "prepaid-wallet":
+        return <PrepaidWalletSettings />
       default:
         return null
     }
