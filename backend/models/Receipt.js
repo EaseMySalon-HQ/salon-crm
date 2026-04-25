@@ -104,6 +104,8 @@ const receiptSchema = new mongoose.Schema({
 receiptSchema.index({ branchId: 1, date: -1 });
 receiptSchema.index({ branchId: 1, clientId: 1 });
 receiptSchema.index({ branchId: 1, createdAt: -1 });
+// saleId lookup — receipts are frequently fetched by their parent sale
+receiptSchema.index({ branchId: 1, saleId: 1 }, { sparse: true });
 
 // Export both schema and model for flexibility
 module.exports = {
