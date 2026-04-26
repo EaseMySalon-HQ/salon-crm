@@ -55,7 +55,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid gap-8 mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "600ms" }}>
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
+          <div className="grid items-start gap-6 md:grid-cols-2 lg:grid-cols-7">
             <Card className="col-span-4 transform hover:scale-[1.02] transition-all duration-300 shadow-lg hover:shadow-xl border-0 bg-white/80 backdrop-blur-sm">
               <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-lg border-b border-blue-100">
                 <CardTitle className="flex items-center gap-2 text-blue-800">

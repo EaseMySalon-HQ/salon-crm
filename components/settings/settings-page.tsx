@@ -130,7 +130,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: "operations",
     title: "Operations",
-    description: "Day-to-day salon workflows, catalog, and sellable offers.",
+    description: "Day-to-day salon workflows, catalog, memberships, and sellable offers.",
     items: [
       {
         id: "appointments",
@@ -161,6 +161,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         searchTerms: ["bundle", "deals"],
       },
       {
+        id: "membership",
+        title: "Membership",
+        description: "Membership tiers, benefits, and customer subscriptions.",
+        icon: IdCard,
+        searchTerms: ["subscription", "tiers", "loyalty"],
+      },
+      {
         id: "prepaid-wallet",
         title: "Prepaid wallet",
         description: "Client wallet plans, credit rules, liability, and expiry alerts.",
@@ -187,13 +194,6 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "Tender types, payment methods, and how you get paid.",
         icon: CreditCard,
         searchTerms: ["upi", "card", "methods"],
-      },
-      {
-        id: "membership",
-        title: "Membership",
-        description: "Membership tiers, benefits, and customer subscriptions.",
-        icon: IdCard,
-        searchTerms: ["subscription", "tiers", "loyalty"],
       },
       {
         id: "plan-billing",

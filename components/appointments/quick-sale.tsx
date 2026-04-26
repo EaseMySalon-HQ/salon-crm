@@ -59,6 +59,7 @@ import {
 } from "@/components/ui/table"
 import { useToast } from "@/components/ui/use-toast"
 import { ReceiptDialog } from "@/components/receipts/receipt-dialog"
+import { PostPaymentReceiptModal } from "@/components/receipts/post-payment-receipt-modal"
 import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -506,6 +507,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [isOldQuickSale, setIsOldQuickSale] = useState(false)
   const [currentReceipt, setCurrentReceipt] = useState<any | null>(null)
   const [showReceiptDialog, setShowReceiptDialog] = useState(false)
+  /** After checkout: in-modal receipt + timed redirect (replaces opening /receipt in a new tab). */
+  const [postPaymentModal, setPostPaymentModal] = useState<{
+    receipt: any
+    returnPath: string
+  } | null>(null)
   const [summaryExpanded, setSummaryExpanded] = useState(false)
 
   // Search states for service items dropdown
@@ -4512,30 +4518,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               }
             }
 
-            // Open receipt in new tab - Use business receipt page (with Print/Thermal Print buttons)
-            try {
-              // Always use business receipt URL for internal use (has Print/Thermal Print buttons)
-              const returnTo = linkedAppointmentId ? 'appointments' : 'quick-sale'
-              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&returnTo=${returnTo}&t=${Date.now()}`
-              console.log('🎯 Opening business receipt URL (with print options):', receiptUrl)
-              
-              const newWindow = window.open(receiptUrl, '_blank')
-              if (!newWindow || newWindow.closed || typeof newWindow.closed == 'undefined') {
-                console.warn('⚠️ Popup was blocked, showing fallback message')
-                toast({
-                  title: "Receipt Generated",
-                  description: `Receipt #${receipt.receiptNumber} created successfully. Please check the receipts page.`,
-                })
-              } else {
-                console.log('✅ Receipt opened successfully in new tab')
-              }
-            } catch (error) {
-              console.error('❌ Error opening receipt:', error)
-              toast({
-                title: "Receipt Generated",
-                description: `Receipt #${receipt.receiptNumber} created successfully. Please check the receipts page.`,
-              })
-            }
+            const returnPath = linkedAppointmentId ? "/appointments" : "/quick-sale"
+            setPostPaymentModal({ receipt: { ...receipt }, returnPath })
           } else {
             console.error('❌ Failed to create sale in backend:', result.error)
                   toast({
@@ -7697,7 +7681,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         sale={selectedBillForPayment}
         onPaymentCollected={handlePaymentCollected}
       />
-      
+
+      <PostPaymentReceiptModal
+        key={postPaymentModal?.receipt?.receiptNumber ?? "post-payment-idle"}
+        open={!!postPaymentModal}
+        onOpenChange={(next) => {
+          if (!next) setPostPaymentModal(null)
+        }}
+        receipt={postPaymentModal?.receipt ?? null}
+        returnPath={postPaymentModal?.returnPath ?? "/quick-sale"}
+      />
+
       {/* Dues Settlement Dialog - Rendered at root level */}
       {showDuesDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" style={{ zIndex: 99999 }}>
