@@ -238,9 +238,9 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
               <span>{formatAmount(receipt.roundOff)}</span>
             </div>
           )}
-          <div className="flex justify-between font-bold text-base border-t border-black pt-2 mt-2">
+          <div className="flex justify-between font-bold text-lg border-t-2 border-black pt-2 mt-2">
             <span>TOTAL:</span>
-            <span>{formatAmount(getReceiptGrandTotal(receipt))}</span>
+            <span className="tabular-nums">{formatAmount(getReceiptGrandTotal(receipt))}</span>
           </div>
           {(() => {
             const total = getReceiptGrandTotal(receipt)
@@ -281,6 +281,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
             if (payment.type === 'cash') displayName = 'Cash'
             if (payment.type === 'card') displayName = 'Card'
             if (payment.type === 'online') displayName = 'Online'
+            if (payment.type === 'wallet') displayName = 'Wallet'
             if (payment.type === 'unknown') displayName = 'Unknown'
             
             const dateLabel = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)

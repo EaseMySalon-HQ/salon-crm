@@ -22,7 +22,17 @@ function isAdminReceiptNotificationsEnabled(whatsapp) {
   return isAdminWhatsappPreferenceTrueByDefault(whatsapp, 'receiptNotifications');
 }
 
+function isAdminClientWalletTransactionNotificationsEnabled(whatsapp) {
+  return isAdminWhatsappPreferenceTrueByDefault(whatsapp, 'clientWalletTransactionNotifications');
+}
+
+function isAdminClientWalletExpiryReminderNotificationsEnabled(whatsapp) {
+  return isAdminWhatsappPreferenceTrueByDefault(whatsapp, 'clientWalletExpiryReminderNotifications');
+}
+
 module.exports = {
   isAdminAppointmentNotificationsEnabled,
   isAdminReceiptNotificationsEnabled,
+  isAdminClientWalletTransactionNotificationsEnabled,
+  isAdminClientWalletExpiryReminderNotificationsEnabled,
 };

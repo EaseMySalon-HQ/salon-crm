@@ -979,6 +979,82 @@ class WhatsAppService {
   }
 
   /**
+   * Prepaid wallet ledger activity (credit / debit / adjustment / refund_credit).
+   * Template type: clientWalletTransaction — Admin → Notifications → WhatsApp.
+   * Expected data fields: clientName, businessName, planName, transactionType, transactionTypeLabel,
+   * amountFormatted, balanceAfterFormatted, description (optional extra mapping only)
+   */
+  async sendClientWalletTransaction(payload) {
+    const { to, ...rest } = payload || {};
+    const data = {
+      clientName: rest.clientName || 'Customer',
+      businessName: rest.businessName || 'Salon',
+      planName: rest.planName || 'Prepaid wallet',
+      transactionType: rest.transactionType || '',
+      transactionTypeLabel: rest.transactionTypeLabel || 'Update',
+      amountFormatted: rest.amountFormatted || '',
+      balanceAfterFormatted: rest.balanceAfterFormatted || '',
+      description: rest.description || '',
+    };
+
+    const templateType = 'clientWalletTransaction';
+    let variables = this.mapDataToTemplateVariables(templateType, data);
+    if (!variables || Object.keys(variables).length === 0) {
+      variables = {
+        body_1: data.clientName,
+        body_2: data.planName,
+        body_3: data.businessName,
+        body_4: data.transactionTypeLabel,
+        body_5: data.amountFormatted,
+        body_6: data.balanceAfterFormatted,
+      };
+    }
+
+    const templateId = this.getTemplateId(templateType);
+    if (!templateId || !String(templateId).trim()) {
+      return { success: false, error: 'clientWalletTransaction template not configured in Admin Settings' };
+    }
+
+    return this.sendMessage({ to, templateId, variables });
+  }
+
+  /**
+   * Prepaid wallet expiry reminder (30 / 15 / 7 days before expiryDate).
+   * Template type: clientWalletExpiryReminder
+   */
+  async sendClientWalletExpiryReminder(payload) {
+    const { to, ...rest } = payload || {};
+    const data = {
+      clientName: rest.clientName || 'Customer',
+      businessName: rest.businessName || 'Salon',
+      planName: rest.planName || 'Prepaid wallet',
+      daysLeft: rest.daysLeft != null ? String(rest.daysLeft) : '',
+      expiryDateFormatted: rest.expiryDateFormatted || '',
+      balanceFormatted: rest.balanceFormatted || '',
+    };
+
+    const templateType = 'clientWalletExpiryReminder';
+    let variables = this.mapDataToTemplateVariables(templateType, data);
+    if (!variables || Object.keys(variables).length === 0) {
+      variables = {
+        body_1: data.clientName,
+        body_2: data.planName,
+        body_3: data.businessName,
+        body_4: data.daysLeft,
+        body_5: data.expiryDateFormatted,
+        body_6: data.balanceFormatted,
+      };
+    }
+
+    const templateId = this.getTemplateId(templateType);
+    if (!templateId || !String(templateId).trim()) {
+      return { success: false, error: 'clientWalletExpiryReminder template not configured in Admin Settings' };
+    }
+
+    return this.sendMessage({ to, templateId, variables });
+  }
+
+  /**
    * Test WhatsApp connection
    * Uses configured variable mappings to send test data matching template requirements
    */
@@ -1061,6 +1137,22 @@ class WhatsAppService {
             testValue = 'Welcome to our service!';
           } else if (dataField === 'reminderHours') {
             testValue = '24 hours';
+          } else if (dataField === 'planName') {
+            testValue = 'Gold prepaid wallet';
+          } else if (dataField === 'transactionType' || dataField === 'transactionTypeLabel') {
+            testValue = 'Credit';
+          } else if (dataField === 'amountFormatted') {
+            testValue = '₹5000';
+          } else if (dataField === 'balanceAfterFormatted') {
+            testValue = '₹8330';
+          } else if (dataField === 'description') {
+            testValue = 'Wallet issued — Gold plan';
+          } else if (dataField === 'daysLeft') {
+            testValue = '7';
+          } else if (dataField === 'expiryDateFormatted') {
+            testValue = '25 Apr 2026';
+          } else if (dataField === 'balanceFormatted') {
+            testValue = '₹8330';
           } else {
             // Default test value for unknown fields
             testValue = `Test ${dataField}`;

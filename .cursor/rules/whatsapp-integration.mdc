@@ -6,6 +6,8 @@ alwaysApply: false
 
 # Adding a New WhatsApp Message Type
 
+**Template authoring playbook** (variable mapping UI, field contracts, verification): see **`whatsapp-template-playbook.mdc`**.
+
 ## Architecture overview
 
 - **Admin settings** (`AdminSettings.notifications.whatsapp`) — platform-level MSG91 config (API key, sender ID, templates, variable mappings).
@@ -14,6 +16,19 @@ alwaysApply: false
 - **`whatsapp-admin-gates.js`** — resolves admin preference flags that may be `undefined`, boolean, or `{ enabled }`.
 - **`whatsapp-settings-defaults.js`** — `getWhatsAppSettingsWithDefaults()` merges business settings with defaults.
 - **`send-appointment-whatsapp.js`** — example of a reusable sender (gates → service → log → quota).
+
+### Prepaid wallet transaction (client wallet ledger)
+
+- **Admin template key:** `clientWalletTransaction` (`notifications.whatsapp.templates.clientWalletTransaction` = MSG91 template ID).
+- **Sender:** `whatsapp-service.sendClientWalletTransaction` → triggered from `client-wallet-service` after each `ClientWalletTransaction` (credit, debit, adjustment, `refund_credit`).
+- **Gates:** `send-client-wallet-transaction-whatsapp.js` — admin WhatsApp enabled + `clientWalletTransactionNotifications` (admin + business) + quiet hours + template ID + client phone + addon/wallet quota.
+- **Default body variables (if mapping empty):** `body_1`…`body_6` map to `clientName`, `planName`, `businessName`, `transactionTypeLabel`, `amountFormatted`, `balanceAfterFormatted`.
+
+### Prepaid wallet expiry reminders (30 / 15 / 7 days)
+
+- **Admin template key:** `clientWalletExpiryReminder`
+- **Sender:** `whatsapp-service.sendClientWalletExpiryReminder` via `send-client-wallet-expiry-whatsapp.js`, called from `client-wallet-notification-service` when `expiryAlertsEnabled` is on.
+- **Gates:** Admin + business `clientWalletExpiryReminderNotifications`, master WhatsApp, quiet hours, template ID, phone, quota. **SMS** still uses plain text in the same reminder function.
 
 ## Step-by-step checklist
 

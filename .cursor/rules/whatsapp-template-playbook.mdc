@@ -1,0 +1,157 @@
+---
+description: Playbook for authoring new MSG91 WhatsApp templates — approval copy, variable mapping, code touch list, admin UI dropdowns
+globs: backend/services/whatsapp-service.js, components/admin/admin-settings/whatsapp-admin-settings.tsx, backend/models/AdminSettings.js, backend/lib/send-*-whatsapp.js, backend/lib/whatsapp-*.js
+alwaysApply: false
+---
+
+# WhatsApp template playbook (MSG91)
+
+Use this when adding or changing **approved WhatsApp templates** and wiring them in EaseMySalon. For the short checklist, see **`whatsapp-integration.mdc`**.
+
+---
+
+## 1. Design the template before coding
+
+1. **Choose a camelCase template type key** (e.g. `clientWalletTransaction`). It becomes:
+   - `AdminSettings.notifications.whatsapp.templates.<key>` (template ID string)
+   - `templateVariables.<key>` / `templateJavaScriptCodes.<key>`
+   - `whatsappService.send<Name>()` often uses the same string in `getTemplateId('<key>')` and `mapDataToTemplateVariables('<key>', data)`.
+
+2. **Lock the variable count** in Meta / MSG91 first. Body placeholders `{{1}}`…`{{N}}` map to API `body_1`…`body_n`. **N must match** what the backend sends after mapping. Extra or missing variables → **silent non-delivery** (API may still return success).
+
+3. **Name data fields** the backend will populate (snake-free camelCase): e.g. `clientName`, `planName`, `amountFormatted`. Document them in the playbook section of your PR or in this rule’s “Field contract” for that template.
+
+4. **Avoid redundant copy** in the template body (e.g. don’t repeat “prepaid wallet” if `{{2}}` is already the plan name).
+
+---
+
+## 2. Field contract (payload → template)
+
+| Step | Responsibility |
+|------|----------------|
+| Caller / `send-*-whatsapp.js` | Builds a plain `data` object: every **mapped** field should be a string (or coerced before send). |
+| `whatsappService.send*` | Merges `...rest` into `data`, calls `mapDataToTemplateVariables(templateType, data)`. |
+| `mapDataToTemplateVariables` | Uses `AdminSettings.notifications.whatsapp.templateVariables[templateType]`: keys `body_1`, `body_2`, … values = **names of keys on `data`**. |
+| **Fallback** (no admin mapping) | If `Object.keys(variables).length === 0`, `send*` must set `body_1`…`body_n` explicitly — **same n as MSG91 template**. |
+
+---
+
+## 3. Code touch list (new transactional template)
+
+Do **all** that apply. Order helps avoid “template ID saved but nowhere to send”.
+
+### Schema & defaults
+
+| Area | File / action |
+|------|----------------|
+| Template ID slot | `backend/models/AdminSettings.js` → `notifications.whatsapp.templates.<newKey>: { type: String, default: '' }` |
+| New admin preference (optional) | Same file → e.g. `notifications.whatsapp.<feature>Notifications: Mixed` with `{ enabled: true }` |
+| Merge existing DB docs | `adminSettingsSchema.statics.getSettings` → `waDefaultTemplateIds` / similar loop so old installs get the new key |
+| WhatsApp log enum (if new) | `backend/models/WhatsAppMessageLog.js` → `messageType.enum` |
+
+### Service
+
+| Area | File / action |
+|------|----------------|
+| Send API | `backend/services/whatsapp-service.js` → `async send<Feature>(payload)` using `getTemplateId('<newKey>')`, `mapDataToTemplateVariables`, **fallback `body_*` count = MSG91** |
+| Test send | Same file → `testConnection`: for each `dataField` in variable mapping, add a branch in the test-value generator so **Test WhatsApp** in admin works |
+
+### Gates & business settings (if per-salon toggle)
+
+| Area | File / action |
+|------|----------------|
+| Admin gate helper | `backend/lib/whatsapp-admin-gates.js` → `isAdmin<Feature>NotificationsEnabled` using `isAdminWhatsappPreferenceTrueByDefault` |
+| Defaults merge | `backend/lib/whatsapp-settings-defaults.js` + `backend/routes/email-notifications.js` GET/PUT merge for `whatsappNotificationSettings` |
+| Salon UI | `components/settings/whatsapp-business-settings.tsx` |
+
+### Reusable sender (recommended)
+
+| Area | File / action |
+|------|----------------|
+| Sender module | `backend/lib/send-<feature>-whatsapp.js` — init service, admin + business gates, quiet hours, `send*`, `WhatsAppMessageLog`, quota / `deductWhatsApp` |
+| Wire after DB success | Route or service: `void send...().catch(...)` so WhatsApp never fails the main transaction |
+
+### Admin UI (critical for operators)
+
+**File:** `components/admin/admin-settings/whatsapp-admin-settings.tsx`
+
+| Area | What to add |
+|------|-------------|
+| Initial `templates` state | `<newKey>: ""` |
+| Test template `<SelectItem>` | So admin can pick type in “Test WhatsApp Configuration” |
+| **`handleParseTemplateJson` `defaultFields`** | `<newKey>: ['field1', 'field2', ...]` in **field order** = `body_1`, `body_2`, … for auto-map |
+| **`handleSaveEdit` inner `defaultFields`** | Same array (duplicate block in save path) |
+| **Modal “Parse & Auto-Configure” `defaultFields`** | Same array (third duplicate) |
+| **Variable mapping `<SelectContent>`** | Every value in `defaultFields` must appear as `<SelectItem value="fieldName">…</SelectItem>`. **If missing, dropdown shows blank for auto-mapped keys** (common bug). Prefer `templateType === '<newKey>'` block for template-specific fields so the list stays short for other templates. |
+
+### Cross-links
+
+- Receipt / appointment flows: `whatsapp-integration.mdc`
+- Security / auth: `security.mdc` if the new endpoint is sensitive
+
+---
+
+## 4. Admin variable mapping UI pattern
+
+When `templateType === 'yourTemplateKey'`, append a fragment:
+
+```tsx
+{templateType === "yourTemplateKey" ? (
+  <>
+    <SelectItem value="myFieldA">My field A</SelectItem>
+    <SelectItem value="myFieldB">My field B</SelectItem>
+  </>
+) : null}
+```
+
+Place it after the shared items (`clientName`, `businessName`, …) inside the same `SelectContent` used for **Template Variable Mapping** (not only the test-template selector).
+
+---
+
+## 5. Reference implementation: prepaid wallet (`clientWalletTransaction`)
+
+| Item | Value |
+|------|--------|
+| Template key | `clientWalletTransaction` |
+| Sender | `whatsappService.sendClientWalletTransaction` |
+| Wrapper | `backend/lib/send-client-wallet-transaction-whatsapp.js` |
+| Trigger | `backend/services/client-wallet-service.js` after `ClientWalletTransaction.create` |
+| Default fields (6 body) | `clientName`, `planName`, `businessName`, `transactionTypeLabel`, `amountFormatted`, `balanceAfterFormatted` |
+| Extra optional in `data` | `description`, `transactionType` — add `<SelectItem>` only if the template uses them |
+| Log `messageType` | `client_wallet_transaction` |
+
+### Prepaid wallet expiry (`clientWalletExpiryReminder`)
+
+| Item | Value |
+|------|--------|
+| Template key | `clientWalletExpiryReminder` |
+| Sender | `whatsappService.sendClientWalletExpiryReminder` |
+| Wrapper | `backend/lib/send-client-wallet-expiry-whatsapp.js` |
+| Trigger | `client-wallet-notification-service.js` → `sendClientWalletExpiryReminder` (after SMS) |
+| Default fields (6) | `clientName`, `planName`, `businessName`, `daysLeft`, `expiryDateFormatted`, `balanceFormatted` |
+| Log `messageType` | `client_wallet_expiry` |
+
+---
+
+## 6. Verification checklist before merge
+
+- [ ] MSG91 template approved; **body (and button) variable count** documented
+- [ ] Fallback in `send*` assigns exactly that many `body_*` (and buttons if any)
+- [ ] `AdminSettings` schema + `getSettings` merge include new template key
+- [ ] All three `defaultFields` entries in `whatsapp-admin-settings.tsx` for the new key
+- [ ] **Every** mapped field appears in the variable-mapping dropdown (or shared list covers it)
+- [ ] `testConnection` returns sensible text for each mapped `dataField` (or generic `Test ${dataField}`)
+- [ ] `WhatsAppMessageLog` enum updated if using a new `messageType`
+- [ ] Manual test: Admin → Test WhatsApp → select template type → send to a test phone
+
+---
+
+## 7. Common mistakes
+
+| Mistake | Symptom |
+|---------|---------|
+| Variable count ≠ template | Message never arrives; MSG91 may still report success |
+| Auto-parse maps `body_2` → `planName` but no `SelectItem` for `planName` | Dropdown empty; hard to fix mapping in UI |
+| New key not in `getSettings` merge | Existing production admin doc missing key; undefined behavior in UI |
+| Forgetting `testConnection` branches | Test message sends wrong or empty slots |
+| Using `=== true` on admin WhatsApp prefs | `undefined` reads as “off”; use `whatsapp-admin-gates` helpers |

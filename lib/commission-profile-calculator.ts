@@ -7,7 +7,7 @@ import {
 export interface SaleItem {
   id: string
   name: string
-  type: 'service' | 'product' | 'package' | 'membership' | 'prepaid'
+  type: 'service' | 'product' | 'package' | 'membership' | 'prepaid' | 'prepaid_wallet'
   quantity: number
   price: number
   total: number
@@ -202,7 +202,9 @@ export class CommissionProfileCalculator {
     const productItems = staffItems.filter(item => item.type === 'product')
     const packageItems = staffItems.filter(item => item.type === 'package')
     const membershipItems = staffItems.filter(item => item.type === 'membership')
-    const prepaidItems = staffItems.filter(item => item.type === 'prepaid')
+    const prepaidItems = staffItems.filter(
+      (item) => item.type === 'prepaid' || item.type === 'prepaid_wallet'
+    )
 
     // Calculate revenue for each item type
     const serviceRevenue = serviceItems.reduce((sum, item) => sum + item.total, 0)

@@ -46,9 +46,12 @@ export function RecentAppointments() {
     }
   })
 
+  const scrollClass =
+    "max-h-[min(32rem,55vh)] overflow-y-auto overflow-x-hidden overscroll-contain space-y-4 pr-1 [-webkit-overflow-scrolling:touch]"
+
   if (isPending) {
     return (
-      <div className="space-y-4">
+      <div className={scrollClass}>
         {[1, 2, 3].map((i) => (
           <div key={i} className="h-16 rounded-xl bg-slate-100 animate-pulse" />
         ))}
@@ -61,7 +64,7 @@ export function RecentAppointments() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className={scrollClass}>
       {items.map((appointment, index) => {
         const statusStyles: Record<string, { badge: string; label: string; amount: string }> = {
           completed: {

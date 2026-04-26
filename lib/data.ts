@@ -123,7 +123,7 @@ export interface ReceiptItem {
 }
 
 export interface PaymentMethod {
-  type: "cash" | "card" | "online" | "unknown"
+  type: "cash" | "card" | "online" | "wallet" | "unknown"
   amount: number
   /** ISO timestamp when this split was recorded (checkout or due collection). */
   recordedAt?: string

@@ -1397,11 +1397,11 @@ export function SalesReport() {
 
   const handleConfirmDelete = async () => {
     if (!selectedSale || !deleteSaleReason.trim()) return
-    
+
     try {
       // Call the API to delete the sale from the database
       const response = await SalesAPI.delete(selectedSale.id, deleteSaleReason.trim())
-      
+
       if (response.success) {
         setSalesRefreshKey((k) => k + 1)
         setIsDeleteDialogOpen(false)
@@ -3267,7 +3267,12 @@ export function SalesReport() {
                               <Receipt className="mr-2 h-4 w-4 text-blue-600" />
                               <span className="text-slate-700">View Receipt</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleViewBill(sale)} className="hover:bg-blue-50">
+                            <DropdownMenuItem
+                              onSelect={() => {
+                                setTimeout(() => handleViewBill(sale), 0)
+                              }}
+                              className="hover:bg-blue-50"
+                            >
                               <Eye className="mr-2 h-4 w-4 text-blue-600" />
                               <span className="text-slate-700">View Bill Details</span>
                             </DropdownMenuItem>
@@ -3281,8 +3286,10 @@ export function SalesReport() {
                                 <span className="text-slate-700">Exchange Products</span>
                               </DropdownMenuItem>
                             )}
-                            <DropdownMenuItem 
-                              onClick={() => handleDeleteSale(sale)}
+                            <DropdownMenuItem
+                              onSelect={() => {
+                                setTimeout(() => handleDeleteSale(sale), 0)
+                              }}
                               className="text-red-600 hover:bg-red-50"
                             >
                               <Trash2 className="mr-2 h-4 w-4" />
@@ -3419,10 +3426,13 @@ export function SalesReport() {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={isDeleteDialogOpen} onOpenChange={(open) => {
-        setIsDeleteDialogOpen(open)
-        if (!open) setDeleteSaleReason("")
-      }}>
+      <Dialog
+        open={isDeleteDialogOpen}
+        onOpenChange={(open) => {
+          setIsDeleteDialogOpen(open)
+          if (!open) setDeleteSaleReason("")
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Sale Record</DialogTitle>
@@ -3446,7 +3456,13 @@ export function SalesReport() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setIsDeleteDialogOpen(false); setDeleteSaleReason("") }}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsDeleteDialogOpen(false)
+                setDeleteSaleReason("")
+              }}
+            >
               Cancel
             </Button>
             <Button variant="destructive" onClick={handleConfirmDelete} disabled={!deleteSaleReason.trim()}>

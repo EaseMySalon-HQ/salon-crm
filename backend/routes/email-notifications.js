@@ -127,6 +127,12 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
         enabled: false,
         lowInventory: false,
         paymentFailures: false
+      },
+      clientWalletTransactionNotifications: {
+        enabled: true
+      },
+      clientWalletExpiryReminderNotifications: {
+        enabled: true
       }
     };
 
@@ -230,6 +236,8 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
                               ('receiptNotifications' in dbWhatsappSettings) ||
                               ('appointmentNotifications' in dbWhatsappSettings) ||
                               ('systemAlerts' in dbWhatsappSettings) ||
+                              ('clientWalletTransactionNotifications' in dbWhatsappSettings) ||
+                              ('clientWalletExpiryReminderNotifications' in dbWhatsappSettings) ||
                               Object.keys(dbWhatsappSettings).length > 0);
     
     logger.debug('[GET Settings] hasSavedSettings check:', {
@@ -330,6 +338,14 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
       mergedWhatsappSettings.systemAlerts = normalizeSection(
         dbWhatsappSettings.systemAlerts,
         defaultWhatsappSettings.systemAlerts
+      );
+      mergedWhatsappSettings.clientWalletTransactionNotifications = normalizeSection(
+        dbWhatsappSettings.clientWalletTransactionNotifications,
+        defaultWhatsappSettings.clientWalletTransactionNotifications
+      );
+      mergedWhatsappSettings.clientWalletExpiryReminderNotifications = normalizeSection(
+        dbWhatsappSettings.clientWalletExpiryReminderNotifications,
+        defaultWhatsappSettings.clientWalletExpiryReminderNotifications
       );
       
       // FINAL CHECK: Ensure enabled is exactly what's in the database
@@ -712,6 +728,34 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
               lowInventory: false,
               paymentFailures: false
             })
+          };
+        }
+
+        if (incomingSettings.clientWalletTransactionNotifications) {
+          newWhatsappSettings.clientWalletTransactionNotifications = {
+            ...(existingSettings.clientWalletTransactionNotifications || { enabled: true }),
+            ...incomingSettings.clientWalletTransactionNotifications,
+            enabled: incomingSettings.clientWalletTransactionNotifications.hasOwnProperty('enabled')
+              ? incomingSettings.clientWalletTransactionNotifications.enabled
+              : (existingSettings.clientWalletTransactionNotifications?.enabled ?? true)
+          };
+        } else {
+          newWhatsappSettings.clientWalletTransactionNotifications = {
+            ...(existingSettings.clientWalletTransactionNotifications || { enabled: true })
+          };
+        }
+
+        if (incomingSettings.clientWalletExpiryReminderNotifications) {
+          newWhatsappSettings.clientWalletExpiryReminderNotifications = {
+            ...(existingSettings.clientWalletExpiryReminderNotifications || { enabled: true }),
+            ...incomingSettings.clientWalletExpiryReminderNotifications,
+            enabled: incomingSettings.clientWalletExpiryReminderNotifications.hasOwnProperty('enabled')
+              ? incomingSettings.clientWalletExpiryReminderNotifications.enabled
+              : (existingSettings.clientWalletExpiryReminderNotifications?.enabled ?? true)
+          };
+        } else {
+          newWhatsappSettings.clientWalletExpiryReminderNotifications = {
+            ...(existingSettings.clientWalletExpiryReminderNotifications || { enabled: true })
           };
         }
       

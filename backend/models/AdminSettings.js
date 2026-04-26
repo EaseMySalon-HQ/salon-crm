@@ -125,6 +125,8 @@ const adminSettingsSchema = new mongoose.Schema({
         appointmentCancellation: { type: String, default: '' }, // Appointment cancellation
         appointmentReminder: { type: String, default: '' }, // Appointment reminder
         appointmentReschedule: { type: String, default: '' }, // Appointment reschedule
+        clientWalletTransaction: { type: String, default: '' }, // Prepaid wallet credit/debit/adjustment/refund
+        clientWalletExpiryReminder: { type: String, default: '' }, // Prepaid wallet 30/15/7-day expiry reminder
         default: { type: String, default: '' } // Default/fallback template
       },
       // Template variable mappings - configure which variables each template uses
@@ -149,6 +151,15 @@ const adminSettingsSchema = new mongoose.Schema({
       receiptNotifications: { type: Boolean, default: true },
       appointmentNotifications: { type: Boolean, default: true },
       systemAlerts: { type: Boolean, default: false },
+      /** Platform default: allow prepaid wallet ledger WhatsApp when template configured */
+      clientWalletTransactionNotifications: {
+        type: mongoose.Schema.Types.Mixed,
+        default: () => ({ enabled: true }),
+      },
+      clientWalletExpiryReminderNotifications: {
+        type: mongoose.Schema.Types.Mixed,
+        default: () => ({ enabled: true }),
+      },
       quietHours: {
         enabled: { type: Boolean, default: false },
         start: { type: String, default: '22:00' },
@@ -306,6 +317,9 @@ adminSettingsSchema.statics.getSettings = async function() {
         appointmentConfirmation: '',
         appointmentCancellation: '',
         appointmentReminder: '',
+        appointmentReschedule: '',
+        clientWalletTransaction: '',
+        clientWalletExpiryReminder: '',
         default: ''
       },
       templateVariables: {},
@@ -313,6 +327,8 @@ adminSettingsSchema.statics.getSettings = async function() {
       receiptNotifications: true,
       appointmentNotifications: true,
       systemAlerts: false,
+      clientWalletTransactionNotifications: { enabled: true },
+      clientWalletExpiryReminderNotifications: { enabled: true },
       quietHours: {
         enabled: false,
         start: '22:00',
@@ -360,6 +376,46 @@ adminSettingsSchema.statics.getSettings = async function() {
         needsSave = true;
       }
     });
+
+    // Merge missing MSG91 template *slots* under notifications.whatsapp.templates
+    if (settings.notifications.whatsapp) {
+      const waDefaultTemplateIds = {
+        welcomeMessage: '',
+        businessAccountCreated: '',
+        receipt: '',
+        receiptCancellation: '',
+        appointmentScheduling: '',
+        appointmentConfirmation: '',
+        appointmentCancellation: '',
+        appointmentReminder: '',
+        appointmentReschedule: '',
+        clientWalletTransaction: '',
+        clientWalletExpiryReminder: '',
+        default: '',
+      };
+      const tmpl = settings.notifications.whatsapp.templates || {};
+      settings.notifications.whatsapp.templates = tmpl;
+      let waMerge = false;
+      for (const [k, v] of Object.entries(waDefaultTemplateIds)) {
+        if (tmpl[k] === undefined) {
+          tmpl[k] = v;
+          waMerge = true;
+        }
+      }
+      if (settings.notifications.whatsapp.clientWalletTransactionNotifications == null) {
+        settings.notifications.whatsapp.clientWalletTransactionNotifications = { enabled: true };
+        waMerge = true;
+      }
+      if (settings.notifications.whatsapp.clientWalletExpiryReminderNotifications == null) {
+        settings.notifications.whatsapp.clientWalletExpiryReminderNotifications = { enabled: true };
+        waMerge = true;
+      }
+      if (waMerge) {
+        settings.markModified('notifications.whatsapp.templates');
+        settings.markModified('notifications.whatsapp.clientWalletTransactionNotifications');
+        needsSave = true;
+      }
+    }
 
     // Update old receiptNotification template format to new simplified format
     const receiptTemplate = settings.notifications.templates.receiptNotification;
