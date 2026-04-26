@@ -319,6 +319,7 @@ app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
 app.use('/api/wallet', require('./routes/wallet'));
+app.use('/api/client-wallet', require('./routes/client-wallet'));
 app.use('/api/plan', require('./routes/plan-checkout'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/packages', require('./routes/packages'));
@@ -9967,6 +9968,11 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
             item.serviceId = new mongoose.Types.ObjectId(item.serviceId);
           }
         }
+        if (item.type === 'prepaid_wallet' && item.prepaidPlanId) {
+          if (typeof item.prepaidPlanId === 'string' && mongoose.Types.ObjectId.isValid(item.prepaidPlanId)) {
+            item.prepaidPlanId = new mongoose.Types.ObjectId(item.prepaidPlanId);
+          }
+        }
         if (item.variantKey !== undefined) item.variantKey = item.variantKey || '';
         
         const linePreTax = getItemPreTaxTotal(item);
@@ -10810,6 +10816,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         const plain = item && typeof item.toObject === 'function' ? item.toObject() : { ...item };
         if (plain.type === 'service' && plain.serviceId && typeof plain.serviceId === 'string' && mongooseSales.Types.ObjectId.isValid(plain.serviceId)) {
           plain.serviceId = new mongooseSales.Types.ObjectId(plain.serviceId);
+        }
+        if (plain.type === 'prepaid_wallet' && plain.prepaidPlanId && typeof plain.prepaidPlanId === 'string' && mongooseSales.Types.ObjectId.isValid(plain.prepaidPlanId)) {
+          plain.prepaidPlanId = new mongooseSales.Types.ObjectId(plain.prepaidPlanId);
         }
         if (plain.variantKey !== undefined) plain.variantKey = plain.variantKey || '';
         const linePreTax = getItemPreTaxForEdit(plain);
@@ -12644,6 +12653,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         serviceTaxRate: 5,
         membershipTaxRate: 5,
         packageTaxRate: 5,
+        prepaidWalletTaxRate: 5,
         productTaxRate: 18,
         essentialProductRate: 5,
         intermediateProductRate: 12,
@@ -12718,6 +12728,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         serviceTaxRate: settings.serviceTaxRate || 5,
         membershipTaxRate: settings.membershipTaxRate ?? settings.serviceTaxRate ?? 5,
         packageTaxRate: settings.packageTaxRate ?? settings.serviceTaxRate ?? 5,
+        prepaidWalletTaxRate: settings.prepaidWalletTaxRate ?? settings.serviceTaxRate ?? 5,
         productTaxRate: settings.productTaxRate || 18,
         essentialProductRate: settings.essentialProductRate || 5,
         intermediateProductRate: settings.intermediateProductRate || 12,
@@ -12753,6 +12764,7 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       serviceTaxRate,
       membershipTaxRate,
       packageTaxRate,
+      prepaidWalletTaxRate,
       productTaxRate,
       essentialProductRate,
       intermediateProductRate,
@@ -12789,6 +12801,7 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
     if (serviceTaxRate !== undefined) settings.serviceTaxRate = serviceTaxRate;
     if (membershipTaxRate !== undefined) settings.membershipTaxRate = membershipTaxRate;
     if (packageTaxRate !== undefined) settings.packageTaxRate = packageTaxRate;
+    if (prepaidWalletTaxRate !== undefined) settings.prepaidWalletTaxRate = prepaidWalletTaxRate;
     if (productTaxRate !== undefined) settings.productTaxRate = productTaxRate;
     if (essentialProductRate !== undefined) settings.essentialProductRate = essentialProductRate;
     if (intermediateProductRate !== undefined) settings.intermediateProductRate = intermediateProductRate;
@@ -12998,6 +13011,21 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       await subUpdate;
     }
 
+    let walletRestored = [];
+    try {
+      const walletSvc = require('./services/client-wallet-service');
+      const wr = await walletSvc.reverseWalletRedemptionsForDeletedSale({
+        branchId: sale.branchId || req.user.branchId,
+        sale,
+        businessModels: req.businessModels,
+        staffUser: req.user,
+        deleteReason,
+      });
+      walletRestored = wr.restored || [];
+    } catch (walletRevErr) {
+      logger.error('Bill delete: prepaid wallet reversal failed', walletRevErr);
+    }
+
     if (session) {
       await Sale.findByIdAndDelete(saleId).session(session);
     } else {
@@ -13029,11 +13057,20 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       req
     );
 
-    res.json({ 
-      success: true, 
+    const msgParts = [`Inventory restored for ${inventoryChanges.length} product(s).`];
+    if (walletRestored.length > 0) {
+      const total = walletRestored.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      msgParts.push(
+        `Prepaid wallet credited back: ₹${Math.round(total * 100) / 100} (${walletRestored.length} wallet${walletRestored.length === 1 ? '' : 's'}).`
+      );
+    }
+
+    res.json({
+      success: true,
       data: sale,
       inventoryRestored: inventoryChanges.length,
-      message: `Bill deleted. Inventory restored for ${inventoryChanges.length} product(s).`
+      walletRestored,
+      message: `Bill deleted. ${msgParts.join(' ')}`,
     });
   } catch (err) {
     logger.error('❌ Error deleting sale:', err);
@@ -14785,6 +14822,9 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   // Setup package expiry cron job (daily midnight UTC)
   const { startExpiryJob } = require('./services/package-expiry-job');
   startExpiryJob();
+
+  const { startClientWalletExpiryJob } = require('./jobs/client-wallet-expiry-job');
+  startClientWalletExpiryJob();
 
   // Setup WhatsApp appointment reminder cron job (every 30 min)
   const { setupAppointmentReminderJob } = require('./jobs/appointment-reminder');

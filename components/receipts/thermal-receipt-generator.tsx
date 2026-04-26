@@ -277,7 +277,11 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
                     ? "Cash"
                     : payment.type === "card"
                       ? "Card"
-                      : "Online"
+                      : payment.type === "online"
+                        ? "Online"
+                        : payment.type === "wallet"
+                          ? "Wallet"
+                          : "Unknown"
                 const d = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
                 const label = d ? `${displayName} (${d})` : displayName
                 return `
@@ -583,7 +587,11 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
                   ? "Cash"
                   : payment.type === "card"
                     ? "Card"
-                    : "Online"
+                    : payment.type === "online"
+                      ? "Online"
+                      : payment.type === "wallet"
+                        ? "Wallet"
+                        : "Unknown"
               const d = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
               const label = d ? `${displayName} (${d})` : displayName
               return `

@@ -125,7 +125,7 @@ export function SupplierForm({ open, onOpenChange, supplier, onSaved }: Supplier
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
       <SheetContent side="right" className="sm:max-w-2xl overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{supplier ? "Edit Supplier" : "Add Supplier"}</SheetTitle>

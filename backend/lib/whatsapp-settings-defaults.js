@@ -42,6 +42,12 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
       enabled: false,
       lowInventory: false,
       paymentFailures: false
+    },
+    clientWalletTransactionNotifications: {
+      enabled: true
+    },
+    clientWalletExpiryReminderNotifications: {
+      enabled: true
     }
   };
 
@@ -61,6 +67,14 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
     whatsappSettings.systemAlerts,
     defaults.systemAlerts
   );
+  const clientWalletTransactionNotifications = normalizeWhatsappNestedSection(
+    whatsappSettings.clientWalletTransactionNotifications,
+    defaults.clientWalletTransactionNotifications
+  );
+  const clientWalletExpiryReminderNotifications = normalizeWhatsappNestedSection(
+    whatsappSettings.clientWalletExpiryReminderNotifications,
+    defaults.clientWalletExpiryReminderNotifications
+  );
 
   const merged = {
     ...defaults,
@@ -68,7 +82,9 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
     enabled: whatsappSettings.hasOwnProperty('enabled') ? whatsappSettings.enabled : defaults.enabled,
     receiptNotifications,
     appointmentNotifications,
-    systemAlerts
+    systemAlerts,
+    clientWalletTransactionNotifications,
+    clientWalletExpiryReminderNotifications
   };
 
   if (merged.enabled === true) {

@@ -14,7 +14,8 @@ import {
   Calendar,
   AlertTriangle,
   CheckCircle2,
-  XCircle
+  XCircle,
+  Wallet
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
@@ -57,6 +58,12 @@ export function WhatsAppBusinessSettings() {
       enabled: false,
       lowInventory: false,
       paymentFailures: false
+    },
+    clientWalletTransactionNotifications: {
+      enabled: true
+    },
+    clientWalletExpiryReminderNotifications: {
+      enabled: true
     }
   })
 
@@ -119,6 +126,22 @@ export function WhatsAppBusinessSettings() {
               enabled: whatsappSettings.systemAlerts?.enabled !== undefined 
                 ? whatsappSettings.systemAlerts.enabled 
                 : prev.systemAlerts.enabled
+            },
+            clientWalletTransactionNotifications: {
+              ...prev.clientWalletTransactionNotifications,
+              ...whatsappSettings.clientWalletTransactionNotifications,
+              enabled:
+                whatsappSettings.clientWalletTransactionNotifications?.enabled !== undefined
+                  ? whatsappSettings.clientWalletTransactionNotifications.enabled
+                  : prev.clientWalletTransactionNotifications.enabled
+            },
+            clientWalletExpiryReminderNotifications: {
+              ...prev.clientWalletExpiryReminderNotifications,
+              ...whatsappSettings.clientWalletExpiryReminderNotifications,
+              enabled:
+                whatsappSettings.clientWalletExpiryReminderNotifications?.enabled !== undefined
+                  ? whatsappSettings.clientWalletExpiryReminderNotifications.enabled
+                  : prev.clientWalletExpiryReminderNotifications.enabled
             }
           }))
         }
@@ -459,6 +482,79 @@ export function WhatsAppBusinessSettings() {
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Wallet className="h-5 w-5 text-indigo-600" />
+                <span>Prepaid wallet updates</span>
+              </CardTitle>
+              <CardDescription>
+                Notify clients on WhatsApp after each wallet credit, debit (checkout), manual adjustment, or refund.
+                Uses the template configured by your administrator (Prepaid wallet transaction).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label>Send wallet activity WhatsApp</Label>
+                  <p className="text-sm text-gray-500">
+                    Requires admin template ID and the client&apos;s mobile number on file.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.clientWalletTransactionNotifications?.enabled !== false}
+                  onCheckedChange={(checked) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      clientWalletTransactionNotifications: {
+                        ...prev.clientWalletTransactionNotifications,
+                        enabled: checked,
+                      },
+                    }))
+                  }
+                  disabled={!isAdmin || !settings.enabled}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Wallet className="h-5 w-5 text-amber-600" />
+                <span>Prepaid wallet expiry reminders</span>
+              </CardTitle>
+              <CardDescription>
+                30 / 15 / 7 days before wallet expiry (same schedule as Prepaid wallet → Business rules). Uses the
+                admin-approved template &quot;Prepaid wallet expiry reminder&quot;. Also requires expiry alerts on in
+                prepaid settings.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label>Send expiry reminder WhatsApp</Label>
+                  <p className="text-sm text-gray-500">
+                    Template ID must be set in Admin → Notifications → WhatsApp.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.clientWalletExpiryReminderNotifications?.enabled !== false}
+                  onCheckedChange={(checked) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      clientWalletExpiryReminderNotifications: {
+                        ...prev.clientWalletExpiryReminderNotifications,
+                        enabled: checked,
+                      },
+                    }))
+                  }
+                  disabled={!isAdmin || !settings.enabled}
+                />
+              </div>
             </CardContent>
           </Card>
 

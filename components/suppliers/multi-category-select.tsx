@@ -79,7 +79,9 @@ export function MultiCategorySelect({ value, onChange, disabled }: MultiCategory
         }
       } catch (_) {}
 
-      setCategories(Array.from(categoryMap.values()).sort((a, b) => a.name.localeCompare(b.name)))
+      setCategories(
+        Array.from(categoryMap.values()).sort((a, b) => a.name.localeCompare(b.name))
+      )
     } catch (err) {
       console.error(err)
     } finally {

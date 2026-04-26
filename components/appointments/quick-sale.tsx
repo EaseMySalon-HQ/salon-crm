@@ -22,6 +22,7 @@ import {
   Receipt,
   CalendarDays,
   FileText,
+  StickyNote,
   Minus,
   Pencil,
   Trash2,
@@ -31,6 +32,7 @@ import {
   RefreshCw,
   Package as PackageIcon,
   AlertCircle,
+  Wallet,
 } from "lucide-react"
 import { Calendar as DatePicker } from "@/components/ui/calendar"
 import { Button } from "@/components/ui/button"
@@ -47,8 +49,17 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { useToast } from "@/components/ui/use-toast"
 import { ReceiptDialog } from "@/components/receipts/receipt-dialog"
+import { PostPaymentReceiptModal } from "@/components/receipts/post-payment-receipt-modal"
 import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -62,7 +73,22 @@ import {
   type PaymentMethod,
   getAllReceipts,
 } from "@/lib/data"
-import { ServicesAPI, ProductsAPI, StaffAPI, SalesAPI, UsersAPI, SettingsAPI, ReceiptsAPI, StaffDirectoryAPI, AppointmentsAPI, BlockTimeAPI, MembershipAPI, PackagesAPI } from "@/lib/api"
+import {
+  ServicesAPI,
+  ProductsAPI,
+  StaffAPI,
+  SalesAPI,
+  UsersAPI,
+  SettingsAPI,
+  ReceiptsAPI,
+  StaffDirectoryAPI,
+  AppointmentsAPI,
+  BlockTimeAPI,
+  MembershipAPI,
+  PackagesAPI,
+  ClientWalletAPI,
+  ClientsAPI,
+} from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
@@ -216,10 +242,116 @@ interface PackageItem {
   staffId: string
 }
 
+/** Client prepaid wallet plan sold as a POS line (same bill as services/products). */
+interface PrepaidPlanItem {
+  id: string
+  planId: string
+  planName: string
+  creditAmount: number
+  validityDays: number
+  staffId: string
+  quantity: number
+  price: number
+  total: number
+}
+
 type BillingMode = "create" | "edit" | "exchange"
 
 function isLikelyMongoObjectId(id: string | null | undefined): boolean {
   return !!id && /^[a-f\d]{24}$/i.test(String(id))
+}
+
+type ClientWalletLedgerStatus = "Credit" | "Debit" | "Adjustment"
+
+type ClientWalletLedgerRow = {
+  _id: string
+  createdAt: string
+  billNo: string | null
+  amount: number
+  statusLabel: ClientWalletLedgerStatus
+  walletPlan: string
+  description: string
+}
+
+function txTypeToLedgerStatus(type: string): ClientWalletLedgerStatus {
+  const t = String(type || "").toLowerCase()
+  if (t === "debit") return "Debit"
+  if (t === "credit" || t === "refund_credit") return "Credit"
+  return "Adjustment"
+}
+
+function saleRefToBillNo(saleId: unknown): string | null {
+  if (!saleId) return null
+  if (typeof saleId === "object" && saleId !== null && "billNo" in saleId) {
+    const bn = (saleId as { billNo?: string }).billNo
+    return bn != null && String(bn) !== "" ? String(bn) : null
+  }
+  return null
+}
+
+function flattenClientWalletLedger(
+  wallets: any[] | undefined,
+  transactionsByWallet: Record<string, any[]> | undefined
+): ClientWalletLedgerRow[] {
+  const by = transactionsByWallet || {}
+  const rows: ClientWalletLedgerRow[] = []
+  for (const w of wallets || []) {
+    const wid = String(w._id)
+    const plan = w.planSnapshot?.planName || "Wallet"
+    for (const tx of by[wid] || []) {
+      rows.push({
+        _id: String(tx._id),
+        createdAt: tx.createdAt || new Date().toISOString(),
+        billNo: saleRefToBillNo(tx.saleId),
+        amount: Number(tx.amount) || 0,
+        statusLabel: txTypeToLedgerStatus(String(tx.type)),
+        walletPlan: plan,
+        description: String(tx.description || "").trim(),
+      })
+    }
+  }
+  rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  return rows
+}
+
+/** Unique staff names on a sale (header + line items + multi-staff contributions). */
+function collectStaffNamesFromSale(sale: any): string {
+  const names = new Set<string>()
+  const add = (s: unknown) => {
+    const t = String(s ?? "").trim()
+    if (t && t.toLowerCase() !== "unassigned staff") names.add(t)
+  }
+  add(sale?.staffName)
+  for (const it of sale?.items || []) {
+    add(it?.staffName)
+    for (const sc of it?.staffContributions || []) add(sc?.staffName)
+  }
+  return names.size > 0 ? [...names].join(", ") : "—"
+}
+
+function mapSaleToCustomerBill(sale: any) {
+  return {
+    id: sale._id || sale.id,
+    receiptNumber: sale.billNo,
+    date: sale.date,
+    time: sale.time || "00:00",
+    total: sale.grossTotal || sale.netTotal || 0,
+    payments:
+      sale.payments || [
+        {
+          type: String(sale.paymentMode || "cash").toLowerCase(),
+          amount: sale.grossTotal || sale.netTotal || 0,
+        },
+      ],
+    paymentHistory: sale.paymentHistory || [],
+    items: sale.items || [],
+    notes: sale.notes || "",
+    clientName: sale.customerName,
+    staffName: sale.staffName || "Unassigned Staff",
+    staffNames: collectStaffNamesFromSale(sale),
+    isEdited: sale.isEdited,
+    editedAt: sale.editedAt,
+  }
 }
 
 /** Parse time string (e.g. "HH:mm", "9:00am") to minutes since midnight */
@@ -296,6 +428,36 @@ function getAvailableStaffIds(
   return allStaffIds.filter((id) => !busyStaffIds.has(String(id)))
 }
 
+function walletExpiryEndMs(w: any): number {
+  const raw = w?.effectiveExpiryDate ?? w?.expiryDate
+  if (!raw) return 0
+  const t = new Date(raw).getTime()
+  return Number.isFinite(t) ? t : 0
+}
+
+/**
+ * Active prepaid wallets with usable balance for Quick Sale (payment picker + header balance).
+ * Uses effective or plan expiry, case-insensitive status, and a short grace window for clock/API skew.
+ */
+function filterWalletsForQuickSaleDisplay(wallets: any[] | undefined, nowMs: number = Date.now()): any[] {
+  if (!wallets?.length) return []
+  const GRACE_MS = 120_000
+  return wallets.filter((w) => {
+    if (String(w.status || "").toLowerCase() !== "active") return false
+    if (Number(w.remainingBalance) <= 0) return false
+    const end = walletExpiryEndMs(w)
+    if (!end) return false
+    return end >= nowMs - GRACE_MS
+  })
+}
+
+/** Prefer soonest-expiring wallet so staff rarely need to pick when multiple exist. */
+function pickDefaultClientWalletId(wallets: any[]): string {
+  if (!wallets?.length) return ""
+  const sorted = [...wallets].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
+  return String(sorted[0]._id)
+}
+
 interface QuickSaleProps {
   mode?: BillingMode
   initialSale?: any
@@ -327,10 +489,29 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [cashAmount, setCashAmount] = useState(0)
   const [cardAmount, setCardAmount] = useState(0)
   const [onlineAmount, setOnlineAmount] = useState(0)
+  /** Client prepaid wallet (salon service credit) applied toward this bill */
+  const [walletPayAmount, setWalletPayAmount] = useState(0)
+  const [selectedWalletId, setSelectedWalletId] = useState<string>("")
+  const [clientWallets, setClientWallets] = useState<any[]>([])
+  const [clientWalletSettings, setClientWalletSettings] = useState<{
+    allowCouponStacking?: boolean
+  } | null>(null)
+  /** Prepaid wallet plans — loaded when "Add Prepaid Plans" panel is open */
+  const [prepaidWalletPlansForIssue, setPrepaidWalletPlansForIssue] = useState<any[]>([])
+  const [loadingPrepaidWalletPlans, setLoadingPrepaidWalletPlans] = useState(false)
+  const [prepaidPlanItems, setPrepaidPlanItems] = useState<PrepaidPlanItem[]>([])
+  const [walletLedgerOpen, setWalletLedgerOpen] = useState(false)
+  const [walletLedgerLoading, setWalletLedgerLoading] = useState(false)
+  const [walletLedgerRows, setWalletLedgerRows] = useState<ClientWalletLedgerRow[]>([])
   const [remarks, setRemarks] = useState("")
   const [isOldQuickSale, setIsOldQuickSale] = useState(false)
   const [currentReceipt, setCurrentReceipt] = useState<any | null>(null)
   const [showReceiptDialog, setShowReceiptDialog] = useState(false)
+  /** After checkout: in-modal receipt + timed redirect (replaces opening /receipt in a new tab). */
+  const [postPaymentModal, setPostPaymentModal] = useState<{
+    receipt: any
+    returnPath: string
+  } | null>(null)
   const [summaryExpanded, setSummaryExpanded] = useState(false)
 
   // Search states for service items dropdown
@@ -341,6 +522,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [isProcessing, setIsProcessing] = useState(false)
   const [showNewCustomerDialog, setShowNewCustomerDialog] = useState(false)
   const [showBillActivityDialog, setShowBillActivityDialog] = useState(false)
+  /** Which single-purpose panel the bills modal shows: invoice notes table vs bill list */
+  const [billActivityModalTab, setBillActivityModalTab] = useState<"notes" | "bills">("bills")
   const [customerBills, setCustomerBills] = useState<any[]>([])
   const [showDuesDialog, setShowDuesDialog] = useState(false)
   const [unpaidBills, setUnpaidBills] = useState<any[]>([])
@@ -753,6 +936,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             membershipTaxRate:
               response.data.membershipTaxRate ?? response.data.serviceTaxRate ?? 5,
             packageTaxRate: response.data.packageTaxRate ?? response.data.serviceTaxRate ?? 5,
+            prepaidWalletTaxRate:
+              response.data.prepaidWalletTaxRate ?? response.data.serviceTaxRate ?? 5,
             essentialProductRate: response.data.essentialProductRate || 5,
             intermediateProductRate: response.data.intermediateProductRate || 12,
             standardProductRate: response.data.standardProductRate || 18,
@@ -885,6 +1070,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       // Set items
       const serviceItemsData: ServiceItem[] = []
       const productItemsData: ProductItem[] = []
+      const prepaidPlanItemsData: PrepaidPlanItem[] = []
 
       if (initialSale.items && Array.isArray(initialSale.items)) {
         const normalizeId = (id: any) => (id != null ? String(id) : "")
@@ -924,12 +1110,26 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 total: item.total || (item.price || 0) * (item.quantity || 1),
               })
             }
+          } else if (item.type === "prepaid_wallet" || item.type === "prepaid") {
+            const pid = item.prepaidPlanId ? normalizeId(item.prepaidPlanId) : ""
+            prepaidPlanItemsData.push({
+              id: `prepaid-${index}`,
+              planId: pid,
+              planName: String(item.name || "").replace(/^Prepaid wallet —\s*/i, "") || "",
+              creditAmount: 0,
+              validityDays: 0,
+              staffId: item.staffId || "",
+              quantity: item.quantity || 1,
+              price: item.price || 0,
+              total: item.total || (item.price || 0) * (item.quantity || 1),
+            })
           }
         })
       }
 
       setServiceItems(serviceItemsData)
       setProductItems(productItemsData)
+      setPrepaidPlanItems(prepaidPlanItemsData)
 
       // Set discount (percentage = global %, fixed = amount in currency)
       if (initialSale.discount && initialSale.discount > 0) {
@@ -1322,6 +1522,83 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     prefillPackageRedeem()
   }, [searchParams, services, clients, staff])
 
+  // Open Quick Sale for client wallet issue: /quick-sale?clientId=...&prepaidWallet=1
+  useEffect(() => {
+    const cid = searchParams.get("clientId")
+    const openPrepaid = searchParams.get("prepaidWallet") === "1"
+    if (!cid || !isLikelyMongoObjectId(cid)) return
+
+    const run = async () => {
+      try {
+        let client = clients.find((c) => String(c._id || c.id) === String(cid))
+        if (!client) {
+          const res = await ClientsAPI.getById(cid)
+          if (res.success && res.data) client = res.data as Client
+        }
+        if (client) {
+          setSelectedCustomer(client as Client)
+          setCustomerSearch(client.name || "")
+          const customerId = client._id || client.id
+          if (customerId) await fetchCustomerStats(String(customerId))
+        }
+        if (openPrepaid) {
+          setAddItemSection("prepaid")
+        }
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href)
+          url.searchParams.delete("clientId")
+          url.searchParams.delete("prepaidWallet")
+          window.history.replaceState({}, "", url.toString())
+        }
+      } catch (e) {
+        console.error("Quick Sale clientId prefill:", e)
+      }
+    }
+
+    void run()
+  }, [searchParams, clients])
+
+  useEffect(() => {
+    if (addItemSection !== "prepaid") return
+    let cancelled = false
+    setLoadingPrepaidWalletPlans(true)
+    ClientWalletAPI.listPlans({ status: "active" })
+      .then((res) => {
+        if (cancelled) return
+        setPrepaidWalletPlansForIssue(res.success && res.data?.plans ? res.data.plans : [])
+      })
+      .catch(() => {
+        if (!cancelled) setPrepaidWalletPlansForIssue([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPrepaidWalletPlans(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [addItemSection])
+
+  // One empty prepaid row when the panel opens (so "Add Prepaid Plans" is immediately actionable)
+  useEffect(() => {
+    if (addItemSection !== "prepaid") return
+    setPrepaidPlanItems((rows) => {
+      if (rows.length > 0) return rows
+      return [
+        {
+          id: `${Date.now()}-prepaid`,
+          planId: "",
+          planName: "",
+          creditAmount: 0,
+          validityDays: 0,
+          staffId: "",
+          quantity: 1,
+          price: 0,
+          total: 0,
+        },
+      ]
+    })
+  }, [addItemSection])
+
   // In production, prefill data should come from URL params or API
   // No localStorage dependency for critical business functionality
 
@@ -1362,6 +1639,35 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     console.log('🔑 Final ID resolved:', id)
     
     return id
+  }
+
+  const openClientWalletLedger = async () => {
+    const cid = getCustomerId(selectedCustomer)
+    if (!cid || !isLikelyMongoObjectId(cid)) {
+      toast({
+        title: "Client required",
+        description: "Choose a saved client from the directory to view prepaid wallet activity.",
+        variant: "destructive",
+      })
+      return
+    }
+    setWalletLedgerOpen(true)
+    setWalletLedgerLoading(true)
+    setWalletLedgerRows([])
+    try {
+      const res = await ClientWalletAPI.getClientWallets(cid)
+      if (!res.success || !res.data) {
+        toast({ title: res.message || "Could not load wallet", variant: "destructive" })
+        return
+      }
+      setWalletLedgerRows(
+        flattenClientWalletLedger(res.data.wallets, res.data.transactionsByWallet)
+      )
+    } catch {
+      toast({ title: "Could not load wallet activity", variant: "destructive" })
+    } finally {
+      setWalletLedgerLoading(false)
+    }
   }
 
   // Handle customer selection with statistics fetch
@@ -1520,8 +1826,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
   }
 
-  // Handle viewing bill activity
-  const handleViewBillActivity = async () => {
+  const handleViewBillActivity = async (tab: "notes" | "bills" = "bills") => {
+    setBillActivityModalTab(tab)
     const customerId = getCustomerId(selectedCustomer)
     if (customerId) {
       try {
@@ -1542,20 +1848,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         // Get sales data for this customer by phone (exact match)
         const salesResponse = await SalesAPI.getByClient(customer.phone || '')
         if (salesResponse.success) {
-          // Transform sales data to match the expected bill format
-          const bills = salesResponse.data.map((sale: any) => ({
-            id: sale._id || sale.id,
-            receiptNumber: sale.billNo,
-            date: sale.date,
-            time: sale.time || '00:00',
-            total: sale.grossTotal || sale.netTotal || 0,
-            payments: sale.payments || [{ type: sale.paymentMode?.toLowerCase() || 'cash', amount: sale.grossTotal || sale.netTotal || 0 }],
-            paymentHistory: sale.paymentHistory || [],
-            items: sale.items || [],
-            notes: sale.notes || '',
-            clientName: sale.customerName,
-            staffName: sale.staffName || 'Unassigned Staff'
-          }))
+          const bills = (salesResponse.data || []).map(mapSaleToCustomerBill)
           
           setCustomerBills(bills)
           console.log('📋 Transformed bills:', bills)
@@ -1681,10 +1974,62 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       .catch(() => setPlans([]))
   }, [selectedCustomer])
 
+  useEffect(() => {
+    ClientWalletAPI.getSettings()
+      .then((res) => {
+        if (res.success && res.data) setClientWalletSettings(res.data as any)
+      })
+      .catch(() => setClientWalletSettings(null))
+  }, [])
+
+  useEffect(() => {
+    const cid = getCustomerId(selectedCustomer)
+    if (!cid || !isLikelyMongoObjectId(cid)) {
+      setClientWallets([])
+      setSelectedWalletId("")
+      setWalletPayAmount(0)
+      return
+    }
+    setSelectedWalletId("")
+    setWalletPayAmount(0)
+    let cancelled = false
+    ClientWalletAPI.getClientWallets(cid)
+      .then((res) => {
+        if (cancelled || !res.success || !res.data?.wallets) return
+        const usable = filterWalletsForQuickSaleDisplay(res.data.wallets as any[])
+        setClientWallets(usable)
+        setSelectedWalletId(pickDefaultClientWalletId(usable))
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setClientWallets([])
+          setSelectedWalletId("")
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedCustomer])
+
   const membershipServiceSnapshot = useMemo(
     () =>
       serviceItems.map((i) => `${i.id}:${String(i.serviceId)}:${i.quantity}`).join("|"),
     [serviceItems]
+  )
+
+  /** Sum of remaining balance on active, non-expired wallets shown in Quick Sale (matches payment picker). */
+  const totalClientWalletBalance = useMemo(
+    () => clientWallets.reduce((sum, w) => sum + (Number(w.remainingBalance) || 0), 0),
+    [clientWallets]
+  )
+
+  const showClientWalletBalanceCard =
+    Number.isFinite(totalClientWalletBalance) && totalClientWalletBalance > 0
+
+  /** Invoices that have non-empty sale `notes` (Customer notes modal only). */
+  const customerBillsWithNotes = useMemo(
+    () => customerBills.filter((b) => String(b.notes ?? "").trim().length > 0),
+    [customerBills]
   )
 
   // Apply membership pricing when membership loads, catalog changes, or line qty/service changes.
@@ -1788,19 +2133,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         console.log('📊 Sales response full data:', salesResponse.data)
         console.log('📊 Sales array length:', sales.length)
         
-        // Transform sales data to match the expected bill format
-        const bills = sales.map((sale: any) => ({
-          id: sale._id || sale.id,
-          receiptNumber: sale.billNo,
-          date: sale.date,
-          time: sale.time || '00:00',
-          total: sale.grossTotal || sale.netTotal || 0,
-          payments: sale.payments || [{ type: sale.paymentMode?.toLowerCase() || 'cash', amount: sale.grossTotal || sale.netTotal || 0 }],
-          items: sale.items || [],
-          notes: sale.notes || '',
-          clientName: sale.customerName,
-          staffName: sale.staffName || 'Unassigned Staff'
-        }))
+        const bills = sales.map(mapSaleToCustomerBill)
         
         console.log('📋 Transformed bills:', bills)
         setCustomerBills(bills)
@@ -2291,6 +2624,53 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     )
   }
 
+  const addPrepaidPlanItem = () => {
+    const newItem: PrepaidPlanItem = {
+      id: `${Date.now()}-prepaid`,
+      planId: "",
+      planName: "",
+      creditAmount: 0,
+      validityDays: 0,
+      staffId: "",
+      quantity: 1,
+      price: 0,
+      total: 0,
+    }
+    setPrepaidPlanItems((rows) => [...rows, newItem])
+  }
+
+  const removePrepaidPlanItem = (id: string) => {
+    setPrepaidPlanItems((rows) => rows.filter((item) => item.id !== id))
+  }
+
+  const updatePrepaidPlanItem = (id: string, field: keyof PrepaidPlanItem, value: any) => {
+    setPrepaidPlanItems((rows) =>
+      rows.map((item) => {
+        if (item.id !== id) return item
+        const updated: PrepaidPlanItem = { ...item, [field]: value }
+        if (field === "planId" && value) {
+          const plan = prepaidWalletPlansForIssue.find((p) => String(p._id) === String(value))
+          if (plan) {
+            updated.planName = plan.name || ""
+            updated.price = Number(plan.payAmount) || 0
+            updated.creditAmount = Number(plan.creditAmount) || 0
+            updated.validityDays = Number(plan.validityDays) || 0
+            const base = updated.price * updated.quantity
+            const prepaidRate =
+              taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { total } = computeMembershipPlanLineTotal(base, {
+              membershipTaxRate: prepaidRate,
+              enableTax: taxSettings?.enableTax !== false,
+              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+            })
+            updated.total = total
+          }
+        }
+        return updated
+      })
+    )
+  }
+
   // Update service item
   const updateServiceItem = (id: string, field: keyof ServiceItem, value: any) => {
     console.log('=== UPDATE SERVICE ITEM ===')
@@ -2740,7 +3120,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           }, 0)
       : 0
 
-  const totalTax = serviceTax + productTax + membershipTax + packageTax
+  const prepaidWalletTax =
+    taxSettings?.enableTax !== false
+      ? prepaidPlanItems
+          .filter((p) => p.planId)
+          .reduce((sum, p) => {
+            const baseAmount = p.price * p.quantity
+            const prepaidTaxRate =
+              taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, prepaidTaxRate, prepaidTaxRate > 0)
+            return sum + taxAmount
+          }, 0)
+      : 0
+
+  const totalTax = serviceTax + productTax + membershipTax + packageTax + prepaidWalletTax
   
   // Service Total (for billing display) = sum of (price × qty) for services only
   const billingServiceTotal = serviceItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
@@ -2753,6 +3146,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const billingPackageTotal = packageItems
     .filter((p) => p.packageId)
     .reduce((sum, p) => sum + p.price * p.quantity, 0)
+  const billingPrepaidTotal = prepaidPlanItems
+    .filter((p) => p.planId)
+    .reduce((sum, p) => sum + p.price * p.quantity, 0)
   // Item Total = Service Total + Product Total (before discounts)
   const billingItemTotal = billingServiceTotal + billingProductTotal
   // Discounts = Manual + Global (both line-level and global discount)
@@ -2762,7 +3158,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     billingServiceTotal +
     billingProductTotal +
     billingMembershipTotal +
-    billingPackageTotal -
+    billingPackageTotal +
+    billingPrepaidTotal -
     discounts
   
   // Calculate subtotal excluding tax (discounted amounts)
@@ -2899,23 +3296,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // so we must NOT subtract globalDiscount again (that would double-apply the discount).
   const membershipTotal = membershipItems.reduce((sum, item) => sum + item.total, 0)
   const packageTotal = packageItems.reduce((sum, item) => sum + item.total, 0)
-  const baseTotal = subtotal + membershipTotal + packageTotal
+  const prepaidPlanTotal = prepaidPlanItems.reduce((sum, item) => sum + item.total, 0)
+  const baseTotal = subtotal + membershipTotal + packageTotal + prepaidPlanTotal
   const baseRounded = Math.round(baseTotal)
   const roundOff = baseRounded - baseTotal
   // Amount payable by customer = baseRounded + tip (tip is separate, non-taxable)
   const grandTotal = baseRounded + tip
   const roundedTotal = grandTotal
-  const totalPaid = cashAmount + cardAmount + onlineAmount
+  const totalPaid = cashAmount + cardAmount + onlineAmount + walletPayAmount
   const change = totalPaid - roundedTotal
+  const payableAfterWallet = Math.max(0, roundedTotal - walletPayAmount)
   const validServiceForCheckout = serviceItems.filter((item) => item.serviceId)
   const validProductForCheckout = productItems.filter((item) => item.productId)
   const validMembershipSaleLines = membershipItems.filter((m) => m.planId)
   const validPackageForCheckout = packageItems.filter((p) => p.packageId)
+  const validPrepaidPlanForCheckout = prepaidPlanItems.filter((p) => p.planId)
   const membershipFreeServicesOnly =
     validServiceForCheckout.length > 0 &&
     validProductForCheckout.length === 0 &&
     validMembershipSaleLines.length === 0 &&
     validPackageForCheckout.length === 0 &&
+    validPrepaidPlanForCheckout.length === 0 &&
     validServiceForCheckout.every(
       (item) => item.isMembershipFree === true && Math.abs(item.total) < 0.005
     )
@@ -3009,27 +3410,32 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     const validServiceItems = serviceItems.filter((item) => item.serviceId)
     const validProductItems = productItems.filter((item) => item.productId)
     const validPackageItems = packageItems.filter((p) => p.packageId)
+    const validPrepaidPlanItems = prepaidPlanItems.filter((p) => p.planId)
 
     if (
       validServiceItems.length === 0 &&
       validProductItems.length === 0 &&
       membershipItems.filter((m) => m.planId).length === 0 &&
-      validPackageItems.length === 0
+      validPackageItems.length === 0 &&
+      validPrepaidPlanItems.length === 0
     ) {
       toast({
         title: "No Items",
-        description: "Please add at least one service, product, membership plan, or package",
+        description: "Please add at least one service, product, membership plan, package, or prepaid plan",
         variant: "destructive",
       })
       return
     }
 
-    if (validPackageItems.length > 0) {
+    if (validPackageItems.length > 0 || validPrepaidPlanItems.length > 0) {
       const cid = getCustomerId(selectedCustomer)
       if (!isLikelyMongoObjectId(cid || undefined)) {
         toast({
           title: "Customer Required",
-          description: "Select an existing customer from search to sell packages on this bill.",
+          description:
+            validPrepaidPlanItems.length > 0
+              ? "Select an existing customer from search to sell prepaid wallet plans on this bill."
+              : "Select an existing customer from search to sell packages on this bill.",
           variant: "destructive",
         })
         return
@@ -3054,6 +3460,56 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         variant: "destructive",
       })
       return
+    }
+
+    const hasBillDiscount =
+      isGlobalDiscountActive ||
+      isValueDiscountActive ||
+      discountPercentage > 0 ||
+      discountValue > 0
+    if (walletPayAmount > 0) {
+      if (!selectedWalletId) {
+        toast({
+          title: "Select wallet",
+          description: "Choose a prepaid wallet or clear the wallet amount.",
+          variant: "destructive",
+        })
+        return
+      }
+      const wSel = clientWallets.find((x) => String(x._id) === selectedWalletId)
+      if (!wSel) {
+        toast({ title: "Wallet unavailable", description: "Refresh and select a valid wallet.", variant: "destructive" })
+        return
+      }
+      if (walletPayAmount > Number(wSel.remainingBalance) + 1e-6) {
+        toast({
+          title: "Wallet amount too high",
+          description: "Cannot apply more than the wallet balance.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (walletPayAmount > roundedTotal + 1e-6) {
+        toast({
+          title: "Wallet amount too high",
+          description: "Wallet cannot exceed the bill total.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (
+        hasBillDiscount &&
+        !clientWalletSettings?.allowCouponStacking &&
+        !wSel.planSnapshot?.allowCouponStacking
+      ) {
+        toast({
+          title: "Discount stacking not allowed",
+          description:
+            "Turn off bill discounts or enable stacking in Prepaid wallet settings / plan to use a wallet with discounts.",
+          variant: "destructive",
+        })
+        return
+      }
     }
 
     // Validate that all services have staff assigned
@@ -3084,6 +3540,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       toast({
         title: "Staff Required",
         description: "Please select staff for all package lines before checkout",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const prepaidWithoutStaff = validPrepaidPlanItems.filter((p) => !p.staffId)
+    if (validPrepaidPlanItems.length > 0 && prepaidWithoutStaff.length > 0) {
+      toast({
+        title: "Staff Required",
+        description: "Please select staff for all prepaid plan lines before checkout",
         variant: "destructive",
       })
       return
@@ -3273,6 +3739,25 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             sgst: 0,
             totalWithTax: p.total,
           })),
+        ...prepaidPlanItems
+          .filter((p) => p.planId)
+          .map((p) => ({
+            id: p.id,
+            name: `Prepaid wallet — ${p.planName}`,
+            type: "prepaid_wallet" as const,
+            quantity: p.quantity,
+            price: p.price,
+            discount: 0,
+            discountType: "percentage" as const,
+            hsnSacCode: "",
+            staffId: p.staffId || staff[0]?._id || staff[0]?.id || "",
+            staffName: (p.staffId ? staff.find((s) => (s._id || s.id) === p.staffId)?.name : null) || staff[0]?.name || "Unassigned Staff",
+            total: p.total,
+            taxAmount: 0,
+            cgst: 0,
+            sgst: 0,
+            totalWithTax: p.total,
+          })),
       ]
 
       // Create payments array
@@ -3280,6 +3765,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               if (cashAmount > 0) payments.push({ type: "cash", amount: cashAmount })
         if (cardAmount > 0) payments.push({ type: "card", amount: cardAmount })
         if (onlineAmount > 0) payments.push({ type: "online", amount: onlineAmount })
+        if (walletPayAmount > 0) payments.push({ type: "wallet", amount: walletPayAmount })
 
       // Get the primary staff member (first staff member from items)
       const primaryStaff = receiptItems.length > 0 ? {
@@ -3300,7 +3786,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       // Calculate tax breakdown from individual items (uses Inclusive/Excluded logic via computeLineTotalAndTax)
       let calculatedTax = 0
       // Base bill amount (for sales/revenue) = subtotal + membership + packages (discount already baked into item totals)
-      const baseTotalForSale = subtotal + membershipTotal + packageTotal
+      const baseTotalForSale = subtotal + membershipTotal + packageTotal + prepaidPlanTotal
       const roundedBaseTotalForSale = Math.round(baseTotalForSale)
       const roundOff = roundedBaseTotalForSale - baseTotalForSale
       // calculatedTotal = bill amount used for sales/grossTotal (EXCLUDES tip)
@@ -3364,7 +3850,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               }, 0)
           : 0
 
-      calculatedTax = serviceTax + productTax + membershipTaxCheckout + packageTaxCheckout
+      const prepaidTaxCheckout =
+        (taxSettings?.enableTax !== false)
+          ? prepaidPlanItems
+              .filter((p) => p.planId)
+              .reduce((sum, p) => {
+                const baseAmount = p.price * p.quantity
+                const prepaidTaxRate =
+                  taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, prepaidTaxRate, prepaidTaxRate > 0)
+                return sum + taxAmount
+              }, 0)
+          : 0
+
+      calculatedTax = serviceTax + productTax + membershipTaxCheckout + packageTaxCheckout + prepaidTaxCheckout
         taxBreakdown = {
           cgst: calculatedTax / 2,
           sgst: calculatedTax / 2,
@@ -3374,6 +3873,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           membershipRate: taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5,
           packageTax: packageTaxCheckout,
           packageRate: taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5,
+          prepaidWalletTax: prepaidTaxCheckout,
+          prepaidWalletTaxRate:
+            taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5,
           serviceRate: taxSettings?.serviceTaxRate || 5,
           productTaxByRate
         } as any
@@ -3436,6 +3938,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           item.totalWithTax = item.total
           item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
           item.taxRate = applyTax ? packageTaxRate : 0
+        } else if (item.type === 'prepaid_wallet') {
+          const prepaidTaxRate =
+            taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const applyTax = (taxSettings?.enableTax !== false) && prepaidTaxRate > 0
+          const baseAmount = item.price * item.quantity
+          const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, prepaidTaxRate, applyTax)
+          item.taxAmount = taxAmount
+          item.cgst = taxAmount / 2
+          item.sgst = taxAmount / 2
+          item.totalWithTax = item.total
+          item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
+          item.taxRate = applyTax ? prepaidTaxRate : 0
         }
       })
       
@@ -3565,6 +4079,28 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 productId: null,
                 name: `${p.packageName} (${p.totalSittings} sittings)`,
                 type: "package" as const,
+                quantity: p.quantity,
+                price: p.price,
+                priceExcludingGST: (p.total - itemTax) / (p.quantity || 1),
+                total: p.total,
+                discount: 0,
+                staffId: p.staffId || "",
+                staffName: staffMember?.name || staff[0]?.name || "",
+                staffContributions: [],
+                hsnSacCode: "",
+                taxRate: (receiptItem as any)?.taxRate ?? 0,
+              }
+            }),
+            ...validPrepaidPlanItems.map((p) => {
+              const receiptItem = receiptItems.find((r) => r.id === p.id)
+              const itemTax = receiptItem?.taxAmount ?? 0
+              const staffMember = staff.find((s) => s._id === p.staffId || s.id === p.staffId)
+              return {
+                serviceId: null,
+                productId: null,
+                prepaidPlanId: p.planId,
+                name: `Prepaid wallet — ${p.planName}`,
+                type: "prepaid_wallet" as const,
                 quantity: p.quantity,
                 price: p.price,
                 priceExcludingGST: (p.total - itemTax) / (p.quantity || 1),
@@ -3766,6 +4302,91 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               window.dispatchEvent(new CustomEvent("appointments-refresh"))
             }
 
+            if (
+              mode === "create" &&
+              walletPayAmount > 0 &&
+              selectedWalletId &&
+              result.data?._id &&
+              isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined)
+            ) {
+              const serviceNames = validServiceItems.map((it: any) => {
+                const svc = services.find((s) => (s._id || s.id) === it.serviceId)
+                return svc?.name || "Service"
+              })
+              const couponApplied =
+                isGlobalDiscountActive ||
+                isValueDiscountActive ||
+                discountPercentage > 0 ||
+                discountValue > 0
+              try {
+                const rw = await ClientWalletAPI.redeem({
+                  walletId: selectedWalletId,
+                  amount: walletPayAmount,
+                  saleId: String(result.data._id),
+                  serviceNames,
+                  couponApplied,
+                })
+                if (!rw.success) {
+                  toast({
+                    title: "Wallet redeem failed",
+                    description:
+                      rw.message ||
+                      "Bill was saved — complete wallet deduction from the client wallet page if needed.",
+                    variant: "destructive",
+                  })
+                }
+              } catch (we) {
+                console.error(we)
+                toast({
+                  title: "Wallet redeem error",
+                  description: "Bill was saved. Adjust the wallet manually if needed.",
+                  variant: "destructive",
+                })
+              }
+            }
+
+            if (mode === "create" && validPrepaidPlanItems.length > 0 && result.data?._id) {
+              const clientOid = getCustomerId(selectedCustomer)
+              if (isLikelyMongoObjectId(clientOid || undefined)) {
+                const newSaleId = String(result.data._id)
+                try {
+                  for (const row of validPrepaidPlanItems) {
+                    const qty = Math.max(1, Math.floor(row.quantity || 1))
+                    for (let q = 0; q < qty; q++) {
+                      const iw = await ClientWalletAPI.issue({
+                        clientId: clientOid!,
+                        planId: row.planId,
+                        amountPaid: row.price,
+                        saleId: newSaleId,
+                      })
+                      if (!iw.success) {
+                        toast({
+                          title: "Prepaid wallet not credited",
+                          description:
+                            iw.message ||
+                            "Bill was saved — issue credit from the client Wallet page or contact support.",
+                          variant: "destructive",
+                        })
+                      }
+                    }
+                  }
+                  const wres = await ClientWalletAPI.getClientWallets(clientOid!)
+                  if (wres.success && wres.data?.wallets) {
+                    const usable = filterWalletsForQuickSaleDisplay(wres.data.wallets as any[])
+                    setClientWallets(usable)
+                    setSelectedWalletId(pickDefaultClientWalletId(usable))
+                  }
+                } catch (pe) {
+                  console.error("[QuickSale] Prepaid issue after bill:", pe)
+                  toast({
+                    title: "Prepaid wallet issue error",
+                    description: "The bill was saved. Issue wallet credit from the client profile if needed.",
+                    variant: "destructive",
+                  })
+                }
+              }
+            }
+
             // Activate client packages (separate from Sale.items — backend package sell API)
             if (mode === "create" && validPackageItems.length > 0) {
               const clientOid = getCustomerId(selectedCustomer)
@@ -3897,30 +4518,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               }
             }
 
-            // Open receipt in new tab - Use business receipt page (with Print/Thermal Print buttons)
-            try {
-              // Always use business receipt URL for internal use (has Print/Thermal Print buttons)
-              const returnTo = linkedAppointmentId ? 'appointments' : 'quick-sale'
-              const receiptUrl = `/receipt/${receipt.receiptNumber}?data=${encodeURIComponent(JSON.stringify(receipt))}&returnTo=${returnTo}&t=${Date.now()}`
-              console.log('🎯 Opening business receipt URL (with print options):', receiptUrl)
-              
-              const newWindow = window.open(receiptUrl, '_blank')
-              if (!newWindow || newWindow.closed || typeof newWindow.closed == 'undefined') {
-                console.warn('⚠️ Popup was blocked, showing fallback message')
-                toast({
-                  title: "Receipt Generated",
-                  description: `Receipt #${receipt.receiptNumber} created successfully. Please check the receipts page.`,
-                })
-              } else {
-                console.log('✅ Receipt opened successfully in new tab')
-              }
-            } catch (error) {
-              console.error('❌ Error opening receipt:', error)
-              toast({
-                title: "Receipt Generated",
-                description: `Receipt #${receipt.receiptNumber} created successfully. Please check the receipts page.`,
-              })
-            }
+            const returnPath = linkedAppointmentId ? "/appointments" : "/quick-sale"
+            setPostPaymentModal({ receipt: { ...receipt }, returnPath })
           } else {
             console.error('❌ Failed to create sale in backend:', result.error)
                   toast({
@@ -3964,9 +4563,29 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       }
       
 
-      // Reset form
+      // Reset form (clears customer); restore below when prepaid was sold so wallet balance stays visible
       resetForm()
       setLinkedAppointmentId(null)
+
+      const restoreCustomerAfterPrepaid =
+        mode === "create" &&
+        validPrepaidPlanItems.length > 0 &&
+        customer != null &&
+        isLikelyMongoObjectId(getCustomerId(customer))
+      if (restoreCustomerAfterPrepaid && customer != null) {
+        setSelectedCustomer(customer)
+        setCustomerSearch(customer.name || "")
+        const restoreCid = getCustomerId(customer)
+        if (restoreCid && isLikelyMongoObjectId(restoreCid)) {
+          void fetchCustomerStats(restoreCid)
+          void ClientWalletAPI.getClientWallets(restoreCid).then((wres) => {
+            if (!wres.success || !wres.data?.wallets) return
+            const usable = filterWalletsForQuickSaleDisplay(wres.data.wallets as any[])
+            setClientWallets(usable)
+            setSelectedWalletId(pickDefaultClientWalletId(usable))
+          })
+        }
+      }
     } catch (error: any) {
       console.error('❌ Checkout failed:', error)
       console.error('❌ Error details:', {
@@ -4009,6 +4628,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setCashAmount(0)
     setCardAmount(0)
     setOnlineAmount(0)
+    setWalletPayAmount(0)
+    setSelectedWalletId("")
+    setClientWallets([])
+    setPrepaidPlanItems([])
+    setAddItemSection(null)
     setRemarks("")
     setTipStaffId(null)
     setConfirmUnpaid(false)
@@ -4019,7 +4643,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setTempEditReason("")
     setMembershipItems([])
     setPackageItems([])
-    setAddItemSection(null)
     setPendingPackageRedemption(null)
   }
 
@@ -4172,7 +4795,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     )}
                   </div>
 
-                  <div className={`grid ${(selectedCustomer.totalDues || 0) > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-4 pt-2`}>
+                  <div
+                    className={`grid gap-4 pt-2 ${
+                      showClientWalletBalanceCard && (selectedCustomer.totalDues || 0) > 0
+                        ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5"
+                        : showClientWalletBalanceCard || (selectedCustomer.totalDues || 0) > 0
+                          ? "grid-cols-2 sm:grid-cols-2 lg:grid-cols-4"
+                          : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-3"
+                    }`}
+                  >
                     <div className="text-center">
                       <div className="flex items-center justify-center gap-1 text-sm text-muted-foreground mb-1">
                         <Calendar className="h-3 w-3" />
@@ -4194,6 +4825,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       </div>
                       <div className="font-semibold text-xs">{formatDate(selectedCustomer.lastVisit || "")}</div>
                     </div>
+                    {showClientWalletBalanceCard && (
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        title="View wallet activity"
+                        className="text-center cursor-pointer rounded-lg p-2 -m-2 transition-colors hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-indigo-300/60"
+                        onClick={() => void openClientWalletLedger()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            void openClientWalletLedger()
+                          }
+                        }}
+                      >
+                        <div className="flex items-center justify-center gap-1 text-sm text-muted-foreground mb-1">
+                          <Wallet className="h-3 w-3" />
+                          Wallet balance
+                        </div>
+                        <div className="font-semibold">{formatCurrency(totalClientWalletBalance)}</div>
+                      </div>
+                    )}
                     {(selectedCustomer.totalDues || 0) > 0 && (
                       <div 
                         className="text-center cursor-pointer hover:bg-red-50 rounded-lg p-2 transition-all duration-200"
@@ -4213,33 +4865,38 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     )}
                   </div>
 
-                   <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                       className="flex-1 bg-transparent"
-                       onClick={async () => {
-                         if (selectedCustomer) {
-                           await fetchCustomerBills(selectedCustomer.phone || '')
-                           setShowBillActivityDialog(true)
-                         }
-                       }}
-                  >
-                    <Eye className="h-4 w-4 mr-2" />
-                    Bill Activity
-                  </Button>
-                     <Button
-                       variant="outline"
-                       size="sm"
-                       className="px-2 bg-red-100 text-red-600"
-                       onClick={() => {
-                         console.log('🔍 TEST: Force opening dialog')
-                         setShowBillActivityDialog(true)
-                       }}
-                     >
-                       TEST
-                  </Button>
-                   </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      className="flex-1 min-w-0 h-8 px-2 text-[11px] bg-transparent"
+                      onClick={async () => {
+                        if (!selectedCustomer) return
+                        setBillActivityModalTab("bills")
+                        await fetchCustomerBills(selectedCustomer.phone || "")
+                        setShowBillActivityDialog(true)
+                      }}
+                    >
+                      <Eye className="h-3.5 w-3.5 mr-1 shrink-0" />
+                      Bill activity
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      className="flex-1 min-w-0 h-8 px-2 text-[11px] bg-transparent"
+                      onClick={async () => {
+                        if (!selectedCustomer) return
+                        setBillActivityModalTab("notes")
+                        await fetchCustomerBills(selectedCustomer.phone || "")
+                        setShowBillActivityDialog(true)
+                      }}
+                    >
+                      <StickyNote className="h-3.5 w-3.5 mr-1 shrink-0" />
+                      Customer notes
+                    </Button>
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -4811,9 +5468,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               <div
                 className={cn(
                   "grid gap-4 mb-4",
-                  (selectedCustomer.totalDues || 0) > 0
-                    ? "grid-cols-2 sm:grid-cols-4"
-                    : "grid-cols-1 sm:grid-cols-3"
+                  showClientWalletBalanceCard && (selectedCustomer.totalDues || 0) > 0
+                    ? "grid-cols-2 sm:grid-cols-3 xl:grid-cols-5"
+                    : showClientWalletBalanceCard || (selectedCustomer.totalDues || 0) > 0
+                      ? "grid-cols-2 sm:grid-cols-2 lg:grid-cols-4"
+                      : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-3"
                 )}
               >
                 <div className={cn(
@@ -4872,6 +5531,52 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     {selectedCustomer.lastVisit ? format(new Date(selectedCustomer.lastVisit), "dd MMM") : "Never"}
                   </p>
                 </div>
+                {showClientWalletBalanceCard && (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    title="View wallet activity"
+                    className={cn(
+                      "text-center p-3 rounded-lg border cursor-pointer transition-all duration-200",
+                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                        ? "bg-amber-50/60 border-amber-200/50 hover:bg-amber-100/70 hover:border-amber-300/60"
+                        : "bg-white/60 border-white/50 hover:bg-white/90 hover:border-indigo-200/60",
+                      "focus:outline-none focus:ring-2 focus:ring-indigo-300/50"
+                    )}
+                    onClick={() => void openClientWalletLedger()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        void openClientWalletLedger()
+                      }
+                    }}
+                  >
+                    <div className="flex items-center justify-center gap-2 mb-2">
+                      <Wallet
+                        className={cn(
+                          "h-4 w-4",
+                          membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                            ? "text-amber-600"
+                            : "text-indigo-600"
+                        )}
+                      />
+                      <span className="text-xs font-medium text-gray-700">Wallet balance</span>
+                    </div>
+                    <p
+                      className={cn(
+                        "text-lg font-bold tabular-nums",
+                        membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                          ? "text-amber-800"
+                          : "text-indigo-800"
+                      )}
+                    >
+                      ₹{totalClientWalletBalance.toFixed(2)}
+                    </p>
+                    {clientWallets.length > 1 && (
+                      <p className="text-[10px] text-gray-500 mt-0.5">{clientWallets.length} active wallets</p>
+                    )}
+                  </div>
+                )}
                 {(selectedCustomer.totalDues || 0) > 0 && (
                   <div
                     className={cn(
@@ -4896,20 +5601,38 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 )}
               </div>
 
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleViewBillActivity}
-                className={cn(
-                  "w-full h-10 text-sm transition-all duration-300",
-                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                    ? "bg-amber-50/80 hover:bg-amber-50 border-amber-200 text-amber-800 hover:text-amber-900 hover:border-amber-300"
-                    : "bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300"
-                )}
-              >
-                <FileText className="h-4 w-4 mr-2" />
-                Bill Activity
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  onClick={() => void handleViewBillActivity("bills")}
+                  className={cn(
+                    "flex-1 min-w-0 h-8 px-2 text-[11px] transition-all duration-300",
+                    membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                      ? "bg-amber-50/80 hover:bg-amber-50 border-amber-200 text-amber-800 hover:text-amber-900 hover:border-amber-300"
+                      : "bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300"
+                  )}
+                >
+                  <FileText className="h-3.5 w-3.5 mr-1 shrink-0" />
+                  Bill activity
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  onClick={() => void handleViewBillActivity("notes")}
+                  className={cn(
+                    "flex-1 min-w-0 h-8 px-2 text-[11px] transition-all duration-300",
+                    membershipData?.plan?.planName?.toLowerCase().includes("gold")
+                      ? "bg-amber-50/80 hover:bg-amber-50 border-amber-200 text-amber-800 hover:text-amber-900 hover:border-amber-300"
+                      : "bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300"
+                  )}
+                >
+                  <StickyNote className="h-3.5 w-3.5 mr-1 shrink-0" />
+                  Customer notes
+                </Button>
+              </div>
             </div>
           )}
 
@@ -5603,7 +6326,92 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
               )}
               {addItemSection === 'gift-voucher' && null}
-              {addItemSection === 'prepaid' && null}
+              {addItemSection === "prepaid" && (
+                <div className="rounded-xl border border-amber-200/90 bg-gradient-to-br from-amber-50/90 to-orange-50/40 p-4 space-y-3 shadow-sm">
+                  {!selectedCustomer || !isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined) ? (
+                    <p className="text-sm text-amber-800">Select an existing customer above first.</p>
+                  ) : loadingPrepaidWalletPlans ? (
+                    <p className="text-sm text-muted-foreground">Loading plans…</p>
+                  ) : prepaidWalletPlansForIssue.length === 0 ? (
+                    <p className="text-sm text-amber-800">
+                      No active wallet plans. Add plans under{" "}
+                      <span className="font-medium">Settings → Prepaid wallet</span>.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="border border-amber-100 rounded-lg bg-white/80 overflow-hidden">
+                        <div className="grid grid-cols-[2fr_1.5fr_80px_100px_100px_40px] gap-2 p-3 bg-amber-100/40 text-xs font-semibold text-amber-950 border-b border-amber-100">
+                          <div>Plan *</div>
+                          <div>Staff *</div>
+                          <div>Qty</div>
+                          <div>Pay (₹)</div>
+                          <div>Line (₹)</div>
+                          <div />
+                        </div>
+                        {prepaidPlanItems.map((item) => (
+                          <div
+                            key={item.id}
+                            className="grid grid-cols-[2fr_1.5fr_80px_100px_100px_40px] gap-2 p-3 border-b border-amber-50/80 last:border-0 items-center text-sm"
+                          >
+                            <Select
+                              value={item.planId || "__none__"}
+                              onValueChange={(v) => updatePrepaidPlanItem(item.id, "planId", v === "__none__" ? "" : v)}
+                            >
+                              <SelectTrigger className="h-8 bg-white">
+                                <SelectValue placeholder="Select plan" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">Select plan</SelectItem>
+                                {prepaidWalletPlansForIssue.map((p) => (
+                                  <SelectItem key={p._id} value={String(p._id)}>
+                                    {p.name} — ₹{p.payAmount} → ₹{p.creditAmount}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Select
+                              value={item.staffId || "__none__"}
+                              onValueChange={(v) => updatePrepaidPlanItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                            >
+                              <SelectTrigger className="h-8 bg-white">
+                                <SelectValue placeholder="Staff" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">Select staff</SelectItem>
+                                {staff.map((member) => {
+                                  const sid = member._id || member.id
+                                  return (
+                                    <SelectItem key={String(sid)} value={String(sid)}>
+                                      {member.name}
+                                    </SelectItem>
+                                  )
+                                })}
+                              </SelectContent>
+                            </Select>
+                            <div className="text-center text-muted-foreground tabular-nums">1</div>
+                            <div className="text-sm tabular-nums">{item.planId ? item.price.toFixed(0) : "—"}</div>
+                            <div className="text-sm font-medium tabular-nums">
+                              {item.planId ? `₹${item.total.toFixed(2)}` : "—"}
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => removePrepaidPlanItem(item.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                      <Button type="button" variant="outline" size="sm" onClick={addPrepaidPlanItem}>
+                        Add prepaid plan line
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -5708,6 +6516,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
               )}
 
+              {prepaidPlanItems.some((p) => p.planId) && (
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-sm text-gray-600">Prepaid plans</span>
+                  <span className="text-sm font-medium text-gray-900">{formatCurrency(billingPrepaidTotal)}</span>
+                </div>
+              )}
+
               {/* 2. Discounts (Manual + Global) */}
               <div className="flex justify-between items-center py-1">
                 <span className="text-sm text-gray-600">Discounts</span>
@@ -5794,6 +6609,36 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             SGST @ {((taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5) / 2).toFixed(1)}% (Package)
                           </span>
                           <span className="text-sm font-medium text-gray-900">{formatCurrency(packageTax / 2)}</span>
+                        </div>
+                      </>
+                    )}
+                    {prepaidWalletTax > 0 && (
+                      <>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">
+                            CGST @{" "}
+                            {(
+                              (taxSettings?.prepaidWalletTaxRate ??
+                                taxSettings?.serviceTaxRate ??
+                                5) / 2
+                            ).toFixed(1)}
+                            %
+                            (Prepaid)
+                          </span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(prepaidWalletTax / 2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-0.5">
+                          <span className="text-sm text-gray-500">
+                            SGST @{" "}
+                            {(
+                              (taxSettings?.prepaidWalletTaxRate ??
+                                taxSettings?.serviceTaxRate ??
+                                5) / 2
+                            ).toFixed(1)}
+                            %
+                            (Prepaid)
+                          </span>
+                          <span className="text-sm font-medium text-gray-900">{formatCurrency(prepaidWalletTax / 2)}</span>
                         </div>
                       </>
                     )}
@@ -5885,6 +6730,58 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               {/* Payment Methods - Modern Grid */}
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-gray-700">Payment Methods</h4>
+
+                {clientWallets.length > 0 && (
+                  <div className="rounded-xl border border-amber-200/80 bg-amber-50/30 p-3 space-y-2">
+                    {clientWallets.length > 1 && (
+                      <select
+                        className="w-full h-9 text-sm rounded-md border border-amber-200 bg-white px-2"
+                        value={selectedWalletId}
+                        onChange={(e) => {
+                          setSelectedWalletId(e.target.value)
+                          setWalletPayAmount(0)
+                        }}
+                      >
+                        <option value="">None</option>
+                        {clientWallets.map((w) => (
+                          <option key={w._id} value={String(w._id)}>
+                            {(w.planSnapshot && w.planSnapshot.planName) || "Wallet"} — ₹
+                            {w.remainingBalance} left
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {selectedWalletId ? (
+                      <div className="flex flex-wrap gap-2 items-end">
+                        <div className="flex-1 min-w-[120px] space-y-1">
+                          <Label className="text-xs text-amber-900">Apply from wallet (₹)</Label>
+                          <Input
+                            type="number"
+                            value={walletPayAmount || ""}
+                            onChange={(e) => setWalletPayAmount(Number(e.target.value) || 0)}
+                            className="h-9"
+                            min={0}
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          className="shrink-0"
+                          onClick={() => {
+                            const w = clientWallets.find((x) => String(x._id) === selectedWalletId)
+                            if (!w) return
+                            setWalletPayAmount(
+                              Math.min(Number(w.remainingBalance), Math.max(0, roundedTotal))
+                            )
+                          }}
+                        >
+                          Max
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
                 
                 <div className="grid grid-cols-3 gap-3">
                   {/* Cash - click to fill payable amount; darker background when selected (amount > 0) */}
@@ -5892,11 +6789,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     role="button"
                     tabIndex={0}
                     onClick={() => {
-                      setCashAmount(roundedTotal)
+                      setCashAmount(payableAfterWallet)
                       setCardAmount(0)
                       setOnlineAmount(0)
                     }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCashAmount(roundedTotal); setCardAmount(0); setOnlineAmount(0); } }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCashAmount(payableAfterWallet); setCardAmount(0); setOnlineAmount(0); } }}
                     className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-colors cursor-pointer ${cashAmount > 0 ? 'bg-green-200 border-green-400 hover:bg-green-300' : 'bg-green-50/50 border-green-200 hover:bg-green-50'}`}
                   >
                     <span className="text-sm font-medium text-green-700">Cash</span>
@@ -5917,11 +6814,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     role="button"
                     tabIndex={0}
                     onClick={() => {
-                      setCardAmount(roundedTotal)
+                      setCardAmount(payableAfterWallet)
                       setCashAmount(0)
                       setOnlineAmount(0)
                     }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCardAmount(roundedTotal); setCashAmount(0); setOnlineAmount(0); } }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCardAmount(payableAfterWallet); setCashAmount(0); setOnlineAmount(0); } }}
                     className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-colors cursor-pointer ${cardAmount > 0 ? 'bg-blue-200 border-blue-400 hover:bg-blue-300' : 'bg-blue-50/50 border-blue-200 hover:bg-blue-50'}`}
                   >
                     <span className="text-sm font-medium text-blue-700">Card</span>
@@ -5942,11 +6839,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     role="button"
                     tabIndex={0}
                     onClick={() => {
-                      setOnlineAmount(roundedTotal)
+                      setOnlineAmount(payableAfterWallet)
                       setCashAmount(0)
                       setCardAmount(0)
                     }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOnlineAmount(roundedTotal); setCashAmount(0); setCardAmount(0); } }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOnlineAmount(payableAfterWallet); setCashAmount(0); setCardAmount(0); } }}
                     className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-colors cursor-pointer ${onlineAmount > 0 ? 'bg-purple-200 border-purple-400 hover:bg-purple-300' : 'bg-purple-50/50 border-purple-200 hover:bg-purple-50'}`}
                   >
                     <span className="text-sm font-medium text-purple-700">Online</span>
@@ -6680,6 +7577,99 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         </DialogContent>
       </Dialog>
       
+      {walletLedgerOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4"
+          style={{ zIndex: 99999 }}
+          onClick={() => setWalletLedgerOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
+            style={{ zIndex: 100000 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 px-5 py-4 border-b shrink-0">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Wallet activity</h2>
+                <p className="text-sm text-muted-foreground">{selectedCustomer?.name}</p>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => setWalletLedgerOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+              {walletLedgerLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                  <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+                  <span className="text-sm">Loading transactions…</span>
+                </div>
+              ) : walletLedgerRows.length === 0 ? (
+                <p className="text-center text-sm text-muted-foreground py-12">No wallet transactions yet.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Bill / receipt</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {walletLedgerRows.map((row) => (
+                      <TableRow key={row._id}>
+                        <TableCell className="whitespace-nowrap text-sm">
+                          {format(new Date(row.createdAt), "dd MMM yyyy, h:mm a")}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          <div className="font-medium text-gray-900">
+                            {row.billNo ? `#${row.billNo}` : "—"}
+                          </div>
+                          <div className="text-xs text-muted-foreground">{row.walletPlan}</div>
+                          {row.description ? (
+                            <div className="text-xs text-muted-foreground mt-0.5">{row.description}</div>
+                          ) : null}
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            "text-right font-mono text-sm font-semibold tabular-nums",
+                            row.statusLabel === "Debit" && "text-red-700",
+                            row.statusLabel === "Credit" && "text-emerald-700",
+                            row.statusLabel === "Adjustment" && "text-slate-700"
+                          )}
+                        >
+                          {row.statusLabel === "Debit"
+                            ? `−₹${row.amount.toFixed(2)}`
+                            : row.statusLabel === "Credit"
+                              ? `+₹${row.amount.toFixed(2)}`
+                              : `₹${row.amount.toFixed(2)}`}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "text-xs font-medium",
+                              row.statusLabel === "Debit" &&
+                                "border-red-200 bg-red-50 text-red-800",
+                              row.statusLabel === "Credit" &&
+                                "border-emerald-200 bg-emerald-50 text-emerald-800",
+                              row.statusLabel === "Adjustment" &&
+                                "border-slate-200 bg-slate-50 text-slate-800"
+                            )}
+                          >
+                            {row.statusLabel}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Payment Collection Modal for Dues */}
       <PaymentCollectionModal
         isOpen={showDuesPaymentModal}
@@ -6691,7 +7681,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         sale={selectedBillForPayment}
         onPaymentCollected={handlePaymentCollected}
       />
-      
+
+      <PostPaymentReceiptModal
+        key={postPaymentModal?.receipt?.receiptNumber ?? "post-payment-idle"}
+        open={!!postPaymentModal}
+        onOpenChange={(next) => {
+          if (!next) setPostPaymentModal(null)
+        }}
+        receipt={postPaymentModal?.receipt ?? null}
+        returnPath={postPaymentModal?.returnPath ?? "/quick-sale"}
+      />
+
       {/* Dues Settlement Dialog - Rendered at root level */}
       {showDuesDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" style={{ zIndex: 99999 }}>
@@ -6769,91 +7769,150 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         </div>
       )}
       
-      {/* Bill Activity Dialog - Rendered at root level */}
+      {/* Customer notes OR bill activity — one panel per button */}
       {showBillActivityDialog && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center" style={{ zIndex: 99999 }}>
-          <div className="bg-white p-6 rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[80vh] overflow-y-auto" style={{ zIndex: 100000 }}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-bold text-gray-800">Bill Activity - {selectedCustomer?.name}</h2>
-              <Button 
-                onClick={() => setShowBillActivityDialog(false)}
-                variant="outline"
-                size="sm"
-              >
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4"
+          style={{ zIndex: 99999 }}
+          onClick={() => setShowBillActivityDialog(false)}
+        >
+          <div
+            className={cn(
+              "bg-white rounded-lg shadow-xl w-full flex flex-col overflow-hidden",
+              billActivityModalTab === "notes" ? "max-w-3xl max-h-[85vh]" : "max-w-2xl max-h-[82vh]"
+            )}
+            style={{ zIndex: 100000 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-2 px-4 py-3 border-b shrink-0">
+              <h2 className="text-base font-semibold text-gray-900 truncate pr-2">
+                {billActivityModalTab === "notes"
+                  ? `Customer notes · ${selectedCustomer?.name ?? ""}`
+                  : `Bill activity · ${selectedCustomer?.name ?? ""}`}
+              </h2>
+              <Button onClick={() => setShowBillActivityDialog(false)} variant="outline" size="sm" className="shrink-0 h-8 w-8 p-0">
                 <X className="h-4 w-4" />
               </Button>
             </div>
-            
-            {customerBills.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <Receipt className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                <p>No bills found for this customer</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {customerBills.map((bill) => (
-                  <div key={bill.id} className="border rounded-lg p-4 hover:bg-gray-50">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-lg">
-                          Bill #{bill.receiptNumber}
-                          {(bill.isEdited === true || bill.editedAt) && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
-                        </h3>
-                        <p className="text-sm text-gray-600">
-                          {bill.date} at {bill.time}
-                        </p>
-                        <p className="text-sm text-gray-600">
-                          Staff: {bill.staffName}
-                        </p>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <div className="text-right">
-                          <p className="text-lg font-bold text-green-600">
-                            ₹{bill.total.toFixed(2)}
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+              {customerBills.length === 0 ? (
+                <div className="text-center py-8 text-gray-500 text-sm">
+                  <Receipt className="h-10 w-10 mx-auto mb-3 text-gray-300" />
+                  <p>No bills found for this customer</p>
+                </div>
+              ) : billActivityModalTab === "notes" ? (
+                customerBillsWithNotes.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500 text-sm">
+                    <StickyNote className="h-10 w-10 mx-auto mb-3 text-gray-300" />
+                    <p>No invoices with customer notes yet.</p>
+                  </div>
+                ) : (
+                  <div className="border rounded-md overflow-hidden max-h-[70vh] overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="h-9 text-xs py-2">Date</TableHead>
+                          <TableHead className="h-9 text-xs py-2">Invoice</TableHead>
+                          <TableHead className="h-9 text-xs py-2 min-w-[120px]">Notes</TableHead>
+                          <TableHead className="h-9 text-xs py-2">Staff</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {[...customerBillsWithNotes]
+                          .sort((a, b) => {
+                            const ta = new Date(a.date).getTime()
+                            const tb = new Date(b.date).getTime()
+                            return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta)
+                          })
+                          .map((bill) => {
+                            const d = bill.date ? new Date(bill.date) : null
+                            const dateLabel =
+                              d && !Number.isNaN(d.getTime())
+                                ? `${format(d, "dd MMM yyyy")}${bill.time ? ` · ${bill.time}` : ""}`
+                                : String(bill.date || "—")
+                            return (
+                              <TableRow key={`note-${bill.id}`} className="text-xs">
+                                <TableCell className="py-2 align-top whitespace-nowrap text-muted-foreground">
+                                  {dateLabel}
+                                </TableCell>
+                                <TableCell className="py-2 align-top font-mono whitespace-nowrap">
+                                  {bill.receiptNumber ? `#${bill.receiptNumber}` : "—"}
+                                </TableCell>
+                                <TableCell className="py-2 align-top text-gray-800 max-w-[240px] break-words">
+                                  {String(bill.notes || "").trim()}
+                                </TableCell>
+                                <TableCell className="py-2 align-top text-gray-700">{bill.staffNames || "—"}</TableCell>
+                              </TableRow>
+                            )
+                          })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )
+              ) : (
+                <div className="space-y-2">
+                  {customerBills.map((bill) => (
+                    <div key={bill.id} className="border rounded-md p-3 hover:bg-gray-50/80">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-sm text-gray-900">
+                            #{bill.receiptNumber}
+                            {(bill.isEdited === true || bill.editedAt) && (
+                              <span className="text-[11px] text-gray-500 font-normal ml-1">(edited)</span>
+                            )}
+                          </h4>
+                          <p className="text-xs text-gray-600 mt-0.5">
+                            {bill.date}
+                            {bill.time ? ` · ${bill.time}` : ""}
                           </p>
-                          <p className="text-sm text-gray-600">
-                            {bill.payments?.[0]?.type || 'Cash'}
-                          </p>
+                          <p className="text-xs text-gray-600">Staff: {bill.staffNames || bill.staffName}</p>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => router.push(`/bills/${bill.receiptNumber || bill.id}/edit`)}
-                            title="Edit Bill"
-                            className="h-8"
-                          >
-                            <Edit className="h-3 w-3" />
-                          </Button>
-                          {bill.items && bill.items.some((item: any) => item.type === 'product') && (
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <p className="text-sm font-semibold text-green-700 tabular-nums">₹{bill.total.toFixed(2)}</p>
+                          <p className="text-[11px] text-gray-500 capitalize">{bill.payments?.[0]?.type || "Cash"}</p>
+                          <div className="flex items-center gap-1">
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => {
-                                router.push(`/billing/${bill.receiptNumber || bill.billNo || bill.id}?mode=exchange`)
-                              }}
-                              title="Exchange Products"
-                              className="h-8 border-blue-200 text-blue-700 hover:bg-blue-50"
+                              onClick={() => router.push(`/bills/${bill.receiptNumber || bill.id}/edit`)}
+                              title="Edit bill"
+                              className="h-7 w-7 p-0"
                             >
-                              <RefreshCw className="h-3 w-3" />
+                              <Edit className="h-3 w-3" />
                             </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => router.push(`/receipt/${bill.receiptNumber || bill.id}?returnTo=/quick-sale`)}
-                            title="View Receipt"
-                            className="h-8"
-                          >
-                            <Eye className="h-3 w-3" />
-                          </Button>
+                            {bill.items && bill.items.some((item: any) => item.type === "product") && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  router.push(`/billing/${bill.receiptNumber || bill.billNo || bill.id}?mode=exchange`)
+                                }}
+                                title="Exchange products"
+                                className="h-7 w-7 p-0 border-blue-200 text-blue-700 hover:bg-blue-50"
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                router.push(`/receipt/${bill.receiptNumber || bill.id}?returnTo=/quick-sale`)
+                              }
+                              title="View receipt"
+                              className="h-7 w-7 p-0"
+                            >
+                              <Eye className="h-3 w-3" />
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

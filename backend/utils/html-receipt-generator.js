@@ -368,6 +368,7 @@ function generateReceiptHTML(receipt, businessSettings) {
           if (payment.type === 'cash') displayName = 'Cash';
           if (payment.type === 'card') displayName = 'Card';
           if (payment.type === 'online') displayName = 'Online';
+          if (payment.type === 'wallet') displayName = 'Wallet';
           if (payment.type === 'unknown') displayName = 'Unknown';
           const dateSuffix = formatPaymentRecordedLabel(payment.recordedAt);
           const labelWithDate = dateSuffix ? `${displayName} (${dateSuffix})` : displayName;

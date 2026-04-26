@@ -69,8 +69,26 @@ interface WhatsAppSettingsState {
     | boolean
     | { enabled?: boolean; confirmations?: boolean; newAppointments?: boolean; reminders?: boolean; cancellations?: boolean }
   systemAlerts?: boolean | { enabled?: boolean; lowInventory?: boolean; paymentFailures?: boolean }
+  clientWalletTransactionNotifications?: boolean | { enabled?: boolean }
+  clientWalletExpiryReminderNotifications?: boolean | { enabled?: boolean }
   quietHours?: { enabled: boolean; start: string; end: string }
   [key: string]: unknown
+}
+
+/** All MSG91 template slot keys (admin table rows). Deep-merge with API so new slots appear even if the DB document predates them. */
+export const EMPTY_WHATSAPP_TEMPLATE_SLOTS: Record<string, string> = {
+  welcomeMessage: "",
+  businessAccountCreated: "",
+  receipt: "",
+  receiptCancellation: "",
+  appointmentScheduling: "",
+  appointmentConfirmation: "",
+  appointmentCancellation: "",
+  appointmentReminder: "",
+  appointmentReschedule: "",
+  clientWalletTransaction: "",
+  clientWalletExpiryReminder: "",
+  default: "",
 }
 
 export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange }: WhatsAppAdminSettingsProps) {
@@ -92,18 +110,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
     provider: "msg91",
     msg91ApiKey: "",
     msg91SenderId: "",
-    templates: {
-      welcomeMessage: "",
-      businessAccountCreated: "",
-      receipt: "",
-      receiptCancellation: "",
-      appointmentScheduling: "",
-      appointmentConfirmation: "",
-      appointmentCancellation: "",
-      appointmentReminder: "",
-      appointmentReschedule: "",
-      default: ""
-    },
+    templates: { ...EMPTY_WHATSAPP_TEMPLATE_SLOTS },
     templateVariables: {}, // Will be auto-populated when JavaScript code is parsed from approved MSG91 templates
     templateJavaScriptCodes: {}, // Store JavaScript code for each template
     // Legacy: Keep for backward compatibility
@@ -117,6 +124,8 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
       cancellations: false,
     },
     systemAlerts: { enabled: false, lowInventory: false, paymentFailures: false },
+    clientWalletTransactionNotifications: { enabled: true },
+    clientWalletExpiryReminderNotifications: { enabled: true },
     quietHours: {
       enabled: false,
       start: "22:00",
@@ -146,8 +155,9 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
           enabled: propSettings.hasOwnProperty('enabled') ? propSettings.enabled : prev.enabled,
           // Preserve nested objects
           templates: {
+            ...EMPTY_WHATSAPP_TEMPLATE_SLOTS,
             ...prev.templates,
-            ...(propSettings.templates || {})
+            ...(propSettings.templates || {}),
           },
           templateVariables: {
             ...prev.templateVariables,
@@ -156,7 +166,15 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
           templateJavaScriptCodes: {
             ...prev.templateJavaScriptCodes,
             ...(propSettings.templateJavaScriptCodes || {})
-          }
+          },
+          clientWalletTransactionNotifications:
+            propSettings.clientWalletTransactionNotifications !== undefined
+              ? propSettings.clientWalletTransactionNotifications
+              : prev.clientWalletTransactionNotifications,
+          clientWalletExpiryReminderNotifications:
+            propSettings.clientWalletExpiryReminderNotifications !== undefined
+              ? propSettings.clientWalletExpiryReminderNotifications
+              : prev.clientWalletExpiryReminderNotifications
         };
         
         console.log('📥 [WhatsAppAdminSettings] Setting new settings with enabled:', newSettings.enabled);
@@ -508,6 +526,22 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
       appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason', 'googleMapsUrl'],
       appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours', 'googleMapsUrl'],
       appointmentReschedule: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
+      clientWalletTransaction: [
+        'clientName',
+        'planName',
+        'businessName',
+        'transactionTypeLabel',
+        'amountFormatted',
+        'balanceAfterFormatted',
+      ],
+      clientWalletExpiryReminder: [
+        'clientName',
+        'planName',
+        'businessName',
+        'daysLeft',
+        'expiryDateFormatted',
+        'balanceFormatted',
+      ],
     }
 
     // Create variable mapping
@@ -602,6 +636,22 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
           appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason', 'googleMapsUrl'],
           appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours', 'googleMapsUrl'],
           appointmentReschedule: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
+          clientWalletTransaction: [
+            'clientName',
+            'planName',
+            'businessName',
+            'transactionTypeLabel',
+            'amountFormatted',
+            'balanceAfterFormatted',
+          ],
+          clientWalletExpiryReminder: [
+            'clientName',
+            'planName',
+            'businessName',
+            'daysLeft',
+            'expiryDateFormatted',
+            'balanceFormatted',
+          ],
         }
 
         // Create variable mapping
@@ -1051,6 +1101,24 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                                           <SelectItem value="loginUrl">Login URL</SelectItem>
                                           <SelectItem value="welcomeMessage">Welcome Message</SelectItem>
                                           <SelectItem value="reminderHours">Reminder Hours</SelectItem>
+                                          {templateType === "clientWalletTransaction" ? (
+                                            <>
+                                              <SelectItem value="planName">Plan name (wallet)</SelectItem>
+                                              <SelectItem value="transactionType">Transaction type (code)</SelectItem>
+                                              <SelectItem value="transactionTypeLabel">Transaction type (label)</SelectItem>
+                                              <SelectItem value="amountFormatted">Amount (formatted)</SelectItem>
+                                              <SelectItem value="balanceAfterFormatted">Balance after (formatted)</SelectItem>
+                                              <SelectItem value="description">Description</SelectItem>
+                                            </>
+                                          ) : null}
+                                          {templateType === "clientWalletExpiryReminder" ? (
+                                            <>
+                                              <SelectItem value="planName">Plan name (wallet)</SelectItem>
+                                              <SelectItem value="daysLeft">Days until expiry</SelectItem>
+                                              <SelectItem value="expiryDateFormatted">Expiry date (formatted)</SelectItem>
+                                              <SelectItem value="balanceFormatted">Current balance (formatted)</SelectItem>
+                                            </>
+                                          ) : null}
                                         </SelectContent>
                                       </Select>
                                     </div>
@@ -1131,6 +1199,8 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                       <SelectItem value="appointmentCancellation">Appointment Cancellation</SelectItem>
                       <SelectItem value="appointmentReminder">Appointment Reminder</SelectItem>
                       <SelectItem value="appointmentReschedule">Appointment Reschedule</SelectItem>
+                      <SelectItem value="clientWalletTransaction">Prepaid wallet transaction</SelectItem>
+                      <SelectItem value="clientWalletExpiryReminder">Prepaid wallet expiry reminder</SelectItem>
                     </SelectContent>
                   </Select>
                   <Input
@@ -1243,6 +1313,56 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                     ? settings.systemAlerts
                     : { lowInventory: false, paymentFailures: false };
                 handleSettingChange('systemAlerts', { ...prev, enabled: checked });
+              }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Prepaid wallet activity WhatsApp</Label>
+              <p className="text-xs text-gray-500">
+                When enabled, salons may send approved template messages for wallet credits, debits, adjustments, and
+                refunds (per-salon toggle in business WhatsApp settings).
+              </p>
+            </div>
+            <Switch
+              checked={
+                typeof settings.clientWalletTransactionNotifications === "boolean"
+                  ? settings.clientWalletTransactionNotifications
+                  : (settings.clientWalletTransactionNotifications?.enabled ?? true)
+              }
+              onCheckedChange={(checked) => {
+                const prev =
+                  typeof settings.clientWalletTransactionNotifications === "object" &&
+                  settings.clientWalletTransactionNotifications !== null
+                    ? settings.clientWalletTransactionNotifications
+                    : { enabled: true }
+                handleSettingChange("clientWalletTransactionNotifications", { ...prev, enabled: checked })
+              }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Prepaid wallet expiry reminder WhatsApp</Label>
+              <p className="text-xs text-gray-500">
+                When enabled, salons may send the approved 30/15/7-day expiry template (also requires salon WhatsApp
+                settings and Prepaid wallet expiry alerts).
+              </p>
+            </div>
+            <Switch
+              checked={
+                typeof settings.clientWalletExpiryReminderNotifications === "boolean"
+                  ? settings.clientWalletExpiryReminderNotifications
+                  : (settings.clientWalletExpiryReminderNotifications?.enabled ?? true)
+              }
+              onCheckedChange={(checked) => {
+                const prev =
+                  typeof settings.clientWalletExpiryReminderNotifications === "object" &&
+                  settings.clientWalletExpiryReminderNotifications !== null
+                    ? settings.clientWalletExpiryReminderNotifications
+                    : { enabled: true }
+                handleSettingChange("clientWalletExpiryReminderNotifications", { ...prev, enabled: checked })
               }}
             />
           </div>
@@ -1437,6 +1557,22 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                         appointmentCancellation: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'cancellationReason', 'googleMapsUrl'],
                         appointmentReminder: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'businessPhone', 'reminderHours', 'googleMapsUrl'],
                         appointmentReschedule: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
+                        clientWalletTransaction: [
+                          'clientName',
+                          'planName',
+                          'businessName',
+                          'transactionTypeLabel',
+                          'amountFormatted',
+                          'balanceAfterFormatted',
+                        ],
+                        clientWalletExpiryReminder: [
+                          'clientName',
+                          'planName',
+                          'businessName',
+                          'daysLeft',
+                          'expiryDateFormatted',
+                          'balanceFormatted',
+                        ],
                       }
 
                       // Create variable mapping

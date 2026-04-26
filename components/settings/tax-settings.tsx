@@ -46,6 +46,7 @@ export function TaxSettings() {
     serviceTaxRate: "5",
     membershipTaxRate: "5",
     packageTaxRate: "5",
+    prepaidWalletTaxRate: "5",
     productTaxRate: "18",
   })
 
@@ -94,6 +95,9 @@ export function TaxSettings() {
           packageTaxRate: String(
             response.data.packageTaxRate ?? response.data.serviceTaxRate ?? 5
           ),
+          prepaidWalletTaxRate: String(
+            response.data.prepaidWalletTaxRate ?? response.data.serviceTaxRate ?? 5
+          ),
           productTaxRate: response.data.productTaxRate?.toString() || "18",
         })
         
@@ -133,6 +137,7 @@ export function TaxSettings() {
         serviceTaxRate: parseFloat(settings.serviceTaxRate),
         membershipTaxRate: parseFloat(settings.membershipTaxRate),
         packageTaxRate: parseFloat(settings.packageTaxRate),
+        prepaidWalletTaxRate: parseFloat(settings.prepaidWalletTaxRate),
         productTaxRate: parseFloat(settings.productTaxRate),
         taxCategories: taxCategories,
         ...categoryRates,
@@ -433,24 +438,47 @@ export function TaxSettings() {
                   </div>
 
                   <div className="mb-6">
-                    <div className="space-y-2 max-w-md">
-                      <Label htmlFor="packageTaxRate" className="text-sm font-medium text-slate-700">
-                        Package Tax Rate (%)
-                      </Label>
-                      <Input
-                        id="packageTaxRate"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="100"
-                        value={settings.packageTaxRate ?? ""}
-                        onChange={(e) => setSettings({ ...settings, packageTaxRate: e.target.value })}
-                        placeholder="Package GST"
-                        className="mt-2"
-                      />
-                      <p className="text-sm text-slate-500 mt-1">
-                        Applied when selling packages on Quick Sale (uses the same Included / Excluded price mode as above)
-                      </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl">
+                      <div className="space-y-2">
+                        <Label htmlFor="packageTaxRate" className="text-sm font-medium text-slate-700">
+                          Package Tax Rate (%)
+                        </Label>
+                        <Input
+                          id="packageTaxRate"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={settings.packageTaxRate ?? ""}
+                          onChange={(e) => setSettings({ ...settings, packageTaxRate: e.target.value })}
+                          placeholder="Package GST"
+                          className="mt-2"
+                        />
+                        <p className="text-sm text-slate-500 mt-1">
+                          Applied when selling packages on Quick Sale (uses the same Included / Excluded price mode as above)
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="prepaidWalletTaxRate" className="text-sm font-medium text-slate-700">
+                          Prepaid Tax Rate (%)
+                        </Label>
+                        <Input
+                          id="prepaidWalletTaxRate"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={settings.prepaidWalletTaxRate ?? ""}
+                          onChange={(e) =>
+                            setSettings({ ...settings, prepaidWalletTaxRate: e.target.value })
+                          }
+                          placeholder="Prepaid wallet plan GST"
+                          className="mt-2"
+                        />
+                        <p className="text-sm text-slate-500 mt-1">
+                          Applied when selling client prepaid wallet plans on Quick Sale (same price mode as above)
+                        </p>
+                      </div>
                     </div>
                   </div>
 

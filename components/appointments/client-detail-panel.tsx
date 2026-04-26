@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard } from "lucide-react"
+import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard, Wallet } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { SalesAPI, MembershipAPI, AppointmentsAPI, PackagesAPI } from "@/lib/api"
+import { SalesAPI, MembershipAPI, AppointmentsAPI, PackagesAPI, ClientWalletAPI } from "@/lib/api"
 import { isClientPackageRedeemable } from "@/lib/client-package-utils"
 import type { Client } from "@/lib/client-store"
 import { useCurrency } from "@/hooks/use-currency"
@@ -64,6 +64,27 @@ function getPackageServiceRowId(row: any): string {
   return sid ? String(sid) : ""
 }
 
+function getPrepaidPlanDisplayName(wallet: any): string {
+  const snap = wallet?.planSnapshot
+  if (snap && typeof snap === "object") {
+    const n = String(snap.planName || snap.name || "").trim()
+    if (n) return n
+  }
+  const p = wallet?.planId
+  if (p && typeof p === "object") {
+    const n = String(p.name || "").trim()
+    if (n) return n
+  }
+  return "Prepaid plan"
+}
+
+function getPrepaidWalletPurchaseDate(wallet: any): Date | null {
+  const raw = wallet?.purchasedAt || wallet?.createdAt
+  if (!raw) return null
+  const t = new Date(raw)
+  return Number.isNaN(t.getTime()) ? null : t
+}
+
 export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelProps) {
   const router = useRouter()
   const { formatAmount } = useCurrency()
@@ -83,6 +104,8 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   const [packagesOpen, setPackagesOpen] = useState(false)
   const [membershipsOpen, setMembershipsOpen] = useState(false)
   const [membershipCardOpen, setMembershipCardOpen] = useState(false)
+  const [prepaidWalletOpen, setPrepaidWalletOpen] = useState(false)
+  const [prepaidWallets, setPrepaidWallets] = useState<any[]>([])
   const [clientPackages, setClientPackages] = useState<any[]>([])
   const [expandedClientPkgId, setExpandedClientPkgId] = useState<string | null>(null)
   const [packageDetailByPackageId, setPackageDetailByPackageId] = useState<Record<string, any>>({})
@@ -105,6 +128,13 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     [clientPackages]
   )
 
+  const totalPrepaidWalletBalance = useMemo(() => {
+    return prepaidWallets.reduce((acc, w) => {
+      if (String(w.status || "").toLowerCase() !== "active") return acc
+      return acc + (Number(w.remainingBalance) || 0)
+    }, 0)
+  }, [prepaidWallets])
+
   const BILLS_VISIBLE_DEFAULT = 5
   const visibleBills = showAllBills ? bills : bills.slice(0, BILLS_VISIBLE_DEFAULT)
   const hasMoreBills = bills.length > BILLS_VISIBLE_DEFAULT
@@ -125,6 +155,8 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
 
   useEffect(() => {
     setMembershipCardOpen(false)
+    setPrepaidWalletOpen(false)
+    setPrepaidWallets([])
     setExpandedClientPkgId(null)
     setPackageDetailByPackageId({})
     setRedeemedServiceIdsByClientPackageId({})
@@ -147,10 +179,11 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     async function fetchStats() {
       setLoading(true)
       try {
-        const [salesRes, membershipRes, packagesRes] = await Promise.all([
+        const [salesRes, membershipRes, packagesRes, walletRes] = await Promise.all([
           client.phone ? SalesAPI.getByClient(client.phone) : Promise.resolve({ success: false, data: [] as any[] }),
           MembershipAPI.getByCustomer(clientId).catch(() => ({ success: false, data: null })),
           PackagesAPI.getClientPackages(clientId).catch(() => ({ success: false, data: [] as any[] })),
+          ClientWalletAPI.getClientWallets(String(clientId)).catch(() => ({ success: false, data: null })),
         ])
 
         if (cancelled) return
@@ -166,6 +199,10 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         } else {
           setClientPackages([])
         }
+
+        const walletPayload = walletRes?.success && walletRes.data ? (walletRes.data as { wallets?: any[] }) : null
+        const wList = Array.isArray(walletPayload?.wallets) ? walletPayload.wallets : []
+        setPrepaidWallets(wList)
 
         const salesList = Array.isArray(salesRes?.data) ? salesRes.data : []
         setBills(salesList)
@@ -497,6 +534,15 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
               {formatAmount(duesUnpaid)}
             </span>
           </div>
+          <div className="flex items-center justify-between text-sm sm:text-base">
+            <span className="text-slate-600 flex items-center gap-2">
+              <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" />
+              Wallet balance
+            </span>
+            <span className="font-semibold text-slate-900 truncate ml-2">
+              {formatAmount(totalPrepaidWalletBalance)}
+            </span>
+          </div>
         </div>
 
         <Separator className="shrink-0" />
@@ -586,6 +632,71 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
                   </div>
                 )}
               </button>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+
+        <Separator className="shrink-0" />
+
+        <Collapsible
+          open={prepaidWalletOpen}
+          onOpenChange={setPrepaidWalletOpen}
+          className="flex flex-col min-h-0 shrink-0"
+        >
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="w-full text-left text-xs sm:text-sm font-semibold text-slate-600 mb-2 sm:mb-3 flex items-center justify-between gap-1.5 shrink-0 hover:bg-slate-50 rounded-lg px-1 py-0.5 -mx-1 transition-colors"
+            >
+              <span className="flex items-center gap-1.5 min-w-0">
+                <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0 text-indigo-500" />
+                Prepaid Wallet
+                <span className="font-normal text-slate-500">({prepaidWallets.length})</span>
+              </span>
+              <ChevronDown
+                className={`h-4 w-4 text-slate-500 transition-transform shrink-0 ${prepaidWalletOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col min-h-0 data-[state=closed]:hidden">
+            {prepaidWallets.length === 0 ? (
+              <p className="text-xs sm:text-sm text-slate-500 mb-1">No prepaid wallet</p>
+            ) : (
+              <ul className="space-y-2 mb-1">
+                {prepaidWallets.map((w) => {
+                  const wid = String(w._id || w.id)
+                  const planName = getPrepaidPlanDisplayName(w)
+                  const purchaseDate = getPrepaidWalletPurchaseDate(w)
+                  const status = String(w.status || "").toLowerCase()
+                  return (
+                    <li
+                      key={wid}
+                      className="rounded-lg border border-slate-200/80 bg-slate-50/60 px-2.5 py-2 sm:px-3 sm:py-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs sm:text-sm font-medium text-slate-900 truncate min-w-0">{planName}</p>
+                        {status === "active" ? (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] sm:text-xs shrink-0 border-emerald-300 bg-emerald-50/80 text-emerald-700"
+                          >
+                            Active
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] sm:text-xs shrink-0 capitalize text-slate-600">
+                            {status || "—"}
+                          </Badge>
+                        )}
+                      </div>
+                      {purchaseDate && (
+                        <p className="text-[10px] sm:text-xs text-slate-500 mt-1">
+                          Date: {format(purchaseDate, "dd MMM yyyy")}
+                        </p>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
             )}
           </CollapsibleContent>
         </Collapsible>

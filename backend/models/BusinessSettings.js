@@ -52,6 +52,8 @@ const businessSettingsSchema = new mongoose.Schema({
   membershipTaxRate: { type: Number, default: 5 },
   /** GST % for packages sold on bills (Quick Sale); independent from service tax. */
   packageTaxRate: { type: Number, default: 5 },
+  /** GST % for client prepaid wallet plan lines (Quick Sale); independent from service tax. */
+  prepaidWalletTaxRate: { type: Number, default: 5 },
   productTaxRate: { type: Number, default: 18 },
   essentialProductRate: { type: Number, default: 5 },
   intermediateProductRate: { type: Number, default: 12 },

@@ -2373,6 +2373,133 @@ export class WalletAPI {
   }
 }
 
+// ── Client prepaid wallet (salon service credit) ─────────────────────────────
+
+export type ClientWalletSettings = {
+  allowCouponStacking: boolean
+  gracePeriodDays: number
+  allowMultiBranch: boolean
+  refundPolicy: "service_credit_only" | "no_refunds"
+  minRechargeAmount: number
+  expiryAlertsEnabled: boolean
+}
+
+/** POST /client-wallet/issue */
+export interface ClientWalletIssueRequest {
+  clientId: string
+  planId: string
+  amountPaid?: number
+  /** Credits wallet against this POS sale (no separate bill). Staff may call when set. */
+  saleId?: string
+}
+
+export class ClientWalletAPI {
+  static async getSettings(): Promise<ApiResponse<ClientWalletSettings>> {
+    const response = await apiClient.get("/client-wallet/settings")
+    return response.data
+  }
+
+  static async updateSettings(
+    body: Partial<ClientWalletSettings>
+  ): Promise<ApiResponse<ClientWalletSettings>> {
+    const response = await apiClient.put("/client-wallet/settings", body)
+    return response.data
+  }
+
+  static async listPlans(params?: { status?: string }): Promise<ApiResponse<{ plans: any[] }>> {
+    const response = await apiClient.get("/client-wallet/plans", { params })
+    return response.data
+  }
+
+  static async createPlan(body: {
+    name: string
+    payAmount: number
+    creditAmount: number
+    validityDays: number
+    maxPerClient?: number | null
+    allowCouponStacking?: boolean
+    branchIds?: string[]
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/plans", body)
+    return response.data
+  }
+
+  static async updatePlan(id: string, body: Record<string, unknown>): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/client-wallet/plans/${id}`, body)
+    return response.data
+  }
+
+  static async updatePlanStatus(
+    id: string,
+    status: "active" | "paused" | "archived"
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/client-wallet/plans/${id}/status`, { status })
+    return response.data
+  }
+
+  /** Archived plans only; fails if any wallet was issued from this plan. */
+  static async deletePlan(id: string): Promise<ApiResponse<{ deleted?: boolean }>> {
+    const response = await apiClient.delete(`/client-wallet/plans/${id}`)
+    return response.data
+  }
+
+  static async issue(body: ClientWalletIssueRequest): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/issue", body)
+    return response.data
+  }
+
+  static async bulkIssue(body: {
+    clientIds: string[]
+    planId: string
+    amountPaid?: number
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/bulk-issue", body)
+    return response.data
+  }
+
+  static async getClientWallets(clientId: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/client-wallet/client/${clientId}`)
+    return response.data
+  }
+
+  static async redeem(body: {
+    walletId: string
+    amount: number
+    saleId?: string
+    serviceNames?: string[]
+    couponApplied?: boolean
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/redeem", body)
+    return response.data
+  }
+
+  static async adjust(body: {
+    walletId: string
+    delta: number
+    reason?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/adjust", body)
+    return response.data
+  }
+
+  static async getLiability(): Promise<
+    ApiResponse<{ totalOutstanding: number; activeWalletCount: number }>
+  > {
+    const response = await apiClient.get("/client-wallet/liability")
+    return response.data
+  }
+
+  static async getHistory(params?: {
+    service?: string
+    from?: string
+    to?: string
+    limit?: number
+  }): Promise<ApiResponse<{ history: any[] }>> {
+    const response = await apiClient.get("/client-wallet/history", { params })
+    return response.data
+  }
+}
+
 // ── Plan Checkout API ────────────────────────────────────────────────────────
 // Self-service plan renewal / upgrade / scheduled-downgrade endpoints. Mirrors
 // the wallet-recharge flow — the same Razorpay / Stripe / Zoho providers are
