@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard, Wallet } from "lucide-react"
+import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard, Wallet, Gift } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { SalesAPI, MembershipAPI, AppointmentsAPI, PackagesAPI, ClientWalletAPI } from "@/lib/api"
+import { SalesAPI, MembershipAPI, AppointmentsAPI, PackagesAPI, ClientWalletAPI, RewardPointsAPI } from "@/lib/api"
 import { isClientPackageRedeemable } from "@/lib/client-package-utils"
 import type { Client } from "@/lib/client-store"
 import { useCurrency } from "@/hooks/use-currency"
@@ -67,6 +67,9 @@ function getPackageServiceRowId(row: any): string {
 function getPrepaidPlanDisplayName(wallet: any): string {
   const snap = wallet?.planSnapshot
   if (snap && typeof snap === "object") {
+    if (snap.openedFromBillChangeCredit === true || snap.billChangeCashCreditNonExpiring === true) {
+      return "Bill change credit"
+    }
     const n = String(snap.planName || snap.name || "").trim()
     if (n) return n
   }
@@ -100,12 +103,18 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   const [expandedBillId, setExpandedBillId] = useState<string | null>(null)
   const [billActivityOpen, setBillActivityOpen] = useState(false)
   const [customerNotes, setCustomerNotes] = useState<CustomerNote[]>([])
-  const [customerNotesOpen, setCustomerNotesOpen] = useState(false)
+  const [customerNotesOpen, setCustomerNotesOpen] = useState(true)
   const [packagesOpen, setPackagesOpen] = useState(false)
   const [membershipsOpen, setMembershipsOpen] = useState(false)
   const [membershipCardOpen, setMembershipCardOpen] = useState(false)
   const [prepaidWalletOpen, setPrepaidWalletOpen] = useState(false)
   const [prepaidWallets, setPrepaidWallets] = useState<any[]>([])
+  const [rewardSummary, setRewardSummary] = useState<{
+    balance: number
+    lifetimeEarned: number
+    lifetimeRedeemed: number
+    lastBillEarnPoints: number
+  } | null>(null)
   const [clientPackages, setClientPackages] = useState<any[]>([])
   const [expandedClientPkgId, setExpandedClientPkgId] = useState<string | null>(null)
   const [packageDetailByPackageId, setPackageDetailByPackageId] = useState<Record<string, any>>({})
@@ -157,6 +166,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     setMembershipCardOpen(false)
     setPrepaidWalletOpen(false)
     setPrepaidWallets([])
+    setRewardSummary(null)
     setExpandedClientPkgId(null)
     setPackageDetailByPackageId({})
     setRedeemedServiceIdsByClientPackageId({})
@@ -179,11 +189,12 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     async function fetchStats() {
       setLoading(true)
       try {
-        const [salesRes, membershipRes, packagesRes, walletRes] = await Promise.all([
+        const [salesRes, membershipRes, packagesRes, walletRes, rewardSumRes] = await Promise.all([
           client.phone ? SalesAPI.getByClient(client.phone) : Promise.resolve({ success: false, data: [] as any[] }),
           MembershipAPI.getByCustomer(clientId).catch(() => ({ success: false, data: null })),
           PackagesAPI.getClientPackages(clientId).catch(() => ({ success: false, data: [] as any[] })),
           ClientWalletAPI.getClientWallets(String(clientId)).catch(() => ({ success: false, data: null })),
+          RewardPointsAPI.getSummary(String(clientId)).catch(() => ({ success: false, data: null })),
         ])
 
         if (cancelled) return
@@ -204,6 +215,11 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         const wList = Array.isArray(walletPayload?.wallets) ? walletPayload.wallets : []
         setPrepaidWallets(wList)
 
+        if (rewardSumRes?.success && rewardSumRes.data) {
+          setRewardSummary(rewardSumRes.data as any)
+        } else {
+          setRewardSummary(null)
+        }
         const salesList = Array.isArray(salesRes?.data) ? salesRes.data : []
         setBills(salesList)
 
@@ -250,6 +266,10 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     }
   }, [clientId])
 
+  useEffect(() => {
+    setCustomerNotesOpen(true)
+  }, [clientId])
+
   const fetchAppointmentNotes = useCallback(async () => {
     if (!clientId || appointmentNotesFetched.current === clientId) return
     appointmentNotesFetched.current = clientId
@@ -287,6 +307,11 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
       setLoadingNotes(false)
     }
   }, [clientId])
+
+  useEffect(() => {
+    if (!clientId || loading) return
+    void fetchAppointmentNotes()
+  }, [clientId, loading, fetchAppointmentNotes])
 
   const displayName = client.name
   const displayPhone = client.phone
@@ -536,13 +561,110 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
           </div>
           <div className="flex items-center justify-between text-sm sm:text-base">
             <span className="text-slate-600 flex items-center gap-2">
-              <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" />
+              <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" aria-hidden />
               Wallet balance
             </span>
-            <span className="font-semibold text-slate-900 truncate ml-2">
+            <span className="font-semibold text-slate-900 truncate ml-2 tabular-nums">
               {formatAmount(totalPrepaidWalletBalance)}
             </span>
           </div>
+          <div className="flex items-center justify-between text-sm sm:text-base">
+            <span className="text-slate-600 flex items-center gap-2">
+              <Gift className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" aria-hidden />
+              Reward points
+            </span>
+            <span className="font-semibold text-slate-900 tabular-nums shrink-0">
+              {rewardSummary?.balance ?? client.rewardPointsBalance ?? 0}
+              <span className="text-xs font-medium text-slate-500 ml-1">pts</span>
+            </span>
+          </div>
+        </div>
+
+        <Separator className="shrink-0" />
+
+        <div
+          className={cn(
+            "rounded-xl border p-3 sm:p-4 shrink-0 transition-colors",
+            customerNotes.length > 0
+              ? "border-amber-400/60 bg-gradient-to-br from-amber-50/90 to-orange-50/40 shadow-sm ring-1 ring-amber-200/50"
+              : "border-slate-200/70 bg-slate-50/40"
+          )}
+        >
+          <Collapsible
+            open={customerNotesOpen}
+            onOpenChange={setCustomerNotesOpen}
+            className="flex flex-col min-h-0"
+          >
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  "w-full text-left flex items-center justify-between gap-2 shrink-0 rounded-lg px-0.5 py-1 transition-colors",
+                  customerNotes.length > 0 ? "hover:bg-amber-100/40" : "hover:bg-slate-100/60"
+                )}
+              >
+                <span className="min-w-0">
+                  <span className="flex items-center gap-2 text-sm sm:text-base font-semibold text-slate-900">
+                    <MessageSquare
+                      className={cn(
+                        "h-4 w-4 sm:h-5 sm:w-5 shrink-0",
+                        customerNotes.length > 0 ? "text-amber-700" : "text-slate-500"
+                      )}
+                    />
+                    Past notes
+                    {customerNotes.length > 0 && (
+                      <Badge
+                        variant="secondary"
+                        className="bg-amber-200/80 text-amber-950 text-[10px] sm:text-xs font-semibold border-amber-300/60"
+                      >
+                        {customerNotes.length}
+                      </Badge>
+                    )}
+                  </span>
+                </span>
+                <ChevronDown
+                  className={`h-4 w-4 text-slate-600 shrink-0 transition-transform ${customerNotesOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="flex flex-col min-h-0 data-[state=closed]:hidden pt-2">
+              {loadingNotes && (
+                <div className="flex items-center gap-2 py-2 text-xs text-slate-600">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                  Loading appointment notes…
+                </div>
+              )}
+              {customerNotes.length === 0 && !loadingNotes ? (
+                <p className="text-xs sm:text-sm text-slate-600 shrink-0">No notes yet.</p>
+              ) : (
+                <ul className="space-y-2.5 flex-1 min-h-0 overflow-y-auto pr-0.5 max-h-56 sm:max-h-72">
+                  {customerNotes.map((note) => (
+                    <li key={note.id}>
+                      <Link
+                        href={note.href}
+                        className="block rounded-lg border border-white/80 bg-white/90 hover:bg-white p-2.5 sm:p-3 transition-colors text-left shadow-sm"
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                          <span className="text-[10px] sm:text-xs font-medium text-slate-500">
+                            {format(new Date(note.createdAt), "dd MMM yyyy, HH:mm")}
+                          </span>
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
+                            {note.source === "appointment" ? "Appointment" : "Bill / sale"}
+                          </Badge>
+                          {note.staffName && (
+                            <span className="text-[10px] sm:text-xs text-slate-600">• {note.staffName}</span>
+                          )}
+                        </div>
+                        <p className="text-xs sm:text-sm text-slate-900 whitespace-pre-wrap break-words leading-relaxed">
+                          {note.content}
+                        </p>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
         </div>
 
         <Separator className="shrink-0" />
@@ -852,68 +974,6 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
 
         <Separator className="shrink-0" />
 
-        {/* Customer Notes */}
-        <Collapsible open={customerNotesOpen} onOpenChange={(open) => {
-          setCustomerNotesOpen(open)
-          if (open) fetchAppointmentNotes()
-        }} className="flex flex-col min-h-0 shrink-0">
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="w-full text-left text-xs sm:text-sm font-semibold text-slate-600 mb-2 sm:mb-3 flex items-center justify-between gap-1.5 shrink-0 hover:bg-slate-50 rounded-lg px-1 py-0.5 -mx-1 transition-colors"
-            >
-              <span className="flex items-center gap-1.5">
-                <MessageSquare className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
-                Customer Notes
-                {customerNotes.length > 0 && (
-                  <span className="font-normal text-slate-500">({customerNotes.length})</span>
-                )}
-              </span>
-              <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform shrink-0 ${customerNotesOpen ? "rotate-180" : ""}`} />
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="flex flex-col min-h-0 data-[state=closed]:hidden">
-            {loadingNotes && (
-              <div className="flex items-center gap-2 py-2 text-xs text-slate-500">
-                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                Loading appointment notes…
-              </div>
-            )}
-            {customerNotes.length === 0 && !loadingNotes ? (
-              <p className="text-xs sm:text-sm text-slate-500 shrink-0">No notes yet</p>
-            ) : (
-              <ul className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-0.5 sm:pr-1 max-h-40">
-                {customerNotes.map((note) => (
-                  <li key={note.id}>
-                    <Link
-                      href={note.href}
-                      className="block rounded-lg border border-slate-200/80 bg-slate-50/60 hover:bg-slate-100/80 p-2.5 sm:p-3 transition-colors text-left"
-                    >
-                      <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                        <span className="text-[10px] sm:text-xs text-slate-500">
-                          {format(new Date(note.createdAt), "dd MMM yyyy, HH:mm")}
-                        </span>
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] px-1.5 py-0 capitalize"
-                        >
-                          {note.source === "appointment" ? "Appointment" : "QuickSale"}
-                        </Badge>
-                        {note.staffName && (
-                          <span className="text-[10px] sm:text-xs text-slate-600">• {note.staffName}</span>
-                        )}
-                      </div>
-                      <p className="text-xs sm:text-sm text-slate-800 line-clamp-3">{note.content}</p>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-
-        <Separator className="shrink-0" />
-
         <Collapsible open={billActivityOpen} onOpenChange={setBillActivityOpen} className="flex flex-col min-h-0 flex-1">
           <CollapsibleTrigger asChild>
             <button
@@ -941,6 +1001,8 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
                   const items: Array<{ name: string; type: string; quantity: number; price: number; total: number }> =
                     Array.isArray(s?.items) ? s.items : []
                   const isExpanded = expandedBillId === billKey
+                  const ptsEarned = Math.floor(Number(s?.loyaltyPointsEarned) || 0)
+                  const ptsRedeemed = Math.floor(Number(s?.loyaltyPointsRedeemed) || 0)
                   return (
                     <Collapsible
                       key={billKey}
@@ -961,6 +1023,12 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
                               type="button"
                               className="flex items-center gap-1.5 shrink-0 ml-2 hover:bg-slate-100 rounded transition-colors px-1 -mx-1"
                             >
+                              {ptsEarned > 0 && (
+                                <span className="text-xs font-semibold text-emerald-700 tabular-nums">+{ptsEarned}</span>
+                              )}
+                              {ptsRedeemed > 0 && (
+                                <span className="text-xs font-semibold text-rose-700 tabular-nums">−{ptsRedeemed}</span>
+                              )}
                               <span className="font-medium text-slate-800">
                                 {formatAmount(Number(s?.grossTotal) || Number(s?.netTotal) || 0)}
                               </span>

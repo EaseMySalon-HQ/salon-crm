@@ -21,6 +21,8 @@ import { Switch } from "@/components/ui/switch"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, ProductsAPI, type SalesSummaryData } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
 import { ProductListReport } from "@/components/reports/product-list-report"
+import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
+import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
@@ -1733,17 +1735,12 @@ export function SalesReport() {
               )}
               {reportType === "service-list" && (
                 <>
-                  <Select value={serviceListServiceFilter} onValueChange={setServiceListServiceFilter}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                      <SelectValue placeholder="Service" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All services</SelectItem>
-                      {serviceListServices.map((s) => (
-                        <SelectItem key={s._id} value={s._id}>{s.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <ServiceFilterCombobox
+                    value={serviceListServiceFilter}
+                    onValueChange={setServiceListServiceFilter}
+                    services={serviceListServices}
+                    triggerClassName="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                  />
                   <Select value={serviceListDatePeriod} onValueChange={handleServiceListDatePeriodChange}>
                     <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
@@ -1836,17 +1833,12 @@ export function SalesReport() {
               )}
               {reportType === "product-list" && (
                 <>
-                  <Select value={productListProductFilter} onValueChange={setProductListProductFilter}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                      <SelectValue placeholder="Product" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All products</SelectItem>
-                      {productListProducts.map((p) => (
-                        <SelectItem key={p._id} value={p._id}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <ProductFilterCombobox
+                    value={productListProductFilter}
+                    onValueChange={setProductListProductFilter}
+                    products={productListProducts}
+                    triggerClassName="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                  />
                   <Select value={productListDatePeriod} onValueChange={handleProductListDatePeriodChange}>
                     <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />

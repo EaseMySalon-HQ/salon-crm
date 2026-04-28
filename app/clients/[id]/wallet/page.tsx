@@ -20,6 +20,14 @@ const STATUS_COLOR: Record<string, string> = {
   cancelled: "bg-gray-100 text-gray-500",
 }
 
+function walletPlanTitle(w: { planSnapshot?: Record<string, unknown> | null }): string {
+  const ps = w.planSnapshot
+  if (ps?.openedFromBillChangeCredit === true || ps?.billChangeCashCreditNonExpiring === true) {
+    return "Bill change credit"
+  }
+  return typeof ps?.planName === "string" && ps.planName.trim() ? ps.planName : "Wallet"
+}
+
 export default function ClientWalletPage() {
   const { id: clientId } = useParams<{ id: string }>()
   const router = useRouter()
@@ -147,7 +155,7 @@ export default function ClientWalletPage() {
               <li key={w._id} className="border rounded-xl p-4 bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <p className="font-semibold">{w.planSnapshot?.planName || "Wallet"}</p>
+                    <p className="font-semibold">{walletPlanTitle(w)}</p>
                     <p className="text-sm text-gray-600">
                       Balance{" "}
                       <span className="font-mono font-medium text-gray-900">₹{w.remainingBalance}</span> / ₹

@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useRef, useEffect, useMemo } from "react"
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react"
 import { useSearchParams } from "next/navigation"
 import {
   Search,
@@ -33,11 +33,13 @@ import {
   Package as PackageIcon,
   AlertCircle,
   Wallet,
+  Gift,
 } from "lucide-react"
 import { Calendar as DatePicker } from "@/components/ui/calendar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -62,7 +64,6 @@ import { ReceiptDialog } from "@/components/receipts/receipt-dialog"
 import { PostPaymentReceiptModal } from "@/components/receipts/post-payment-receipt-modal"
 import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
@@ -71,8 +72,11 @@ import {
   addReceipt,
   getReceiptsByClient,
   type PaymentMethod,
+  type Receipt as ReceiptRecord,
   getAllReceipts,
 } from "@/lib/data"
+import { ReceiptPreview } from "@/components/receipts/receipt-preview"
+import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
 import {
   ServicesAPI,
   ProductsAPI,
@@ -88,7 +92,14 @@ import {
   PackagesAPI,
   ClientWalletAPI,
   ClientsAPI,
+  RewardPointsAPI,
 } from "@/lib/api"
+import { previewRedemptionLive } from "@/lib/reward-points-preview"
+import {
+  mergePaymentConfiguration,
+  eligibleRedemptionSubtotal,
+} from "@/lib/payment-redemption-eligibility"
+import type { RewardPointsSettings } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
@@ -297,7 +308,11 @@ function flattenClientWalletLedger(
   const rows: ClientWalletLedgerRow[] = []
   for (const w of wallets || []) {
     const wid = String(w._id)
-    const plan = w.planSnapshot?.planName || "Wallet"
+    const ps = w.planSnapshot
+    const plan =
+      ps?.openedFromBillChangeCredit === true || ps?.billChangeCashCreditNonExpiring === true
+        ? "Bill change credit"
+        : ps?.planName || "Wallet"
     for (const tx of by[wid] || []) {
       rows.push({
         _id: String(tx._id),
@@ -327,6 +342,15 @@ function collectStaffNamesFromSale(sale: any): string {
     for (const sc of it?.staffContributions || []) add(sc?.staffName)
   }
   return names.size > 0 ? [...names].join(", ") : "—"
+}
+
+/** Bill number for `/billing/[billNo]` (same editor as Reports → Edit bill). */
+function quickSaleBillNoForBillingRoute(bill: {
+  receiptNumber?: string
+  billNo?: string
+  id?: string
+}) {
+  return String(bill.receiptNumber ?? bill.billNo ?? bill.id ?? "").trim()
 }
 
 function mapSaleToCustomerBill(sale: any) {
@@ -435,6 +459,75 @@ function walletExpiryEndMs(w: any): number {
   return Number.isFinite(t) ? t : 0
 }
 
+function pickWalletIdForChangeCredit(usableWallets: any[], selectedWalletId: string): string | null {
+  if (!usableWallets?.length) return null
+  if (selectedWalletId) {
+    const hit = usableWallets.find((w) => String(w._id) === String(selectedWalletId))
+    if (hit) return String(hit._id)
+  }
+  const sorted = [...usableWallets].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
+  return sorted[0] ? String(sorted[0]._id) : null
+}
+
+/** When customer overpays and change is credited to wallet, trim recorded payments to sale due total (cash → card → online). */
+function buildRecordedPaymentsForCheckout(options: {
+  cashAmount: number
+  cardAmount: number
+  onlineAmount: number
+  walletPayAmount: number
+  saleDueTotal: number
+  creditOverpaymentToWallet: boolean
+}): {
+  payments: PaymentMethod[]
+  changeToCredit: number
+  recordedPaidTotal: number
+} {
+  const {
+    cashAmount,
+    cardAmount,
+    onlineAmount,
+    walletPayAmount,
+    saleDueTotal,
+    creditOverpaymentToWallet,
+  } = options
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  const totalPaid = cashAmount + cardAmount + onlineAmount + walletPayAmount
+  const change = round2(totalPaid - saleDueTotal)
+  const pushPayments = (c: number, ca: number, o: number, w: number) => {
+    const out: PaymentMethod[] = []
+    if (c > 0.005) out.push({ type: "cash", amount: round2(c) })
+    if (ca > 0.005) out.push({ type: "card", amount: round2(ca) })
+    if (o > 0.005) out.push({ type: "online", amount: round2(o) })
+    if (w > 0.005) out.push({ type: "wallet", amount: round2(w) })
+    return out
+  }
+  if (!creditOverpaymentToWallet || change <= 0.005) {
+    const payments = pushPayments(cashAmount, cardAmount, onlineAmount, walletPayAmount)
+    return {
+      payments,
+      changeToCredit: 0,
+      recordedPaidTotal: round2(payments.reduce((s, p) => s + p.amount, 0)),
+    }
+  }
+  let excess = change
+  let c = cashAmount
+  let ca = cardAmount
+  let o = onlineAmount
+  const w = walletPayAmount
+  const take = (amt: number) => {
+    const t = Math.min(Math.max(0, amt), excess)
+    excess = round2(excess - t)
+    return round2(amt - t)
+  }
+  c = take(c)
+  if (excess > 0.005) ca = take(ca)
+  if (excess > 0.005) o = take(o)
+  const payments = pushPayments(c, ca, o, w)
+  const recordedPaidTotal = round2(payments.reduce((s, p) => s + p.amount, 0))
+  const changeToCredit = round2(totalPaid - recordedPaidTotal)
+  return { payments, changeToCredit, recordedPaidTotal }
+}
+
 /**
  * Active prepaid wallets with usable balance for Quick Sale (payment picker + header balance).
  * Uses effective or plan expiry, case-insensitive status, and a short grace window for clock/API skew.
@@ -456,6 +549,42 @@ function pickDefaultClientWalletId(wallets: any[]): string {
   if (!wallets?.length) return ""
   const sorted = [...wallets].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
   return String(sorted[0]._id)
+}
+
+/** Single display row for combined-wallet mode; redeem still uses primary _id + server FIFO. */
+function buildCombinedQuickSaleWalletRow(usable: any[]) {
+  const sorted = [...usable].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
+  const sum = sorted.reduce((s, w) => s + (Number(w.remainingBalance) || 0), 0)
+  const primary = sorted[0]
+  return {
+    ...primary,
+    _id: primary._id,
+    remainingBalance: sum,
+    effectiveExpiryDate: primary.effectiveExpiryDate,
+    planSnapshot: {
+      ...(primary.planSnapshot || {}),
+      planName: "Combined prepaid balance",
+    },
+    _combinedSources: sorted,
+  }
+}
+
+/** Bill activity list: "dd MMM yyyy · HH:mm" (uses bill.time when parseable, else from date). */
+function formatCustomerBillDateTimeLine(bill: { date?: string; time?: string }): string {
+  const d = bill.date ? new Date(bill.date) : null
+  if (!d || Number.isNaN(d.getTime())) {
+    return [bill.date, bill.time].filter(Boolean).join(" · ") || "—"
+  }
+  const dateStr = format(d, "dd MMM yyyy")
+  const rawT = bill.time != null ? String(bill.time).trim() : ""
+  let timeStr: string
+  if (rawT) {
+    const m = rawT.match(/^(\d{1,2}):(\d{2})(?::\d{2})?/)
+    timeStr = m ? `${m[1].padStart(2, "0")}:${m[2]}` : rawT
+  } else {
+    timeStr = format(d, "HH:mm")
+  }
+  return `${dateStr} · ${timeStr}`
 }
 
 interface QuickSaleProps {
@@ -492,9 +621,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   /** Client prepaid wallet (salon service credit) applied toward this bill */
   const [walletPayAmount, setWalletPayAmount] = useState(0)
   const [selectedWalletId, setSelectedWalletId] = useState<string>("")
-  const [clientWallets, setClientWallets] = useState<any[]>([])
+  const [rewardPointsSettings, setRewardPointsSettings] = useState<RewardPointsSettings | null>(null)
+  const [loyaltyBalance, setLoyaltyBalance] = useState(0)
+  const [loyaltyPointsInput, setLoyaltyPointsInput] = useState(0)
+  /** When wallet and reward cannot stack, user picks one redemption method for this bill. */
+  const [exclusiveRedemptionMethod, setExclusiveRedemptionMethod] = useState<"wallet" | "reward" | null>(null)
+  const [clientWalletsRaw, setClientWalletsRaw] = useState<any[]>([])
   const [clientWalletSettings, setClientWalletSettings] = useState<{
     allowCouponStacking?: boolean
+    combineMultipleWallets?: boolean
   } | null>(null)
   /** Prepaid wallet plans — loaded when "Add Prepaid Plans" panel is open */
   const [prepaidWalletPlansForIssue, setPrepaidWalletPlansForIssue] = useState<any[]>([])
@@ -512,6 +647,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     receipt: any
     returnPath: string
   } | null>(null)
+  /** Bill activity panel: Eye opens same ReceiptPreview as post-checkout "View invoice", not /receipt. */
+  const [historyInvoicePreviewOpen, setHistoryInvoicePreviewOpen] = useState(false)
+  const [historyInvoicePreviewReceipt, setHistoryInvoicePreviewReceipt] = useState<ReceiptRecord | null>(null)
+  const [historyInvoicePreviewSettings, setHistoryInvoicePreviewSettings] = useState<any>(null)
+  const [historyInvoicePreviewLoading, setHistoryInvoicePreviewLoading] = useState(false)
   const [summaryExpanded, setSummaryExpanded] = useState(false)
 
   // Search states for service items dropdown
@@ -521,10 +661,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [activeProductDropdown, setActiveProductDropdown] = useState<string | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [showNewCustomerDialog, setShowNewCustomerDialog] = useState(false)
-  const [showBillActivityDialog, setShowBillActivityDialog] = useState(false)
-  /** Which single-purpose panel the bills modal shows: invoice notes table vs bill list */
-  const [billActivityModalTab, setBillActivityModalTab] = useState<"notes" | "bills">("bills")
+  /** Side panel: notes (default) vs bill list — inline next to snapshot, no modal */
+  const [billActivityModalTab, setBillActivityModalTab] = useState<"notes" | "bills">("notes")
   const [customerBills, setCustomerBills] = useState<any[]>([])
+  const [customerBillsLoading, setCustomerBillsLoading] = useState(false)
   const [showDuesDialog, setShowDuesDialog] = useState(false)
   const [unpaidBills, setUnpaidBills] = useState<any[]>([])
   const [showDuesPaymentModal, setShowDuesPaymentModal] = useState(false)
@@ -536,10 +676,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     email: "",
   })
   const customerSearchRef = useRef<HTMLDivElement>(null)
+  /** Measured height of the Customer Snapshot card — side panel matches this when visible (md+ row). */
+  const customerSnapshotCardRef = useRef<HTMLDivElement>(null)
+  const [snapshotSidePanelHeightPx, setSnapshotSidePanelHeightPx] = useState<number | null>(null)
   const [showBillDetailsDialog, setShowBillDetailsDialog] = useState(false)
   const [selectedBill, setSelectedBill] = useState<any>(null)
   const [confirmUnpaid, setConfirmUnpaid] = useState(false)
   const [showPaymentModal, setShowPaymentModal] = useState(false)
+  const [showCreditChangeConfirm, setShowCreditChangeConfirm] = useState(false)
+  /** When opening wallet-change confirm from edit-reason dialog, pass reason into checkout */
+  const [creditCheckoutReasonOverride, setCreditCheckoutReasonOverride] = useState<string | null>(null)
   const [showTipModal, setShowTipModal] = useState(false)
   const [tempTipAmount, setTempTipAmount] = useState(0)
   const [editReason, setEditReason] = useState("")
@@ -1153,6 +1299,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       // Set notes
       if (initialSale.notes) {
         setRemarks(initialSale.notes)
+      }
+
+      const lpInit = Number(initialSale.loyaltyPointsRedeemed) || 0
+      const ldInit = Number(initialSale.loyaltyDiscountAmount) || 0
+      if (lpInit > 0 || ldInit > 0) {
+        setLoyaltyPointsInput(lpInit)
       }
 
       // Set payment amounts (if any)
@@ -1826,56 +1978,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
   }
 
-  const handleViewBillActivity = async (tab: "notes" | "bills" = "bills") => {
-    setBillActivityModalTab(tab)
-    const customerId = getCustomerId(selectedCustomer)
-    if (customerId) {
-      try {
-        // First get the customer object to get the name
-        const customer = clients.find(c => (c._id || c.id) === customerId)
-        if (!customer) {
-          console.error('❌ Customer not found in clients list:', customerId)
-          toast({
-            title: "Error",
-            description: "Customer not found. Please try again.",
-            variant: "destructive",
-          })
-          return
-        }
-        
-        console.log('👤 Fetching bills for customer:', customer.name)
-        
-        // Get sales data for this customer by phone (exact match)
-        const salesResponse = await SalesAPI.getByClient(customer.phone || '')
-        if (salesResponse.success) {
-          const bills = (salesResponse.data || []).map(mapSaleToCustomerBill)
-          
-          setCustomerBills(bills)
-          console.log('📋 Transformed bills:', bills)
-        } else {
-          console.error('Failed to fetch customer sales:', salesResponse.error)
-          toast({
-            title: "Error",
-            description: "Failed to fetch customer bills. Please try again.",
-            variant: "destructive",
-          })
-        }
-      } catch (error) {
-        console.error('Error fetching customer bills:', error)
-        toast({
-          title: "Error",
-          description: "Failed to fetch customer bills. Please try again.",
-          variant: "destructive",
-        })
-      }
-      setShowBillActivityDialog(true)
-    } else {
+  const handleViewBillActivity = async (tab: "notes" | "bills") => {
+    if (!selectedCustomer?.phone?.trim()) {
       toast({
         title: "Error",
-        description: "Invalid customer ID. Please select a customer again.",
+        description: "Please select a customer first.",
         variant: "destructive",
       })
+      return
     }
+    setBillActivityModalTab(tab)
+    await fetchCustomerBills(selectedCustomer.phone)
   }
 
   // Fetch unpaid/partially paid bills for the customer
@@ -1983,9 +2096,38 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }, [])
 
   useEffect(() => {
+    RewardPointsAPI.getSettings()
+      .then((res) => {
+        if (res.success && res.data) setRewardPointsSettings(res.data as RewardPointsSettings)
+      })
+      .catch(() => setRewardPointsSettings(null))
+  }, [])
+
+  useEffect(() => {
     const cid = getCustomerId(selectedCustomer)
     if (!cid || !isLikelyMongoObjectId(cid)) {
-      setClientWallets([])
+      setLoyaltyBalance(0)
+      setLoyaltyPointsInput(0)
+      return
+    }
+    let cancelled = false
+    ClientsAPI.getById(cid)
+      .then((res) => {
+        if (cancelled || !res.success || !res.data) return
+        setLoyaltyBalance(Number((res.data as any).rewardPointsBalance) || 0)
+      })
+      .catch(() => {
+        if (!cancelled) setLoyaltyBalance(0)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedCustomer])
+
+  useEffect(() => {
+    const cid = getCustomerId(selectedCustomer)
+    if (!cid || !isLikelyMongoObjectId(cid)) {
+      setClientWalletsRaw([])
       setSelectedWalletId("")
       setWalletPayAmount(0)
       return
@@ -1997,12 +2139,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       .then((res) => {
         if (cancelled || !res.success || !res.data?.wallets) return
         const usable = filterWalletsForQuickSaleDisplay(res.data.wallets as any[])
-        setClientWallets(usable)
+        setClientWalletsRaw(usable)
         setSelectedWalletId(pickDefaultClientWalletId(usable))
       })
       .catch(() => {
         if (!cancelled) {
-          setClientWallets([])
+          setClientWalletsRaw([])
           setSelectedWalletId("")
         }
       })
@@ -2017,20 +2159,65 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     [serviceItems]
   )
 
-  /** Sum of remaining balance on active, non-expired wallets shown in Quick Sale (matches payment picker). */
-  const totalClientWalletBalance = useMemo(
-    () => clientWallets.reduce((sum, w) => sum + (Number(w.remainingBalance) || 0), 0),
-    [clientWallets]
+  const clientWalletsUsableFiltered = useMemo(
+    () => filterWalletsForQuickSaleDisplay(clientWalletsRaw),
+    [clientWalletsRaw]
   )
+
+  const clientWallets = useMemo(() => {
+    if (
+      !clientWalletSettings?.combineMultipleWallets ||
+      clientWalletsUsableFiltered.length <= 1
+    ) {
+      return clientWalletsUsableFiltered
+    }
+    return [buildCombinedQuickSaleWalletRow(clientWalletsUsableFiltered)]
+  }, [clientWalletsUsableFiltered, clientWalletSettings?.combineMultipleWallets])
+
+  /** Sum of remaining balance on active, non-expired wallets (always from underlying wallets). */
+  const totalClientWalletBalance = useMemo(
+    () =>
+      clientWalletsUsableFiltered.reduce((sum, w) => sum + (Number(w.remainingBalance) || 0), 0),
+    [clientWalletsUsableFiltered]
+  )
+
+  const showSeparateWalletCount =
+    !clientWalletSettings?.combineMultipleWallets && clientWalletsUsableFiltered.length > 1
 
   const showClientWalletBalanceCard =
     Number.isFinite(totalClientWalletBalance) && totalClientWalletBalance > 0
 
-  /** Invoices that have non-empty sale `notes` (Customer notes modal only). */
+  /** Invoices that have non-empty sale `notes`. */
   const customerBillsWithNotes = useMemo(
     () => customerBills.filter((b) => String(b.notes ?? "").trim().length > 0),
     [customerBills]
   )
+
+  /** Hide the side column when there are no invoice notes (default tab) — snapshot uses full width until user opens Bill activity. */
+  const showCustomerSidePanel = useMemo(
+    () => billActivityModalTab === "bills" || customerBillsWithNotes.length > 0,
+    [billActivityModalTab, customerBillsWithNotes.length]
+  )
+
+  useLayoutEffect(() => {
+    if (!showCustomerSidePanel) {
+      setSnapshotSidePanelHeightPx(null)
+      return
+    }
+    const el = customerSnapshotCardRef.current
+    if (!el) {
+      setSnapshotSidePanelHeightPx(null)
+      return
+    }
+    const sync = () => {
+      const h = el.getBoundingClientRect().height
+      if (h > 0) setSnapshotSidePanelHeightPx(Math.round(h))
+    }
+    sync()
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [showCustomerSidePanel, selectedCustomer?.phone])
 
   // Apply membership pricing when membership loads, catalog changes, or line qty/service changes.
   // Included services: free units use plan balance first; extra qty is charged at plan discount %.
@@ -2119,22 +2306,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
   }
 
-  // Fetch customer bills for Bill Activity dialog
+  // Fetch customer bills for Bill Activity dialog and inline Customer notes panel
   const fetchCustomerBills = async (customerPhone: string) => {
     console.log('🔍 fetchCustomerBills called with phone')
+    setCustomerBillsLoading(true)
     try {
       console.log('🔍 Calling SalesAPI.getByClient...')
       const salesResponse = await SalesAPI.getByClient(customerPhone)
       console.log('📊 Customer bills API response:', salesResponse)
-      
+
       if (salesResponse.success) {
         const sales = salesResponse.data || []
         console.log('📊 Sales data received:', sales)
-        console.log('📊 Sales response full data:', salesResponse.data)
-        console.log('📊 Sales array length:', sales.length)
-        
+
         const bills = sales.map(mapSaleToCustomerBill)
-        
+
         console.log('📋 Transformed bills:', bills)
         setCustomerBills(bills)
         console.log('📋 Customer bills state updated')
@@ -2145,8 +2331,69 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     } catch (error) {
       console.error('❌ Error fetching customer bills:', error)
       setCustomerBills([])
+    } finally {
+      setCustomerBillsLoading(false)
     }
   }
+
+  const openCustomerBillInvoicePreview = async (billNoRaw: string) => {
+    const billNo = String(billNoRaw || "").trim()
+    if (!billNo) {
+      toast({
+        title: "Missing bill number",
+        description: "Cannot load this invoice.",
+        variant: "destructive",
+      })
+      return
+    }
+    setHistoryInvoicePreviewOpen(true)
+    setHistoryInvoicePreviewLoading(true)
+    setHistoryInvoicePreviewReceipt(null)
+    setHistoryInvoicePreviewSettings(null)
+    try {
+      const saleRes = await SalesAPI.getByBillNo(billNo)
+      if (!saleRes.success || !saleRes.data) {
+        toast({
+          title: "Invoice not found",
+          description: `No sale found for bill #${billNo}.`,
+          variant: "destructive",
+        })
+        setHistoryInvoicePreviewOpen(false)
+        return
+      }
+      let settings = businessSettings
+      if (!settings) {
+        const s = await SettingsAPI.getBusinessSettings()
+        if (s.success && s.data) settings = s.data
+      }
+      setHistoryInvoicePreviewReceipt(receiptPreviewReceiptFromSaleApi(saleRes.data))
+      setHistoryInvoicePreviewSettings(settings ?? null)
+    } catch (e) {
+      console.error(e)
+      toast({
+        title: "Failed to load invoice",
+        variant: "destructive",
+      })
+      setHistoryInvoicePreviewOpen(false)
+    } finally {
+      setHistoryInvoicePreviewLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    const phone = selectedCustomer?.phone?.trim()
+    if (!phone) {
+      setCustomerBills([])
+      setCustomerBillsLoading(false)
+      return
+    }
+    void fetchCustomerBills(phone)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync bills when selected customer identity changes via phone only
+  }, [selectedCustomer?.phone])
+
+  useEffect(() => {
+    setBillActivityModalTab("notes")
+  }, [selectedCustomer?.phone])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -3297,15 +3544,208 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const membershipTotal = membershipItems.reduce((sum, item) => sum + item.total, 0)
   const packageTotal = packageItems.reduce((sum, item) => sum + item.total, 0)
   const prepaidPlanTotal = prepaidPlanItems.reduce((sum, item) => sum + item.total, 0)
+
+  const payCfgMerged = useMemo(
+    () => mergePaymentConfiguration(paymentSettings?.paymentConfiguration),
+    [paymentSettings?.paymentConfiguration]
+  )
+  const allowBillingRedemption = payCfgMerged.billingRedemption.allowRedemptionInBilling !== false
+  const stackWalletAndReward = payCfgMerged.billingRedemption.allowWalletAndPointsTogether !== false
+
+  const redemptionLineItems = useMemo(() => {
+    const lines: { type: string; total: number }[] = []
+    for (const it of serviceItems) {
+      if (!it.serviceId) continue
+      lines.push({ type: "service", total: Number(it.total) || 0 })
+    }
+    for (const it of productItems) {
+      if (!it.productId) continue
+      lines.push({ type: "product", total: Number(it.total) || 0 })
+    }
+    for (const it of membershipItems) {
+      if (!it.planId) continue
+      lines.push({ type: "membership", total: Number(it.total) || 0 })
+    }
+    for (const it of packageItems) {
+      if (!it.packageId) continue
+      lines.push({ type: "package", total: Number(it.total) || 0 })
+    }
+    for (const it of prepaidPlanItems) {
+      if (!it.planId) continue
+      lines.push({ type: "prepaid_wallet", total: Number(it.total) || 0 })
+    }
+    return lines
+  }, [serviceItems, productItems, membershipItems, packageItems, prepaidPlanItems])
+
+  const eligibleWalletSubtotal = useMemo(() => {
+    if (!allowBillingRedemption) return 0
+    return eligibleRedemptionSubtotal(redemptionLineItems, payCfgMerged, "wallet")
+  }, [allowBillingRedemption, redemptionLineItems, payCfgMerged])
+
+  const eligibleRewardSubtotalRounded = useMemo(() => {
+    if (!allowBillingRedemption) return 0
+    return Math.round(eligibleRedemptionSubtotal(redemptionLineItems, payCfgMerged, "reward"))
+  }, [allowBillingRedemption, redemptionLineItems, payCfgMerged])
+
+  const hasWalletRedemptionSlot = useMemo(() => {
+    if (!allowBillingRedemption) return false
+    if (payCfgMerged.walletRedemption.enabled === false) return false
+    if (clientWalletsUsableFiltered.length === 0) return false
+    return eligibleWalletSubtotal > 0
+  }, [
+    allowBillingRedemption,
+    payCfgMerged.walletRedemption.enabled,
+    clientWalletsUsableFiltered.length,
+    eligibleWalletSubtotal,
+  ])
+
+  const hasRewardRedemptionSlot = useMemo(() => {
+    if (!allowBillingRedemption) return false
+    if (payCfgMerged.rewardPointRedemption.enabled === false) return false
+    if (!rewardPointsSettings?.enabled || !selectedCustomer || loyaltyBalance <= 0) return false
+    const cid = getCustomerId(selectedCustomer)
+    if (!cid || !isLikelyMongoObjectId(cid)) return false
+    return eligibleRewardSubtotalRounded > 0
+  }, [
+    allowBillingRedemption,
+    payCfgMerged.rewardPointRedemption.enabled,
+    rewardPointsSettings?.enabled,
+    selectedCustomer,
+    loyaltyBalance,
+    eligibleRewardSubtotalRounded,
+  ])
+
+  const showRedemptionSection = hasWalletRedemptionSlot || hasRewardRedemptionSlot
+  const showExclusiveRedemptionPicker =
+    allowBillingRedemption && !stackWalletAndReward && hasWalletRedemptionSlot && hasRewardRedemptionSlot
+
+  const showWalletInput =
+    hasWalletRedemptionSlot &&
+    (stackWalletAndReward || !hasRewardRedemptionSlot || exclusiveRedemptionMethod === "wallet")
+  const showRewardInput =
+    hasRewardRedemptionSlot &&
+    (stackWalletAndReward || !hasWalletRedemptionSlot || exclusiveRedemptionMethod === "reward")
+
+  const hasAnyBillLineForRedemption = redemptionLineItems.length > 0
+  const walletRedemptionBlockedByItems =
+    allowBillingRedemption &&
+    hasAnyBillLineForRedemption &&
+    eligibleWalletSubtotal <= 0 &&
+    payCfgMerged.walletRedemption.enabled !== false
+  const rewardRedemptionBlockedByItems =
+    allowBillingRedemption &&
+    hasAnyBillLineForRedemption &&
+    eligibleRewardSubtotalRounded <= 0 &&
+    payCfgMerged.rewardPointRedemption.enabled !== false
+
   const baseTotal = subtotal + membershipTotal + packageTotal + prepaidPlanTotal
   const baseRounded = Math.round(baseTotal)
   const roundOff = baseRounded - baseTotal
-  // Amount payable by customer = baseRounded + tip (tip is separate, non-taxable)
-  const grandTotal = baseRounded + tip
+  const loyaltyPreview = useMemo(() => {
+    if (!rewardPointsSettings?.enabled) {
+      return { ok: true as const, pointsToRedeem: 0, discountRupees: 0 }
+    }
+    const cid = getCustomerId(selectedCustomer)
+    if (!cid || !isLikelyMongoObjectId(cid)) {
+      return { ok: true as const, pointsToRedeem: 0, discountRupees: 0 }
+    }
+    const capSubtotal = allowBillingRedemption ? eligibleRewardSubtotalRounded : baseRounded
+    return previewRedemptionLive(
+      rewardPointsSettings,
+      capSubtotal,
+      loyaltyPointsInput,
+      loyaltyBalance
+    )
+  }, [
+    rewardPointsSettings,
+    baseRounded,
+    eligibleRewardSubtotalRounded,
+    allowBillingRedemption,
+    loyaltyPointsInput,
+    loyaltyBalance,
+    selectedCustomer,
+  ])
+  const loyaltyDiscountLive =
+    loyaltyPreview.ok && loyaltyPreview.discountRupees > 0 ? loyaltyPreview.discountRupees : 0
+  const showRewardPointsCustomerUI = useMemo(() => {
+    if (!allowBillingRedemption) return false
+    if (!rewardPointsSettings?.enabled || !selectedCustomer) return false
+    if (loyaltyBalance <= 0) return false
+    const cid = getCustomerId(selectedCustomer)
+    return !!cid && isLikelyMongoObjectId(cid)
+  }, [allowBillingRedemption, rewardPointsSettings?.enabled, selectedCustomer, loyaltyBalance])
+  const customerStatsGridClass = useMemo(() => {
+    if (!selectedCustomer) return "grid-cols-2 sm:grid-cols-3 lg:grid-cols-3"
+    const dues = (selectedCustomer.totalDues || 0) > 0
+    const wallet = showClientWalletBalanceCard
+    const reward = showRewardPointsCustomerUI
+    const n = 3 + (wallet ? 1 : 0) + (dues ? 1 : 0) + (reward ? 1 : 0)
+    if (n <= 3) return "grid-cols-2 sm:grid-cols-3 lg:grid-cols-3"
+    if (n === 4) return "grid-cols-2 sm:grid-cols-2 lg:grid-cols-4"
+    if (n === 5) return "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5"
+    return "grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-6"
+  }, [selectedCustomer, showClientWalletBalanceCard, showRewardPointsCustomerUI])
+  const isGoldMembershipPlan = useMemo(
+    () => !!membershipData?.plan?.planName?.toLowerCase()?.includes("gold"),
+    [membershipData?.plan?.planName]
+  )
+
+  useEffect(() => {
+    if (!allowBillingRedemption) {
+      setWalletPayAmount(0)
+      setLoyaltyPointsInput(0)
+      setExclusiveRedemptionMethod(null)
+    }
+  }, [allowBillingRedemption])
+
+  useEffect(() => {
+    if (!showExclusiveRedemptionPicker) setExclusiveRedemptionMethod(null)
+  }, [showExclusiveRedemptionPicker])
+
+  useEffect(() => {
+    if (showExclusiveRedemptionPicker && exclusiveRedemptionMethod === null) {
+      setWalletPayAmount(0)
+      setLoyaltyPointsInput(0)
+    }
+  }, [showExclusiveRedemptionPicker, exclusiveRedemptionMethod])
+
+  useEffect(() => {
+    if (!hasWalletRedemptionSlot) setWalletPayAmount(0)
+  }, [hasWalletRedemptionSlot])
+
+  useEffect(() => {
+    if (!hasRewardRedemptionSlot) setLoyaltyPointsInput(0)
+  }, [hasRewardRedemptionSlot])
+
+  useEffect(() => {
+    if (exclusiveRedemptionMethod === "wallet") setLoyaltyPointsInput(0)
+    if (exclusiveRedemptionMethod === "reward") setWalletPayAmount(0)
+  }, [exclusiveRedemptionMethod])
+
+  // Amount payable by customer = baseRounded − loyalty + tip (tip is separate, non-taxable)
+  const grandTotal = Math.max(0, baseRounded - loyaltyDiscountLive) + tip
   const roundedTotal = grandTotal
+  const walletRedemptionTileDisabled =
+    walletRedemptionBlockedByItems || payCfgMerged.walletRedemption.enabled === false
+  const applyQuickSaleWalletMax = () => {
+    if (walletRedemptionTileDisabled) return
+    const w = clientWallets.find((x) => String(x._id) === selectedWalletId)
+    if (!w) return
+    setWalletPayAmount(
+      Math.min(Number(w.remainingBalance), Math.max(0, Math.min(roundedTotal, eligibleWalletSubtotal)))
+    )
+  }
   const totalPaid = cashAmount + cardAmount + onlineAmount + walletPayAmount
   const change = totalPaid - roundedTotal
   const payableAfterWallet = Math.max(0, roundedTotal - walletPayAmount)
+  const PAY_EPS = 0.01
+  /** Bill change credits to wallet only when the sale is settled entirely with cash tenders. */
+  const isCashOnlyCheckout =
+    cashAmount >= PAY_EPS &&
+    Math.abs(cardAmount) < PAY_EPS &&
+    Math.abs(onlineAmount) < PAY_EPS &&
+    Math.abs(walletPayAmount) < PAY_EPS
+
   const validServiceForCheckout = serviceItems.filter((item) => item.serviceId)
   const validProductForCheckout = productItems.filter((item) => item.productId)
   const validMembershipSaleLines = membershipItems.filter((m) => m.planId)
@@ -3373,13 +3813,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     throw lastError instanceof Error ? lastError : new Error('Failed to generate receipt number. Please check your connection and try again.')
   }
 
-  // Handle checkout (reasonOverride: when called from modal, pass reason directly since setState is async)
-  const handleCheckout = async (reasonOverride?: string) => {
+  // Handle checkout (reasonOverride: when called from modal, pass reason directly since setState is async).
+  /** creditBillChangeToWallet — user confirmed via the post–Collect modal to credit bill change to prepaid. */
+  const handleCheckout = async (
+    reasonOverride?: string,
+    options?: { creditBillChangeToWallet?: boolean }
+  ) => {
     console.log('🚀 handleCheckout function called!')
     console.log('🚀 Mode:', mode)
     console.log('🚀 selectedCustomer:', selectedCustomer)
     console.log('🚀 customerSearch:', customerSearch)
     console.log('🚀 isProcessing:', isProcessing)
+
+    const wantBillChangeCredit = options?.creditBillChangeToWallet === true
+    const creditChangeEffective =
+      wantBillChangeCredit && isCashOnlyCheckout && mode !== "exchange"
     
     // Prevent multiple simultaneous checkouts
     if (isProcessing) {
@@ -3452,14 +3900,54 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       return
     }
 
-    // Validate payment amounts don't exceed total
-    if (totalPaid > roundedTotal) {
-      toast({
-        title: "Payment Error",
-        description: `Total paid (₹${totalPaid.toFixed(2)}) cannot exceed total amount (₹${roundedTotal.toFixed(2)})`,
-        variant: "destructive",
-      })
-      return
+    // Overpayment: crediting change to wallet is only available for all-cash tenders (non-expiring credit on server).
+    if (totalPaid > roundedTotal + 1e-6) {
+      if (mode === "exchange") {
+        toast({
+          title: "Payment Error",
+          description: `Total paid cannot exceed bill total (₹${roundedTotal.toFixed(2)}) during exchange.`,
+          variant: "destructive",
+        })
+        return
+      }
+      if (!isCashOnlyCheckout) {
+        toast({
+          title: "Overpayment",
+          description:
+            "Change can be credited to prepaid only when the bill is paid entirely in cash. Remove card, online, or wallet payment, or reduce cash to match the bill total.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (!wantBillChangeCredit) {
+        toast({
+          title: "Overpayment",
+          description:
+            "Reduce cash to the bill total, or tap Collect and confirm crediting the change to the prepaid wallet in the dialog.",
+          variant: "destructive",
+        })
+        return
+      }
+      const cidOver = getCustomerId(selectedCustomer)
+      if (!isLikelyMongoObjectId(cidOver || undefined)) {
+        toast({
+          title: "Customer required",
+          description: "Select a saved customer from search to credit change to prepaid wallet.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (clientWalletsUsableFiltered.length > 0) {
+        const widPick = pickWalletIdForChangeCredit(clientWalletsUsableFiltered, selectedWalletId)
+        if (!widPick) {
+          toast({
+            title: "Wallet error",
+            description: "Could not pick a wallet for the credit. Refresh and try again.",
+            variant: "destructive",
+          })
+          return
+        }
+      }
     }
 
     const hasBillDiscount =
@@ -3468,6 +3956,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       discountPercentage > 0 ||
       discountValue > 0
     if (walletPayAmount > 0) {
+      if (!allowBillingRedemption) {
+        toast({
+          title: "Wallet not allowed",
+          description: "Wallet redemption is disabled in Payment configuration.",
+          variant: "destructive",
+        })
+        return
+      }
       if (!selectedWalletId) {
         toast({
           title: "Select wallet",
@@ -3489,19 +3985,25 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         })
         return
       }
-      if (walletPayAmount > roundedTotal + 1e-6) {
+      const maxWalletForBill = Math.min(roundedTotal, eligibleWalletSubtotal)
+      if (walletPayAmount > maxWalletForBill + 1e-6) {
         toast({
           title: "Wallet amount too high",
-          description: "Wallet cannot exceed the bill total.",
+          description:
+            eligibleWalletSubtotal + 1e-6 < roundedTotal
+              ? "Wallet cannot exceed the amount allowed for eligible bill lines (Payment configuration)."
+              : "Wallet cannot exceed the bill total.",
           variant: "destructive",
         })
         return
       }
-      if (
-        hasBillDiscount &&
-        !clientWalletSettings?.allowCouponStacking &&
-        !wSel.planSnapshot?.allowCouponStacking
-      ) {
+      const combinedSources = (wSel as { _combinedSources?: any[] })._combinedSources
+      const stackingOk =
+        clientWalletSettings?.allowCouponStacking ||
+        (Array.isArray(combinedSources) && combinedSources.length > 0
+          ? combinedSources.every((sw) => sw.planSnapshot?.allowCouponStacking)
+          : wSel.planSnapshot?.allowCouponStacking)
+      if (hasBillDiscount && !stackingOk) {
         toast({
           title: "Discount stacking not allowed",
           description:
@@ -3510,6 +4012,42 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         })
         return
       }
+    }
+
+    if (loyaltyPointsInput > 0) {
+      if (!allowBillingRedemption) {
+        toast({
+          title: "Reward points not allowed",
+          description: "Redemption during billing is disabled in Payment configuration.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (!hasRewardRedemptionSlot) {
+        toast({
+          title: "Reward points not applicable",
+          description:
+            "Reward points cannot be applied to the current bill items (payment configuration).",
+          variant: "destructive",
+        })
+        return
+      }
+      if (!loyaltyPreview.ok) {
+        toast({
+          title: "Reward points",
+          description: loyaltyPreview.error || "Invalid reward points redemption.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+    if (!stackWalletAndReward && walletPayAmount > 1e-6 && loyaltyPointsInput > 0) {
+      toast({
+        title: "Only one redemption type",
+        description: "Use wallet or reward points on this bill, not both (payment configuration).",
+        variant: "destructive",
+      })
+      return
     }
 
     // Validate that all services have staff assigned
@@ -3592,10 +4130,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setIsProcessing(true)
 
     try {
-      // Calculate rounded total for customer stats (before receipt generation)
-      // Grand total = baseTotal + tip (discount already in subtotal via item totals)
-      const grandTotalForStats = baseTotal + tip
-      const roundedTotalForStats = Math.round(grandTotalForStats)
+      // Match payable total shown in UI (includes loyalty discount + tip)
+      const roundedTotalForStats = roundedTotal
       
       // Create or use existing customer
       let customer = selectedCustomer
@@ -3759,13 +4295,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             totalWithTax: p.total,
           })),
       ]
-
-      // Create payments array
-      const payments: PaymentMethod[] = []
-              if (cashAmount > 0) payments.push({ type: "cash", amount: cashAmount })
-        if (cardAmount > 0) payments.push({ type: "card", amount: cardAmount })
-        if (onlineAmount > 0) payments.push({ type: "online", amount: onlineAmount })
-        if (walletPayAmount > 0) payments.push({ type: "wallet", amount: walletPayAmount })
 
       // Get the primary staff member (first staff member from items)
       const primaryStaff = receiptItems.length > 0 ? {
@@ -3952,6 +4481,26 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           item.taxRate = applyTax ? prepaidTaxRate : 0
         }
       })
+
+      let loyaltyDiscountAmountSave = 0
+      let loyaltyPointsRedeemedSave = 0
+      if (rewardPointsSettings?.enabled && loyaltyPointsInput > 0 && showRewardInput) {
+        const cid = getCustomerId(customer)
+        if (cid && isLikelyMongoObjectId(cid)) {
+          const rewardCapForSave = allowBillingRedemption ? eligibleRewardSubtotalRounded : roundedBaseTotalForSale
+          const prev = previewRedemptionLive(
+            rewardPointsSettings,
+            rewardCapForSave,
+            loyaltyPointsInput,
+            loyaltyBalance
+          )
+          if (prev.ok) {
+            loyaltyPointsRedeemedSave = prev.pointsToRedeem
+            loyaltyDiscountAmountSave = prev.discountRupees
+          }
+        }
+      }
+      calculatedTotal = Math.max(0, roundedBaseTotalForSale - loyaltyDiscountAmountSave)
       
       // Handle different modes: create, edit, exchange
       try {
@@ -3994,6 +4543,28 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         const tipStaff = tipStaffId
           ? staff.find((s) => (s._id || s.id) === tipStaffId)
           : null
+        const saleDueTotal = calculatedTotal + tip
+        const { payments, changeToCredit, recordedPaidTotal } = buildRecordedPaymentsForCheckout({
+          cashAmount,
+          cardAmount,
+          onlineAmount,
+          walletPayAmount,
+          saleDueTotal,
+          creditOverpaymentToWallet: creditChangeEffective,
+        })
+        if (
+          creditChangeEffective &&
+          totalPaid > saleDueTotal + 1e-6 &&
+          Math.abs(recordedPaidTotal - saleDueTotal) > 0.02
+        ) {
+          toast({
+            title: "Cannot credit this change",
+            description:
+              "The overpayment must be reducible from cash, card, or online — not from prepaid wallet redemption. Lower the wallet amount on the bill or pay the exact total.",
+            variant: "destructive",
+          })
+          return
+        }
         const saleData = {
           billNo: receiptNumber,
           customerId: getCustomerId(customer),
@@ -4128,16 +4699,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           paymentStatus: {
             // Total amount customer needs to pay = sales amount (calculatedTotal) + tip
             totalAmount: calculatedTotal + tip,
-            paidAmount: totalPaid,
-            remainingAmount: calculatedTotal + tip - totalPaid,
+            paidAmount: recordedPaidTotal,
+            remainingAmount: calculatedTotal + tip - recordedPaidTotal,
             dueDate: new Date()
           },
           status:
             calculatedTotal + tip <= 0
               ? 'completed'
-              : totalPaid === 0
+              : recordedPaidTotal === 0
                 ? 'unpaid'
-                : totalPaid < calculatedTotal + tip
+                : recordedPaidTotal < calculatedTotal + tip
                   ? 'partial'
                   : 'completed',
           paymentMode: payments.map(p => {
@@ -4163,6 +4734,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             serviceRate: taxBreakdown.serviceRate,
             productTaxByRate: taxBreakdown.productTaxByRate,
           },
+          loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
+          loyaltyDiscountAmount: loyaltyDiscountAmountSave,
         }
 
         console.log('💾 Creating sale in backend:', saleData)
@@ -4196,7 +4769,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               cashAmount,
               cardAmount,
               onlineAmount,
-              totalPaid
+              totalPaid,
+              recordedPaidTotal,
+              changeToCredit,
             })
             result = await SalesAPI.update(saleId!, {
               ...saleData,
@@ -4234,6 +4809,78 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             
             // For edit/exchange, show success and redirect
             if (mode === "edit" || mode === "exchange") {
+              if (mode === "edit" && changeToCredit > 0.005 && result.data?._id) {
+                const cidW = getCustomerId(selectedCustomer)
+                if (!isLikelyMongoObjectId(cidW || undefined)) {
+                  /* skip wallet credit */
+                } else if (clientWalletsUsableFiltered.length > 0) {
+                  const walletIdForCredit = pickWalletIdForChangeCredit(
+                    clientWalletsUsableFiltered,
+                    selectedWalletId
+                  )
+                  if (walletIdForCredit) {
+                    try {
+                      const cr = await ClientWalletAPI.creditChange({
+                        walletId: walletIdForCredit,
+                        amount: changeToCredit,
+                        saleId: String(result.data._id),
+                        billNo: receiptNumber,
+                      })
+                      if (cr.success) {
+                        toast({
+                          title: "Change credited to wallet",
+                          description: `₹${changeToCredit.toFixed(2)} added to prepaid balance.`,
+                        })
+                      } else {
+                        toast({
+                          title: "Wallet credit failed",
+                          description:
+                            cr.message ||
+                            "Bill was updated — add the change manually from the client wallet if needed.",
+                          variant: "destructive",
+                        })
+                      }
+                    } catch (ce) {
+                      console.error(ce)
+                      toast({
+                        title: "Wallet credit error",
+                        description: "Bill was updated. Credit the change from the client profile if needed.",
+                        variant: "destructive",
+                      })
+                    }
+                  }
+                } else {
+                  try {
+                    const cr = await ClientWalletAPI.creditChangeOpenWallet({
+                      clientId: cidW!,
+                      amount: changeToCredit,
+                      saleId: String(result.data._id),
+                      billNo: receiptNumber,
+                    })
+                    if (cr.success) {
+                      toast({
+                        title: "Prepaid wallet opened",
+                        description: `₹${changeToCredit.toFixed(2)} credited — new wallet linked to bill ${receiptNumber}.`,
+                      })
+                    } else {
+                      toast({
+                        title: "Could not create wallet credit",
+                        description:
+                          cr.message ||
+                          "Ensure an active prepaid plan exists under Wallet settings. Adjust balance manually if needed.",
+                        variant: "destructive",
+                      })
+                    }
+                  } catch (ce) {
+                    console.error(ce)
+                    toast({
+                      title: "Wallet credit error",
+                      description: "Bill was updated. Add credit from Wallet settings or client profile.",
+                      variant: "destructive",
+                    })
+                  }
+                }
+              }
               toast({
                 title: `Bill ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
                 description: `Bill ${receiptNumber} has been ${actionText} successfully.`,
@@ -4282,7 +4929,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             }
             
             // Mark all linked appointments as completed if fully paid
-            if (linkedAppointmentId && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
+            if (linkedAppointmentId && (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')) {
               try {
                 const idsToComplete = resolveAppointmentIdsToComplete(linkedAppointmentIds, linkedAppointmentId)
                 await Promise.all(idsToComplete.map(id => AppointmentsAPI.update(id, { status: "completed" })))
@@ -4298,7 +4945,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               }
             }
             // Refresh calendar so new walk-in cards (multi-staff services) appear - for both linked and standalone sales
-            if (typeof window !== "undefined" && (totalPaid >= calculatedTotal + tip || result.data?.status === 'completed')) {
+            if (typeof window !== "undefined" && (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')) {
               window.dispatchEvent(new CustomEvent("appointments-refresh"))
             }
 
@@ -4345,6 +4992,82 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               }
             }
 
+            if (mode === "create" && changeToCredit > 0.005 && result.data?._id) {
+              const cidCh = getCustomerId(selectedCustomer)
+              if (isLikelyMongoObjectId(cidCh || undefined)) {
+                try {
+                  if (clientWalletsUsableFiltered.length > 0) {
+                    const walletIdForCredit = pickWalletIdForChangeCredit(
+                      clientWalletsUsableFiltered,
+                      selectedWalletId
+                    )
+                    if (walletIdForCredit) {
+                      const cr = await ClientWalletAPI.creditChange({
+                        walletId: walletIdForCredit,
+                        amount: changeToCredit,
+                        saleId: String(result.data._id),
+                        billNo: receiptNumber,
+                      })
+                      if (cr.success) {
+                        toast({
+                          title: "Change credited to wallet",
+                          description: `₹${changeToCredit.toFixed(2)} added to prepaid balance.`,
+                        })
+                      } else {
+                        toast({
+                          title: "Wallet credit failed",
+                          description:
+                            cr.message ||
+                            "Bill was saved — add the change amount manually from the client wallet if needed.",
+                          variant: "destructive",
+                        })
+                      }
+                    } else {
+                      toast({
+                        title: "Wallet credit skipped",
+                        description: "Could not resolve a prepaid wallet — refresh clients and retry, or add credit manually.",
+                        variant: "destructive",
+                      })
+                    }
+                  } else {
+                    const cr = await ClientWalletAPI.creditChangeOpenWallet({
+                      clientId: cidCh!,
+                      amount: changeToCredit,
+                      saleId: String(result.data._id),
+                      billNo: receiptNumber,
+                    })
+                    if (cr.success) {
+                      toast({
+                        title: "Prepaid wallet opened",
+                        description: `₹${changeToCredit.toFixed(2)} credited — wallet created using your salon prepaid plan.`,
+                      })
+                    } else {
+                      toast({
+                        title: "Could not create wallet credit",
+                        description:
+                          cr.message ||
+                          "Create at least one active prepaid plan under Wallet settings, then add credit manually.",
+                        variant: "destructive",
+                      })
+                    }
+                  }
+                  const wres = await ClientWalletAPI.getClientWallets(cidCh!)
+                  if (wres.success && wres.data?.wallets) {
+                    const usable = filterWalletsForQuickSaleDisplay(wres.data.wallets as any[])
+                    setClientWalletsRaw(usable)
+                    setSelectedWalletId(pickDefaultClientWalletId(usable))
+                  }
+                } catch (ce) {
+                  console.error(ce)
+                  toast({
+                    title: "Wallet credit error",
+                    description: "Bill was saved. Credit the change from Wallet settings or the client profile if needed.",
+                    variant: "destructive",
+                  })
+                }
+              }
+            }
+
             if (mode === "create" && validPrepaidPlanItems.length > 0 && result.data?._id) {
               const clientOid = getCustomerId(selectedCustomer)
               if (isLikelyMongoObjectId(clientOid || undefined)) {
@@ -4373,7 +5096,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   const wres = await ClientWalletAPI.getClientWallets(clientOid!)
                   if (wres.success && wres.data?.wallets) {
                     const usable = filterWalletsForQuickSaleDisplay(wres.data.wallets as any[])
-                    setClientWallets(usable)
+                    setClientWalletsRaw(usable)
                     setSelectedWalletId(pickDefaultClientWalletId(usable))
                   }
                 } catch (pe) {
@@ -4391,7 +5114,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             if (mode === "create" && validPackageItems.length > 0) {
               const clientOid = getCustomerId(selectedCustomer)
               if (isLikelyMongoObjectId(clientOid || undefined)) {
-                const paidForBill = Math.min(totalPaid, calculatedTotal)
+                const paidForBill = Math.min(recordedPaidTotal, calculatedTotal)
                 try {
                   for (const row of validPackageItems) {
                     const qty = Math.max(1, Math.floor(row.quantity || 1))
@@ -4581,7 +5304,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           void ClientWalletAPI.getClientWallets(restoreCid).then((wres) => {
             if (!wres.success || !wres.data?.wallets) return
             const usable = filterWalletsForQuickSaleDisplay(wres.data.wallets as any[])
-            setClientWallets(usable)
+            setClientWalletsRaw(usable)
             setSelectedWalletId(pickDefaultClientWalletId(usable))
           })
         }
@@ -4630,7 +5353,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setOnlineAmount(0)
     setWalletPayAmount(0)
     setSelectedWalletId("")
-    setClientWallets([])
+    setClientWalletsRaw([])
     setPrepaidPlanItems([])
     setAddItemSection(null)
     setRemarks("")
@@ -4772,10 +5495,52 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               {/* Customer Details */}
               {selectedCustomer && (
                 <div className="mt-4 p-4 bg-muted/50 rounded-lg space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4" />
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                      <User className="h-4 w-4 shrink-0" />
                       <span className="font-medium">{selectedCustomer.name}</span>
+                      {showClientWalletBalanceCard && (
+                        <button
+                          type="button"
+                          title={
+                            showSeparateWalletCount
+                              ? `View wallet activity · ${clientWalletsUsableFiltered.length} wallets`
+                              : clientWalletSettings?.combineMultipleWallets &&
+                                  clientWalletsUsableFiltered.length > 1
+                                ? "View wallet activity · combined balance"
+                                : "View wallet activity"
+                          }
+                          onClick={() => void openClientWalletLedger()}
+                          className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-slate-200/90 bg-background px-2.5 py-0.5 text-[11px] font-medium tabular-nums shadow-sm transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300/60"
+                        >
+                          <Wallet className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                          <span className="min-w-0 truncate">{formatCurrency(totalClientWalletBalance)}</span>
+                          {showSeparateWalletCount ? (
+                            <span className="text-muted-foreground">
+                              ({clientWalletsUsableFiltered.length})
+                            </span>
+                          ) : null}
+                        </button>
+                      )}
+                      {showRewardPointsCustomerUI && rewardPointsSettings && (
+                        <span
+                          title={
+                            rewardPointsSettings.redeemPointsStep > 0 && rewardPointsSettings.redeemRupeeStep > 0
+                              ? `~${formatCurrency(
+                                  Math.floor(loyaltyBalance / rewardPointsSettings.redeemPointsStep) *
+                                    rewardPointsSettings.redeemRupeeStep
+                                )} redeem value`
+                              : undefined
+                          }
+                          className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-violet-200/80 bg-violet-50/90 px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-violet-900"
+                        >
+                          <Gift className="h-3.5 w-3.5 shrink-0 text-violet-600" aria-hidden />
+                          <span className="min-w-0 truncate">
+                            {loyaltyBalance}
+                            <span className="ml-0.5 font-normal text-violet-800/90">pts</span>
+                          </span>
+                        </span>
+                      )}
                       <Badge variant={selectedCustomer.status === "active" ? "default" : "secondary"}>
                         {selectedCustomer.status}
                       </Badge>
@@ -4795,15 +5560,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     )}
                   </div>
 
-                  <div
-                    className={`grid gap-4 pt-2 ${
-                      showClientWalletBalanceCard && (selectedCustomer.totalDues || 0) > 0
-                        ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5"
-                        : showClientWalletBalanceCard || (selectedCustomer.totalDues || 0) > 0
-                          ? "grid-cols-2 sm:grid-cols-2 lg:grid-cols-4"
-                          : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-3"
-                    }`}
-                  >
+                  <div className={cn("grid gap-4 pt-2", customerStatsGridClass)}>
                     <div className="text-center">
                       <div className="flex items-center justify-center gap-1 text-sm text-muted-foreground mb-1">
                         <Calendar className="h-3 w-3" />
@@ -4825,27 +5582,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       </div>
                       <div className="font-semibold text-xs">{formatDate(selectedCustomer.lastVisit || "")}</div>
                     </div>
-                    {showClientWalletBalanceCard && (
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        title="View wallet activity"
-                        className="text-center cursor-pointer rounded-lg p-2 -m-2 transition-colors hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-indigo-300/60"
-                        onClick={() => void openClientWalletLedger()}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault()
-                            void openClientWalletLedger()
-                          }
-                        }}
-                      >
-                        <div className="flex items-center justify-center gap-1 text-sm text-muted-foreground mb-1">
-                          <Wallet className="h-3 w-3" />
-                          Wallet balance
-                        </div>
-                        <div className="font-semibold">{formatCurrency(totalClientWalletBalance)}</div>
-                      </div>
-                    )}
                     {(selectedCustomer.totalDues || 0) > 0 && (
                       <div 
                         className="text-center cursor-pointer hover:bg-red-50 rounded-lg p-2 transition-all duration-200"
@@ -4870,32 +5606,34 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       variant="outline"
                       size="sm"
                       type="button"
-                      className="flex-1 min-w-0 h-8 px-2 text-[11px] bg-transparent"
-                      onClick={async () => {
-                        if (!selectedCustomer) return
-                        setBillActivityModalTab("bills")
-                        await fetchCustomerBills(selectedCustomer.phone || "")
-                        setShowBillActivityDialog(true)
-                      }}
+                      className={cn(
+                        "h-8 min-w-0 flex-1 px-2 text-[11px]",
+                        billActivityModalTab === "bills"
+                          ? "border-indigo-300/90 bg-indigo-50 text-indigo-900"
+                          : "bg-transparent"
+                      )}
+                      onClick={() => void handleViewBillActivity("bills")}
                     >
-                      <Eye className="h-3.5 w-3.5 mr-1 shrink-0" />
+                      <Eye className="mr-1 h-3.5 w-3.5 shrink-0" />
                       Bill activity
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      type="button"
-                      className="flex-1 min-w-0 h-8 px-2 text-[11px] bg-transparent"
-                      onClick={async () => {
-                        if (!selectedCustomer) return
-                        setBillActivityModalTab("notes")
-                        await fetchCustomerBills(selectedCustomer.phone || "")
-                        setShowBillActivityDialog(true)
-                      }}
-                    >
-                      <StickyNote className="h-3.5 w-3.5 mr-1 shrink-0" />
-                      Customer notes
-                    </Button>
+                    {customerBillsWithNotes.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        className={cn(
+                          "h-8 min-w-0 flex-1 px-2 text-[11px]",
+                          billActivityModalTab === "notes"
+                            ? "border-indigo-300/90 bg-indigo-50 text-indigo-900"
+                            : "bg-transparent"
+                        )}
+                        onClick={() => void handleViewBillActivity("notes")}
+                      >
+                        <StickyNote className="mr-1 h-3.5 w-3.5 shrink-0" />
+                        Customer notes
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}
@@ -5246,36 +5984,26 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               </Button>
             </div>
           )}
-          {/* Header */}
-          <div className="flex items-center justify-between gap-4">
-            <div className="space-y-2">
-              <h2 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                {mode === "edit" ? "Edit Bill" : mode === "exchange" ? "Exchange Products" : "Quick Sale"}
-              </h2>
-              <p className="text-muted-foreground">
-                {mode === "edit" ? "Edit existing bill details" : mode === "exchange" ? "Exchange products in this bill" : "Create and process sales quickly and efficiently"}
-              </p>
-            </div>
-            {(mode === "edit" || mode === "exchange") && initialSale && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center gap-3 shrink-0">
-                <div className="p-2 bg-amber-100 rounded-lg">
-                  <Edit className="h-5 w-5 text-amber-700" />
-                </div>
-                <div>
-                  <p className="font-semibold text-amber-900">
-                    {mode === "edit" ? "Editing Bill" : "Exchanging Products"}: {initialSale.billNo || initialSale.receiptNumber}
-                    {initialSale.isEdited && <span className="text-xs text-gray-500 ml-1">(edited)</span>}
-                  </p>
-                  <p className="text-sm text-amber-700">
-                    Original Date: {initialSale.date ? format(new Date(initialSale.date), "dd MMM yyyy") : "N/A"}
-                    {initialSale.tip && initialSale.tip > 0 && (
-                      <span className="ml-2">• Tip: {formatCurrency(initialSale.tip)}</span>
-                    )}
-                  </p>
-                </div>
+          {(mode === "edit" || mode === "exchange") && initialSale && (
+            <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <div className="rounded-lg bg-amber-100 p-2">
+                <Edit className="h-5 w-5 text-amber-700" />
               </div>
-            )}
-          </div>
+              <div>
+                <p className="font-semibold text-amber-900">
+                  {mode === "edit" ? "Editing Bill" : "Exchanging Products"}:{" "}
+                  {initialSale.billNo || initialSale.receiptNumber}
+                  {initialSale.isEdited && <span className="ml-1 text-xs text-gray-500">(edited)</span>}
+                </p>
+                <p className="text-sm text-amber-700">
+                  Original Date: {initialSale.date ? format(new Date(initialSale.date), "dd MMM yyyy") : "N/A"}
+                  {initialSale.tip && initialSale.tip > 0 && (
+                    <span className="ml-2">• Tip: {formatCurrency(initialSale.tip)}</span>
+                  )}
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Customer and Date */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -5410,229 +6138,424 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             </div>
           </div>
 
-          {/* Full-width below Customer + Date row */}
+          {/* Customer snapshot + side panel (notes / bill activity — inline when applicable) */}
           {selectedCustomer && (
             <div
               className={cn(
-                "w-full p-6 rounded-xl shadow-sm",
-                membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                  ? "bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100/80 border border-amber-200/60"
-                  : "bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 border border-indigo-100/50"
+                "flex w-full min-w-0 flex-col gap-4",
+                showCustomerSidePanel && "md:flex-row md:items-start md:gap-6"
               )}
             >
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className={cn(
-                    "p-3 rounded-xl shadow-md",
-                    membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                      ? "bg-gradient-to-br from-amber-500 via-yellow-500 to-amber-600"
-                      : "bg-gradient-to-br from-indigo-500 to-purple-600"
-                  )}>
-                    <User className="h-5 w-5 text-white" />
+            <div
+              className={cn(
+                "flex min-h-0 min-w-0 shrink-0 flex-col",
+                showCustomerSidePanel ? "w-full md:w-1/2" : "w-full"
+              )}
+            >
+            <div
+              ref={customerSnapshotCardRef}
+              className={cn(
+                "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-white shadow-sm ring-1 ring-slate-900/[0.04]",
+                isGoldMembershipPlan
+                  ? "border-slate-200/90 border-l-[3px] border-l-amber-400"
+                  : "border-slate-200/90 border-l-[3px] border-l-indigo-500"
+              )}
+            >
+              <div className="flex flex-col gap-3 border-b border-slate-100/90 px-4 py-3.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:px-5 sm:py-4">
+                <div className="flex min-w-0 items-start gap-3.5">
+                  <div
+                    className={cn(
+                      "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl",
+                      isGoldMembershipPlan
+                        ? "bg-amber-50 text-amber-800 ring-1 ring-amber-200/80"
+                        : "bg-slate-100 text-slate-700 ring-1 ring-slate-200/80"
+                    )}
+                  >
+                    <User className="h-5 w-5" />
                   </div>
-                  <div>
-                    <h4 className="font-semibold text-gray-800 text-lg">{selectedCustomer.name}</h4>
-                    <p className="text-sm text-gray-600">{selectedCustomer.phone}</p>
+                  <div className="min-w-0">
+                    <h4 className="truncate text-base font-semibold tracking-tight text-slate-900">
+                      {selectedCustomer.name}
+                    </h4>
+                    <p className="mt-0.5 text-sm text-slate-500 tabular-nums">{selectedCustomer.phone}</p>
                     {selectedCustomer.email && (
-                      <p className="text-sm text-gray-600">{selectedCustomer.email}</p>
+                      <p className="mt-0.5 truncate text-sm text-slate-500">{selectedCustomer.email}</p>
                     )}
                   </div>
                 </div>
-                <div className="flex flex-col items-end gap-1">
-                  <div className="flex items-center gap-2">
-                    {membershipData?.subscription && (
+                <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                    {membershipData?.subscription && !isGoldMembershipPlan && (
                       <Badge
                         variant="outline"
-                        className={cn(
-                          "text-xs",
-                          membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                            ? "bg-amber-50 text-amber-800 border-amber-300"
-                            : "bg-emerald-50 text-emerald-700 border-emerald-200"
-                        )}
+                        className="border-slate-200 bg-white px-2.5 py-0.5 text-[11px] font-medium text-slate-700"
                       >
                         {membershipData?.plan?.planName || "Membership Applied"}
                       </Badge>
                     )}
-                    <Badge variant={selectedCustomer.status === "active" ? "default" : "secondary"} className="px-3 py-1">
+                    {showClientWalletBalanceCard && (
+                      <button
+                        type="button"
+                        title={
+                          showSeparateWalletCount
+                            ? `View wallet activity · ${clientWalletsUsableFiltered.length} wallets`
+                            : clientWalletSettings?.combineMultipleWallets &&
+                                clientWalletsUsableFiltered.length > 1
+                              ? "View wallet activity · combined balance"
+                              : "View wallet activity"
+                        }
+                        onClick={() => void openClientWalletLedger()}
+                        className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-slate-200/90 bg-white px-2.5 py-0.5 text-[11px] font-medium text-slate-800 shadow-sm ring-1 ring-slate-900/[0.04] transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
+                      >
+                        <Wallet className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
+                        <span className="min-w-0 truncate tabular-nums">
+                          ₹{totalClientWalletBalance.toFixed(2)}
+                          {showSeparateWalletCount ? (
+                            <span className="ml-1 font-normal text-slate-500">
+                              ({clientWalletsUsableFiltered.length})
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                    )}
+                    {showRewardPointsCustomerUI && rewardPointsSettings && (
+                      <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-violet-200/80 bg-violet-50/90 px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-violet-900 ring-1 ring-violet-900/[0.08]">
+                        <Gift className="h-3.5 w-3.5 shrink-0 text-violet-600" aria-hidden />
+                        <span className="min-w-0 truncate">
+                          {loyaltyBalance}
+                          <span className="ml-0.5 font-normal text-violet-800/90">pts</span>
+                        </span>
+                      </span>
+                    )}
+                    {membershipData?.subscription && isGoldMembershipPlan && (
+                      <span
+                        className="relative inline-flex max-w-full min-w-0 items-center overflow-hidden rounded-full border border-amber-500/55 bg-gradient-to-r from-amber-600 via-yellow-400 to-amber-500 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-950 shadow-[0_0_0_1px_rgba(251,191,36,0.35),0_2px_10px_rgba(180,83,9,0.4),inset_0_1px_0_rgba(255,255,255,0.55)] ring-1 ring-amber-300/60"
+                        title={membershipData?.plan?.planName || "Gold membership"}
+                      >
+                        <span
+                          aria-hidden
+                          className="pointer-events-none absolute inset-0 z-0 opacity-90"
+                        >
+                          <span className="absolute inset-y-0 left-0 w-[45%] animate-gold-sheen bg-gradient-to-r from-transparent via-white/70 to-transparent blur-[0.5px]" />
+                        </span>
+                        <span className="relative z-10 drop-shadow-[0_1px_0_rgba(255,255,255,0.5)]">
+                          Gold
+                        </span>
+                      </span>
+                    )}
+                    <span
+                      className={cn(
+                        "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize",
+                        selectedCustomer.status === "active"
+                          ? "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200/70"
+                          : "bg-slate-100 text-slate-700 ring-1 ring-slate-200/80"
+                      )}
+                    >
                       {selectedCustomer.status}
-                    </Badge>
+                    </span>
                   </div>
                   {membershipData?.subscription?.expiryDate && (
-                    <p className="text-xs text-gray-500">
-                      Valid Till: {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
+                    <p className="text-xs text-slate-500">
+                      Valid through{" "}
+                      {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
                     </p>
                   )}
                 </div>
               </div>
 
-              <div
-                className={cn(
-                  "grid gap-4 mb-4",
-                  showClientWalletBalanceCard && (selectedCustomer.totalDues || 0) > 0
-                    ? "grid-cols-2 sm:grid-cols-3 xl:grid-cols-5"
-                    : showClientWalletBalanceCard || (selectedCustomer.totalDues || 0) > 0
-                      ? "grid-cols-2 sm:grid-cols-2 lg:grid-cols-4"
-                      : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-3"
-                )}
-              >
-                <div className={cn(
-                  "text-center p-3 rounded-lg border",
-                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                    ? "bg-amber-50/60 border-amber-200/50"
-                    : "bg-white/60 border-white/50"
-                )}>
-                  <div className="flex items-center justify-center gap-2 mb-2">
-                    <CalendarDays className={cn(
-                      "h-4 w-4",
-                      membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-indigo-600"
-                    )} />
-                    <span className="text-xs font-medium text-gray-700">Visits</span>
+              <div className="min-w-0 px-4 py-3 sm:px-5 sm:py-3.5">
+                <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-2.5">
+                  <div className="min-w-0 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
+                    <p className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-500">Visits</p>
+                    <p className="mt-1 min-w-0 break-all text-xs font-semibold tabular-nums leading-tight text-slate-900 sm:text-sm">
+                      {selectedCustomer.totalVisits || 0}
+                    </p>
                   </div>
-                  <p className={cn(
-                    "text-lg font-bold",
-                    membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-indigo-700"
-                  )}>{selectedCustomer.totalVisits || 0}</p>
-                </div>
-                <div className={cn(
-                  "text-center p-3 rounded-lg border",
-                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                    ? "bg-amber-50/60 border-amber-200/50"
-                    : "bg-white/60 border-white/50"
-                )}>
-                  <div className="flex items-center justify-center gap-2 mb-2">
-                    <TrendingUp className={cn(
-                      "h-4 w-4",
-                      membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-emerald-600"
-                    )} />
-                    <span className="text-xs font-medium text-gray-700">Revenue</span>
+                  <div className="min-w-0 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
+                    <p className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-500">Revenue</p>
+                    <p className="mt-1 min-w-0 break-all text-xs font-semibold tabular-nums leading-tight text-slate-900 sm:text-sm">
+                      ₹{Number(selectedCustomer.totalSpent || 0).toFixed(2)}
+                    </p>
                   </div>
-                  <p className={cn(
-                    "text-lg font-bold",
-                    membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-emerald-700"
-                  )}>₹{Number(selectedCustomer.totalSpent || 0).toFixed(2)}</p>
-                </div>
-                <div className={cn(
-                  "text-center p-3 rounded-lg border",
-                  membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                    ? "bg-amber-50/60 border-amber-200/50"
-                    : "bg-white/60 border-white/50"
-                )}>
-                  <div className="flex items-center justify-center gap-2 mb-2">
-                    <CalendarIcon className={cn(
-                      "h-4 w-4",
-                      membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-600" : "text-purple-600"
-                    )} />
-                    <span className="text-xs font-medium text-gray-700">Last Visit</span>
+                  <div className="min-w-0 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
+                    <p className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-500">Last visit</p>
+                    <p className="mt-1 min-w-0 break-words text-xs font-semibold leading-tight text-slate-900 sm:text-sm">
+                      {selectedCustomer.lastVisit ? format(new Date(selectedCustomer.lastVisit), "dd MMM") : "Never"}
+                    </p>
                   </div>
-                  <p className={cn(
-                    "text-sm font-semibold",
-                    membershipData?.plan?.planName?.toLowerCase().includes("gold") ? "text-amber-700" : "text-purple-700"
-                  )}>
-                    {selectedCustomer.lastVisit ? format(new Date(selectedCustomer.lastVisit), "dd MMM") : "Never"}
-                  </p>
-                </div>
-                {showClientWalletBalanceCard && (
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    title="View wallet activity"
-                    className={cn(
-                      "text-center p-3 rounded-lg border cursor-pointer transition-all duration-200",
-                      membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                        ? "bg-amber-50/60 border-amber-200/50 hover:bg-amber-100/70 hover:border-amber-300/60"
-                        : "bg-white/60 border-white/50 hover:bg-white/90 hover:border-indigo-200/60",
-                      "focus:outline-none focus:ring-2 focus:ring-indigo-300/50"
-                    )}
-                    onClick={() => void openClientWalletLedger()}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault()
-                        void openClientWalletLedger()
-                      }
-                    }}
-                  >
-                    <div className="flex items-center justify-center gap-2 mb-2">
-                      <Wallet
-                        className={cn(
-                          "h-4 w-4",
-                          membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                            ? "text-amber-600"
-                            : "text-indigo-600"
-                        )}
-                      />
-                      <span className="text-xs font-medium text-gray-700">Wallet balance</span>
-                    </div>
-                    <p
-                      className={cn(
-                        "text-lg font-bold tabular-nums",
-                        membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                          ? "text-amber-800"
-                          : "text-indigo-800"
-                      )}
+                  {(selectedCustomer.totalDues || 0) > 0 && (
+                    <button
+                      type="button"
+                      className="min-w-0 overflow-hidden rounded-lg border border-red-100/90 bg-red-50/50 px-2 py-2 text-left shadow-sm ring-1 ring-red-900/[0.04] transition-colors hover:bg-red-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/30 sm:px-2.5 sm:py-2.5"
+                      onClick={async () => {
+                        if (selectedCustomer) {
+                          await fetchUnpaidBills(selectedCustomer.phone || "")
+                          setShowDuesDialog(true)
+                        }
+                      }}
                     >
-                      ₹{totalClientWalletBalance.toFixed(2)}
-                    </p>
-                    {clientWallets.length > 1 && (
-                      <p className="text-[10px] text-gray-500 mt-0.5">{clientWallets.length} active wallets</p>
-                    )}
-                  </div>
-                )}
-                {(selectedCustomer.totalDues || 0) > 0 && (
-                  <div
-                    className={cn(
-                      "text-center p-3 rounded-lg border cursor-pointer transition-all duration-200",
-                      "bg-red-50/90 border-red-200/70 hover:bg-red-100/90 hover:border-red-300"
-                    )}
-                    onClick={async () => {
-                      if (selectedCustomer) {
-                        await fetchUnpaidBills(selectedCustomer.phone || "")
-                        setShowDuesDialog(true)
-                      }
-                    }}
-                  >
-                    <div className="flex items-center justify-center gap-2 mb-2">
-                      <CreditCard className="h-4 w-4 text-red-600" />
-                      <span className="text-xs font-medium text-red-800">Dues</span>
-                    </div>
-                    <p className="text-lg font-bold text-red-700">
-                      ₹{Number(selectedCustomer.totalDues || 0).toFixed(2)}
-                    </p>
-                  </div>
-                )}
+                      <p className="truncate text-[10px] font-medium uppercase tracking-wide text-red-700/90">Dues</p>
+                      <p className="mt-1 min-w-0 break-all text-xs font-semibold tabular-nums leading-tight text-red-900 sm:text-sm">
+                        ₹{Number(selectedCustomer.totalDues || 0).toFixed(2)}
+                      </p>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 border-t border-slate-100/90 bg-slate-50/40 px-4 py-3 sm:flex-row sm:gap-2">
                 <Button
                   variant="outline"
                   size="sm"
                   type="button"
                   onClick={() => void handleViewBillActivity("bills")}
                   className={cn(
-                    "flex-1 min-w-0 h-8 px-2 text-[11px] transition-all duration-300",
-                    membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                      ? "bg-amber-50/80 hover:bg-amber-50 border-amber-200 text-amber-800 hover:text-amber-900 hover:border-amber-300"
-                      : "bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300"
+                    "h-9 flex-1 min-w-0 text-xs font-medium shadow-sm",
+                    billActivityModalTab === "bills"
+                      ? "border-indigo-300/90 bg-indigo-50 text-indigo-900 hover:bg-indigo-50/90"
+                      : "border-slate-200/90 bg-white text-slate-700 hover:bg-slate-50"
                   )}
                 >
-                  <FileText className="h-3.5 w-3.5 mr-1 shrink-0" />
+                  <FileText
+                    className={cn(
+                      "mr-1.5 h-3.5 w-3.5 shrink-0",
+                      billActivityModalTab === "bills" ? "text-indigo-600" : "text-slate-500"
+                    )}
+                  />
                   Bill activity
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  type="button"
-                  onClick={() => void handleViewBillActivity("notes")}
+                {customerBillsWithNotes.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={() => void handleViewBillActivity("notes")}
+                    className={cn(
+                      "h-9 flex-1 min-w-0 text-xs font-medium shadow-sm",
+                      billActivityModalTab === "notes"
+                        ? "border-indigo-300/90 bg-indigo-50 text-indigo-900 hover:bg-indigo-50/90"
+                        : "border-slate-200/90 bg-white text-slate-700 hover:bg-slate-50"
+                    )}
+                  >
+                    <StickyNote
+                      className={cn(
+                        "mr-1.5 h-3.5 w-3.5 shrink-0",
+                        billActivityModalTab === "notes" ? "text-indigo-600" : "text-slate-500"
+                      )}
+                    />
+                    Customer notes
+                  </Button>
+                )}
+              </div>
+            </div>
+            </div>
+
+            {showCustomerSidePanel && (
+              <div
+                className={cn(
+                  "flex w-full min-w-0 flex-col overflow-hidden rounded-2xl border bg-white shadow-sm ring-1 ring-slate-900/[0.04]",
+                  "md:w-1/2",
+                  snapshotSidePanelHeightPx == null && "min-h-[13rem] max-h-[min(70vh,40rem)] md:max-h-[min(38rem,calc(100dvh-12rem))]",
+                  isGoldMembershipPlan
+                    ? "border-slate-200/90 border-l-[3px] border-l-amber-400/80"
+                    : "border-slate-200/90 border-l-[3px] border-l-indigo-500/90"
+                )}
+                style={
+                  snapshotSidePanelHeightPx != null
+                    ? {
+                        height: snapshotSidePanelHeightPx,
+                        maxHeight: snapshotSidePanelHeightPx,
+                        minHeight: snapshotSidePanelHeightPx,
+                      }
+                    : undefined
+                }
+              >
+                <div className="flex shrink-0 items-start justify-between gap-2 border-b border-slate-100/90 px-4 py-3 sm:px-5">
+                  <div className="min-w-0">
+                    {billActivityModalTab === "notes" ? (
+                      <div className="flex items-center gap-2">
+                        <StickyNote className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
+                        <p className="text-sm font-semibold text-slate-900">Customer notes</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
+                          <p className="text-sm font-semibold text-slate-900">Bill activity</p>
+                        </div>
+                        <p className="mt-0.5 pl-6 text-[11px] leading-snug text-slate-500">
+                          Recent invoices — open receipt or edit.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div
                   className={cn(
-                    "flex-1 min-w-0 h-8 px-2 text-[11px] transition-all duration-300",
-                    membershipData?.plan?.planName?.toLowerCase().includes("gold")
-                      ? "bg-amber-50/80 hover:bg-amber-50 border-amber-200 text-amber-800 hover:text-amber-900 hover:border-amber-300"
-                      : "bg-white/80 hover:bg-white border-indigo-200 text-indigo-700 hover:text-indigo-800 hover:border-indigo-300"
+                    "min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-5",
+                    billActivityModalTab === "notes" && "bg-slate-50/35"
                   )}
                 >
-                  <StickyNote className="h-3.5 w-3.5 mr-1 shrink-0" />
-                  Customer notes
-                </Button>
+                  {customerBillsLoading ? (
+                    <div className="flex flex-1 items-center justify-center gap-2 py-10 text-sm text-slate-500">
+                      <Loader2 className="h-5 w-5 shrink-0 animate-spin text-indigo-500" />
+                      {billActivityModalTab === "notes" ? "Loading notes…" : "Loading invoices…"}
+                    </div>
+                  ) : billActivityModalTab === "notes" ? (
+                    <>
+                      {customerBills.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-slate-200/90 bg-slate-50/50 px-4 py-8 text-center text-sm text-slate-500">
+                          No invoices for this customer yet.
+                        </div>
+                      ) : customerBillsWithNotes.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-slate-200/90 bg-slate-50/50 px-4 py-8 text-center text-sm text-slate-500">
+                          No notes on past invoices yet.
+                        </div>
+                      ) : (
+                        <ul className="space-y-2.5 pb-2">
+                          {[...customerBillsWithNotes]
+                            .sort((a, b) => {
+                              const ta = new Date(a.date).getTime()
+                              const tb = new Date(b.date).getTime()
+                              return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta)
+                            })
+                            .map((bill) => {
+                              const billNo = quickSaleBillNoForBillingRoute(bill)
+                              const dateLine = formatCustomerBillDateTimeLine(bill).replace(" · ", ", ")
+                              const staffLabel = String(bill.staffNames || bill.staffName || "").trim()
+                              const cardClass =
+                                "block w-full rounded-lg border border-white/80 bg-white/90 p-2.5 text-left shadow-sm transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:p-3"
+                              const inner = (
+                                <>
+                                  <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                                    <span className="text-[10px] font-medium text-slate-500 sm:text-xs">
+                                      {dateLine}
+                                    </span>
+                                    <Badge variant="outline" className="px-1.5 py-0 text-[10px] capitalize">
+                                      Bill / sale
+                                    </Badge>
+                                    {billNo ? (
+                                      <span className="font-mono text-[10px] text-slate-500 sm:text-xs">
+                                        #{bill.receiptNumber || bill.id || "—"}
+                                      </span>
+                                    ) : null}
+                                    {staffLabel ? (
+                                      <span className="text-[10px] text-slate-600 sm:text-xs">• {staffLabel}</span>
+                                    ) : null}
+                                  </div>
+                                  <p className="text-xs leading-relaxed text-slate-900 whitespace-pre-wrap break-words sm:text-sm">
+                                    {String(bill.notes || "").trim()}
+                                  </p>
+                                </>
+                              )
+                              return (
+                                <li key={`inline-note-${bill.id}`}>
+                                  {billNo ? (
+                                    <button
+                                      type="button"
+                                      className={cn(cardClass, "cursor-pointer font-inherit")}
+                                      onClick={() => void openCustomerBillInvoicePreview(billNo)}
+                                    >
+                                      {inner}
+                                    </button>
+                                  ) : (
+                                    <div className={cardClass}>{inner}</div>
+                                  )}
+                                </li>
+                              )
+                            })}
+                        </ul>
+                      )}
+                    </>
+                  ) : customerBills.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-slate-200/90 bg-slate-50/50 px-4 py-8 text-center text-sm text-slate-500">
+                      No bills found for this customer.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 pb-2">
+                      {[...customerBills]
+                        .sort((a, b) => {
+                          const ta = new Date(a.date).getTime()
+                          const tb = new Date(b.date).getTime()
+                          return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta)
+                        })
+                        .map((bill) => (
+                        <div key={bill.id} className="rounded-md border border-slate-100/90 p-3 hover:bg-slate-50/80">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <h4 className="font-medium text-sm text-slate-900">
+                                #{bill.receiptNumber}
+                                {(bill.isEdited === true || bill.editedAt) && (
+                                  <span className="ml-1 text-[11px] font-normal text-slate-500">(edited)</span>
+                                )}
+                              </h4>
+                              <p className="mt-0.5 text-xs text-slate-600 tabular-nums">
+                                {formatCustomerBillDateTimeLine(bill)}
+                              </p>
+                              <p className="text-xs text-slate-600">
+                                Staff: {bill.staffNames || bill.staffName}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 flex-col items-end gap-1.5">
+                              <p className="text-sm font-semibold tabular-nums text-emerald-700">
+                                ₹{bill.total.toFixed(2)}
+                              </p>
+                              <p className="text-[11px] capitalize text-slate-500">
+                                {bill.payments?.[0]?.type || "Cash"}
+                              </p>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    const bn = quickSaleBillNoForBillingRoute(bill)
+                                    if (bn) {
+                                      router.push(`/billing/${encodeURIComponent(bn)}?mode=edit`)
+                                    }
+                                  }}
+                                  title="Edit bill"
+                                  className="h-7 w-7 p-0"
+                                >
+                                  <Edit className="h-3 w-3" />
+                                </Button>
+                                {bill.items &&
+                                  bill.items.some((item: { type?: string }) => item.type === "product") && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => {
+                                        const bn = quickSaleBillNoForBillingRoute(bill)
+                                        if (bn) {
+                                          router.push(`/billing/${encodeURIComponent(bn)}?mode=exchange`)
+                                        }
+                                      }}
+                                      title="Exchange products"
+                                      className="h-7 w-7 border-blue-200 p-0 text-blue-700 hover:bg-blue-50"
+                                    >
+                                      <RefreshCw className="h-3 w-3" />
+                                    </Button>
+                                  )}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() =>
+                                    openCustomerBillInvoicePreview(String(bill.receiptNumber || bill.id))
+                                  }
+                                  title="View invoice"
+                                  className="h-7 w-7 p-0"
+                                >
+                                  <Eye className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
+            )}
             </div>
           )}
 
@@ -6660,6 +7583,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   <span className="font-medium text-gray-700">{formatCurrency(roundOff)}</span>
                 </div>
               )}
+              {loyaltyDiscountLive > 0 && (
+                <div className="flex justify-between items-center py-0.5 text-violet-800">
+                  <span className="text-sm flex items-center gap-1">
+                    <Gift className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    Points discount
+                  </span>
+                  <span className="text-sm font-medium">−{formatCurrency(loyaltyDiscountLive)}</span>
+                </div>
+              )}
 
               {/* 6. Tip (Optional) */}
               <div className="flex justify-between items-center py-1">
@@ -6709,6 +7641,32 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               </div>
             </div>
 
+            {mode !== "exchange" &&
+              change > 0.01 &&
+              !isCashOnlyCheckout &&
+              cashAmount >= PAY_EPS &&
+              isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined) && (
+                <div className="rounded-lg border border-slate-200/90 bg-slate-50/80 p-3 text-sm leading-snug text-slate-800">
+                  <p className="font-medium text-slate-900">Cash-only for wallet change</p>
+                  <p className="mt-1 text-slate-700">
+                    To credit bill change to prepaid, pay this bill entirely in cash. Card, online, or wallet payment
+                    cannot be combined with this option.
+                  </p>
+                </div>
+              )}
+
+            {mode !== "exchange" && change > 0.01 && (
+              !isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined) && (
+                <div className="rounded-lg border border-amber-200/90 bg-amber-50/60 p-3 text-sm leading-snug text-amber-950">
+                  <p className="font-medium text-amber-900">Wallet credit isn&apos;t available here</p>
+                  <p className="mt-1 text-amber-950/90">
+                    Select a saved customer from search (not only a typed name) to credit change to prepaid. For now,
+                    enter payment equal to the bill total or return cash change.
+                  </p>
+                </div>
+              )
+            )}
+
             {/* Remarks - Modern */}
             <div className="space-y-1">
               <Label className="text-sm font-medium text-gray-700">Remarks</Label>
@@ -6731,11 +7689,48 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-gray-700">Payment Methods</h4>
 
-                {clientWallets.length > 0 && (
-                  <div className="rounded-xl border border-amber-200/80 bg-amber-50/30 p-3 space-y-2">
-                    {clientWallets.length > 1 && (
+                {showRedemptionSection && (
+                  <div className="space-y-2 border-b border-gray-100 pb-3">
+                    {(walletRedemptionBlockedByItems || rewardRedemptionBlockedByItems) &&
+                      hasAnyBillLineForRedemption && (
+                      <p className="text-xs text-amber-800 bg-amber-50/80 border border-amber-200/80 rounded-md px-2 py-1.5">
+                        Redemption is not allowed for the selected bill items as per payment configuration.
+                      </p>
+                    )}
+                    {showExclusiveRedemptionPicker ? (
+                      <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2">
+                        <Label
+                          id="qs-redeem-method-label"
+                          className="text-xs font-medium text-slate-800 shrink-0 mb-0"
+                        >
+                          Choose Redemption Method
+                        </Label>
+                        <RadioGroup
+                          aria-labelledby="qs-redeem-method-label"
+                          value={exclusiveRedemptionMethod ?? undefined}
+                          onValueChange={(v) => {
+                            if (v === "wallet" || v === "reward") setExclusiveRedemptionMethod(v)
+                          }}
+                          className="flex flex-row flex-wrap items-center gap-x-5 gap-y-1"
+                        >
+                          <div className="flex items-center gap-2">
+                            <RadioGroupItem value="wallet" id="qs-redeem-wallet" />
+                            <Label htmlFor="qs-redeem-wallet" className="text-sm font-normal cursor-pointer mb-0">
+                              Wallet
+                            </Label>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <RadioGroupItem value="reward" id="qs-redeem-reward" />
+                            <Label htmlFor="qs-redeem-reward" className="text-sm font-normal cursor-pointer mb-0">
+                              Reward Points
+                            </Label>
+                          </div>
+                        </RadioGroup>
+                      </div>
+                    ) : null}
+                    {showWalletInput && showSeparateWalletCount ? (
                       <select
-                        className="w-full h-9 text-sm rounded-md border border-amber-200 bg-white px-2"
+                        className="w-full h-9 text-sm rounded-md border border-gray-200 bg-white px-2 text-gray-800"
                         value={selectedWalletId}
                         onChange={(e) => {
                           setSelectedWalletId(e.target.value)
@@ -6745,41 +7740,90 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         <option value="">None</option>
                         {clientWallets.map((w) => (
                           <option key={w._id} value={String(w._id)}>
-                            {(w.planSnapshot && w.planSnapshot.planName) || "Wallet"} — ₹
-                            {w.remainingBalance} left
+                            {(w.planSnapshot && w.planSnapshot.planName) || "Wallet"} — ₹{w.remainingBalance} left
                           </option>
                         ))}
                       </select>
-                    )}
-                    {selectedWalletId ? (
-                      <div className="flex flex-wrap gap-2 items-end">
-                        <div className="flex-1 min-w-[120px] space-y-1">
-                          <Label className="text-xs text-amber-900">Apply from wallet (₹)</Label>
+                    ) : null}
+                    <div className="flex flex-row flex-nowrap items-stretch gap-3">
+                      {showWalletInput && clientWallets.length > 0 && selectedWalletId ? (
+                        <div
+                          role="button"
+                          tabIndex={walletRedemptionTileDisabled ? -1 : 0}
+                          onClick={applyQuickSaleWalletMax}
+                          onKeyDown={(e) => {
+                            if (walletRedemptionTileDisabled) return
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault()
+                              applyQuickSaleWalletMax()
+                            }
+                          }}
+                          className={`flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors ${
+                            walletRedemptionTileDisabled
+                              ? "cursor-not-allowed border-cyan-200/55 bg-cyan-50/15 opacity-50"
+                              : `cursor-pointer ${
+                                  walletPayAmount > 0
+                                    ? "border-cyan-300/70 bg-cyan-50/35 hover:bg-cyan-50/50"
+                                    : "border-cyan-200/65 bg-cyan-50/20 hover:bg-cyan-50/35"
+                                }`
+                          }`}
+                        >
+                          <span className="text-sm font-semibold text-cyan-800">Wallet (₹)</span>
                           <Input
                             type="number"
                             value={walletPayAmount || ""}
                             onChange={(e) => setWalletPayAmount(Number(e.target.value) || 0)}
-                            className="h-9"
+                            onFocus={(e) => e.target.select()}
+                            onClick={(e) => e.stopPropagation()}
                             min={0}
+                            disabled={walletRedemptionTileDisabled}
+                            className="h-8 w-full rounded-lg border-cyan-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-cyan-400/85 focus:ring-cyan-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            style={{ textAlign: "center" }}
+                            placeholder="0"
                           />
                         </div>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          className="shrink-0"
-                          onClick={() => {
-                            const w = clientWallets.find((x) => String(x._id) === selectedWalletId)
-                            if (!w) return
-                            setWalletPayAmount(
-                              Math.min(Number(w.remainingBalance), Math.max(0, roundedTotal))
-                            )
-                          }}
+                      ) : null}
+                      {showRewardInput && showRewardPointsCustomerUI && rewardPointsSettings ? (
+                        <div
+                          className={`flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors ${
+                            rewardRedemptionBlockedByItems || payCfgMerged.rewardPointRedemption.enabled === false
+                              ? "border-rose-200/55 bg-rose-50/15 opacity-50"
+                              : loyaltyPointsInput > 0
+                                ? "border-rose-300/70 bg-rose-50/35 hover:bg-rose-50/45"
+                                : "border-rose-200/65 bg-rose-50/20 hover:bg-rose-50/32"
+                          }`}
                         >
-                          Max
-                        </Button>
-                      </div>
-                    ) : null}
+                          <span className="text-sm font-semibold text-slate-900">Points</span>
+                          {loyaltyBalance >= (rewardPointsSettings.minRedeemPoints || 0) ? (
+                            <Input
+                              type="number"
+                              min={0}
+                              step={rewardPointsSettings.redeemPointsStep}
+                              value={loyaltyPointsInput || ""}
+                              onChange={(e) =>
+                                setLoyaltyPointsInput(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                              }
+                              onFocus={(e) => e.target.select()}
+                              className="h-8 w-full rounded-lg border-rose-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-rose-400/85 focus:ring-rose-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                              style={{ textAlign: "center" }}
+                              placeholder="0"
+                              title={`Balance ${loyaltyBalance}, step ${rewardPointsSettings.redeemPointsStep}`}
+                              aria-label={`Reward points to redeem. Balance ${loyaltyBalance}, step ${rewardPointsSettings.redeemPointsStep}`}
+                              disabled={
+                                rewardRedemptionBlockedByItems || payCfgMerged.rewardPointRedemption.enabled === false
+                              }
+                            />
+                          ) : (
+                            <p className="px-1 text-center text-xs leading-snug text-muted-foreground">
+                              Need {rewardPointsSettings.minRedeemPoints || 0}+ pts (have {loyaltyBalance})
+                            </p>
+                          )}
+                          {!loyaltyPreview.ok && loyaltyPointsInput > 0 && loyaltyPreview.error && (
+                            <p className="text-center text-xs text-red-600">{loyaltyPreview.error}</p>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 )}
                 
@@ -6929,6 +7973,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 if (totalPaid < roundedTotal) {
                   console.log('💰 Opening payment modal for partial/unpaid bill')
                   setShowPaymentModal(true)
+                } else if (
+                  totalPaid > roundedTotal + 1e-6 &&
+                  isCashOnlyCheckout &&
+                  mode !== "exchange" &&
+                  isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined)
+                ) {
+                  setCreditCheckoutReasonOverride(null)
+                  setShowCreditChangeConfirm(true)
                 } else {
                   console.log('✅ Full payment, proceeding with checkout')
                   handleCheckout()
@@ -7040,6 +8092,54 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={showCreditChangeConfirm}
+        onOpenChange={(open) => {
+          if (!isProcessing) {
+            setShowCreditChangeConfirm(open)
+            if (!open) setCreditCheckoutReasonOverride(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Wallet className="h-5 w-5 text-cyan-700" />
+              Credit change to wallet?
+            </DialogTitle>
+            <DialogDescription className="text-left text-sm text-slate-600">
+              The customer paid {formatCurrency(totalPaid)} in cash and the bill total is {formatCurrency(roundedTotal)}.
+              <span className="mt-2 block font-medium text-slate-900">
+                {formatCurrency(change)} will be added to their prepaid wallet as non-expiring balance — no cash change.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowCreditChangeConfirm(false)}
+              disabled={isProcessing}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="bg-cyan-700 hover:bg-cyan-800"
+              disabled={isProcessing}
+              onClick={() => {
+                const r = creditCheckoutReasonOverride
+                setShowCreditChangeConfirm(false)
+                setCreditCheckoutReasonOverride(null)
+                void handleCheckout(r ?? undefined, { creditBillChangeToWallet: true })
+              }}
+            >
+              Confirm & collect
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
       {/* Edit Reason Modal - shown when user clicks Save Changes in edit mode */}
       <Dialog open={showEditReasonModal} onOpenChange={(open) => {
@@ -7101,6 +8201,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 setTempEditReason("")
                 if (totalPaid < roundedTotal) {
                   setShowPaymentModal(true)
+                } else if (
+                  totalPaid > roundedTotal + 1e-6 &&
+                  isCashOnlyCheckout &&
+                  mode !== "exchange" &&
+                  isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined)
+                ) {
+                  setCreditCheckoutReasonOverride(reason)
+                  setShowCreditChangeConfirm(true)
                 } else {
                   handleCheckout(reason)
                 }
@@ -7682,6 +8790,43 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         onPaymentCollected={handlePaymentCollected}
       />
 
+      <Dialog
+        open={historyInvoicePreviewOpen}
+        onOpenChange={(next) => {
+          if (!next) {
+            setHistoryInvoicePreviewOpen(false)
+            setHistoryInvoicePreviewReceipt(null)
+            setHistoryInvoicePreviewSettings(null)
+          }
+        }}
+      >
+        <DialogContent className="flex max-h-[90vh] w-[calc(100vw-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+          <DialogHeader className="shrink-0 px-6 pt-6 pb-2">
+            <DialogTitle>
+              {historyInvoicePreviewReceipt
+                ? `Invoice #${historyInvoicePreviewReceipt.receiptNumber}`
+                : "Invoice preview"}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Invoice preview for the selected bill
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 sm:px-6">
+            {historyInvoicePreviewLoading ? (
+              <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin shrink-0" />
+                Loading invoice…
+              </div>
+            ) : historyInvoicePreviewReceipt ? (
+              <ReceiptPreview
+                receipt={historyInvoicePreviewReceipt}
+                businessSettings={historyInvoicePreviewSettings}
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <PostPaymentReceiptModal
         key={postPaymentModal?.receipt?.receiptNumber ?? "post-payment-idle"}
         open={!!postPaymentModal}
@@ -7769,154 +8914,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         </div>
       )}
       
-      {/* Customer notes OR bill activity — one panel per button */}
-      {showBillActivityDialog && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4"
-          style={{ zIndex: 99999 }}
-          onClick={() => setShowBillActivityDialog(false)}
-        >
-          <div
-            className={cn(
-              "bg-white rounded-lg shadow-xl w-full flex flex-col overflow-hidden",
-              billActivityModalTab === "notes" ? "max-w-3xl max-h-[85vh]" : "max-w-2xl max-h-[82vh]"
-            )}
-            style={{ zIndex: 100000 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-2 px-4 py-3 border-b shrink-0">
-              <h2 className="text-base font-semibold text-gray-900 truncate pr-2">
-                {billActivityModalTab === "notes"
-                  ? `Customer notes · ${selectedCustomer?.name ?? ""}`
-                  : `Bill activity · ${selectedCustomer?.name ?? ""}`}
-              </h2>
-              <Button onClick={() => setShowBillActivityDialog(false)} variant="outline" size="sm" className="shrink-0 h-8 w-8 p-0">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
-              {customerBills.length === 0 ? (
-                <div className="text-center py-8 text-gray-500 text-sm">
-                  <Receipt className="h-10 w-10 mx-auto mb-3 text-gray-300" />
-                  <p>No bills found for this customer</p>
-                </div>
-              ) : billActivityModalTab === "notes" ? (
-                customerBillsWithNotes.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500 text-sm">
-                    <StickyNote className="h-10 w-10 mx-auto mb-3 text-gray-300" />
-                    <p>No invoices with customer notes yet.</p>
-                  </div>
-                ) : (
-                  <div className="border rounded-md overflow-hidden max-h-[70vh] overflow-y-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="hover:bg-transparent">
-                          <TableHead className="h-9 text-xs py-2">Date</TableHead>
-                          <TableHead className="h-9 text-xs py-2">Invoice</TableHead>
-                          <TableHead className="h-9 text-xs py-2 min-w-[120px]">Notes</TableHead>
-                          <TableHead className="h-9 text-xs py-2">Staff</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {[...customerBillsWithNotes]
-                          .sort((a, b) => {
-                            const ta = new Date(a.date).getTime()
-                            const tb = new Date(b.date).getTime()
-                            return (Number.isNaN(tb) ? 0 : tb) - (Number.isNaN(ta) ? 0 : ta)
-                          })
-                          .map((bill) => {
-                            const d = bill.date ? new Date(bill.date) : null
-                            const dateLabel =
-                              d && !Number.isNaN(d.getTime())
-                                ? `${format(d, "dd MMM yyyy")}${bill.time ? ` · ${bill.time}` : ""}`
-                                : String(bill.date || "—")
-                            return (
-                              <TableRow key={`note-${bill.id}`} className="text-xs">
-                                <TableCell className="py-2 align-top whitespace-nowrap text-muted-foreground">
-                                  {dateLabel}
-                                </TableCell>
-                                <TableCell className="py-2 align-top font-mono whitespace-nowrap">
-                                  {bill.receiptNumber ? `#${bill.receiptNumber}` : "—"}
-                                </TableCell>
-                                <TableCell className="py-2 align-top text-gray-800 max-w-[240px] break-words">
-                                  {String(bill.notes || "").trim()}
-                                </TableCell>
-                                <TableCell className="py-2 align-top text-gray-700">{bill.staffNames || "—"}</TableCell>
-                              </TableRow>
-                            )
-                          })}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )
-              ) : (
-                <div className="space-y-2">
-                  {customerBills.map((bill) => (
-                    <div key={bill.id} className="border rounded-md p-3 hover:bg-gray-50/80">
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="font-medium text-sm text-gray-900">
-                            #{bill.receiptNumber}
-                            {(bill.isEdited === true || bill.editedAt) && (
-                              <span className="text-[11px] text-gray-500 font-normal ml-1">(edited)</span>
-                            )}
-                          </h4>
-                          <p className="text-xs text-gray-600 mt-0.5">
-                            {bill.date}
-                            {bill.time ? ` · ${bill.time}` : ""}
-                          </p>
-                          <p className="text-xs text-gray-600">Staff: {bill.staffNames || bill.staffName}</p>
-                        </div>
-                        <div className="flex flex-col items-end gap-1.5 shrink-0">
-                          <p className="text-sm font-semibold text-green-700 tabular-nums">₹{bill.total.toFixed(2)}</p>
-                          <p className="text-[11px] text-gray-500 capitalize">{bill.payments?.[0]?.type || "Cash"}</p>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => router.push(`/bills/${bill.receiptNumber || bill.id}/edit`)}
-                              title="Edit bill"
-                              className="h-7 w-7 p-0"
-                            >
-                              <Edit className="h-3 w-3" />
-                            </Button>
-                            {bill.items && bill.items.some((item: any) => item.type === "product") && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  router.push(`/billing/${bill.receiptNumber || bill.billNo || bill.id}?mode=exchange`)
-                                }}
-                                title="Exchange products"
-                                className="h-7 w-7 p-0 border-blue-200 text-blue-700 hover:bg-blue-50"
-                              >
-                                <RefreshCw className="h-3 w-3" />
-                              </Button>
-                            )}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() =>
-                                router.push(`/receipt/${bill.receiptNumber || bill.id}?returnTo=/quick-sale`)
-                              }
-                              title="View receipt"
-                              className="h-7 w-7 p-0"
-                            >
-                              <Eye className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   )
 }

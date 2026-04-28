@@ -28,6 +28,7 @@ import {
   Search,
   IdCard,
   CircleDollarSign,
+  Gift,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -46,6 +47,7 @@ import { PackagesSettingsPanel } from "@/components/packages/PackagesSettingsPan
 import { ChannelUsageSettings } from "./channel-usage-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
+import { RewardPointsProgramSettings } from "./reward-points-settings"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { ProductsTable } from "@/components/products/products-table"
@@ -74,6 +76,7 @@ const SETTINGS_SECTION_IDS = [
   "channel-usage",
   "recharge",
   "prepaid-wallet",
+  "reward-points",
 ] as const
 
 function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
@@ -194,6 +197,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "Tender types, payment methods, and how you get paid.",
         icon: CreditCard,
         searchTerms: ["upi", "card", "methods"],
+      },
+      {
+        id: "reward-points",
+        title: "Reward points",
+        description: "Loyalty earning and redemption rules for customer bills.",
+        icon: Gift,
+        searchTerms: ["loyalty", "points", "rewards", "earn", "redeem"],
       },
       {
         id: "plan-billing",
@@ -425,6 +435,8 @@ export function SettingsPage() {
         return <RechargeSettings />
       case "prepaid-wallet":
         return <PrepaidWalletSettings />
+      case "reward-points":
+        return <RewardPointsProgramSettings />
       default:
         return null
     }

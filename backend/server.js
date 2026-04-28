@@ -320,6 +320,7 @@ app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/client-wallet', require('./routes/client-wallet'));
+app.use('/api/reward-points', require('./routes/reward-points'));
 app.use('/api/plan', require('./routes/plan-checkout'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/packages', require('./routes/packages'));
@@ -9948,7 +9949,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       logger.debug('👤 User:', req.user?.email);
     }
     
-    const { Sale, Product, InventoryTransaction, Appointment } = req.businessModels;
+    const { Sale, Product, InventoryTransaction, Appointment, BusinessSettings } = req.businessModels;
     const saleData = req.body;
     
     // Process items to handle staff contributions and preserve productId/serviceId
@@ -9998,6 +9999,59 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     
     // Add branchId to sale data
     saleData.branchId = req.user.branchId;
+
+    const {
+      mergePaymentConfiguration,
+      eligibleRedemptionSubtotal,
+      sumWalletPayments,
+    } = require('./lib/payment-redemption-eligibility');
+    let eligibleRewardSubCreate = null;
+    let eligibleWalletSubCreate = null;
+    if (BusinessSettings) {
+      const payDoc = await BusinessSettings.findOne().select('paymentConfiguration').lean();
+      const payCfg = mergePaymentConfiguration(payDoc?.paymentConfiguration);
+      const itemsForRedeem = Array.isArray(saleData.items) ? saleData.items : [];
+      eligibleWalletSubCreate = eligibleRedemptionSubtotal(itemsForRedeem, payCfg, 'wallet');
+      eligibleRewardSubCreate = eligibleRedemptionSubtotal(itemsForRedeem, payCfg, 'reward');
+      const walletPaid = sumWalletPayments(saleData.payments);
+      if (walletPaid > eligibleWalletSubCreate + 0.02) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'Wallet payment exceeds amount allowed for eligible bill lines (payment configuration).',
+        });
+      }
+      if (payCfg.billingRedemption?.allowWalletAndPointsTogether === false) {
+        const ptsCreate = Math.floor(Number(saleData.loyaltyPointsRedeemed) || 0);
+        if (walletPaid > 0.02 && ptsCreate > 0) {
+          return res.status(400).json({
+            success: false,
+            error:
+              'Use only one of wallet or reward points on this bill (payment configuration).',
+          });
+        }
+      }
+    }
+
+    const rewardPointsSvcCreate = require('./services/reward-points-service');
+    const rpSettingsCreate = await rewardPointsSvcCreate.getMergedSettings(req.user.branchId);
+    try {
+      rewardPointsSvcCreate.validateSaleLoyaltyBeforeSave(
+        saleData,
+        rpSettingsCreate,
+        eligibleRewardSubCreate
+      );
+    } catch (loyErr) {
+      return res.status(loyErr.status || 400).json({ success: false, error: loyErr.message });
+    }
+    const redeemedPre = Math.floor(Number(saleData.loyaltyPointsRedeemed) || 0);
+    if (rpSettingsCreate.enabled && redeemedPre > 0 && saleData.customerId) {
+      const { Client: ClientForRp } = req.businessModels;
+      const cliRp = await ClientForRp.findById(saleData.customerId).select('rewardPointsBalance').lean();
+      if (!cliRp || Number(cliRp.rewardPointsBalance) < redeemedPre) {
+        return res.status(400).json({ success: false, error: 'Insufficient reward points balance' });
+      }
+    }
 
     // Validate customerId is a valid ObjectId if present
     if (saleData.customerId && !mongoose.Types.ObjectId.isValid(saleData.customerId)) {
@@ -10677,6 +10731,17 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     logger.debug('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
 
     const createdSale = savedSale || sale;
+    try {
+      await rewardPointsSvcCreate.processSaleCompletionLoyalty({
+        savedSale: createdSale,
+        branchId: req.user.branchId,
+        businessModels: req.businessModels,
+        userId: req.user._id,
+      });
+    } catch (rpErr) {
+      logger.error('[reward-points] process sale completion failed', rpErr);
+    }
+
     scheduleActivityLog(
       {
         businessId: req.user.branchId,
@@ -10958,6 +11023,8 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'tipStaffId',
       'tipStaffName',
       'staffName', // Header staff on bill; keeps sale in sync when invoice staff changes
+      'loyaltyPointsRedeemed',
+      'loyaltyDiscountAmount',
     ];
 
     editableRootFields.forEach((field) => {
@@ -11079,6 +11146,60 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       }
     }
 
+    const rewardPointsSvcPut = require('./services/reward-points-service');
+    const rpSettingsPut = await rewardPointsSvcPut.getMergedSettings(req.user.branchId);
+    const mergedLoyaltyBody = {
+      grossTotal:
+        updateData.grossTotal != null ? Number(updateData.grossTotal) : Number(existingSale.grossTotal) || 0,
+      loyaltyPointsRedeemed:
+        updateData.loyaltyPointsRedeemed != null
+          ? Number(updateData.loyaltyPointsRedeemed)
+          : Number(existingSale.loyaltyPointsRedeemed) || 0,
+      loyaltyDiscountAmount:
+        updateData.loyaltyDiscountAmount != null
+          ? Number(updateData.loyaltyDiscountAmount)
+          : Number(existingSale.loyaltyDiscountAmount) || 0,
+    };
+
+    const {
+      mergePaymentConfiguration: mergePayCfgPut,
+      eligibleRedemptionSubtotal: eligibleRedemptionSubtotalPut,
+      sumWalletPayments: sumWalletPaymentsPut,
+    } = require('./lib/payment-redemption-eligibility');
+    const { BusinessSettings: BizSettingsRedeemPut } = req.businessModels;
+    let eligibleRewardPut = null;
+    if (BizSettingsRedeemPut) {
+      const payDocPut = await BizSettingsRedeemPut.findOne().select('paymentConfiguration').lean();
+      const payCfgPut = mergePayCfgPut(payDocPut?.paymentConfiguration);
+      const itemsForRedeemPut = Array.isArray(existingSale.items) ? existingSale.items : [];
+      const eligibleWalletPut = eligibleRedemptionSubtotalPut(itemsForRedeemPut, payCfgPut, 'wallet');
+      eligibleRewardPut = eligibleRedemptionSubtotalPut(itemsForRedeemPut, payCfgPut, 'reward');
+      const walletPaidPut = sumWalletPaymentsPut(existingSale.payments);
+      if (walletPaidPut > eligibleWalletPut + 0.02) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'Wallet payment exceeds amount allowed for eligible bill lines (payment configuration).',
+        });
+      }
+      if (payCfgPut.billingRedemption?.allowWalletAndPointsTogether === false) {
+        const loyPutEx = Math.floor(Number(mergedLoyaltyBody.loyaltyPointsRedeemed) || 0);
+        if (walletPaidPut > 0.02 && loyPutEx > 0) {
+          return res.status(400).json({
+            success: false,
+            error:
+              'Use only one of wallet or reward points on this bill (payment configuration).',
+          });
+        }
+      }
+    }
+
+    try {
+      rewardPointsSvcPut.validateSaleLoyaltyBeforeSave(mergedLoyaltyBody, rpSettingsPut, eligibleRewardPut);
+    } catch (loyErr) {
+      return res.status(loyErr.status || 400).json({ success: false, error: loyErr.message });
+    }
+
     const beforeSnapshot = existingSale.toObject();
 
     // Mark bill as edited
@@ -11127,6 +11248,28 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         await autoConsumption.reverseConsumptionForBill(savedSale._id, req.businessModels);
       } catch (reversalErr) {
         logger.error('Auto consumption reversal on bill cancel failed:', reversalErr);
+      }
+      try {
+        await rewardPointsSvcPut.reverseSaleLoyalty({
+          sale: savedSale,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          userId: req.user._id,
+        });
+      } catch (rpRevErr) {
+        logger.error('[reward-points] reverse on bill cancel failed:', rpRevErr);
+      }
+    }
+    if (newStatus === 'completed' && previousStatus !== 'completed') {
+      try {
+        await rewardPointsSvcPut.processSaleCompletionLoyalty({
+          savedSale,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          userId: req.user._id,
+        });
+      } catch (rpProcErr) {
+        logger.error('[reward-points] process on bill completion (edit) failed:', rpProcErr);
       }
     }
 
@@ -12672,11 +12815,15 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         gstNumber: "",
         autoResetReceipt: false,
         resetFrequency: "monthly",
-        branchId: branchId
+        branchId: branchId,
+        paymentConfiguration: require('./lib/payment-redemption-eligibility').mergePaymentConfiguration(null),
       });
       await settings.save();
       logger.debug("✅ Default business settings created");
     }
+
+    const { mergePaymentConfiguration } = require('./lib/payment-redemption-eligibility');
+    const paymentConfigurationMerged = mergePaymentConfiguration(settings.paymentConfiguration);
 
     // Build tax categories array from settings
     let taxCategories = []
@@ -12736,7 +12883,8 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         luxuryProductRate: settings.luxuryProductRate || 28,
         exemptProductRate: settings.exemptProductRate || 0,
         taxCategories: taxCategories,
-        priceInclusiveOfTax: settings.priceInclusiveOfTax !== false
+        priceInclusiveOfTax: settings.priceInclusiveOfTax !== false,
+        paymentConfiguration: paymentConfigurationMerged,
       }
     });
   } catch (error) {
@@ -12772,7 +12920,8 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       luxuryProductRate,
       exemptProductRate,
       taxCategories,
-      priceInclusiveOfTax
+      priceInclusiveOfTax,
+      paymentConfiguration
     } = req.body;
     const { BusinessSettings } = req.businessModels;
 
@@ -12784,6 +12933,8 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         error: "Business settings not found"
       });
     }
+
+    const { mergePaymentConfiguration: mergePayCfg } = require('./lib/payment-redemption-eligibility');
 
     // Update payment settings
     if (currency !== undefined) settings.currency = currency;
@@ -12812,12 +12963,19 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       settings.taxCategories = taxCategories;
     }
     if (priceInclusiveOfTax !== undefined) settings.priceInclusiveOfTax = priceInclusiveOfTax;
+    if (paymentConfiguration !== undefined && paymentConfiguration !== null && typeof paymentConfiguration === 'object') {
+      settings.paymentConfiguration = mergePayCfg(paymentConfiguration);
+      settings.markModified('paymentConfiguration');
+    }
 
     await settings.save();
 
     res.json({
       success: true,
-      data: settings,
+      data: {
+        ...settings.toObject(),
+        paymentConfiguration: mergePayCfg(settings.paymentConfiguration),
+      },
       message: "Payment settings updated successfully"
     });
   } catch (error) {
@@ -12861,6 +13019,20 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       return res.status(404).json({ success: false, error: 'Sale not found' });
     }
     logger.debug(`✅ Sale found: ${sale.billNo}, items count: ${sale.items?.length || 0}`);
+
+    if (String(sale.status || '').toLowerCase() === 'completed' && sale.customerId) {
+      try {
+        const rewardPointsSvcDel = require('./services/reward-points-service');
+        await rewardPointsSvcDel.reverseSaleLoyalty({
+          sale,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          userId: req.user._id,
+        });
+      } catch (rpDelErr) {
+        logger.error('[reward-points] reverse on bill delete failed:', rpDelErr);
+      }
+    }
 
     // Archive bill before deletion
     const deleteReason = (req.body?.reason || '').trim() || 'Bill deleted';

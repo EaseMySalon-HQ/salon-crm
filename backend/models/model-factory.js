@@ -148,6 +148,8 @@ class ModelFactory {
         connection
       ),
 
+      PointsLedger: this.getModel('PointsLedger', require('./PointsLedger').schema, connection),
+
       // Scheduling (package sessions + holds + availability)
       PackageSession: this.getModel('PackageSession', require('./PackageSession').schema, connection),
       BookingHold: this.getModel('BookingHold', require('./BookingHold').schema, connection),
