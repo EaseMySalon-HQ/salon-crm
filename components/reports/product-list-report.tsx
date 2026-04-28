@@ -13,6 +13,7 @@ import { SalesAPI, ProductsAPI, StaffDirectoryAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
 import { splitLineRevenueByStaff } from "@/lib/staff-line-revenue"
 import type { DatePeriod } from "@/components/reports/service-list-report"
+import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
 
 interface ProductRow {
   id: string
@@ -304,26 +305,15 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-6">
             <div className="flex flex-wrap items-center gap-3">
-              <Select value={productF} onValueChange={controlledFilters?.setProductFilter ?? setProductFilter}>
-                <SelectTrigger className="w-44 border-slate-200">
-                  <SelectValue placeholder="Product" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All products</SelectItem>
-                  {productsList.map((p) => (
-                    <SelectItem key={p._id} value={p._id}>
-                      {p.name}
-                    </SelectItem>
-                  ))}
-                  {uniqueProductNames
-                    .filter((n) => !productsList.some((p) => p.name === n))
-                    .map((name) => (
-                      <SelectItem key={name} value={name}>
-                        {name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+              <ProductFilterCombobox
+                value={productF}
+                onValueChange={controlledFilters?.setProductFilter ?? setProductFilter}
+                products={productsList}
+                extraOptions={uniqueProductNames
+                  .filter((n) => !productsList.some((p) => p.name === n))
+                  .map((name) => ({ value: name, label: name }))}
+                triggerClassName="w-44 border-slate-200"
+              />
               <Popover>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="w-44 justify-start text-left font-normal border-slate-200">

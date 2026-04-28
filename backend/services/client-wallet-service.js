@@ -25,7 +25,67 @@ const DEFAULT_SETTINGS = {
   refundPolicy: 'service_credit_only',
   minRechargeAmount: 500,
   expiryAlertsEnabled: true,
+  combineMultipleWallets: false,
 };
+
+/** Bill cash-change credits: never expire (expiry job compares to `now`). */
+const NON_EXPIRING_WALLET_DATE = () => new Date('9999-12-31T23:59:59.999Z');
+
+/**
+ * Assert sale was paid with Cash only (recorded payment lines) — required for bill change → wallet.
+ */
+async function assertSaleIsCashOnlyPayments(businessModels, saleId, branchId) {
+  const { Sale } = businessModels;
+  const sid = mongoose.Types.ObjectId.isValid(String(saleId)) ? saleId : null;
+  if (!sid) {
+    const err = new Error('Invalid sale');
+    err.status = 400;
+    throw err;
+  }
+  const sale = await Sale.findOne({ _id: sid, branchId }).select('payments').lean();
+  if (!sale) {
+    const err = new Error('Sale not found');
+    err.status = 404;
+    throw err;
+  }
+  const rows = (sale.payments || []).filter((p) => Number(p.amount) > 1e-6);
+  if (rows.length === 0) {
+    const err = new Error('Sale has no payment rows');
+    err.status = 400;
+    throw err;
+  }
+  const nonCash = rows.some((p) => {
+    const m = String(p.mode ?? '')
+      .toLowerCase()
+      .trim();
+    return m !== 'cash';
+  });
+  if (nonCash) {
+    const err = new Error(
+      'Crediting bill change to wallet is allowed only when the bill is paid entirely in Cash'
+    );
+    err.status = 400;
+    throw err;
+  }
+}
+
+async function markWalletNonExpiringBillChangeCashCredit(walletId, branchId, businessModels) {
+  const { ClientWallet } = businessModels;
+  const far = NON_EXPIRING_WALLET_DATE();
+  const w = await ClientWallet.findOne({ _id: walletId, branchId });
+  if (!w) return null;
+  w.nonExpiring = true;
+  w.expiryDate = far;
+  w.effectiveExpiryDate = far;
+  const ps =
+    w.planSnapshot != null && typeof w.planSnapshot === 'object'
+      ? { ...w.planSnapshot }
+      : {};
+  ps.billChangeCashCreditNonExpiring = true;
+  w.planSnapshot = ps;
+  await w.save();
+  return w;
+}
 
 async function getMainBusiness(branchId) {
   const mainConnection = await databaseManager.getMainConnection();
@@ -448,28 +508,142 @@ async function issueWalletLinkedToSale({
 }
 
 /**
- * Atomic debit + ledger row.
+ * Redeem across all eligible client wallets in FIFO order (soonest effectiveExpiryDate first).
  */
-async function redeemBalance({
+async function redeemBalanceFifoAcrossWallets({
   branchId,
   businessModels,
   staffUser,
   walletId,
-  amount,
+  amt,
   saleId,
   serviceNames,
   couponApplied,
+  cwSettings,
 }) {
   const { ClientWallet, ClientWalletTransaction } = businessModels;
-  const mainBiz = await getMainBusiness(branchId);
-  const cwSettings = mergeClientWalletSettings(mainBiz?.clientWalletSettings);
 
-  const amt = Number(amount);
-  if (!Number.isFinite(amt) || amt <= 0) {
-    const err = new Error('Invalid redeem amount');
+  const anchor = await ClientWallet.findOne({ _id: walletId, branchId }).lean();
+  if (!anchor) {
+    const err = new Error('Wallet not found');
+    err.status = 404;
+    throw err;
+  }
+  const clientId = anchor.clientId;
+  const now = new Date();
+  const GRACE_MS = 120000;
+  const graceCutoff = new Date(now.getTime() - GRACE_MS);
+
+  let candidates = await ClientWallet.find({
+    branchId,
+    clientId,
+    status: 'active',
+    remainingBalance: { $gt: 0 },
+    effectiveExpiryDate: { $gte: graceCutoff },
+  }).lean();
+
+  candidates = candidates.filter((w) => {
+    if (!cwSettings.allowMultiBranch && String(w.issuedBranchId) !== String(branchId)) return false;
+    return true;
+  });
+
+  candidates.sort((a, b) => new Date(a.effectiveExpiryDate) - new Date(b.effectiveExpiryDate));
+
+  if (couponApplied && !cwSettings.allowCouponStacking) {
+    candidates = candidates.filter((w) => w.planSnapshot && w.planSnapshot.allowCouponStacking === true);
+  }
+
+  const totalAvail = candidates.reduce((s, w) => s + Number(w.remainingBalance || 0), 0);
+  if (totalAvail + 1e-6 < amt) {
+    const err = new Error('Amount exceeds combined wallet balance');
     err.status = 400;
     throw err;
   }
+
+  let remain = Math.round(amt * 100) / 100;
+  let lastUpdated = null;
+  let lastFinalBal = 0;
+  const saleOid = saleId && mongoose.Types.ObjectId.isValid(String(saleId)) ? saleId : null;
+  const svcNames = Array.isArray(serviceNames) ? serviceNames.filter(Boolean) : [];
+
+  for (const w of candidates) {
+    if (remain <= 1e-9) break;
+    const bal = Number(w.remainingBalance || 0);
+    const slice = Math.round(Math.min(remain, bal) * 100) / 100;
+    if (slice <= 1e-9) continue;
+
+    const newBal = Math.round((bal - slice) * 100) / 100;
+    const updated = await ClientWallet.findOneAndUpdate(
+      {
+        _id: w._id,
+        branchId,
+        status: 'active',
+        remainingBalance: { $gte: slice },
+        effectiveExpiryDate: { $gte: now },
+      },
+      {
+        $inc: { remainingBalance: -slice },
+        ...(newBal <= 0.009 ? { $set: { status: 'exhausted' } } : {}),
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      const err = new Error('Redeem failed — balance or status changed');
+      err.status = 409;
+      throw err;
+    }
+
+    lastUpdated = updated;
+    lastFinalBal = updated.remainingBalance;
+
+    const debitTx = await ClientWalletTransaction.create({
+      branchId,
+      walletId: updated._id,
+      clientId: updated.clientId,
+      type: 'debit',
+      amount: slice,
+      balanceAfter: lastFinalBal,
+      description: 'Redeemed at checkout',
+      performedBy: staffUser?._id || null,
+      saleId: saleOid,
+      serviceNames: svcNames,
+    });
+    queueWalletTxnWhatsApp(branchId, businessModels, updated, debitTx);
+
+    remain = Math.round((remain - slice) * 100) / 100;
+  }
+
+  if (remain > 0.02) {
+    const err = new Error('Redeem incomplete — insufficient balance');
+    err.status = 409;
+    throw err;
+  }
+
+  if (!lastUpdated) {
+    const err = new Error('No wallet available to redeem');
+    err.status = 409;
+    throw err;
+  }
+
+  return { wallet: lastUpdated, balanceAfter: lastFinalBal };
+}
+
+/**
+ * Single-wallet redeem (separate wallets mode).
+ */
+async function redeemBalanceSingleWallet({
+  branchId,
+  businessModels,
+  staffUser,
+  walletId,
+  amt,
+  saleId,
+  serviceNames,
+  couponApplied,
+  cwSettings,
+}) {
+  const { ClientWallet, ClientWalletTransaction } = businessModels;
 
   const wallet = await ClientWallet.findOne({ _id: walletId, branchId });
   if (!wallet) {
@@ -554,6 +728,53 @@ async function redeemBalance({
   return { wallet: updated, balanceAfter: finalBal };
 }
 
+/**
+ * Atomic debit + ledger row(s). Uses FIFO across wallets when combineMultipleWallets is enabled.
+ */
+async function redeemBalance({
+  branchId,
+  businessModels,
+  staffUser,
+  walletId,
+  amount,
+  saleId,
+  serviceNames,
+  couponApplied,
+}) {
+  const mainBiz = await getMainBusiness(branchId);
+  const cwSettings = mergeClientWalletSettings(mainBiz?.clientWalletSettings);
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) {
+    const err = new Error('Invalid redeem amount');
+    err.status = 400;
+    throw err;
+  }
+  if (cwSettings.combineMultipleWallets) {
+    return redeemBalanceFifoAcrossWallets({
+      branchId,
+      businessModels,
+      staffUser,
+      walletId,
+      amt,
+      saleId,
+      serviceNames,
+      couponApplied,
+      cwSettings,
+    });
+  }
+  return redeemBalanceSingleWallet({
+    branchId,
+    businessModels,
+    staffUser,
+    walletId,
+    amt,
+    saleId,
+    serviceNames,
+    couponApplied,
+    cwSettings,
+  });
+}
+
 async function manualAdjust({
   branchId,
   businessModels,
@@ -561,6 +782,7 @@ async function manualAdjust({
   walletId,
   delta,
   reason,
+  saleId: saleIdOpt,
 }) {
   const { ClientWallet, ClientWalletTransaction } = businessModels;
   const d = Number(delta);
@@ -592,6 +814,11 @@ async function manualAdjust({
   }
   await wallet.save();
 
+  const saleOid =
+    saleIdOpt && mongoose.Types.ObjectId.isValid(String(saleIdOpt))
+      ? new mongoose.Types.ObjectId(String(saleIdOpt))
+      : null;
+
   const adjTx = await ClientWalletTransaction.create({
     branchId,
     walletId: wallet._id,
@@ -601,12 +828,190 @@ async function manualAdjust({
     balanceAfter: newBal,
     description: reason || (d > 0 ? 'Manual credit' : 'Manual debit'),
     performedBy: staffUser?._id || null,
-    saleId: null,
+    saleId: saleOid,
     serviceNames: [],
   });
   queueWalletTxnWhatsApp(branchId, businessModels, wallet, adjTx);
 
   return wallet;
+}
+
+/**
+ * POS: customer overpaid; no cash change — credit excess to prepaid wallet (staff).
+ */
+async function creditChangeReturnFromPos({
+  branchId,
+  businessModels,
+  staffUser,
+  walletId,
+  amount,
+  saleId,
+  billNo,
+}) {
+  const amt = Math.round(Number(amount) * 100) / 100;
+  if (!Number.isFinite(amt) || amt <= 0) {
+    const err = new Error('Amount must be positive');
+    err.status = 400;
+    throw err;
+  }
+  if (!mongoose.Types.ObjectId.isValid(String(walletId))) {
+    const err = new Error('Invalid wallet id');
+    err.status = 400;
+    throw err;
+  }
+  await assertSaleIsCashOnlyPayments(businessModels, saleId, branchId);
+  const bill = billNo != null && String(billNo).trim() ? String(billNo).trim() : '';
+  const desc = bill
+    ? `Change credited to prepaid wallet (no cash change) · Bill ${bill}`
+    : 'Change credited to prepaid wallet (no cash change)';
+  await manualAdjust({
+    branchId,
+    businessModels,
+    staffUser,
+    walletId,
+    delta: amt,
+    reason: desc,
+    saleId: saleId && mongoose.Types.ObjectId.isValid(String(saleId)) ? saleId : null,
+  });
+  await markWalletNonExpiringBillChangeCashCredit(walletId, branchId, businessModels);
+  const { ClientWallet } = businessModels;
+  return ClientWallet.findOne({ _id: walletId, branchId }).lean();
+}
+
+/**
+ * POS: client had no prepaid wallet — create one using an active prepaid plan template and credit the bill change.
+ */
+async function creditChangeOpenWalletFromPos({
+  branchId,
+  businessModels,
+  staffUser,
+  clientId,
+  amount,
+  saleId,
+  billNo,
+}) {
+  const amt = Math.round(Number(amount) * 100) / 100;
+  if (!Number.isFinite(amt) || amt <= 0) {
+    const err = new Error('Amount must be positive');
+    err.status = 400;
+    throw err;
+  }
+  const { ClientWallet, ClientWalletTransaction, PrepaidPlan, Sale } = businessModels;
+
+  if (!mongoose.Types.ObjectId.isValid(String(clientId))) {
+    const err = new Error('Invalid client id');
+    err.status = 400;
+    throw err;
+  }
+  if (!mongoose.Types.ObjectId.isValid(String(saleId))) {
+    const err = new Error('Invalid sale id');
+    err.status = 400;
+    throw err;
+  }
+
+  const clientOid = new mongoose.Types.ObjectId(String(clientId));
+  const existingCount = await ClientWallet.countDocuments({
+    branchId,
+    clientId: clientOid,
+    status: { $nin: ['cancelled'] },
+  });
+  if (existingCount > 0) {
+    const err = new Error(
+      'This client already has a prepaid wallet — credit change to that wallet instead'
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const sale = await Sale.findOne({ _id: saleId, branchId }).select('customerId').lean();
+  if (!sale) {
+    const err = new Error('Sale not found');
+    err.status = 404;
+    throw err;
+  }
+  if (String(sale.customerId) !== String(clientId)) {
+    const err = new Error('Sale customer does not match');
+    err.status = 400;
+    throw err;
+  }
+
+  await assertSaleIsCashOnlyPayments(businessModels, saleId, branchId);
+
+  const plans = await PrepaidPlan.find({ branchId, status: 'active' }).sort({ createdAt: -1 }).lean();
+  let plan = null;
+  for (const p of plans) {
+    if (!p.branchIds || p.branchIds.length === 0) {
+      plan = p;
+      break;
+    }
+    if (p.branchIds.some((b) => String(b) === String(branchId))) {
+      plan = p;
+      break;
+    }
+  }
+  if (!plan) {
+    const err = new Error('No active prepaid plan — create one under Wallet plans to enable this.');
+    err.status = 409;
+    throw err;
+  }
+
+  const far = NON_EXPIRING_WALLET_DATE();
+  const purchasedAt = new Date();
+
+  const planSnapshot = {
+    // Uses an active template for schema/FK only — not a prepaid plan purchase on this bill
+    planName: 'Bill change credit',
+    templatePlanName: plan.name,
+    payAmount: plan.payAmount,
+    creditAmount: plan.creditAmount,
+    validityDays: plan.validityDays,
+    allowCouponStacking: !!plan.allowCouponStacking,
+    openedFromBillChangeCredit: true,
+    billChangeCashCreditNonExpiring: true,
+  };
+
+  const bill = billNo != null && String(billNo).trim() ? String(billNo).trim() : '';
+  const saleOid = new mongoose.Types.ObjectId(String(saleId));
+
+  const wallet = await ClientWallet.create({
+    branchId,
+    clientId: clientOid,
+    planId: plan._id,
+    planSnapshot,
+    paidAmount: amt,
+    creditedBalance: amt,
+    remainingBalance: amt,
+    purchasedAt,
+    expiryDate: far,
+    gracePeriodDays: 0,
+    effectiveExpiryDate: far,
+    nonExpiring: true,
+    status: 'active',
+    issuedBranchId: branchId,
+    saleId: saleOid,
+    notifiedDays: [],
+  });
+
+  const txDesc = bill
+    ? `New prepaid wallet opened — bill change credited · Bill ${bill}`
+    : 'New prepaid wallet opened — bill change credited';
+
+  const wt = await ClientWalletTransaction.create({
+    branchId,
+    walletId: wallet._id,
+    clientId: clientOid,
+    type: 'credit',
+    amount: amt,
+    balanceAfter: amt,
+    description: txDesc,
+    performedBy: staffUser?._id || null,
+    saleId: saleOid,
+    serviceNames: [],
+  });
+
+  queueWalletTxnWhatsApp(branchId, businessModels, wallet, wt);
+
+  return { wallet };
 }
 
 /**
@@ -794,6 +1199,8 @@ module.exports = {
   issueWalletLinkedToSale,
   redeemBalance,
   manualAdjust,
+  creditChangeReturnFromPos,
+  creditChangeOpenWalletFromPos,
   reverseWalletRedemptionsForDeletedSale,
   getLiabilitySummary,
   DEFAULT_SETTINGS,

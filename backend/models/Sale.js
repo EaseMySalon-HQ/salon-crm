@@ -121,7 +121,12 @@ const saleSchema = new mongoose.Schema({
     serviceTax: { type: Number, default: 0 },
     serviceRate: { type: Number, default: 5 },
     productTaxByRate: { type: mongoose.Schema.Types.Mixed, default: {} }
-  }
+  },
+  /** Loyalty / reward points applied on this bill */
+  loyaltyPointsRedeemed: { type: Number, default: 0, min: 0 },
+  loyaltyDiscountAmount: { type: Number, default: 0, min: 0 },
+  loyaltyPointsEarned: { type: Number, default: 0 },
+  loyaltyReversedAt: { type: Date, default: null }
 }, {
   timestamps: true
 });

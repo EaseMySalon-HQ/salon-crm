@@ -11,6 +11,8 @@ import type {
   AnalyticsStaffDrillDownData,
   AnalyticsStaffTabData,
 } from "@/lib/types/analytics"
+import type { PaymentConfiguration } from "./payment-redemption-eligibility"
+
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
@@ -1657,12 +1659,14 @@ export class SettingsAPI {
     return response.data
   }
 
-  static async getPaymentSettings(): Promise<ApiResponse<any>> {
+  static async getPaymentSettings(): Promise<ApiResponse<PaymentSettingsData>> {
     const response = await apiClient.get('/settings/payment')
     return response.data
   }
 
-  static async updatePaymentSettings(data: any): Promise<ApiResponse<any>> {
+  static async updatePaymentSettings(
+    data: PaymentSettingsUpdatePayload
+  ): Promise<ApiResponse<PaymentSettingsData>> {
     const response = await apiClient.put('/settings/payment', data)
     return response.data
   }
@@ -2382,6 +2386,8 @@ export type ClientWalletSettings = {
   refundPolicy: "service_credit_only" | "no_refunds"
   minRechargeAmount: number
   expiryAlertsEnabled: boolean
+  /** When true, POS redeems across all client wallets FIFO (soonest expiry first). */
+  combineMultipleWallets: boolean
 }
 
 /** POST /client-wallet/issue */
@@ -2482,6 +2488,28 @@ export class ClientWalletAPI {
     return response.data
   }
 
+  /** Staff: when customer overpaid and there is no cash change, credit excess to prepaid wallet */
+  static async creditChange(body: {
+    walletId: string
+    amount: number
+    saleId?: string
+    billNo?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/credit-change", body)
+    return response.data
+  }
+
+  /** Staff: customer had no prepaid wallet — create one from an active plan and credit bill change */
+  static async creditChangeOpenWallet(body: {
+    clientId: string
+    amount: number
+    saleId: string
+    billNo?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/credit-change-open-wallet", body)
+    return response.data
+  }
+
   static async getLiability(): Promise<
     ApiResponse<{ totalOutstanding: number; activeWalletCount: number }>
   > {
@@ -2496,6 +2524,102 @@ export class ClientWalletAPI {
     limit?: number
   }): Promise<ApiResponse<{ history: any[] }>> {
     const response = await apiClient.get("/client-wallet/history", { params })
+    return response.data
+  }
+}
+
+// ── Reward points (loyalty) ─────────────────────────────────────────────────
+
+export type RewardPointsSettings = {
+  enabled: boolean
+  earnRupeeStep: number
+  earnPointsStep: number
+  redeemPointsStep: number
+  redeemRupeeStep: number
+  minRedeemPoints: number
+  maxRedeemPercentOfBill: number
+  earnOnWalletPurchaseLines: boolean
+  /** When true, service lines count toward earn base. */
+  earnPointsOnServices: boolean
+  /** When true, product lines count toward earn base. */
+  earnPointsOnProducts: boolean
+  /** When true, membership plan purchase lines count toward earn base. */
+  earnPointsOnMembershipPurchases: boolean
+  /** When true, prepaid wallet plan purchase lines count toward earn base. */
+  earnPointsOnPrepaidPlan: boolean
+  /** Package retail lines (defaults true if omitted). */
+  earnPointsOnPackages?: boolean
+  firstVisitBonusPoints: number
+  birthdayBonusPoints: number
+  birthdayBonusWindowDays: number
+}
+
+export class RewardPointsAPI {
+  static async getSettings(): Promise<ApiResponse<RewardPointsSettings>> {
+    const response = await apiClient.get("/reward-points/settings")
+    return response.data
+  }
+
+  static async updateSettings(
+    body: Partial<RewardPointsSettings>
+  ): Promise<ApiResponse<RewardPointsSettings>> {
+    const response = await apiClient.put("/reward-points/settings", body)
+    return response.data
+  }
+
+  static async preview(params: {
+    billSubtotal: number
+    points: number
+    clientId: string
+  }): Promise<
+    ApiResponse<{
+      ok: boolean
+      error?: string
+      pointsToRedeem: number
+      discountRupees: number
+      currentBalance: number
+      settings: RewardPointsSettings
+    }>
+  > {
+    const qs = new URLSearchParams({
+      billSubtotal: String(params.billSubtotal),
+      points: String(params.points),
+      clientId: params.clientId,
+    })
+    const response = await apiClient.get(`/reward-points/preview?${qs.toString()}`)
+    return response.data
+  }
+
+  static async getLedger(
+    clientId: string,
+    params?: { limit?: number; skip?: number }
+  ): Promise<ApiResponse<{ rows: any[]; total: number; limit: number; skip: number }>> {
+    const qs = new URLSearchParams({ clientId })
+    if (params?.limit != null) qs.set("limit", String(params.limit))
+    if (params?.skip != null) qs.set("skip", String(params.skip))
+    const response = await apiClient.get(`/reward-points/ledger?${qs.toString()}`)
+    return response.data
+  }
+
+  static async getSummary(clientId: string): Promise<
+    ApiResponse<{
+      balance: number
+      lifetimeEarned: number
+      lifetimeRedeemed: number
+      lastBillEarnPoints: number
+      lastBillEarnAt: string | null
+    }>
+  > {
+    const response = await apiClient.get(`/reward-points/summary?clientId=${encodeURIComponent(clientId)}`)
+    return response.data
+  }
+
+  static async grantManualBonus(body: {
+    clientId: string
+    points: number
+    reason?: string
+  }): Promise<ApiResponse<{ balance: number }>> {
+    const response = await apiClient.post("/reward-points/manual-bonus", body)
     return response.data
   }
 }
@@ -2816,6 +2940,41 @@ export class PackagesAPI {
     return response.data
   }
 }
+
+export type { PaymentConfiguration, PaymentRedemptionLine } from "./payment-redemption-eligibility"
+
+/** GET /settings/payment `data` shape (aligned with backend/server.js). */
+export type PaymentSettingsData = {
+  paymentConfiguration?: Partial<PaymentConfiguration> | null
+  processingFee?: number | string
+  enableProcessingFees?: boolean
+  currency?: string
+  taxRate?: number
+  enableCurrency?: boolean
+  enableTax?: boolean
+  taxType?: "single" | "gst" | "vat" | "sales"
+  cgstRate?: number
+  sgstRate?: number
+  igstRate?: number
+  serviceTaxRate?: number
+  membershipTaxRate?: number
+  packageTaxRate?: number
+  prepaidWalletTaxRate?: number
+  productTaxRate?: number
+  essentialProductRate?: number
+  intermediateProductRate?: number
+  standardProductRate?: number
+  luxuryProductRate?: number
+  exemptProductRate?: number
+  taxCategories?: Array<{ id?: string; name?: string; rate?: number }>
+  priceInclusiveOfTax?: boolean
+}
+
+export type PaymentSettingsUpdatePayload = {
+  processingFee?: number
+  enableProcessingFees?: boolean
+  paymentConfiguration?: PaymentConfiguration
+} & Record<string, unknown>
 
 // Export the main API client for direct use if needed
 export { apiClient }

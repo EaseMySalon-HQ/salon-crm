@@ -50,6 +50,7 @@ router.put('/settings', authMainManager, async (req, res) => {
       'refundPolicy',
       'minRechargeAmount',
       'expiryAlertsEnabled',
+      'combineMultipleWallets',
     ];
     const patch = {};
     for (const k of allowed) {
@@ -182,6 +183,40 @@ router.post('/redeem', authStaff, async (req, res) => {
   try {
     const { walletId, amount, saleId, serviceNames, couponApplied } = req.body;
     if (!walletId || !amount) return fail(res, 400, 'walletId and amount are required');
+    const amt = Number(amount);
+    if (saleId && mongoose.Types.ObjectId.isValid(String(saleId))) {
+      const { Sale, BusinessSettings } = req.businessModels;
+      if (Sale && BusinessSettings) {
+        const sale = await Sale.findById(saleId).select('items payments loyaltyPointsRedeemed').lean();
+        if (sale) {
+          const {
+            mergePaymentConfiguration,
+            eligibleRedemptionSubtotal,
+            sumWalletPayments,
+          } = require('../lib/payment-redemption-eligibility');
+          const payDoc = await BusinessSettings.findOne().select('paymentConfiguration').lean();
+          const payCfg = mergePaymentConfiguration(payDoc?.paymentConfiguration);
+          const eligibleWallet = eligibleRedemptionSubtotal(sale.items || [], payCfg, 'wallet');
+          const walletOnSale = sumWalletPayments(sale.payments);
+          const loyOnSale = Math.floor(Number(sale.loyaltyPointsRedeemed) || 0);
+          if (payCfg.billingRedemption?.allowWalletAndPointsTogether === false && loyOnSale > 0 && amt > 0.02) {
+            return fail(
+              res,
+              400,
+              'Wallet cannot be redeemed on this bill while reward points are applied (payment configuration).'
+            );
+          }
+          /** Sale is usually saved with Wallet in payments before redeem; amount must match and stay within eligible lines. */
+          if (amt > eligibleWallet + 0.02 || walletOnSale > eligibleWallet + 0.02) {
+            return fail(
+              res,
+              400,
+              'Wallet redeem amount exceeds eligible bill lines (payment configuration).'
+            );
+          }
+        }
+      }
+    }
     const out = await walletSvc.redeemBalance({
       branchId: req.user.branchId,
       businessModels: req.businessModels,
@@ -211,11 +246,58 @@ router.post('/adjust', authManager, async (req, res) => {
       walletId,
       delta: Number(req.body.delta),
       reason: reason || '',
+      saleId: null,
     });
     return ok(res, { wallet: w }, 'Adjusted');
   } catch (e) {
     const status = e.status || 500;
     logger.error('[client-wallet] adjust', e);
+    return fail(res, status, e.message);
+  }
+});
+
+/** Staff: credit bill overpayment (no physical change) to a client prepaid wallet */
+router.post('/credit-change', authStaff, async (req, res) => {
+  try {
+    const { walletId, amount, saleId, billNo } = req.body;
+    if (!walletId || amount == null) return fail(res, 400, 'walletId and amount are required');
+    const w = await walletSvc.creditChangeReturnFromPos({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+      staffUser: req.user,
+      walletId,
+      amount: Number(amount),
+      saleId: saleId || undefined,
+      billNo: billNo || '',
+    });
+    return ok(res, { wallet: w }, 'Change credited to wallet');
+  } catch (e) {
+    const status = e.status || 500;
+    logger.error('[client-wallet] credit-change', e);
+    return fail(res, status, e.message);
+  }
+});
+
+/** Staff: no wallet yet — open one from an active prepaid plan template and credit bill change */
+router.post('/credit-change-open-wallet', authStaff, async (req, res) => {
+  try {
+    const { clientId, amount, saleId, billNo } = req.body;
+    if (!clientId || amount == null || !saleId) {
+      return fail(res, 400, 'clientId, amount, and saleId are required');
+    }
+    const out = await walletSvc.creditChangeOpenWalletFromPos({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+      staffUser: req.user,
+      clientId: String(clientId),
+      amount: Number(amount),
+      saleId: String(saleId),
+      billNo: billNo || '',
+    });
+    return ok(res, out, 'Wallet opened and change credited');
+  } catch (e) {
+    const status = e.status || 500;
+    logger.error('[client-wallet] credit-change-open-wallet', e);
     return fail(res, status, e.message);
   }
 });

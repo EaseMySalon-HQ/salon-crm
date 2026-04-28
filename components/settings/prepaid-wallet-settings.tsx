@@ -35,6 +35,7 @@ const defaultSettings: ClientWalletSettings = {
   refundPolicy: "service_credit_only",
   minRechargeAmount: 500,
   expiryAlertsEnabled: true,
+  combineMultipleWallets: false,
 }
 
 function statusBadgeClass(status: string) {
@@ -407,6 +408,12 @@ export function PrepaidWalletSettings() {
                   desc: "Reminders at 30, 15, and 7 days before expiry",
                   checked: settings.expiryAlertsEnabled,
                   onChange: (v: boolean) => setSettings((s) => ({ ...s, expiryAlertsEnabled: v })),
+                },
+                {
+                  title: "Combine multiple wallets",
+                  desc: "When on, prepaid balance is shared across wallets at checkout (soonest-expiring debited first). When off, each wallet stays separate.",
+                  checked: settings.combineMultipleWallets,
+                  onChange: (v: boolean) => setSettings((s) => ({ ...s, combineMultipleWallets: v })),
                 },
               ].map((row) => (
                 <div

@@ -12,6 +12,7 @@ import { format } from "date-fns"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
 import { splitLineRevenueByStaff } from "@/lib/staff-line-revenue"
+import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
 
 interface ServiceRow {
   id: string
@@ -346,20 +347,15 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-6">
             <div className="flex flex-wrap items-center gap-3">
-              <Select value={serviceF} onValueChange={controlledFilters?.setServiceFilter ?? setServiceFilter}>
-                <SelectTrigger className="w-44 border-slate-200">
-                  <SelectValue placeholder="Service" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All services</SelectItem>
-                  {servicesList.map((s) => (
-                    <SelectItem key={s._id} value={s._id}>{s.name}</SelectItem>
-                  ))}
-                  {uniqueServiceNames.filter((n) => !servicesList.some((s) => s.name === n)).map((name) => (
-                    <SelectItem key={name} value={name}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ServiceFilterCombobox
+                value={serviceF}
+                onValueChange={controlledFilters?.setServiceFilter ?? setServiceFilter}
+                services={servicesList}
+                extraOptions={uniqueServiceNames
+                  .filter((n) => !servicesList.some((s) => s.name === n))
+                  .map((name) => ({ value: name, label: name }))}
+                triggerClassName="w-44 border-slate-200"
+              />
               <Popover>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="w-44 justify-start text-left font-normal border-slate-200">

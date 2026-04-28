@@ -74,6 +74,7 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   tax: "tax_settings",
   payments: "payment_settings",
   pos: "pos_settings",
+  "reward-points": "pos_settings",
   notifications: "notification_settings",
   "plan-billing": "plan_billing",
   membership: "membership",

@@ -62,6 +62,9 @@ const businessSettingsSchema = new mongoose.Schema({
   exemptProductRate: { type: Number, default: 0 },
   taxCategories: { type: Array, default: [] }, // Array of tax category objects
   priceInclusiveOfTax: { type: Boolean, default: true }, // true = price includes GST, false = GST added on top
+
+  /** Wallet / reward redemption rules at billing (merged with defaults in API). */
+  paymentConfiguration: { type: mongoose.Schema.Types.Mixed, default: undefined },
   
   // Multi-tenant support
   branchId: {
