@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useMemo }
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format } from "date-fns"
-import { Pencil, Eye, ChevronDown, Square, List, Calendar } from "lucide-react"
+import { Pencil, Eye, ChevronDown, Square, List, Calendar, Lock } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -62,6 +62,8 @@ interface Appointment {
   leadSource?: string
   bookingGroupId?: string | null
   prepaidAtBooking?: boolean
+  /** Client preference: keep this stylist */
+  staffLocked?: boolean
 }
 
 function parseTimeToMinutes(time: string): number {
@@ -912,7 +914,7 @@ export const AppointmentsCalendar = forwardRef<
                         onDragEnd={handleCardDragEnd}
                         className={`${getStatusCardFill(appointment.status)} border rounded-lg transition-colors duration-200 overflow-hidden flex flex-col ${
                           isDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
-                        } ${isDragging ? 'opacity-50' : ''}`}
+                        } ${anyAppt.staffLocked === true ? '!border-[3px] !border-amber-600' : ''} ${isDragging ? 'opacity-50' : ''}`}
                         onClick={() => {
                           if (justDropped) return
                           setSelectedAppointment(appointment)
@@ -936,6 +938,15 @@ export const AppointmentsCalendar = forwardRef<
                                     Paid
                                   </Badge>
                                 )}
+                              {anyAppt.staffLocked === true && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] shrink-0 gap-0.5 px-1 border-amber-400 text-amber-900 bg-amber-50"
+                                  title="Staff locked"
+                                >
+                                  <Lock className="h-2.5 w-2.5" />
+                                </Badge>
+                              )}
                             </div>
                             <Badge variant="outline" className={`text-[10px] shrink-0 ${col.timeBadgeClass}`}>
                               {appointment.time}
@@ -1065,7 +1076,15 @@ export const AppointmentsCalendar = forwardRef<
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Stylist Name</div>
-                        <div>{staffName}</div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span>{staffName}</span>
+                          {(a.staffLocked === true) && (
+                            <Badge variant="outline" className="text-[11px] gap-1 border-amber-300 bg-amber-50 text-amber-900">
+                              <Lock className="h-3 w-3" />
+                              Locked
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Payment Status</div>
@@ -1204,7 +1223,11 @@ export const AppointmentsCalendar = forwardRef<
                   return (
                     <Card
                       key={appointment._id}
-                      className="bg-indigo-50/50 border-indigo-200 shadow-lg hover:shadow-xl transition-all duration-300 rounded-2xl cursor-pointer"
+                      className={`bg-indigo-50/50 shadow-lg hover:shadow-xl transition-all duration-300 rounded-2xl cursor-pointer ${
+                        anyAppt.staffLocked === true
+                          ? 'border-[3px] border-amber-600 ring-2 ring-amber-500/80'
+                          : 'border border-indigo-200'
+                      }`}
                       onClick={() => {
                         setSelectedAppointment(appointment)
                         setShowDetails(true)
@@ -1227,6 +1250,16 @@ export const AppointmentsCalendar = forwardRef<
                                   Paid
                                 </Badge>
                               )}
+                            {(anyAppt.staffLocked === true) && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs shrink-0 gap-1 border-amber-400 bg-amber-50 text-amber-900"
+                                title="Client requested this stylist"
+                              >
+                                <Lock className="h-3 w-3" />
+                                Staff locked
+                              </Badge>
+                            )}
                           </div>
                           <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50 shrink-0">
                             {appointment.time}

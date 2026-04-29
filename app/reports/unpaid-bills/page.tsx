@@ -108,7 +108,12 @@ export default function UnpaidBillsPage() {
   }
 
   const handleViewReceipt = (bill: UnpaidBill) => {
-    router.push(`/receipt/${bill.billNo}?returnTo=/reports/unpaid-bills`)
+    if (typeof window === "undefined") return
+    window.open(
+      `/receipt/${bill.billNo}?returnTo=/reports/unpaid-bills`,
+      "_blank",
+      "noopener,noreferrer",
+    )
   }
 
   const handleEditBill = (bill: UnpaidBill) => {

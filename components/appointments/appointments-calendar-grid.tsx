@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2, List, Calendar, AlertCircle } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2, List, Calendar, AlertCircle, Lock } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -66,6 +66,8 @@ interface Appointment {
   leadSource?: string
   bookingGroupId?: string | null
   prepaidAtBooking?: boolean
+  /** Client requested this stylist — show lock on cards */
+  staffLocked?: boolean
 }
 
 interface StaffWorkDay {
@@ -322,6 +324,8 @@ export const AppointmentsCalendarGrid = forwardRef<
     duration: number
     mode: "move" | "resize-top" | "resize-bottom"
     sourceStaffId: string
+    /** Only time/duration may change — never reassign staff */
+    staffLocked?: boolean
   } | null>(null)
   const [updatingTimeForId, setUpdatingTimeForId] = useState<string | null>(null)
   const [dragOffsetY, setDragOffsetY] = useState(0)
@@ -1128,6 +1132,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       duration: getTotalDuration(apt as any),
       mode: "move",
       sourceStaffId,
+      staffLocked: (apt as any).staffLocked === true,
     })
   }
 
@@ -1148,6 +1153,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       duration: getTotalDuration(apt as any),
       mode,
       sourceStaffId,
+      staffLocked: (apt as any).staffLocked === true,
     })
   }
 
@@ -1190,7 +1196,8 @@ export const AppointmentsCalendarGrid = forwardRef<
       justDraggedRef.current = true
       setDragOffsetY(e.clientY - draggingApt.startY)
       if (draggingApt.mode === "move" || draggingApt.mode === "resize-top") {
-        setDragOffsetX(e.clientX - draggingApt.startX)
+        if (draggingApt.staffLocked) setDragOffsetX(0)
+        else setDragOffsetX(e.clientX - draggingApt.startX)
         const el = blocksContainerRef.current
         if (el && columns.length > 0) {
           const rect = el.getBoundingClientRect()
@@ -1199,10 +1206,24 @@ export const AppointmentsCalendarGrid = forwardRef<
           const colIndex = Math.floor(relX / (rect.width / columns.length))
           const slotIndex = Math.floor(relY / slotHeight)
           const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
-          const inBounds = colIndex >= 0 && colIndex < columns.length && slotMinutes >= extendedStartMinutes && slotMinutes < extendedEndMinutes
-          const valid = inBounds && isValidDropTarget(colIndex, slotMinutes, draggingApt.duration ?? 60)
-          if (valid) {
-            const slot = { colIndex, slotMinutes }
+          const dur = draggingApt.duration ?? 60
+          const inBoundsVert =
+            slotMinutes >= extendedStartMinutes && slotMinutes < extendedEndMinutes
+          let valid = false
+          let slotCol = colIndex
+          if (draggingApt.staffLocked) {
+            const sourceIx = columns.findIndex((c) => c._id === draggingApt.sourceStaffId)
+            if (sourceIx >= 0 && inBoundsVert) {
+              valid = isValidDropTarget(sourceIx, slotMinutes, dur)
+              slotCol = sourceIx
+            }
+          } else {
+            const inBounds =
+              colIndex >= 0 && colIndex < columns.length && inBoundsVert
+            valid = inBounds && isValidDropTarget(colIndex, slotMinutes, dur)
+          }
+          if (valid && slotCol >= 0 && slotCol < columns.length) {
+            const slot = { colIndex: slotCol, slotMinutes }
             setDragHoverSlot(slot)
             dragHoverSlotRef.current = slot
           } else {
@@ -1306,7 +1327,9 @@ export const AppointmentsCalendarGrid = forwardRef<
           setTimeout(() => { justDraggedRef.current = false }, 0)
           return
         }
-        if (isStaffChange) {
+        if (isStaffChange && current.staffLocked) {
+          await applyDrop({ mode: "move", newTime: clampedTime })
+        } else if (isStaffChange) {
           await applyDrop({ mode: "staff", newStaffId: targetStaffId!, newTime: clampedTime })
         } else {
           await applyDrop({ mode: "move", newTime: clampedTime })
@@ -1348,7 +1371,9 @@ export const AppointmentsCalendarGrid = forwardRef<
           setTimeout(() => { justDraggedRef.current = false }, 0)
           return
         }
-        if (isStaffChange) {
+        if (isStaffChange && current.staffLocked) {
+          await applyDrop({ mode: "resize-top", newTime: clampedTime })
+        } else if (isStaffChange) {
           await applyDrop({ mode: "staff", newStaffId: targetStaffId!, newTime: clampedTime })
         } else {
           await applyDrop({ mode: "resize-top", newTime: clampedTime })
@@ -2016,7 +2041,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                     const clientName = a?.clientId?.name || "Client"
                     const isDragging = draggingApt?.id === apt._id
                     const isUpdating = updatingTimeForId === apt._id
-                    const canDrag = apt.status !== "cancelled" && apt.status !== "completed"
+                    const staffLockedCard = a.staffLocked === true
+                    const canDrag =
+                      apt.status !== "cancelled" && apt.status !== "completed"
                     const baseHeight = Math.max(slotHeight * 0.6, height)
                     const resizeBottomHeight =
                       isDragging && draggingApt?.mode === "resize-bottom"
@@ -2033,14 +2060,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                       transformParts.push(`translateY(${dragOffsetY}px)`)
                     }
                     const minBlockHeight = Math.max(72, resizeBottomHeight)
-                    const accentColorMap: Record<string, string> = {
-                      scheduled: "bg-amber-500",
-                      arrived: "bg-blue-500",
-                      confirmed: "bg-emerald-500",
-                      service_started: "bg-violet-500",
-                      completed: "bg-emerald-500",
-                      cancelled: "bg-red-500",
-                    }
                     const statusDotColorMap: Record<string, string> = {
                       confirmed: "bg-emerald-500",
                       scheduled: "bg-amber-400",
@@ -2049,7 +2068,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                       completed: "bg-emerald-500",
                       cancelled: "bg-red-500",
                     }
-                    const accentColor = accentColorMap[apt.status] || "bg-slate-500"
                     const statusDotColor = statusDotColorMap[apt.status] || "bg-slate-400"
                     const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(apt as any))
                     const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
@@ -2057,10 +2075,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                       <div
                         data-appointment-card
                         key={apt._id}
-                        className={`group absolute overflow-hidden text-left z-10 pointer-events-auto flex flex-col select-none animate-appointment-card-enter ${
+                        className={`group absolute overflow-hidden rounded-md text-left z-10 pointer-events-auto flex flex-col select-none animate-appointment-card-enter ${
                           isDragging
                             ? "ring-2 ring-violet-400/80 transition-none opacity-40"
-                            : "transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
+                            : staffLockedCard
+                              ? "shadow-[0_0_0_3px_rgb(217,119,6)] transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
+                              : "transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
                         } ${isUpdating ? "opacity-70" : ""}`}
                         style={{
                           top: top,
@@ -2077,11 +2097,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                           if (!isDragging) e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)"
                         }}
                       >
-                        {/* 4px vertical accent strip - full height, rounded */}
-                        <div
-                          className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor} shrink-0`}
-                          aria-hidden
-                        />
                         {/* Drag handle - top */}
                         <div
                           className={`absolute top-0 left-0 right-0 z-20 h-3 flex flex-col items-center justify-center ${canDrag ? "!cursor-grab active:!cursor-grabbing hover:bg-black/[0.06]" : ""}`}
@@ -2089,7 +2104,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                           onMouseDown={(e) => {
                             if (canDrag) handleResizeStart(e, apt, "resize-top")
                           }}
-                          title={canDrag ? "Drag to change start time or reassign staff" : undefined}
+                          title={
+                            staffLockedCard
+                              ? "Drag vertically to change start time (stylist stays fixed)"
+                              : canDrag
+                                ? "Drag to change start time or reassign staff"
+                                : undefined
+                          }
                         >
                           {canDrag && (
                             <div className="pointer-events-none w-6 h-0.5 rounded-full bg-slate-400/50" aria-hidden />
@@ -2097,7 +2118,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                         </div>
                         {/* Main card body */}
                         <div
-                          className={`flex-1 pl-[14px] pr-3 pt-6 pb-4 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+                          className={`relative flex-1 rounded-md pl-[14px] pr-3 pt-6 pb-4 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${
+                            staffLockedCard ? "!border-[3px] !border-amber-600" : ""
+                          } ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
                           onMouseDown={(e) => {
                             if (canDrag) handleTimeDragStart(e, apt)
                           }}
@@ -2109,7 +2132,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                             setSelectedAppointment(apt)
                             setShowDetails(true)
                           }}
-                          title={canDrag ? "Drag to move • Click for details" : "Click to view details"}
+                          title={
+                            staffLockedCard
+                              ? "Drag vertically to move time — staff stays on this column • Click for details"
+                              : canDrag
+                                ? "Drag to move • Click for details"
+                                : "Click to view details"
+                          }
                         >
                           {/* Status dot - 6-8px top-left */}
                           <div
@@ -2140,11 +2169,22 @@ export const AppointmentsCalendarGrid = forwardRef<
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80">
                               {getTotalDuration(apt as any)} min
                             </span>
-                            {a.prepaidAtBooking && apt.status !== "completed" && apt.status !== "cancelled" && (
-                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">
-                                Paid
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1 flex-wrap justify-end shrink-0">
+                              {a.prepaidAtBooking && apt.status !== "completed" && apt.status !== "cancelled" && (
+                                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                                  Paid
+                                </span>
+                              )}
+                              {(a.staffLocked === true) && (
+                                <span
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/90"
+                                  title="Client requested this stylist"
+                                >
+                                  <Lock className="h-3 w-3 shrink-0" aria-hidden />
+                                  Staff locked
+                                </span>
+                              )}
+                            </div>
                           </div>
                           {apt.notes && (
                             <div className="text-slate-400 text-[11px] truncate mt-1.5 italic border-t border-slate-100 pt-1.5">
@@ -2196,15 +2236,25 @@ export const AppointmentsCalendarGrid = forwardRef<
                             </div>
                           )}
                         </div>
-                        {/* Resize handle - bottom */}
+                        {/* Resize handle - bottom (visible on card hover) */}
                         <div
-                          className={`absolute bottom-0 left-0 right-0 z-20 h-4 flex items-center justify-center bg-slate-100/80 ${canDrag ? "hover:bg-slate-200/80 cursor-n-resize active:bg-slate-300/80" : ""}`}
+                          className={`absolute bottom-0 left-0 right-0 z-20 h-4 flex items-center justify-center bg-slate-100/80 ${
+                            canDrag
+                              ? "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150 hover:bg-slate-200/80 cursor-n-resize active:bg-slate-300/80"
+                              : "pointer-events-none opacity-0"
+                          }`}
                           aria-hidden
                           onMouseDown={(e) => {
                             e.stopPropagation()
                             if (canDrag) handleResizeStart(e, apt, "resize-bottom")
                           }}
-                          title={canDrag ? "Drag to extend or shorten duration" : undefined}
+                          title={
+                            staffLockedCard
+                              ? "Drag to change duration"
+                              : canDrag
+                                ? "Drag to extend or shorten duration"
+                                : undefined
+                          }
                         >
                           {canDrag && (
                             <div className="pointer-events-none w-8 h-1 rounded-full bg-slate-400/60" aria-hidden />
@@ -2363,16 +2413,15 @@ export const AppointmentsCalendarGrid = forwardRef<
         const a = apt as any
         const serviceNames = getServiceDisplayNames(a)
         const clientName = a?.clientId?.name || "Client"
-        const accentColorMap: Record<string, string> = {
-          scheduled: "bg-amber-500", arrived: "bg-blue-500", confirmed: "bg-emerald-500",
-          service_started: "bg-violet-500", completed: "bg-slate-400", cancelled: "bg-red-500",
-        }
-        const accentColor = accentColorMap[apt.status] || "bg-slate-500"
         const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(a))
         const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
         return createPortal(
           <div
-            className="fixed z-[9999] overflow-hidden shadow-xl border border-slate-200/80 bg-white pointer-events-none cursor-grabbing"
+            className={`fixed z-[9999] overflow-hidden rounded-md shadow-xl bg-white pointer-events-none cursor-grabbing ${
+              a.staffLocked === true
+                ? "border-[3px] border-amber-600 ring-2 ring-amber-500/90"
+                : "border border-slate-200/80"
+            }`}
             style={{
               left: dragStartRect.left + dragOffsetX,
               top: dragStartRect.top + dragOffsetY,
@@ -2380,7 +2429,6 @@ export const AppointmentsCalendarGrid = forwardRef<
               height: dragStartRect.height,
             }}
           >
-            <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor}`} />
             <div className="pl-[14px] pr-3 pt-6 pb-3 h-full flex flex-col justify-center">
               <div className="font-semibold text-slate-800 text-[14px] truncate">{clientName}</div>
               {serviceNames.length === 1 ? (
@@ -2397,6 +2445,12 @@ export const AppointmentsCalendarGrid = forwardRef<
               <span className="inline-flex mt-2 px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80 w-fit">
                 {getTotalDuration(a)} min
               </span>
+              {(a.staffLocked === true) && (
+                <span className="inline-flex mt-1.5 items-center gap-1 text-[11px] font-semibold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/90 w-fit">
+                  <Lock className="h-3 w-3" aria-hidden />
+                  Staff locked
+                </span>
+              )}
             </div>
           </div>,
           document.body
@@ -2602,7 +2656,19 @@ export const AppointmentsCalendarGrid = forwardRef<
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Stylist Name</div>
-                        <div>{staffName}</div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span>{staffName}</span>
+                          {(a.staffLocked === true) && (
+                            <Badge
+                              variant="outline"
+                              className="text-[11px] font-semibold gap-1 border-amber-300 bg-amber-50 text-amber-900"
+                              title="Client requested this stylist"
+                            >
+                              <Lock className="h-3 w-3" />
+                              Locked
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Payment Status</div>

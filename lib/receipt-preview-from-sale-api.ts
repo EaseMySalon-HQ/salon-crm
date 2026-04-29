@@ -91,5 +91,10 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
           ? "cancelled"
           : "completed",
     invoiceDeleted: saleData.invoiceDeleted === true,
+    billChangeCreditedToWallet:
+      saleData.billChangeCreditedToWallet != null &&
+      Number(saleData.billChangeCreditedToWallet) > 0.005
+        ? Number(saleData.billChangeCreditedToWallet)
+        : undefined,
   } as Receipt
 }

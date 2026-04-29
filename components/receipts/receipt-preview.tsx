@@ -2,7 +2,7 @@
 
 import { useEffect } from "react"
 import type { Receipt } from "@/lib/data"
-import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
+import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
@@ -23,9 +23,8 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
     console.log('🔍 ReceiptPreview - payments:', receipt.payments)
   }, [receipt])
   
-  const total = getReceiptGrandTotal(receipt)
-  const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
-  const outstanding = total - totalPaid
+  const settlement = getReceiptSettlementSummary(receipt)
+  const total = settlement.billTotal
   const stamp = getReceiptPaymentStamp(receipt as any, total)
   const paymentStatus = stamp.label
   const stampColor = stamp.color
@@ -240,25 +239,36 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
           )}
           <div className="flex justify-between font-bold text-lg border-t-2 border-black pt-2 mt-2">
             <span>TOTAL:</span>
-            <span className="tabular-nums">{formatAmount(getReceiptGrandTotal(receipt))}</span>
+            <span className="tabular-nums">{formatAmount(settlement.billTotal)}</span>
           </div>
-          {(() => {
-            const total = getReceiptGrandTotal(receipt)
-            const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
-            const outstanding = total - totalPaid
-            return (
-              <>
-                <div className="flex justify-between text-sm mt-2">
-                  <span>Total Paid:</span>
-                  <span>{formatAmount(totalPaid)}</span>
+          {settlement.showReceivedAndAdjusted && (
+            <div className="space-y-1 text-sm mt-3 pt-1 border-t border-dashed border-black/30">
+              <div className="flex justify-between">
+                <span>Amount Received:</span>
+                <span className="tabular-nums">{formatAmount(settlement.amountReceived)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Adjusted:</span>
+                <span className="tabular-nums">{formatAmount(settlement.paidTowardBill)}</span>
+              </div>
+              {settlement.showWalletCreditLine && (
+                <div className="flex justify-between">
+                  <span>Wallet Credit:</span>
+                  <span className="tabular-nums">{formatAmount(settlement.walletCredit)}</span>
                 </div>
-                <div className={`flex justify-between text-sm mt-1 ${outstanding > 0 ? "text-red-600 font-medium" : ""}`}>
+              )}
+              {settlement.showOutstandingLine && (
+                <div className="flex justify-between text-red-600 font-medium">
                   <span>Outstanding:</span>
-                  <span>{formatAmount(outstanding)}</span>
+                  <span className="tabular-nums">{formatAmount(settlement.outstanding)}</span>
                 </div>
-              </>
-            )
-          })()}
+              )}
+            </div>
+          )}
+          <div className="flex justify-between text-sm mt-3 font-semibold pt-2 border-t border-black/20">
+            <span>Total Paid (Bill):</span>
+            <span className="tabular-nums">{formatAmount(settlement.paidTowardBill)}</span>
+          </div>
         </div>
 
         {/* Payments */}

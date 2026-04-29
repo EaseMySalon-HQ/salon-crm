@@ -277,17 +277,24 @@ export function SalesReport() {
   /** Ref for sales list: reset page when filter key changes (avoids stale page + fetch race). */
   const prevSalesFilterKeyRef = useRef<string | null>(null)
 
-  // Function to navigate to receipt page (Back restores tab + report type, e.g. Deleted Invoice)
+  const openReceiptInNewTab = (path: string) => {
+    if (typeof window === "undefined") return
+    window.open(path, "_blank", "noopener,noreferrer")
+  }
+
+  /** Open receipt in a new tab (keeps Reports open). */
   const handleViewReceipt = (sale: SalesRecord) => {
-    router.push(`/receipt/${sale.billNo}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
+    openReceiptInNewTab(`/receipt/${sale.billNo}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
   }
 
   const navigateToReceiptByBillNo = useCallback(
     (billNo: string) => {
       if (!billNo?.trim()) return
-      router.push(`/receipt/${encodeURIComponent(billNo.trim())}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
+      openReceiptInNewTab(
+        `/receipt/${encodeURIComponent(billNo.trim())}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`,
+      )
     },
-    [router, buildReportsReturnPath],
+    [buildReportsReturnPath],
   )
 
   const handleEditBill = (sale: SalesRecord) => {
@@ -946,6 +953,8 @@ export function SalesReport() {
       ? "Cash payments only"
       : paymentFilter === "Cash"
         ? "Filtered: Cash only"
+        : paymentFilter === "Wallet"
+          ? "Filtered: bills with prepaid wallet payment"
         : "All cash payments"
   const onlineCashCollectedTooltip =
     paymentFilter === "all"
@@ -954,7 +963,9 @@ export function SalesReport() {
         ? "Filtered: Card only"
         : paymentFilter === "Online"
           ? "Filtered: Online only"
-          : "All online payments"
+        : paymentFilter === "Wallet"
+          ? "Filtered: bills with prepaid wallet payment"
+        : "All online payments"
 
   const salesStatSkeleton = <div className="h-8 w-24 max-w-full bg-slate-200 rounded animate-pulse" aria-hidden />
 
@@ -1648,6 +1659,7 @@ export function SalesReport() {
                       <SelectItem value="Cash">Cash</SelectItem>
                       <SelectItem value="Card">Card</SelectItem>
                       <SelectItem value="Online">Online</SelectItem>
+                      <SelectItem value="Wallet">Wallet</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -1827,6 +1839,7 @@ export function SalesReport() {
                       <SelectItem value="Cash">Cash</SelectItem>
                       <SelectItem value="Card">Card</SelectItem>
                       <SelectItem value="Online">Online</SelectItem>
+                      <SelectItem value="Wallet">Wallet</SelectItem>
                     </SelectContent>
                   </Select>
                 </>
@@ -1925,6 +1938,7 @@ export function SalesReport() {
                       <SelectItem value="Cash">Cash</SelectItem>
                       <SelectItem value="Card">Card</SelectItem>
                       <SelectItem value="Online">Online</SelectItem>
+                      <SelectItem value="Wallet">Wallet</SelectItem>
                     </SelectContent>
                   </Select>
                 </>
@@ -2437,8 +2451,8 @@ export function SalesReport() {
                                   type="button"
                                   onClick={() => {
                                     const dataStr = encodeURIComponent(JSON.stringify(receiptData))
-                                    router.push(
-                                      `/receipt/${encodeURIComponent(row.billNo || bill.billNo)}?data=${dataStr}&returnTo=${encodeURIComponent(buildReportsReturnPath())}`
+                                    openReceiptInNewTab(
+                                      `/receipt/${encodeURIComponent(row.billNo || bill.billNo)}?data=${dataStr}&returnTo=${encodeURIComponent(buildReportsReturnPath())}`,
                                     )
                                   }}
                                   className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium text-left"

@@ -124,6 +124,14 @@ const appointmentSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  /**
+   * Client has requested this stylist for this booking — salon should prefer not to reassign.
+   * Stored per appointment row (each card in a booking group may differ).
+   */
+  staffLocked: {
+    type: Boolean,
+    default: false,
+  },
   /** Timestamp when WhatsApp reminder was sent — used to prevent duplicate sends */
   reminderSentAt: {
     type: Date,

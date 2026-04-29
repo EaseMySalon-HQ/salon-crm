@@ -411,6 +411,7 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
                   <SelectItem value="Cash">Cash</SelectItem>
                   <SelectItem value="Card">Card</SelectItem>
                   <SelectItem value="Online">Online</SelectItem>
+                  <SelectItem value="Wallet">Wallet</SelectItem>
                 </SelectContent>
               </Select>
             </div>

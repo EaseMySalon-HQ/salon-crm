@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, Loader2, Receipt, Calendar as CalendarIcon } from "lucide-react"
+import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, Loader2, Receipt, Calendar as CalendarIcon, Lock, LockOpen } from "lucide-react"
 import { format, isBefore, startOfDay } from "date-fns"
 import { DayPicker } from "react-day-picker"
 
@@ -122,6 +122,8 @@ interface SelectedService {
   name: string
   duration: number
   price: number
+  /** Client requested this stylist; shown on calendar cards */
+  staffLocked?: boolean
 }
 
 interface ServiceDropdownState {
@@ -379,7 +381,15 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const staffIdVal = a.staffId?._id || a.staffId || (a.staffAssignments?.[0]?.staffId?._id ?? a.staffAssignments?.[0]?.staffId)
 
         // Build selectedServices: multi-staff group OR primary+additional (same staff)
-        let servicesToShow: Array<{ id: string; serviceId: string; staffId: string; name: string; duration: number; price: number }> = []
+        let servicesToShow: Array<{
+          id: string
+          serviceId: string
+          staffId: string
+          name: string
+          duration: number
+          price: number
+          staffLocked?: boolean
+        }> = []
         const related = (res as any).relatedAppointments as any[] | undefined
 
         const nonCancelledRelated = (related ?? []).filter((r: any) => r.status !== "cancelled")
@@ -401,6 +411,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               name: (typeof s === "object" && s?.name) || "Service",
               duration: apt.duration ?? (typeof s === "object" && s?.duration) ?? 60,
               price: apt.price ?? (typeof s === "object" && s?.price) ?? 0,
+              staffLocked: !!apt.staffLocked,
             }
           })
         } else if (a.additionalServices && a.additionalServices.length > 0) {
@@ -417,6 +428,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: (typeof svc === "object" && svc?.name) || "Service",
             duration: (typeof svc === "object" && svc?.duration) ?? a.duration ?? 60,
             price: primaryPrice || ((typeof svc === "object" && svc?.price) ?? 0),
+            staffLocked: !!a.staffLocked,
           }
           const additional = (a.additionalServices as any[]).map((s: any, idx: number) => ({
             id: `additional-${idx}`,
@@ -425,6 +437,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: s?.name || "Service",
             duration: s?.duration ?? 60,
             price: s?.price ?? 0,
+            staffLocked: !!a.staffLocked,
           }))
           servicesToShow = [primary, ...additional]
         } else {
@@ -435,6 +448,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: (typeof svc === "object" && svc?.name) || "Service",
             duration: a.duration ?? (typeof svc === "object" && svc?.duration) ?? 60,
             price: a.price ?? (typeof svc === "object" && svc?.price) ?? 0,
+            staffLocked: !!a.staffLocked,
           }]
         }
 
@@ -734,6 +748,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       name: "",
       duration: 0,
       price: 0,
+      staffLocked: false,
     }
     setSelectedServices([...selectedServices, newService])
   }
@@ -758,6 +773,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               updatedService.duration = selectedService.duration
               updatedService.price = selectedService.price
             }
+          }
+          if (field === "staffId" && !value) {
+            updatedService.staffLocked = false
           }
           
           return updatedService
@@ -906,6 +924,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             price: totalPrice,
             leadSource: leadSourceValue || "",
             notes: values.notes,
+            staffLocked: selectedServices.some((s) => s.staffLocked),
           })
           if (!updateRes?.success) {
             toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -946,6 +965,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               price: s.price,
               leadSource: leadSourceValue || "",
               notes: values.notes,
+              staffLocked: !!s.staffLocked,
             })
             if (!updateRes?.success) {
               toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -967,6 +987,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               price: originalService.price,
               leadSource: leadSourceValue || "",
               notes: values.notes,
+              staffLocked: !!originalService.staffLocked,
             })
             if (!updateRes?.success) {
               toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -1005,6 +1026,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               name: s.name,
               duration: s.duration,
               price: s.price,
+              staffLocked: !!s.staffLocked,
             })),
             totalDuration: newServicesDifferentStaff.reduce((sum, s) => sum + (s.duration || 0), 0),
             totalAmount: newServicesDifferentStaff.reduce((sum, s) => sum + (s.price || 0), 0),
@@ -1033,6 +1055,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: service.name,
             duration: service.duration,
             price: service.price,
+            staffLocked: !!service.staffLocked,
           })),
           totalDuration: calculateTotalDuration(),
           totalAmount: calculateTotalAmount(),
@@ -1400,6 +1423,36 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           )}
                         </SelectContent>
                       </Select>
+                      <Button
+                        type="button"
+                        variant={service.staffLocked ? "secondary" : "ghost"}
+                        size="sm"
+                        className={cn(
+                          "h-9 w-9 shrink-0 p-0 border border-transparent",
+                          service.staffLocked
+                            ? "text-amber-800 bg-amber-100/90 border-amber-300 hover:bg-amber-100"
+                            : "text-slate-400 hover:text-amber-700 hover:bg-amber-50 border-slate-200"
+                        )}
+                        disabled={!service.staffId}
+                        title={
+                          service.staffLocked
+                            ? "Client requested this stylist — staff locked"
+                            : service.staffId
+                              ? "Mark: client requests this stylist only"
+                              : "Select a stylist first"
+                        }
+                        aria-pressed={!!service.staffLocked}
+                        onClick={() =>
+                          service.staffId &&
+                          updateService(service.id, "staffLocked", !service.staffLocked)
+                        }
+                      >
+                        {service.staffLocked ? (
+                          <Lock className="h-4 w-4" aria-hidden />
+                        ) : (
+                          <LockOpen className="h-4 w-4" aria-hidden />
+                        )}
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"

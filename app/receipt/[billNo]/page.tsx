@@ -57,6 +57,8 @@ interface ReceiptData {
     productTaxByRate: { [rate: string]: number }
   }
   shareToken?: string
+  /** Excess cash credited to prepaid wallet (POS); amount in ₹ */
+  billChangeCreditedToWallet?: number
 }
 
 export default function ReceiptPage() {
@@ -163,7 +165,12 @@ export default function ReceiptPage() {
               invoiceDeleted: frontendData.invoiceDeleted === true,
               // Include taxBreakdown for correct tax display
               taxBreakdown: frontendData.taxBreakdown,
-              shareToken: frontendData.shareToken
+              shareToken: frontendData.shareToken,
+              billChangeCreditedToWallet:
+                typeof frontendData.billChangeCreditedToWallet === "number" &&
+                frontendData.billChangeCreditedToWallet > 0.005
+                  ? frontendData.billChangeCreditedToWallet
+                  : undefined,
             }
             
             console.log('🔍 Frontend receipt data:', receiptData)
@@ -246,7 +253,12 @@ export default function ReceiptPage() {
                 serviceRate: saleData.taxBreakdown.serviceRate ?? 5,
                 productTaxByRate: saleData.taxBreakdown.productTaxByRate || {}
               } : undefined,
-              shareToken: saleData.shareToken
+              shareToken: saleData.shareToken,
+              billChangeCreditedToWallet:
+                saleData.billChangeCreditedToWallet != null &&
+                Number(saleData.billChangeCreditedToWallet) > 0.005
+                  ? Number(saleData.billChangeCreditedToWallet)
+                  : undefined,
             }
             
             console.log('🔍 Final receipt data from API:', receiptData)
@@ -385,7 +397,8 @@ ${publicUrl}`
       })),
       staffId: "",
       staffName: receipt.staffName,
-      notes: ""
+      notes: "",
+      billChangeCreditedToWallet: receipt.billChangeCreditedToWallet,
     }
 
     const { printThermalReceipt } = ThermalReceiptGenerator({ 
@@ -512,6 +525,7 @@ ${publicUrl}`
               taxBreakdown: receipt.taxBreakdown,
               status: receipt.status,
               invoiceDeleted: receipt.invoiceDeleted,
+              billChangeCreditedToWallet: receipt.billChangeCreditedToWallet,
             }} 
             businessSettings={businessSettings} 
           />
