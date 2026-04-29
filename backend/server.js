@@ -572,7 +572,7 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
       updatedAt: new Date()
     });
 
-    const accessToken = await issueTenantSession(res, user);
+    await issueTenantSession(res, user);
     const csrfToken = setCsrfCookie(res);
     const { password: _, ...userWithoutPassword } = user.toObject();
 
@@ -614,7 +614,6 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
       success: true,
       data: {
         user: { ...userWithoutPassword, ...suspensionMeta },
-        token: accessToken,   // JWT for mobile Bearer auth
         csrfToken,
       }
     });
