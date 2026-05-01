@@ -20,6 +20,7 @@ import {
   Wrench,
   Package,
   BarChart2,
+  MessageCircle,
   Zap,
   Scissors,
   FolderTree,
@@ -45,6 +46,7 @@ import { PlanBilling } from "./plan-billing"
 import { MembershipPlansTable } from "@/components/membership/membership-plans-table"
 import { PackagesSettingsPanel } from "@/components/packages/PackagesSettingsPanel"
 import { ChannelUsageSettings } from "./channel-usage-settings"
+import { WhatsAppBusinessSettings } from "./whatsapp-business-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { RewardPointsProgramSettings } from "./reward-points-settings"
@@ -74,6 +76,7 @@ const SETTINGS_SECTION_IDS = [
   "products",
   "packages",
   "channel-usage",
+  "whatsapp-integration",
   "recharge",
   "prepaid-wallet",
   "reward-points",
@@ -225,6 +228,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "Email, SMS, and reminder preferences for your team and clients.",
         icon: Bell,
         searchTerms: ["alerts", "reminders", "email"],
+      },
+      {
+        id: "whatsapp-integration",
+        title: "WhatsApp Integration",
+        description: "Connect WhatsApp Business, templates, and client message preferences.",
+        icon: MessageCircle,
+        searchTerms: ["whatsapp", "meta", "business api", "messaging"],
       },
       {
         id: "channel-usage",
@@ -429,6 +439,8 @@ export function SettingsPage() {
         )
       case "packages":
         return <PackagesSettingsPanel />
+      case "whatsapp-integration":
+        return <WhatsAppBusinessSettings />
       case "channel-usage":
         return <ChannelUsageSettings />
       case "recharge":

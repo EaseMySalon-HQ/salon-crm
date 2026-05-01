@@ -8,7 +8,7 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from "@tanstack/react-table"
-import { MoreHorizontal, Pencil, Trash2, User, Phone, Mail, Calendar, TrendingUp, Eye, Receipt, Upload, Edit, RefreshCw } from "lucide-react"
+import { MoreHorizontal, Pencil, Trash2, User, Phone, Mail, Calendar, TrendingUp, Eye, Receipt, Upload, Edit, RefreshCw, MessageCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -48,6 +48,12 @@ interface Client {
   totalVisits?: number
   totalSpent?: number
   createdAt?: string
+  whatsappConsent?: {
+    optedIn?: boolean
+    source?: string | null
+    optedInAt?: string | null
+    optedOutAt?: string | null
+  }
   // Real-time calculated fields
   realTotalVisits?: number
   realTotalSpent?: number
@@ -299,13 +305,24 @@ export function ClientsTable({ clients }: ClientsTableProps) {
               <User className="h-5 w-5 text-white" />
             </div>
             <div className="flex flex-col">
-              <button
-                type="button"
-                onClick={() => openClientDetailsDrawer(client)}
-                className="font-semibold text-gray-900 hover:text-indigo-600 transition-colors duration-200 text-left"
-              >
-                {client.name}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openClientDetailsDrawer(client)}
+                  className="font-semibold text-gray-900 hover:text-indigo-600 transition-colors duration-200 text-left"
+                >
+                  {client.name}
+                </button>
+                {client.whatsappConsent?.optedIn && (
+                  <Badge
+                    variant="secondary"
+                    className="px-2 py-0.5 text-[10px] font-medium bg-emerald-50 text-emerald-700 border-emerald-200"
+                  >
+                    <MessageCircle className="h-3 w-3 mr-1" />
+                    WhatsApp
+                  </Badge>
+                )}
+              </div>
               <div className="flex items-center space-x-4 text-xs text-gray-500 mt-1">
                 <span className="flex items-center space-x-1">
                   <Phone className="h-3 w-3" />

@@ -5,13 +5,14 @@ import { useRouter } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { User, Mail, Phone, Calendar, MapPin, FileText, Users, Loader2 } from "lucide-react"
+import { User, Mail, Phone, Calendar, MapPin, FileText, Users, Loader2, MessageCircle } from "lucide-react"
 import { clientStore, type Client } from "@/lib/client-store"
 import { Button } from "@/components/ui/button"
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Switch } from "@/components/ui/switch"
 import { Card, CardContent } from "@/components/ui/card"
 import { toast } from "@/components/ui/use-toast"
 
@@ -66,6 +67,8 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
       required_error: "Please select a gender.",
     }),
     birthdate: z.string().optional(),
+    whatsappOptedIn: z.boolean().optional(),
+    whatsappOptInReason: z.string().max(500).optional(),
   })
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -79,6 +82,8 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
       notes: "",
       gender: "female" as const,
       birthdate: "",
+      whatsappOptedIn: false,
+      whatsappOptInReason: "",
     },
   })
 
@@ -95,6 +100,8 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
         notes: client.notes || "",
         gender: (client.gender as "male" | "female" | "other") || "female",
         birthdate: client.birthdate || "",
+        whatsappOptedIn: Boolean(client.whatsappConsent?.optedIn),
+        whatsappOptInReason: client.whatsappConsent?.optInReason || "",
       })
     }
   }, [client, form])
@@ -103,6 +110,19 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
     setIsSubmitting(true)
 
     try {
+      const previousOptedIn = Boolean(client?.whatsappConsent?.optedIn)
+      const desiredOptedIn = Boolean(values.whatsappOptedIn)
+
+      const whatsappConsent =
+        previousOptedIn === desiredOptedIn
+          ? client?.whatsappConsent
+          : {
+              optedIn: desiredOptedIn,
+              source: "staff" as const,
+              optInReason: desiredOptedIn ? values.whatsappOptInReason || "Manual update via client form" : null,
+              optOutReason: desiredOptedIn ? null : values.whatsappOptInReason || "Manual update via client form",
+            }
+
       const clientData = {
         id: client?.id || '',
         name: `${values.firstName} ${values.lastName}`,
@@ -116,6 +136,7 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
         totalVisits: client?.totalVisits || 0,
         totalSpent: client?.totalSpent || 0,
         createdAt: client?.createdAt || new Date().toISOString(),
+        whatsappConsent,
       }
 
       let success = false
@@ -150,11 +171,15 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
           variant: "destructive",
         })
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(`Error ${client ? 'updating' : 'creating'} client:`, error)
+      const message =
+        error?.message ||
+        error?.response?.data?.error ||
+        "An unexpected error occurred. Please try again."
       toast({
         title: "Error",
-        description: "An unexpected error occurred. Please try again.",
+        description: message,
         variant: "destructive",
       })
     } finally {
@@ -418,6 +443,62 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
                   </FormItem>
                 )}
               />
+            </div>
+
+            {/* WhatsApp marketing consent */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-100 rounded-lg">
+                  <MessageCircle className="h-5 w-5 text-emerald-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">WhatsApp marketing</h3>
+                  <p className="text-xs text-slate-500">Required before sending WhatsApp campaigns to this client.</p>
+                </div>
+              </div>
+
+              <FormField
+                control={form.control}
+                name="whatsappOptedIn"
+                render={({ field }) => (
+                  <FormItem className="rounded-xl border border-slate-200 bg-white p-4 flex items-start justify-between gap-4">
+                    <div className="space-y-1">
+                      <FormLabel className="text-sm font-medium text-slate-800">Opt in for WhatsApp marketing</FormLabel>
+                      <FormDescription className="text-xs text-slate-500">
+                        Salon staff confirms the client has agreed to receive WhatsApp messages. Replies of STOP / UNSUBSCRIBE auto opt-out.
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={Boolean(field.value)}
+                        onCheckedChange={field.onChange}
+                        disabled={isViewMode}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+
+              {form.watch("whatsappOptedIn") && (
+                <FormField
+                  control={form.control}
+                  name="whatsappOptInReason"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-sm font-medium text-slate-700">Consent note (recorded in audit log)</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="e.g. confirmed verbally during checkout"
+                          className="h-11 border-slate-200 focus:border-indigo-500 focus:ring-indigo-500 rounded-xl"
+                          {...field}
+                          disabled={isViewMode}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
             </div>
 
             {/* Action buttons: only for "new client" — existing clients use Save/Cancel in ClientDetailsPage toolbar (form id="client-form") */}

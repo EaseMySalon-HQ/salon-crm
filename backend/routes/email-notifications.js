@@ -1686,7 +1686,7 @@ router.get('/whatsapp/status', authenticateToken, setupMainDatabase, async (req,
         addonQuota,
         addonUsed,
         addonRemaining,
-        canUse: adminConfigured && addonEnabled && addonRemaining > 0,
+        canUse: adminConfigured && addonEnabled,
         provider: whatsappConfig.provider || 'msg91'
       }
     });

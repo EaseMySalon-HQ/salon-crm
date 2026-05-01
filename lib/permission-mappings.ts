@@ -20,7 +20,6 @@
  * /appointments, /appointments/new, /appointments/[id]/edit → appointments
  * /clients, /clients/new, /clients/[id] → clients
  * /leads → lead_management
- * /campaigns → campaigns
  * /services, /services/new → services
  * /products, /products/new → products
  * /cash-registry → cash_registry
@@ -32,7 +31,8 @@
  * === SETTINGS SECTION ID → MODULE ===
  * general → general_settings, business → business_settings, appointments → appointment_settings,
  * currency → currency_settings, tax → tax_settings, payments → payment_settings,
- * pos → pos_settings, notifications → notification_settings, plan-billing → plan_billing
+ * pos → pos_settings, notifications → notification_settings, whatsapp-integration → notification_settings,
+ * plan-billing → plan_billing
  */
 
 // Sidebar/route: permission module for page-level access (check "view" feature)
@@ -46,7 +46,9 @@ export const ROUTE_PERMISSION_MAP: Record<string, string> = {
   "/appointments": "appointments",
   "/clients": "clients",
   "/leads": "lead_management",
-  "/campaigns": "campaigns",
+  "/whatsapp/templates": "campaigns",
+  "/whatsapp/campaigns": "campaigns",
+  "/whatsapp/inbox": "campaigns",
   "/membership": "membership",
   "/packages": "packages",
   "/packages/new": "packages",
@@ -83,6 +85,7 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   services: "services",
   products: "products",
   "channel-usage": "notification_settings",
+  "whatsapp-integration": "notification_settings",
   recharge: "plan_billing",
 }
 

@@ -7,6 +7,8 @@
  */
 
 const { logger } = require('../utils/logger');
+const databaseManager = require('../config/database-manager');
+const { getAddonStatus } = require('../lib/entitlements');
 const emailService = require('./email-service');
 const smsService = require('./sms-service');
 const whatsappService = require('./whatsapp-service');
@@ -59,6 +61,16 @@ async function sendPackageNotification(
   }
 
   const message = messageBuilder(clientName, packageName, salonName);
+
+  let businessAddonLean = null;
+  try {
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    businessAddonLean = await Business.findById(clientPackage.branchId).select('plan.addons').lean();
+  } catch (e) {
+    logger.warn('[PackageNotification] Could not load business for addon check:', e.message);
+  }
+
   const channels = ['SMS', 'EMAIL', 'WHATSAPP'];
 
   for (const channel of channels) {
@@ -74,7 +86,9 @@ async function sendPackageNotification(
     try {
       if (channel === 'SMS' && client.phone) {
         await smsService.initialize();
-        if (smsService.enabled) {
+        if (!businessAddonLean || !getAddonStatus(businessAddonLean, 'sms').enabled) {
+          await PackageNotificationModel.findByIdAndUpdate(log._id, { status: 'FAILED' });
+        } else if (smsService.enabled) {
           await smsService.sendRaw(client.phone, message);
           await PackageNotificationModel.findByIdAndUpdate(log._id, {
             status: 'SENT',
@@ -101,7 +115,9 @@ async function sendPackageNotification(
         }
       } else if (channel === 'WHATSAPP' && client.phone) {
         await whatsappService.initialize();
-        if (whatsappService.enabled) {
+        if (!businessAddonLean || !getAddonStatus(businessAddonLean, 'whatsapp').enabled) {
+          await PackageNotificationModel.findByIdAndUpdate(log._id, { status: 'FAILED' });
+        } else if (whatsappService.enabled) {
           await whatsappService.sendMessage(client.phone, message);
           await PackageNotificationModel.findByIdAndUpdate(log._id, {
             status: 'SENT',

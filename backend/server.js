@@ -140,6 +140,18 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
+/**
+ * Provider webhooks (Meta WhatsApp, etc.) authenticate via HMAC over the
+ * exact bytes Meta sent — `X-Hub-Signature-256`. They MUST receive the raw
+ * body, so the raw parser is mounted BEFORE express.json(); otherwise the
+ * global JSON parser turns req.body into a parsed Object and the HMAC
+ * verification crashes on `Hmac.update(<Object>)`.
+ */
+app.use(
+  '/api/webhooks/whatsapp/meta',
+  express.raw({ type: 'application/json', limit: '2mb' })
+);
+
 // Body + cookies before rate limiters so auth routes can key off JSON (email, etc.)
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
@@ -317,6 +329,16 @@ app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
+app.use('/api/whatsapp/meta', require('./routes/whatsapp-meta'));
+app.use('/api/whatsapp/v2/templates', require('./routes/whatsapp-templates'));
+app.use('/api/whatsapp/v2/campaigns', require('./routes/whatsapp-campaigns'));
+app.use('/api/whatsapp/v2/messages', require('./routes/whatsapp-messages'));
+app.use('/api/whatsapp/v2/inbox', require('./routes/whatsapp-inbox'));
+app.use('/api/webhooks/whatsapp/meta', require('./routes/whatsapp-webhook'));
+app.use(
+  '/api/admin/whatsapp-meta-config',
+  require('./routes/admin-whatsapp-meta-config')
+);
 app.use('/api/channel-usage', require('./routes/channel-usage'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/client-wallet', require('./routes/client-wallet'));
@@ -2317,7 +2339,7 @@ app.post(
   validate(createClientBodySchema),
   async (req, res) => {
   try {
-    const { name, email, phone, address, notes } = req.body;
+    const { name, email, phone, address, notes, whatsappConsent } = req.body;
 
     if (!name || !phone) {
       return res.status(400).json({
@@ -2338,6 +2360,13 @@ app.post(
       });
     }
 
+    const { normaliseConsentUpdate, recordConsentEvent } = require('./lib/client-consent');
+    const consentResult = normaliseConsentUpdate({
+      existing: null,
+      incoming: whatsappConsent,
+      actor: { actorType: 'staff', actorId: req.user._id },
+    });
+
     const newClient = new Client({
       name,
       email,
@@ -2347,10 +2376,28 @@ app.post(
       status: 'active',
       totalVisits: 0,
       totalSpent: 0,
-      branchId: req.user.branchId
+      branchId: req.user.branchId,
+      whatsappConsent: consentResult.next || undefined,
     });
 
     const savedClient = await newClient.save();
+
+    if (consentResult.changed && consentResult.event) {
+      recordConsentEvent({
+        tenantConnection: req.businessConnection,
+        branchId: req.user.branchId,
+        clientId: savedClient._id,
+        channel: 'whatsapp',
+        event: consentResult.event,
+        source: consentResult.next?.source || 'staff',
+        actorType: 'staff',
+        actorId: req.user._id,
+        reason:
+          consentResult.event === 'opt_in'
+            ? consentResult.next?.optInReason
+            : consentResult.next?.optOutReason,
+      }).catch((err) => logger.warn('Consent event log failed:', err?.message));
+    }
 
     scheduleActivityLog(
       {
@@ -2389,7 +2436,7 @@ app.put(
   async (req, res) => {
   try {
     const { Client } = req.businessModels;
-    const { phone } = req.body;
+    const { phone, whatsappConsent } = req.body;
     
     // If phone number is being updated, check for duplicates
     if (phone) {
@@ -2405,9 +2452,22 @@ app.put(
       }
     }
 
+    const { normaliseConsentUpdate, recordConsentEvent } = require('./lib/client-consent');
+    const updatePayload = { ...req.body };
+    let consentResult = null;
+    if (whatsappConsent !== undefined) {
+      const previous = await Client.findById(req.params.id).select('whatsappConsent').lean();
+      consentResult = normaliseConsentUpdate({
+        existing: previous?.whatsappConsent || null,
+        incoming: whatsappConsent,
+        actor: { actorType: 'staff', actorId: req.user._id },
+      });
+      updatePayload.whatsappConsent = consentResult.next;
+    }
+
     const updatedClient = await Client.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      updatePayload,
       { new: true, runValidators: true }
     );
 
@@ -2416,6 +2476,23 @@ app.put(
         success: false,
         error: 'Client not found'
       });
+    }
+
+    if (consentResult && consentResult.changed && consentResult.event) {
+      recordConsentEvent({
+        tenantConnection: req.businessConnection,
+        branchId: req.user.branchId,
+        clientId: updatedClient._id,
+        channel: 'whatsapp',
+        event: consentResult.event,
+        source: consentResult.next?.source || 'staff',
+        actorType: 'staff',
+        actorId: req.user._id,
+        reason:
+          consentResult.event === 'opt_in'
+            ? consentResult.next?.optInReason
+            : consentResult.next?.optOutReason,
+      }).catch((err) => logger.warn('Consent event log failed:', err?.message));
     }
 
     scheduleActivityLog(
@@ -15004,6 +15081,24 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   // Setup WhatsApp appointment reminder cron job (every 30 min)
   const { setupAppointmentReminderJob } = require('./jobs/appointment-reminder');
   setupAppointmentReminderJob();
+
+  // WhatsApp Business module: token rotation + metadata refresh (24h)
+  try {
+    const { start: startWaTokenRotation } = require('./jobs/whatsapp-token-rotation');
+    startWaTokenRotation();
+    logger.debug('⏰ WhatsApp token rotation job scheduled');
+  } catch (err) {
+    logger.warn('⚠️  WhatsApp token rotation could not be scheduled:', err?.message || err);
+  }
+
+  // WhatsApp campaign scheduler: polls every minute for due campaigns.
+  try {
+    const { start: startWaCampaignScheduler } = require('./jobs/whatsapp-campaign-scheduler');
+    startWaCampaignScheduler();
+    logger.debug('⏰ WhatsApp campaign scheduler started');
+  } catch (err) {
+    logger.warn('⚠️  WhatsApp campaign scheduler could not be started:', err?.message || err);
+  }
   
   // Initialize email service on server start
   const emailService = require('./services/email-service');

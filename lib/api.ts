@@ -1986,100 +1986,6 @@ export class EmailNotificationsAPI {
   }
 }
 
-// Marketing Templates API
-export class MarketingTemplatesAPI {
-  static async getAll(params?: { status?: string; page?: number; limit?: number }): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/whatsapp/marketing-templates', { params })
-    return response.data
-  }
-
-  static async getById(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/whatsapp/marketing-templates/${id}`)
-    return response.data
-  }
-
-  static async create(data: {
-    templateName: string;
-    language?: string;
-    components: any[];
-    description?: string;
-    tags?: string[];
-  }): Promise<ApiResponse<any>> {
-    try {
-      const response = await apiClient.post('/whatsapp/marketing-templates/create', data)
-      return response.data
-    } catch (error: any) {
-      // Return error response in the same format as success
-      if (error.response?.data) {
-        // The backend returns { success: false, error: "...", details: {...} }
-        return error.response.data
-      }
-      // If no response data, create a proper error response
-      return {
-        success: false,
-        error: error.message || 'Failed to create template',
-        data: undefined as any
-      }
-    }
-  }
-
-  static async checkStatus(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.put(`/whatsapp/marketing-templates/${id}/check-status`)
-    return response.data
-  }
-
-  static async delete(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.delete(`/whatsapp/marketing-templates/${id}`)
-    return response.data
-  }
-}
-
-// Campaigns API
-export class CampaignsAPI {
-  static async getAll(params?: { status?: string; page?: number; limit?: number }): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/campaigns', { params })
-    return response.data
-  }
-
-  static async getById(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/campaigns/${id}`)
-    return response.data
-  }
-
-  static async create(data: {
-    name: string;
-    description?: string;
-    templateId: string;
-    recipientType: 'all_clients' | 'segment' | 'custom';
-    recipientFilters?: any;
-    templateVariables?: any;
-    scheduledAt?: string;
-  }): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/campaigns', data)
-    return response.data
-  }
-
-  static async send(campaignId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`/campaigns/${campaignId}/send`)
-    return response.data
-  }
-
-  static async getRecipients(campaignId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/campaigns/${campaignId}/recipients`)
-    return response.data
-  }
-
-  static async getStats(campaignId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/campaigns/${campaignId}/stats`)
-    return response.data
-  }
-
-  static async cancel(campaignId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.put(`/campaigns/${campaignId}/cancel`)
-    return response.data
-  }
-}
-
 export class WhatsAppAPI {
   // Test WhatsApp connection
   static async testConnection(phone: string): Promise<ApiResponse<any>> {
@@ -2975,6 +2881,236 @@ export type PaymentSettingsUpdatePayload = {
   enableProcessingFees?: boolean
   paymentConfiguration?: PaymentConfiguration
 } & Record<string, unknown>
+
+// =============================================================================
+// WhatsApp Business module (Meta Cloud API)
+// =============================================================================
+
+export class WhatsAppMetaAPI {
+  static async getStatus(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/whatsapp/meta/status')
+    return response.data
+  }
+
+  static async exchangeCode(payload: {
+    code: string
+    wabaId: string
+    phoneNumberId: string
+    phoneE164?: string
+    displayName?: string
+    mode?: 'test' | 'live'
+    redirectUri?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/connect/exchange', payload)
+    return response.data
+  }
+
+  static async disconnect(): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/disconnect')
+    return response.data
+  }
+
+  static async refresh(): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/refresh')
+    return response.data
+  }
+
+  static async setMode(payload: { mode: 'test' | 'live'; testRecipientWhitelist?: string[] }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/mode', payload)
+    return response.data
+  }
+
+  static async sendTest(to: string, templateName = 'hello_world', language = 'en_US'): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/test-message', { to, templateName, language })
+    return response.data
+  }
+
+  static async getCompliance(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/whatsapp/meta/compliance')
+    return response.data
+  }
+}
+
+export class WhatsAppTemplatesAPI {
+  static async list(params?: { status?: string; search?: string; limit?: number; skip?: number }): Promise<ApiResponse<any[]> & { total?: number; limit?: number; skip?: number }> {
+    const response = await apiClient.get('/whatsapp/v2/templates', { params })
+    return response.data
+  }
+
+  static async get(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/whatsapp/v2/templates/${id}`)
+    return response.data
+  }
+
+  static async fromMeta(): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/whatsapp/v2/templates/from-meta')
+    return response.data
+  }
+
+  static async create(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/v2/templates', data)
+    return response.data
+  }
+
+  static async update(id: string, data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/whatsapp/v2/templates/${id}`, data)
+    return response.data
+  }
+
+  static async submit(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/templates/${id}/submit`)
+    return response.data
+  }
+
+  static async sync(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/templates/${id}/sync`)
+    return response.data
+  }
+
+  static async syncAll(): Promise<ApiResponse<{ imported: number; updated: number; total: number }>> {
+    const response = await apiClient.post('/whatsapp/v2/templates/sync-all')
+    return response.data
+  }
+
+  static async remove(id: string, opts?: { force?: boolean }): Promise<ApiResponse> {
+    const response = await apiClient.delete(`/whatsapp/v2/templates/${id}`, {
+      params: opts?.force ? { force: 1 } : undefined,
+    })
+    return response.data
+  }
+}
+
+export class WhatsAppCampaignsAPI {
+  static async list(): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/whatsapp/v2/campaigns')
+    return response.data
+  }
+
+  static async get(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/whatsapp/v2/campaigns/${id}`)
+    return response.data
+  }
+
+  static async create(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/v2/campaigns', data)
+    return response.data
+  }
+
+  static async update(id: string, data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/whatsapp/v2/campaigns/${id}`, data)
+    return response.data
+  }
+
+  static async preview(id: string): Promise<ApiResponse<{ count: number; excludedOptOut?: number; sample: any[] }>> {
+    const response = await apiClient.post(`/whatsapp/v2/campaigns/${id}/recipients/preview`)
+    return response.data
+  }
+
+  static async send(id: string): Promise<ApiResponse<{ recipientCount: number; expectedSpendPaise: number }>> {
+    const response = await apiClient.post(`/whatsapp/v2/campaigns/${id}/send`)
+    return response.data
+  }
+
+  static async schedule(id: string, scheduledAt: string): Promise<ApiResponse<any>> {
+    // Updating `scheduledAt` flips status to `scheduled`; the cron picks it
+    // up at the appropriate time.
+    const response = await apiClient.put(`/whatsapp/v2/campaigns/${id}`, { scheduledAt })
+    return response.data
+  }
+
+  static async cancel(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/campaigns/${id}/cancel`)
+    return response.data
+  }
+
+  static async stats(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/whatsapp/v2/campaigns/${id}/stats`)
+    return response.data
+  }
+}
+
+export class WhatsAppMessagesAPI {
+  static async list(params?: Record<string, any>): Promise<ApiResponse<{ items: any[]; total: number }>> {
+    const response = await apiClient.get('/whatsapp/v2/messages', { params })
+    return response.data
+  }
+
+  static async usage(params?: Record<string, any>): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/whatsapp/v2/messages/usage', { params })
+    return response.data
+  }
+}
+
+export type WhatsAppInboxFilter = 'all' | 'unread' | 'open' | 'resolved' | 'optedout'
+
+export class WhatsAppInboxAPI {
+  static async list(params?: { filter?: WhatsAppInboxFilter; q?: string; limit?: number }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/whatsapp/v2/inbox', { params })
+    return response.data
+  }
+
+  static async thread(conversationId: string): Promise<ApiResponse<{ conversation: any; messages: any[] }>> {
+    const response = await apiClient.get(`/whatsapp/v2/inbox/${conversationId}`)
+    return response.data
+  }
+
+  static async reply(
+    conversationId: string,
+    payload: {
+      mode?: 'text' | 'template'
+      text?: string
+      templateName?: string
+      language?: string
+      components?: any[]
+      /**
+       * Flat placeholder map keyed by the placeholder index (and "h<N>"
+       * for header placeholders). The backend will fetch the template
+       * and translate this into the Meta-shape `components` array.
+       */
+      variables?: Record<string, string>
+    }
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/inbox/${conversationId}/reply`, payload)
+    return response.data
+  }
+
+  static async resolve(conversationId: string, resolved = true): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/inbox/${conversationId}/resolve`, { resolved })
+    return response.data
+  }
+
+  static async consent(
+    conversationId: string,
+    payload: { optedIn: boolean; reason: string }
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/inbox/${conversationId}/consent`, payload)
+    return response.data
+  }
+
+  /**
+   * Returns the placeholder schema for a template so the inbox composer
+   * can render variable inputs per `{{N}}` it finds in header/body.
+   */
+  static async templateDetail(
+    name: string,
+    language = 'en_US'
+  ): Promise<ApiResponse<{
+    name: string
+    language: string
+    status: string
+    category: string
+    components: any
+    placeholders: {
+      header: { key: string; label: string; sample: string; index: number }[]
+      body: { key: string; label: string; sample: string; index: number }[]
+    }
+  }>> {
+    const response = await apiClient.get(`/whatsapp/v2/inbox/templates/${encodeURIComponent(name)}`, {
+      params: { language },
+    })
+    return response.data
+  }
+}
 
 // Export the main API client for direct use if needed
 export { apiClient }

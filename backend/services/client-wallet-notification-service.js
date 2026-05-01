@@ -4,6 +4,8 @@
  */
 
 const { logger } = require('../utils/logger');
+const databaseManager = require('../config/database-manager');
+const { getAddonStatus } = require('../lib/entitlements');
 const smsService = require('./sms-service');
 const { sendClientWalletExpiryReminderWhatsApp } = require('../lib/send-client-wallet-expiry-whatsapp');
 
@@ -41,10 +43,25 @@ async function sendClientWalletExpiryReminder(client, wallet, daysLeft, salonNam
     : '';
   const text = messageFor(daysLeft, clientName, planName, salonName, expiryStr);
 
+  let businessAddonLean = null;
+  if (branchId) {
+    try {
+      const mainConnection = await databaseManager.getMainConnection();
+      const Business = mainConnection.model('Business', require('../models/Business').schema);
+      businessAddonLean = await Business.findById(branchId).select('plan.addons').lean();
+    } catch (e) {
+      logger.warn('[ClientWalletNotify] Could not load business for addon check:', e.message);
+    }
+  }
+
   if (client.phone) {
     try {
       await smsService.initialize();
-      if (smsService.enabled) {
+      if (
+        smsService.enabled &&
+        businessAddonLean &&
+        getAddonStatus(businessAddonLean, 'sms').enabled
+      ) {
         await smsService.sendTestSms({ to: client.phone, message: text });
       }
     } catch (e) {
