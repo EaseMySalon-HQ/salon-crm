@@ -126,7 +126,9 @@ const saleSchema = new mongoose.Schema({
   loyaltyPointsRedeemed: { type: Number, default: 0, min: 0 },
   loyaltyDiscountAmount: { type: Number, default: 0, min: 0 },
   loyaltyPointsEarned: { type: Number, default: 0 },
-  loyaltyReversedAt: { type: Date, default: null }
+  loyaltyReversedAt: { type: Date, default: null },
+  /** When customer paid cash above bill due and excess was credited to prepaid wallet (POS). Amount in ₹. */
+  billChangeCreditedToWallet: { type: Number, default: undefined, min: 0 },
 }, {
   timestamps: true
 });

@@ -47,6 +47,7 @@ interface ReceiptData {
     serviceRate: number
     productTaxByRate: { [rate: string]: number }
   }
+  billChangeCreditedToWallet?: number
 }
 
 // Public receipt page - no authentication required
@@ -131,7 +132,12 @@ export default function PublicReceiptPage() {
                     ],
               staffName: saleData.staffName,
               status: saleData.status,
-              taxBreakdown: saleData.taxBreakdown
+              taxBreakdown: saleData.taxBreakdown,
+              billChangeCreditedToWallet:
+                saleData.billChangeCreditedToWallet != null &&
+                Number(saleData.billChangeCreditedToWallet) > 0.005
+                  ? Number(saleData.billChangeCreditedToWallet)
+                  : undefined,
             }
             
             console.log('🔍 Final receipt data from API:', receiptData)
@@ -258,8 +264,9 @@ export default function PublicReceiptPage() {
               staffId: receipt.id,
               staffName: receipt.staffName,
               notes: '',
-              taxBreakdown: receipt.taxBreakdown
-            }} 
+              taxBreakdown: receipt.taxBreakdown,
+              billChangeCreditedToWallet: receipt.billChangeCreditedToWallet,
+            }}
             businessSettings={businessSettings} 
           />
         </div>

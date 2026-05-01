@@ -8114,7 +8114,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         leadSource: leadSource || '',
         createdBy,
         price: totalPrice,
-        branchId: req.user.branchId
+        branchId: req.user.branchId,
+        staffLocked: !!services.some((s) => s.staffLocked),
       };
 
       if (first.staffAssignments && Array.isArray(first.staffAssignments)) {
@@ -8163,7 +8164,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
           createdBy,
           price: service.price,
           branchId: req.user.branchId,
-          bookingGroupId
+          bookingGroupId,
+          staffLocked: !!service.staffLocked,
         };
 
         if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
@@ -11265,6 +11267,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'staffName', // Header staff on bill; keeps sale in sync when invoice staff changes
       'loyaltyPointsRedeemed',
       'loyaltyDiscountAmount',
+      'billChangeCreditedToWallet',
     ];
 
     editableRootFields.forEach((field) => {

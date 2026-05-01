@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, Loader2, Receipt, Calendar as CalendarIcon } from "lucide-react"
+import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, Loader2, Receipt, Calendar as CalendarIcon, Lock, LockOpen } from "lucide-react"
 import { format, isBefore, startOfDay } from "date-fns"
 import { DayPicker } from "react-day-picker"
 
@@ -122,6 +122,8 @@ interface SelectedService {
   name: string
   duration: number
   price: number
+  /** Client requested this stylist; shown on calendar cards */
+  staffLocked?: boolean
   /** Per-service start time in 24h "HH:mm". Only used in custom scheduling mode. */
   startTime?: string
 }
@@ -400,7 +402,15 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const staffIdVal = a.staffId?._id || a.staffId || (a.staffAssignments?.[0]?.staffId?._id ?? a.staffAssignments?.[0]?.staffId)
 
         // Build selectedServices: multi-staff group OR primary+additional (same staff)
-        let servicesToShow: Array<{ id: string; serviceId: string; staffId: string; name: string; duration: number; price: number }> = []
+        let servicesToShow: Array<{
+          id: string
+          serviceId: string
+          staffId: string
+          name: string
+          duration: number
+          price: number
+          staffLocked?: boolean
+        }> = []
         const related = (res as any).relatedAppointments as any[] | undefined
 
         const nonCancelledRelated = (related ?? []).filter((r: any) => r.status !== "cancelled")
@@ -441,6 +451,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               name: (typeof s === "object" && s?.name) || "Service",
               duration: apt.duration ?? (typeof s === "object" && s?.duration) ?? 60,
               price: apt.price ?? (typeof s === "object" && s?.price) ?? 0,
+              staffLocked: !!apt.staffLocked,
               ...(groupIsCustom ? { startTime: timeStringTo24h(apt.time || "") } : {}),
             }
           })
@@ -458,6 +469,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: (typeof svc === "object" && svc?.name) || "Service",
             duration: (typeof svc === "object" && svc?.duration) ?? a.duration ?? 60,
             price: primaryPrice || ((typeof svc === "object" && svc?.price) ?? 0),
+            staffLocked: !!a.staffLocked,
           }
           const additional = (a.additionalServices as any[]).map((s: any, idx: number) => ({
             id: `additional-${idx}`,
@@ -466,6 +478,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: s?.name || "Service",
             duration: s?.duration ?? 60,
             price: s?.price ?? 0,
+            staffLocked: !!a.staffLocked,
           }))
           servicesToShow = [primary, ...additional]
         } else {
@@ -476,6 +489,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: (typeof svc === "object" && svc?.name) || "Service",
             duration: a.duration ?? (typeof svc === "object" && svc?.duration) ?? 60,
             price: a.price ?? (typeof svc === "object" && svc?.price) ?? 0,
+            staffLocked: !!a.staffLocked,
           }]
         }
 
@@ -792,6 +806,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       name: "",
       duration: 0,
       price: 0,
+      staffLocked: false,
       ...(defaultStart !== undefined ? { startTime: defaultStart } : {}),
     }
     setSelectedServices([...selectedServices, newService])
@@ -837,6 +852,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               updatedService.duration = selectedService.duration
               updatedService.price = selectedService.price
             }
+          }
+          if (field === "staffId" && !value) {
+            updatedService.staffLocked = false
           }
           
           return updatedService
@@ -1019,6 +1037,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             price: totalPrice,
             leadSource: leadSourceValue || "",
             notes: values.notes,
+            staffLocked: selectedServices.some((s) => s.staffLocked),
           })
           if (!updateRes?.success) {
             toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -1061,6 +1080,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               price: s.price,
               leadSource: leadSourceValue || "",
               notes: values.notes,
+              staffLocked: !!s.staffLocked,
               ...(schedulingMode === "custom" ? { schedulingMode: "custom" } : {}),
             })
             if (!updateRes?.success) {
@@ -1086,6 +1106,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               price: originalService.price,
               leadSource: leadSourceValue || "",
               notes: values.notes,
+              staffLocked: !!originalService.staffLocked,
               ...(schedulingMode === "custom" ? { schedulingMode: "custom" } : {}),
             })
             if (!updateRes?.success) {
@@ -1126,6 +1147,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               name: s.name,
               duration: s.duration,
               price: s.price,
+              staffLocked: !!s.staffLocked,
               ...(schedulingMode === "custom" && s.startTime
                 ? { startTime: formatTimeForApi(s.startTime) }
                 : {}),
@@ -1158,6 +1180,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: service.name,
             duration: service.duration,
             price: service.price,
+            staffLocked: !!service.staffLocked,
             ...(schedulingMode === "custom" && service.startTime
               ? { startTime: formatTimeForApi(service.startTime) }
               : {}),
@@ -1589,6 +1612,80 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
+                      <Select
+                        value={service.staffId}
+                        onValueChange={(value) => updateService(service.id, "staffId", value)}
+                      >
+                        <SelectTrigger className="h-9 w-[130px] shrink-0 border-slate-200 rounded-md text-sm">
+                          <SelectValue placeholder="Staff" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {loadingStaff ? (
+                            <SelectItem value="__loading__" disabled>Loading...</SelectItem>
+                          ) : staff.length === 0 ? (
+                            <SelectItem value="no-staff" disabled>No staff</SelectItem>
+                          ) : (
+                            (() => {
+                              const serviceIndex = selectedServices.indexOf(service)
+                              const list = getAvailableStaffForService(serviceIndex).filter((member: any) => member._id || member.id)
+                              const selectedId = service.staffId
+                              const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
+                              const options = selectedNotInList
+                                ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
+                                : list
+                              return options.map((member: any) => {
+                                const staffId = member._id || member.id
+                                const isUnavailable = selectedNotInList && staffId === selectedId
+                                return (
+                                  <SelectItem key={staffId} value={staffId}>
+                                    {member.name}
+                                    {isUnavailable ? " (unavailable)" : ""}
+                                  </SelectItem>
+                                )
+                              })
+                            })()
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        type="button"
+                        variant={service.staffLocked ? "secondary" : "ghost"}
+                        size="sm"
+                        className={cn(
+                          "h-9 w-9 shrink-0 p-0 border border-transparent",
+                          service.staffLocked
+                            ? "text-amber-800 bg-amber-100/90 border-amber-300 hover:bg-amber-100"
+                            : "text-slate-400 hover:text-amber-700 hover:bg-amber-50 border-slate-200"
+                        )}
+                        disabled={!service.staffId}
+                        title={
+                          service.staffLocked
+                            ? "Client requested this stylist — staff locked"
+                            : service.staffId
+                              ? "Mark: client requests this stylist only"
+                              : "Select a stylist first"
+                        }
+                        aria-pressed={!!service.staffLocked}
+                        onClick={() =>
+                          service.staffId &&
+                          updateService(service.id, "staffLocked", !service.staffLocked)
+                        }
+                      >
+                        {service.staffLocked ? (
+                          <Lock className="h-4 w-4" aria-hidden />
+                        ) : (
+                          <LockOpen className="h-4 w-4" aria-hidden />
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeService(service.id)}
+                        className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                       {schedulingMode === "custom" && (
                         <div className="flex items-center gap-2 pl-8">
                           <Label className="text-[11px] font-medium text-slate-500 uppercase tracking-wide shrink-0">Start</Label>

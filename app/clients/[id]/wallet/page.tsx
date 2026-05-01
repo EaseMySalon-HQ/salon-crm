@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ClientWalletAPI } from "@/lib/api"
+import { clientWalletTxnToDebitCredit } from "@/lib/client-wallet-ledger"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
@@ -175,17 +176,20 @@ export default function ClientWalletPage() {
                 </Button>
                 {expanded === w._id && (
                   <ul className="mt-2 text-sm border-t pt-2 space-y-1 max-h-48 overflow-y-auto">
-                    {(data.transactionsByWallet[String(w._id)] || []).map((tx: any) => (
+                    {(data.transactionsByWallet[String(w._id)] || []).map((tx: any) => {
+                      const ledgerSide = clientWalletTxnToDebitCredit(tx)
+                      return (
                       <li key={tx._id} className="flex justify-between gap-2 text-gray-700">
                         <span>
-                          {tx.type} · {tx.description || "—"}
+                          {ledgerSide} · {tx.description || "—"}
                           {tx.serviceNames?.length ? ` · ${tx.serviceNames.join(", ")}` : ""}
                         </span>
                         <span className="shrink-0 font-mono">
-                          {tx.type === "debit" ? "-" : "+"}₹{Math.abs(tx.amount)}
+                          {ledgerSide === "Debit" ? "-" : "+"}₹{Math.abs(tx.amount)}
                         </span>
                       </li>
-                    ))}
+                      )
+                    })}
                   </ul>
                 )}
               </li>
