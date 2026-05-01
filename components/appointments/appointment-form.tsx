@@ -124,7 +124,11 @@ interface SelectedService {
   price: number
   /** Client requested this stylist; shown on calendar cards */
   staffLocked?: boolean
+  /** Per-service start time in 24h "HH:mm". Only used in custom scheduling mode. */
+  startTime?: string
 }
+
+type SchedulingMode = "sequential" | "custom"
 
 interface ServiceDropdownState {
   [key: string]: {
@@ -163,6 +167,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
   const [existingBookingGroupId, setExistingBookingGroupId] = useState<string | null>(null)
   const [existingGroupAppointmentIds, setExistingGroupAppointmentIds] = useState<string[]>([])
+  const [schedulingMode, setSchedulingMode] = useState<SchedulingMode>("sequential")
+  const [editLockedMode, setEditLockedMode] = useState(false)
 
   // Prefer URL params (from calendar slot) over props so time is correct on first paint
   const urlDate = searchParams?.get("date") ?? initialDate
@@ -280,21 +286,36 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   }, [selectedServices])
 
   /**
+   * Compute the start minutes for a given service row.
+   * Custom mode uses the row's own startTime; sequential mode chains durations from formTime.
+   */
+  const getServiceStartMinutes = useCallback((serviceIndex: number): number => {
+    if (schedulingMode === "custom") {
+      const rowStart = selectedServices[serviceIndex]?.startTime
+      if (rowStart) return parseTimeToMinutes(rowStart)
+      return formTime ? parseTimeToMinutes(formTime) : 0
+    }
+    let serviceStartM = formTime ? parseTimeToMinutes(formTime) : 0
+    for (let i = 0; i < serviceIndex; i++) {
+      serviceStartM += selectedServices[i]?.duration ?? 60
+    }
+    return serviceStartM
+  }, [schedulingMode, selectedServices, formTime])
+
+  /**
    * Get staff available for a specific service's time block only.
-   * Services are sequential: Service 0 = formTime to formTime+dur0, Service 1 = formTime+dur0 to formTime+dur0+dur1, etc.
+   * Sequential: Service 0 = formTime to formTime+dur0, Service 1 = formTime+dur0 to formTime+dur0+dur1, etc.
+   * Custom: each service uses its own startTime.
    * Availability is checked per service time block - NOT against full appointment duration.
    * Excludes: current appointment when editing (so editing one service doesn't invalidate others).
    */
   const getAvailableStaffForService = useCallback((serviceIndex: number) => {
-    if (!formDate || !formTime) return staff
+    if (!formDate) return staff
+    if (schedulingMode === "sequential" && !formTime) return staff
     const dateStr = format(formDate, "yyyy-MM-dd")
     const dayIndex = formDate.getDay()
 
-    // Compute this service's start and end (sequential)
-    let serviceStartM = parseTimeToMinutes(formTime)
-    for (let i = 0; i < serviceIndex; i++) {
-      serviceStartM += selectedServices[i]?.duration ?? 60
-    }
+    const serviceStartM = getServiceStartMinutes(serviceIndex)
     const serviceDuration = selectedServices[serviceIndex]?.duration ?? 60
     const serviceEndM = serviceStartM + serviceDuration
 
@@ -346,7 +367,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       })
       return !hasOverlappingAppointment
     })
-  }, [staff, formDate, formTime, selectedServices, blockTimesForDate, appointmentsForDate, appointmentId])
+  }, [staff, formDate, formTime, selectedServices, blockTimesForDate, appointmentsForDate, appointmentId, schedulingMode, getServiceStartMinutes])
 
   // Load services and staff on component mount
   useEffect(() => {
@@ -393,6 +414,25 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const related = (res as any).relatedAppointments as any[] | undefined
 
         const nonCancelledRelated = (related ?? []).filter((r: any) => r.status !== "cancelled")
+        // Detect custom scheduling mode from the loaded booking (any doc in the group flags it).
+        const groupIsCustom =
+          a.schedulingMode === "custom" ||
+          nonCancelledRelated.some((r: any) => r.schedulingMode === "custom")
+        if (groupIsCustom) {
+          setSchedulingMode("custom")
+          setEditLockedMode(true)
+        } else {
+          setSchedulingMode("sequential")
+          setEditLockedMode(false)
+        }
+
+        const timeStringTo24h = (t: string): string => {
+          const m = parseTimeToMinutes(t)
+          const h = Math.floor(m / 60) % 24
+          const min = m % 60
+          return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`
+        }
+
         if (nonCancelledRelated.length > 0) {
           // Multi-staff: merge main + related, sort by time. Exclude cancelled (should not appear when editing).
           const allApts = [{ ...a, _id: a._id }, ...nonCancelledRelated.map((r: any) => ({ ...r, _id: r._id }))]
@@ -412,6 +452,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               duration: apt.duration ?? (typeof s === "object" && s?.duration) ?? 60,
               price: apt.price ?? (typeof s === "object" && s?.price) ?? 0,
               staffLocked: !!apt.staffLocked,
+              ...(groupIsCustom ? { startTime: timeStringTo24h(apt.time || "") } : {}),
             }
           })
         } else if (a.additionalServices && a.additionalServices.length > 0) {
@@ -741,6 +782,23 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   // Add a service to the appointment (pre-fill staff when coming from calendar slot)
   const addService = () => {
     const isFirstService = selectedServices.length === 0
+    // Default start time in custom mode: chain after the previous service if known, else the form base time.
+    let defaultStart: string | undefined = undefined
+    if (schedulingMode === "custom") {
+      if (selectedServices.length === 0) {
+        defaultStart = formTime || ""
+      } else {
+        const last = selectedServices[selectedServices.length - 1]
+        if (last?.startTime) {
+          const m = parseTimeToMinutes(last.startTime) + (last.duration || 0)
+          const h = Math.floor(m / 60) % 24
+          const min = m % 60
+          defaultStart = `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`
+        } else {
+          defaultStart = formTime || ""
+        }
+      }
+    }
     const newService: SelectedService = {
       id: Date.now().toString(),
       serviceId: "",
@@ -749,8 +807,29 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       duration: 0,
       price: 0,
       staffLocked: false,
+      ...(defaultStart !== undefined ? { startTime: defaultStart } : {}),
     }
     setSelectedServices([...selectedServices, newService])
+  }
+
+  /** Switch scheduling mode. When entering custom mode, seed each service's startTime so users see sensible defaults. */
+  const handleSchedulingModeChange = (mode: SchedulingMode) => {
+    if (editLockedMode) return
+    setSchedulingMode(mode)
+    if (mode === "custom") {
+      setSelectedServices((prev) => {
+        let cumulative = 0
+        const base = formTime ? parseTimeToMinutes(formTime) : 0
+        return prev.map((s, idx) => {
+          if (s.startTime) return s
+          const startM = base + cumulative
+          cumulative += s.duration || 0
+          const h = Math.floor(startM / 60) % 24
+          const min = startM % 60
+          return { ...s, startTime: `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}` }
+        })
+      })
+    }
   }
 
   // Remove a service from the appointment
@@ -861,6 +940,40 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       return
     }
 
+    // Custom-mode validation: every service must have its own start time.
+    if (schedulingMode === "custom") {
+      const missingStart = selectedServices.find((s) => !s.startTime)
+      if (missingStart) {
+        toast({
+          title: "Error",
+          description: `Please select start time for ${missingStart.name || "every service"}`,
+          variant: "destructive",
+        })
+        return
+      }
+      // Within-form overlap check on same staff (mirrors backend rule).
+      for (let i = 0; i < selectedServices.length; i++) {
+        const a = selectedServices[i]
+        const aStart = parseTimeToMinutes(a.startTime || "")
+        const aEnd = aStart + (a.duration || 0)
+        for (let j = i + 1; j < selectedServices.length; j++) {
+          const b = selectedServices[j]
+          if (!a.staffId || !b.staffId) continue
+          if (a.staffId !== b.staffId) continue
+          const bStart = parseTimeToMinutes(b.startTime || "")
+          const bEnd = bStart + (b.duration || 0)
+          if (aStart < bEnd && aEnd > bStart) {
+            toast({
+              title: "Error",
+              description: "Same staff has overlapping services. Please adjust the start times.",
+              variant: "destructive",
+            })
+            return
+          }
+        }
+      }
+    }
+
     if (values.date && values.time) {
       const unavailable = selectedServices.filter((s, idx) => {
         if (!s.staffId) return false
@@ -931,7 +1044,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             return
           }
         } else if (hasRelated) {
-          // Multi staff: delete removed appointments, update remaining with sequential times
+          // Multi staff: delete removed appointments, update remaining with sequential or per-row custom times.
           const idsToUpdate = selectedServices
             .map((s) => (s.id === "edit-service" ? appointmentId : s.id.startsWith("related-") ? s.id.replace("related-", "") : null))
             .filter(Boolean)
@@ -951,7 +1064,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
           for (let i = 0; i < selectedServices.length; i++) {
             const s = selectedServices[i]
-            const serviceTime = getSequentialServiceStartTime(selectedServices, values.time, i)
+            const serviceTime = schedulingMode === "custom" && s.startTime
+              ? s.startTime
+              : getSequentialServiceStartTime(selectedServices, values.time, i)
             const apiTime = formatTimeForApi(serviceTime)
             const aptId = s.id === "edit-service" ? appointmentId : s.id.startsWith("related-") ? s.id.replace("related-", "") : null
             if (!aptId) continue
@@ -966,6 +1081,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               leadSource: leadSourceValue || "",
               notes: values.notes,
               staffLocked: !!s.staffLocked,
+              ...(schedulingMode === "custom" ? { schedulingMode: "custom" } : {}),
             })
             if (!updateRes?.success) {
               toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -976,9 +1092,12 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           // Single service or edit-service only
           const originalService = selectedServices.find((s) => s.id === "edit-service")
           if (originalService) {
+            const customTimeStr = schedulingMode === "custom" && originalService.startTime
+              ? formatTimeForApi(originalService.startTime)
+              : timeStr
             const updateRes = await AppointmentsAPI.update(appointmentId, {
               date: dateStr,
-              time: timeStr,
+              time: customTimeStr,
               serviceId: originalService.serviceId,
               additionalServiceIds: [],
               staffId: originalService.staffId,
@@ -988,6 +1107,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               leadSource: leadSourceValue || "",
               notes: values.notes,
               staffLocked: !!originalService.staffLocked,
+              ...(schedulingMode === "custom" ? { schedulingMode: "custom" } : {}),
             })
             if (!updateRes?.success) {
               toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -1020,6 +1140,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             time: timeStrForNew,
             leadSource: leadSourceValue,
             bookingGroupId: groupId,
+            schedulingMode,
             services: newServicesDifferentStaff.map((s) => ({
               serviceId: s.serviceId,
               staffId: s.staffId,
@@ -1027,6 +1148,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               duration: s.duration,
               price: s.price,
               staffLocked: !!s.staffLocked,
+              ...(schedulingMode === "custom" && s.startTime
+                ? { startTime: formatTimeForApi(s.startTime) }
+                : {}),
             })),
             totalDuration: newServicesDifferentStaff.reduce((sum, s) => sum + (s.duration || 0), 0),
             totalAmount: newServicesDifferentStaff.reduce((sum, s) => sum + (s.price || 0), 0),
@@ -1049,6 +1173,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           date: format(values.date, "yyyy-MM-dd"),
           time: formatTimeForApi(values.time),
           leadSource: leadSourceValue,
+          schedulingMode,
           services: selectedServices.map(service => ({
             serviceId: service.serviceId,
             staffId: service.staffId,
@@ -1056,6 +1181,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             duration: service.duration,
             price: service.price,
             staffLocked: !!service.staffLocked,
+            ...(schedulingMode === "custom" && service.startTime
+              ? { startTime: formatTimeForApi(service.startTime) }
+              : {}),
           })),
           totalDuration: calculateTotalDuration(),
           totalAmount: calculateTotalAmount(),
@@ -1322,71 +1450,167 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                 {!isDrawer && <p className="text-sm text-slate-500">Add services and assign staff members for this appointment</p>}
               </div>
 
+              {/* Scheduling mode toggle */}
+              <div className="flex flex-col gap-2">
+                <Label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Scheduling</Label>
+                <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1 w-fit">
+                  <button
+                    type="button"
+                    disabled={editLockedMode && schedulingMode !== "sequential"}
+                    onClick={() => handleSchedulingModeChange("sequential")}
+                    className={cn(
+                      "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                      schedulingMode === "sequential"
+                        ? "bg-white text-slate-900 shadow-sm"
+                        : "text-slate-600 hover:text-slate-900",
+                      editLockedMode && schedulingMode !== "sequential" ? "opacity-50 cursor-not-allowed" : ""
+                    )}
+                  >
+                    Same time for all services
+                  </button>
+                  <button
+                    type="button"
+                    disabled={editLockedMode && schedulingMode !== "custom"}
+                    onClick={() => handleSchedulingModeChange("custom")}
+                    className={cn(
+                      "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                      schedulingMode === "custom"
+                        ? "bg-white text-slate-900 shadow-sm"
+                        : "text-slate-600 hover:text-slate-900",
+                      editLockedMode && schedulingMode !== "custom" ? "opacity-50 cursor-not-allowed" : ""
+                    )}
+                  >
+                    Custom time per service
+                  </button>
+                </div>
+                {editLockedMode && (
+                  <p className="text-[11px] text-slate-500">
+                    Scheduling mode is locked for existing bookings. Cancel and rebook to switch modes.
+                  </p>
+                )}
+              </div>
+
               {selectedServices.length > 0 ? (
                 <div className="space-y-2">
-                  {selectedServices.map((service) => (
-                    <div key={service.id} className="flex items-center gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
-                      <span className="text-xs font-medium text-slate-500 w-6 shrink-0">{selectedServices.indexOf(service) + 1}.</span>
-                      <div className="relative service-dropdown-container flex-1 min-w-0">
-                        {service.serviceId && service.name ? (
-                          <div className="flex items-center justify-between h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 min-w-0">
-                            <span className="truncate">{service.name}</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                updateService(service.id, "serviceId", "")
-                                updateService(service.id, "name", "")
-                                updateDropdownState(service.id, { search: '', isOpen: false })
-                              }}
-                              className="ml-1.5 shrink-0 text-slate-400 hover:text-slate-600"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="relative">
-                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                            <Input
-                              placeholder="Search service..."
-                              value={getDropdownState(service.id).search}
-                              onChange={(e) => updateDropdownState(service.id, { search: e.target.value, isOpen: true })}
-                              onFocus={() => updateDropdownState(service.id, { isOpen: true })}
-                              className="h-9 pl-8 pr-8 text-sm border-slate-200 rounded-md"
-                            />
-                            {getDropdownState(service.id).search && (
+                  {selectedServices.map((service) => {
+                    const serviceIndex = selectedServices.indexOf(service)
+                    const serviceStartM = getServiceStartMinutes(serviceIndex)
+                    const serviceEndM = serviceStartM + (service.duration || 0)
+                    const formatMinutesAs12h = (m: number) => {
+                      const h24 = Math.floor(m / 60) % 24
+                      const min = m % 60
+                      const period = h24 >= 12 ? "PM" : "AM"
+                      const h12 = h24 % 12 === 0 ? 12 : h24 % 12
+                      return `${h12}:${String(min).padStart(2, "0")} ${period}`
+                    }
+                    return (
+                    <div key={service.id} className="flex flex-col gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-slate-500 w-6 shrink-0">{serviceIndex + 1}.</span>
+                        <div className="relative service-dropdown-container flex-1 min-w-0">
+                          {service.serviceId && service.name ? (
+                            <div className="flex items-center justify-between h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 min-w-0">
+                              <span className="truncate">{service.name}</span>
                               <button
                                 type="button"
-                                onClick={() => updateDropdownState(service.id, { search: '', isOpen: false })}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                onClick={() => {
+                                  updateService(service.id, "serviceId", "")
+                                  updateService(service.id, "name", "")
+                                  updateDropdownState(service.id, { search: '', isOpen: false })
+                                }}
+                                className="ml-1.5 shrink-0 text-slate-400 hover:text-slate-600"
                               >
                                 <X className="h-3.5 w-3.5" />
                               </button>
-                            )}
-                          </div>
-                        )}
-                        {getDropdownState(service.id).isOpen && !service.serviceId && (
-                          <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-48 overflow-auto">
-                            {loadingServices ? (
-                              <div className="p-2 text-center text-xs text-slate-500">Loading...</div>
-                            ) : getFilteredServices(service.id).length === 0 ? (
-                              <div className="p-2 text-center text-xs text-slate-500">No matches</div>
-                            ) : (
-                              getFilteredServices(service.id).map((s) => (
-                                <div
-                                  key={s._id || s.id}
-                                  className="px-2.5 py-2 hover:bg-slate-50 cursor-pointer border-b last:border-b-0 text-sm"
-                                  onClick={() => {
-                                    updateService(service.id, "serviceId", s._id || s.id)
-                                    updateDropdownState(service.id, { search: '', isOpen: false })
-                                  }}
+                            </div>
+                          ) : (
+                            <div className="relative">
+                              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                              <Input
+                                placeholder="Search service..."
+                                value={getDropdownState(service.id).search}
+                                onChange={(e) => updateDropdownState(service.id, { search: e.target.value, isOpen: true })}
+                                onFocus={() => updateDropdownState(service.id, { isOpen: true })}
+                                className="h-9 pl-8 pr-8 text-sm border-slate-200 rounded-md"
+                              />
+                              {getDropdownState(service.id).search && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateDropdownState(service.id, { search: '', isOpen: false })}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                                 >
-                                  <div className="font-medium text-slate-800">{s.name}</div>
-                                  <div className="text-xs text-slate-500">{s.duration} min · ₹{s.price}</div>
-                                </div>
-                              ))
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {getDropdownState(service.id).isOpen && !service.serviceId && (
+                            <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-48 overflow-auto">
+                              {loadingServices ? (
+                                <div className="p-2 text-center text-xs text-slate-500">Loading...</div>
+                              ) : getFilteredServices(service.id).length === 0 ? (
+                                <div className="p-2 text-center text-xs text-slate-500">No matches</div>
+                              ) : (
+                                getFilteredServices(service.id).map((s) => (
+                                  <div
+                                    key={s._id || s.id}
+                                    className="px-2.5 py-2 hover:bg-slate-50 cursor-pointer border-b last:border-b-0 text-sm"
+                                    onClick={() => {
+                                      updateService(service.id, "serviceId", s._id || s.id)
+                                      updateDropdownState(service.id, { search: '', isOpen: false })
+                                    }}
+                                  >
+                                    <div className="font-medium text-slate-800">{s.name}</div>
+                                    <div className="text-xs text-slate-500">{s.duration} min · ₹{s.price}</div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <Select
+                          value={service.staffId}
+                          onValueChange={(value) => updateService(service.id, "staffId", value)}
+                        >
+                          <SelectTrigger className="h-9 w-[130px] shrink-0 border-slate-200 rounded-md text-sm">
+                            <SelectValue placeholder="Staff" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {loadingStaff ? (
+                              <SelectItem value="__loading__" disabled>Loading...</SelectItem>
+                            ) : staff.length === 0 ? (
+                              <SelectItem value="no-staff" disabled>No staff</SelectItem>
+                            ) : (
+                              (() => {
+                                const list = getAvailableStaffForService(serviceIndex).filter((member: any) => member._id || member.id)
+                                const selectedId = service.staffId
+                                const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
+                                const options = selectedNotInList
+                                  ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
+                                  : list
+                                return options.map((member: any) => {
+                                  const staffId = member._id || member.id
+                                  const isUnavailable = selectedNotInList && staffId === selectedId
+                                  return (
+                                    <SelectItem key={staffId} value={staffId}>
+                                      {member.name}
+                                      {isUnavailable ? " (unavailable)" : ""}
+                                    </SelectItem>
+                                  )
+                                })
+                              })()
                             )}
-                          </div>
-                        )}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeService(service.id)}
+                          className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
                       <Select
                         value={service.staffId}
@@ -1462,14 +1686,89 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
+                      {schedulingMode === "custom" && (
+                        <div className="flex items-center gap-2 pl-8">
+                          <Label className="text-[11px] font-medium text-slate-500 uppercase tracking-wide shrink-0">Start</Label>
+                          <Select
+                            value={service.startTime || undefined}
+                            onValueChange={(value) => updateService(service.id, "startTime", value)}
+                          >
+                            <SelectTrigger className="h-8 w-[110px] shrink-0 border-slate-200 rounded-md text-xs bg-white">
+                              <SelectValue placeholder="--:--" />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-60">
+                              {timeSlots.map((time) => (
+                                <SelectItem key={time} value={time} className="text-xs">
+                                  {time}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <span className="text-[11px] text-slate-400">→</span>
+                          <span className="text-[11px] font-medium text-slate-600 tabular-nums">
+                            {service.startTime && service.duration
+                              ? `End ${formatMinutesAs12h(serviceEndM)}`
+                              : "End —"}
+                          </span>
+                          <span className="text-[11px] text-slate-400 ml-auto">
+                            {service.duration ? `${service.duration} min` : ""}
+                          </span>
+                        </div>
+                      )}
                     </div>
-                  ))}
+                  )})}
                 </div>
               ) : (
                 <div className={cn("text-center border-2 border-dashed border-slate-200 rounded-lg bg-slate-50/50", isDrawer ? "p-4" : "p-8")}>
                   <FileText className={cn("text-slate-300 mx-auto", isDrawer ? "h-8 w-8 mb-2" : "h-12 w-12 mb-4")} />
                   <p className="text-slate-500 text-sm">No services added yet</p>
                 </div>
+              )}
+
+              {/* Timeline preview (custom mode only) */}
+              {schedulingMode === "custom" && selectedServices.length > 0 && (
+                <details className="rounded-lg border border-slate-200 bg-white">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 select-none">
+                    Timeline preview ({selectedServices.length} {selectedServices.length === 1 ? "service" : "services"})
+                  </summary>
+                  <div className="px-3 pb-3 pt-1 space-y-1.5">
+                    {[...selectedServices]
+                      .map((s, idx) => ({ ...s, _idx: idx }))
+                      .filter((s) => s.startTime)
+                      .sort((a, b) => parseTimeToMinutes(a.startTime || "") - parseTimeToMinutes(b.startTime || ""))
+                      .map((s) => {
+                        const startM = parseTimeToMinutes(s.startTime || "")
+                        const endM = startM + (s.duration || 0)
+                        const fmt = (m: number) => {
+                          const h24 = Math.floor(m / 60) % 24
+                          const min = m % 60
+                          const period = h24 >= 12 ? "PM" : "AM"
+                          const h12 = h24 % 12 === 0 ? 12 : h24 % 12
+                          return `${h12}:${String(min).padStart(2, "0")} ${period}`
+                        }
+                        const staffMember = staff.find((st: any) => (st._id || st.id) === s.staffId)
+                        const staffLabel = staffMember?.name || (s.staffId ? "Selected staff" : "Unassigned")
+                        const serviceLabel = s.name || "Untitled service"
+                        return (
+                          <div
+                            key={s.id}
+                            className="flex items-center justify-between gap-3 text-xs rounded-md bg-slate-50 px-2.5 py-1.5"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium text-slate-800 truncate">{serviceLabel}</div>
+                              <div className="text-slate-500 truncate">{staffLabel}</div>
+                            </div>
+                            <div className="text-slate-700 tabular-nums shrink-0">
+                              {fmt(startM)} <span className="text-slate-400">–</span> {fmt(endM)}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    {selectedServices.every((s) => !s.startTime) && (
+                      <p className="text-xs text-slate-500">Set a start time on each service to see the timeline.</p>
+                    )}
+                  </div>
+                </details>
               )}
             </div>
 
