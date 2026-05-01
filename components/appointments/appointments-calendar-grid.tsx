@@ -857,6 +857,36 @@ export const AppointmentsCalendarGrid = forwardRef<
     return result
   }, [columns, blocksByColumn])
 
+  // Multi-card booking groups: stable color per bookingGroupId so service cards belonging to one
+  // logical booking are visually linked across the calendar.
+  const groupAccents = useMemo(() => {
+    const palette = [
+      "ring-rose-300/70",
+      "ring-amber-300/70",
+      "ring-emerald-300/70",
+      "ring-sky-300/70",
+      "ring-violet-300/70",
+      "ring-pink-300/70",
+      "ring-teal-300/70",
+      "ring-indigo-300/70",
+    ]
+    const counts = new Map<string, number>()
+    appointments.forEach((apt) => {
+      const gid = (apt as Appointment).bookingGroupId
+      if (!gid) return
+      counts.set(gid, (counts.get(gid) || 0) + 1)
+    })
+    const colorByGroup = new Map<string, string>()
+    let idx = 0
+    counts.forEach((cnt, gid) => {
+      if (cnt > 1) {
+        colorByGroup.set(gid, palette[idx % palette.length])
+        idx += 1
+      }
+    })
+    return colorByGroup
+  }, [appointments])
+
   const WALK_IN_SALE_DURATION = 30
 
   const salesByColumn = useMemo(() => {
@@ -2053,6 +2083,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                     const statusDotColor = statusDotColorMap[apt.status] || "bg-slate-400"
                     const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(apt as any))
                     const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
+                    const groupAccentRing = (apt as Appointment).bookingGroupId
+                      ? groupAccents.get((apt as Appointment).bookingGroupId as string)
+                      : undefined
                     return (
                       <div
                         data-appointment-card
@@ -2060,7 +2093,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                         className={`group absolute overflow-hidden text-left z-10 pointer-events-auto flex flex-col select-none animate-appointment-card-enter ${
                           isDragging
                             ? "ring-2 ring-violet-400/80 transition-none opacity-40"
-                            : "transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
+                            : `transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ""}`
                         } ${isUpdating ? "opacity-70" : ""}`}
                         style={{
                           top: top,
@@ -2140,11 +2173,21 @@ export const AppointmentsCalendarGrid = forwardRef<
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80">
                               {getTotalDuration(apt as any)} min
                             </span>
-                            {a.prepaidAtBooking && apt.status !== "completed" && apt.status !== "cancelled" && (
-                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">
-                                Paid
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {groupAccentRing && (
+                                <span
+                                  className="text-[10px] font-semibold text-slate-600 bg-white px-1.5 py-0.5 rounded-md border border-slate-200"
+                                  title="Linked to a multi-service booking"
+                                >
+                                  Linked
+                                </span>
+                              )}
+                              {a.prepaidAtBooking && apt.status !== "completed" && apt.status !== "cancelled" && (
+                                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                                  Paid
+                                </span>
+                              )}
+                            </div>
                           </div>
                           {apt.notes && (
                             <div className="text-slate-400 text-[11px] truncate mt-1.5 italic border-t border-slate-100 pt-1.5">

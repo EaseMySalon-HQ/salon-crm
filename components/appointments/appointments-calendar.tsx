@@ -209,6 +209,36 @@ export const AppointmentsCalendar = forwardRef<
     [staffList]
   )
 
+  // Multi-card booking groups: stable color per bookingGroupId so service cards belonging to one
+  // logical booking are visually linked across the Kanban board.
+  const groupAccents = useMemo(() => {
+    const palette = [
+      "ring-rose-300/70",
+      "ring-amber-300/70",
+      "ring-emerald-300/70",
+      "ring-sky-300/70",
+      "ring-violet-300/70",
+      "ring-pink-300/70",
+      "ring-teal-300/70",
+      "ring-indigo-300/70",
+    ]
+    const counts = new Map<string, number>()
+    appointments.forEach((apt) => {
+      const gid = (apt as any).bookingGroupId
+      if (!gid) return
+      counts.set(gid, (counts.get(gid) || 0) + 1)
+    })
+    const colorByGroup = new Map<string, string>()
+    let idx = 0
+    counts.forEach((cnt, gid) => {
+      if (cnt > 1) {
+        colorByGroup.set(gid, palette[idx % palette.length])
+        idx += 1
+      }
+    })
+    return colorByGroup
+  }, [appointments])
+
   const dayChips = useMemo(() => {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
@@ -904,6 +934,7 @@ export const AppointmentsCalendar = forwardRef<
                     const duration = getTotalDuration(anyAppt)
                     const isDraggable = appointment.status !== 'completed'
                     const isDragging = draggingAppointmentId === appointment._id
+                    const groupAccentRing = anyAppt?.bookingGroupId ? groupAccents.get(anyAppt.bookingGroupId) : undefined
                     return (
                       <Card
                         key={appointment._id}
@@ -912,7 +943,7 @@ export const AppointmentsCalendar = forwardRef<
                         onDragEnd={handleCardDragEnd}
                         className={`${getStatusCardFill(appointment.status)} border rounded-lg transition-colors duration-200 overflow-hidden flex flex-col ${
                           isDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
-                        } ${isDragging ? 'opacity-50' : ''}`}
+                        } ${isDragging ? 'opacity-50' : ''} ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ''}`}
                         onClick={() => {
                           if (justDropped) return
                           setSelectedAppointment(appointment)
@@ -937,9 +968,20 @@ export const AppointmentsCalendar = forwardRef<
                                   </Badge>
                                 )}
                             </div>
-                            <Badge variant="outline" className={`text-[10px] shrink-0 ${col.timeBadgeClass}`}>
-                              {appointment.time}
-                            </Badge>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {groupAccentRing && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] border-slate-300 text-slate-600 bg-white"
+                                  title="Linked to a multi-service booking"
+                                >
+                                  Linked
+                                </Badge>
+                              )}
+                              <Badge variant="outline" className={`text-[10px] ${col.timeBadgeClass}`}>
+                                {appointment.time}
+                              </Badge>
+                            </div>
                           </div>
                           {serviceNames.length === 1 ? (
                             <div className="font-medium text-slate-800 text-sm truncate">{serviceNames[0]}</div>

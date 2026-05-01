@@ -7910,8 +7910,9 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    const { Appointment } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId } = req.body;
+    const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode } = req.body;
+    const schedulingMode = rawSchedulingMode === 'custom' ? 'custom' : 'sequential';
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -7945,7 +7946,156 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
 
     const createdAppointments = [];
 
-    if (allSameStaff && services.length > 1) {
+    if (schedulingMode === 'custom') {
+      // Per-service custom start times: one Appointment doc per service even when staff is shared.
+      // Duration always comes from the Service catalog; endTime = startTime + duration (computed server-side).
+      const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
+
+      // Pre-validate each service: startTime present + Service catalog duration exists.
+      const serviceCatalogIds = services.map(s => s.serviceId).filter(Boolean);
+      const catalogDocs = await BusinessService.find({ _id: { $in: serviceCatalogIds } })
+        .select('_id name duration')
+        .lean();
+      const catalogById = new Map(catalogDocs.map(d => [String(d._id), d]));
+
+      const resolved = [];
+      for (let i = 0; i < services.length; i++) {
+        const s = services[i];
+        const catalog = catalogById.get(String(s.serviceId));
+        const fallbackName = s.name || `Service ${i + 1}`;
+        const displayName = catalog?.name || fallbackName;
+        const startTimeRaw = s.startTime || s.time || null;
+        if (!startTimeRaw || typeof startTimeRaw !== 'string' || !/^\d{1,2}:\d{2}/.test(startTimeRaw)) {
+          return res.status(400).json({
+            success: false,
+            error: `Please select start time for ${displayName}`
+          });
+        }
+        if (!catalog || !catalog.duration || catalog.duration < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Service duration is missing in service settings for ${displayName}`
+          });
+        }
+        const duration = catalog.duration;
+        const startMinutes = parseTimeToMinutes(startTimeRaw);
+        const dayStart = parseDateIST(date);
+        const startAt = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
+        const endAt = new Date(startAt.getTime() + duration * 60 * 1000);
+        resolved.push({
+          raw: s,
+          name: displayName,
+          serviceId: s.serviceId,
+          time: minutesToTimeString(startMinutes),
+          duration,
+          price: typeof s.price === 'number' ? s.price : 0,
+          startAt,
+          endAt
+        });
+      }
+
+      // Conflict pre-check across submitted services + existing bookings.
+      const formatTimeForError = (timeStr) => {
+        const m = parseTimeToMinutes(timeStr);
+        const h24 = Math.floor(m / 60);
+        const mins = m % 60;
+        const period = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+        return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
+      };
+
+      // Within-batch overlap check (same staff in this submission).
+      for (let i = 0; i < resolved.length; i++) {
+        const a = resolved[i];
+        const aStaffId = getPrimaryStaffId(a.raw);
+        for (let j = i + 1; j < resolved.length; j++) {
+          const b = resolved[j];
+          const bStaffId = getPrimaryStaffId(b.raw);
+          if (!aStaffId || !bStaffId) continue;
+          if (aStaffId !== bStaffId) continue;
+          if (a.startAt < b.endAt && a.endAt > b.startAt) {
+            return res.status(409).json({
+              success: false,
+              error: `Staff is already booked from ${formatTimeForError(a.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(a.time) + a.duration))}`
+            });
+          }
+        }
+      }
+
+      // External conflict check against existing appointments per staff.
+      for (const r of resolved) {
+        const staffId = getPrimaryStaffId(r.raw);
+        if (!staffId) {
+          return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
+        }
+        const result = await detectStaffConflict(
+          { Appointment, BookingHold },
+          {
+            branchId: req.user.branchId,
+            staffId,
+            start: r.startAt,
+            end: r.endAt,
+            skipHoldCheck: true
+          }
+        );
+        if (result.conflict) {
+          return res.status(409).json({
+            success: false,
+            error: `Staff is already booked from ${formatTimeForError(r.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(r.time) + r.duration))}`
+          });
+        }
+      }
+
+      const bookingGroupId = existingBookingGroupId || uuidv4();
+      for (const r of resolved) {
+        const appointmentData = {
+          clientId,
+          serviceId: r.serviceId,
+          date,
+          time: r.time,
+          duration: r.duration,
+          startAt: r.startAt,
+          endAt: r.endAt,
+          status,
+          notes,
+          leadSource: leadSource || '',
+          createdBy,
+          price: r.price,
+          branchId: req.user.branchId,
+          bookingGroupId,
+          schedulingMode: 'custom'
+        };
+
+        if (r.raw.staffAssignments && Array.isArray(r.raw.staffAssignments)) {
+          appointmentData.staffAssignments = r.raw.staffAssignments;
+          const totalPercentage = r.raw.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+          if (Math.abs(totalPercentage - 100) > 0.01) {
+            return res.status(400).json({
+              success: false,
+              error: 'Staff assignment percentages must add up to 100%'
+            });
+          }
+        } else if (r.raw.staffId) {
+          appointmentData.staffId = r.raw.staffId;
+          appointmentData.staffAssignments = [{
+            staffId: r.raw.staffId,
+            percentage: 100,
+            role: 'primary'
+          }];
+        }
+
+        const newAppointment = new Appointment(appointmentData);
+        const savedAppointment = await newAppointment.save();
+
+        const populatedAppointment = await Appointment.findById(savedAppointment._id)
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role')
+          .populate('staffAssignments.staffId', 'name role');
+
+        createdAppointments.push(populatedAppointment);
+      }
+    } else if (allSameStaff && services.length > 1) {
       // Single appointment with multiple services (same staff)
       const first = services[0];
       const additionalIds = services.slice(1).map((s) => s.serviceId);
@@ -9147,7 +9297,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
   try {
     const { id } = req.params;
     const updateData = req.body;
-    const { Appointment } = req.businessModels;
+    const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
 
     // Find the appointment
     const appointment = await Appointment.findById(id)
@@ -9172,6 +9322,89 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       updateData.status !== 'cancelled' &&
       ((updateData.date && updateData.date !== appointment.date) ||
        (updateData.time && updateData.time !== appointment.time));
+
+    // When the time changes for a single appointment doc (per-service edit), refetch duration
+    // from the Service catalog as source of truth, recompute startAt/endAt, and pre-check staff conflict.
+    const timeIsChanging = updateData.time && updateData.time !== appointment.time;
+    const dateIsChanging = updateData.date && updateData.date !== appointment.date;
+    if ((timeIsChanging || dateIsChanging) && updateData.status !== 'cancelled') {
+      const newTime = updateData.time || appointment.time;
+      const newDate = updateData.date || appointment.date;
+      if (!/^\d{1,2}:\d{2}/.test(String(newTime || ''))) {
+        return res.status(400).json({ success: false, error: 'Please select a valid start time' });
+      }
+
+      const serviceCatalog = appointment.serviceId && typeof appointment.serviceId === 'object' && appointment.serviceId.duration
+        ? appointment.serviceId
+        : await BusinessService.findById(appointment.serviceId).select('_id name duration').lean();
+      const serviceName = serviceCatalog?.name || 'this service';
+      const catalogDuration = serviceCatalog?.duration;
+      // For sequential same-staff multi-service docs, appointment.duration is the sum across services and the
+      // catalog row only covers the primary service — keep the existing total in that case.
+      const hasAdditional = Array.isArray(appointment.additionalServiceIds) && appointment.additionalServiceIds.length > 0;
+      let durationForWindow = appointment.duration || 60;
+      if (!hasAdditional) {
+        if (!catalogDuration || catalogDuration < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Service duration is missing in service settings for ${serviceName}`
+          });
+        }
+        durationForWindow = catalogDuration;
+        updateData.duration = catalogDuration;
+      }
+
+      const dayStart = parseDateIST(newDate);
+      const startMinutes = parseTimeToMinutes(newTime);
+      const startAt = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
+      const endAt = new Date(startAt.getTime() + durationForWindow * 60 * 1000);
+      updateData.startAt = startAt;
+      updateData.endAt = endAt;
+
+      // Conflict detection (skip if newly cancelled).
+      const primaryStaffId = (() => {
+        if (updateData.staffId) return String(updateData.staffId);
+        if (Array.isArray(updateData.staffAssignments) && updateData.staffAssignments[0]?.staffId) {
+          return String(updateData.staffAssignments[0].staffId);
+        }
+        if (appointment.staffId) {
+          return String(appointment.staffId._id || appointment.staffId);
+        }
+        if (Array.isArray(appointment.staffAssignments) && appointment.staffAssignments[0]?.staffId) {
+          return String(appointment.staffAssignments[0].staffId);
+        }
+        return null;
+      })();
+      if (primaryStaffId) {
+        const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
+        const result = await detectStaffConflict(
+          { Appointment, BookingHold },
+          {
+            branchId: req.user.branchId,
+            staffId: primaryStaffId,
+            start: startAt,
+            end: endAt,
+            excludeAppointmentId: id,
+            skipHoldCheck: true
+          }
+        );
+        if (result.conflict) {
+          const formatTimeForError = (timeStr) => {
+            const m = parseTimeToMinutes(timeStr);
+            const h24 = Math.floor(m / 60);
+            const mins = m % 60;
+            const period = h24 >= 12 ? 'PM' : 'AM';
+            const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+            return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
+          };
+          const endStr = minutesToTimeString(startMinutes + durationForWindow);
+          return res.status(409).json({
+            success: false,
+            error: `Staff is already booked from ${formatTimeForError(newTime)} to ${formatTimeForError(endStr)}`
+          });
+        }
+      }
+    }
 
     // Update the appointment
     const updatedAppointment = await Appointment.findByIdAndUpdate(
@@ -9460,6 +9693,13 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       data: updatedAppointment
     });
   } catch (error) {
+    if (error.code === 11000 || error.codeName === 'DuplicateKey' || /duplicate key/i.test(String(error.message || ''))) {
+      logger.warn('Appointment slot conflict on update (duplicate slotKey):', error.message);
+      return res.status(409).json({
+        success: false,
+        error: 'This time slot is already booked for the selected staff member. Please choose a different time.'
+      });
+    }
     logger.error('Error updating appointment:', error);
     res.status(500).json({
       success: false,

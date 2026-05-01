@@ -133,6 +133,12 @@ const appointmentSchema = new mongoose.Schema({
   slotKey: {
     type: String,
     required: false
+  },
+  /** How services within the booking group are scheduled. Per-service custom start times use 'custom'. */
+  schedulingMode: {
+    type: String,
+    enum: ['sequential', 'custom'],
+    default: 'sequential'
   }
 }, {
   timestamps: true
