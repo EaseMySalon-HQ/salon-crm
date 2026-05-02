@@ -2112,9 +2112,8 @@ export const AppointmentsCalendarGrid = forwardRef<
                           isDragging
                             ? "ring-2 ring-violet-400/80 transition-none opacity-40"
                             : staffLockedCard
-                              ? "shadow-[0_0_0_3px_rgb(217,119,6)] transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
-                              : "transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
-                            : `transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ""}`
+                              ? `shadow-[0_0_0_3px_rgb(217,119,6)] transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ""}`
+                              : `transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ""}`
                         } ${isUpdating ? "opacity-70" : ""}`}
                         style={{
                           top: top,
@@ -2204,7 +2203,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                               {getTotalDuration(apt as any)} min
                             </span>
                             <div className="flex items-center gap-1 flex-wrap justify-end shrink-0">
-                            <div className="flex items-center gap-1 shrink-0">
                               {groupAccentRing && (
                                 <span
                                   className="text-[10px] font-semibold text-slate-600 bg-white px-1.5 py-0.5 rounded-md border border-slate-200"

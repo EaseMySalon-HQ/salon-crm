@@ -53,6 +53,14 @@ function parseTimeToMinutes(time: string): number {
 }
 
 /** Add minutes to a time string, return "9:30 AM" format */
+/** Convert an absolute minutes-of-day value to a 24h "HH:mm" string. */
+function minutesToTimeString(absMinutes: number): string {
+  const total = ((absMinutes % (24 * 60)) + 24 * 60) % (24 * 60)
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
+}
+
 function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
   const baseM = parseTimeToMinutes(timeStr)
   const totalM = baseM + minutesToAdd
@@ -167,8 +175,14 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
   const [existingBookingGroupId, setExistingBookingGroupId] = useState<string | null>(null)
   const [existingGroupAppointmentIds, setExistingGroupAppointmentIds] = useState<string[]>([])
-  const [schedulingMode, setSchedulingMode] = useState<SchedulingMode>("sequential")
-  const [editLockedMode, setEditLockedMode] = useState(false)
+  /**
+   * Effective scheduling mode is derived: any service with an explicit startTime puts the
+   * booking in "custom" mode. Otherwise services chain sequentially from the appointment time.
+   */
+  const schedulingMode = useMemo<SchedulingMode>(
+    () => (selectedServices.some((s) => !!s.startTime) ? "custom" : "sequential"),
+    [selectedServices]
+  )
 
   // Prefer URL params (from calendar slot) over props so time is correct on first paint
   const urlDate = searchParams?.get("date") ?? initialDate
@@ -287,20 +301,23 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
 
   /**
    * Compute the start minutes for a given service row.
-   * Custom mode uses the row's own startTime; sequential mode chains durations from formTime.
+   * If the row has its own startTime, use it. Otherwise the row chains from the previous
+   * service's effective end (whether the previous was sequential or custom).
    */
   const getServiceStartMinutes = useCallback((serviceIndex: number): number => {
-    if (schedulingMode === "custom") {
-      const rowStart = selectedServices[serviceIndex]?.startTime
-      if (rowStart) return parseTimeToMinutes(rowStart)
-      return formTime ? parseTimeToMinutes(formTime) : 0
-    }
-    let serviceStartM = formTime ? parseTimeToMinutes(formTime) : 0
+    const own = selectedServices[serviceIndex]?.startTime
+    if (own) return parseTimeToMinutes(own)
+    let cursorM = formTime ? parseTimeToMinutes(formTime) : 0
     for (let i = 0; i < serviceIndex; i++) {
-      serviceStartM += selectedServices[i]?.duration ?? 60
+      const prev = selectedServices[i]
+      if (prev?.startTime) {
+        cursorM = parseTimeToMinutes(prev.startTime) + (prev.duration || 0)
+      } else {
+        cursorM += prev?.duration ?? 60
+      }
     }
-    return serviceStartM
-  }, [schedulingMode, selectedServices, formTime])
+    return cursorM
+  }, [selectedServices, formTime])
 
   /**
    * Get staff available for a specific service's time block only.
@@ -414,17 +431,11 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const related = (res as any).relatedAppointments as any[] | undefined
 
         const nonCancelledRelated = (related ?? []).filter((r: any) => r.status !== "cancelled")
-        // Detect custom scheduling mode from the loaded booking (any doc in the group flags it).
+        // Detect custom scheduling mode from the loaded booking. When custom, each service
+        // gets an explicit startTime below — that alone causes the derived schedulingMode to be "custom".
         const groupIsCustom =
           a.schedulingMode === "custom" ||
           nonCancelledRelated.some((r: any) => r.schedulingMode === "custom")
-        if (groupIsCustom) {
-          setSchedulingMode("custom")
-          setEditLockedMode(true)
-        } else {
-          setSchedulingMode("sequential")
-          setEditLockedMode(false)
-        }
 
         const timeStringTo24h = (t: string): string => {
           const m = parseTimeToMinutes(t)
@@ -782,23 +793,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   // Add a service to the appointment (pre-fill staff when coming from calendar slot)
   const addService = () => {
     const isFirstService = selectedServices.length === 0
-    // Default start time in custom mode: chain after the previous service if known, else the form base time.
-    let defaultStart: string | undefined = undefined
-    if (schedulingMode === "custom") {
-      if (selectedServices.length === 0) {
-        defaultStart = formTime || ""
-      } else {
-        const last = selectedServices[selectedServices.length - 1]
-        if (last?.startTime) {
-          const m = parseTimeToMinutes(last.startTime) + (last.duration || 0)
-          const h = Math.floor(m / 60) % 24
-          const min = m % 60
-          defaultStart = `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`
-        } else {
-          defaultStart = formTime || ""
-        }
-      }
-    }
     const newService: SelectedService = {
       id: Date.now().toString(),
       serviceId: "",
@@ -807,29 +801,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       duration: 0,
       price: 0,
       staffLocked: false,
-      ...(defaultStart !== undefined ? { startTime: defaultStart } : {}),
     }
     setSelectedServices([...selectedServices, newService])
-  }
-
-  /** Switch scheduling mode. When entering custom mode, seed each service's startTime so users see sensible defaults. */
-  const handleSchedulingModeChange = (mode: SchedulingMode) => {
-    if (editLockedMode) return
-    setSchedulingMode(mode)
-    if (mode === "custom") {
-      setSelectedServices((prev) => {
-        let cumulative = 0
-        const base = formTime ? parseTimeToMinutes(formTime) : 0
-        return prev.map((s, idx) => {
-          if (s.startTime) return s
-          const startM = base + cumulative
-          cumulative += s.duration || 0
-          const h = Math.floor(startM / 60) % 24
-          const min = startM % 60
-          return { ...s, startTime: `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}` }
-        })
-      })
-    }
   }
 
   // Remove a service from the appointment
@@ -940,27 +913,19 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       return
     }
 
-    // Custom-mode validation: every service must have its own start time.
+    // Custom mode (any service has an explicit startTime): check same-staff overlap on effective times.
+    // Services without a picked time fall back to sequential chaining via getServiceStartMinutes.
     if (schedulingMode === "custom") {
-      const missingStart = selectedServices.find((s) => !s.startTime)
-      if (missingStart) {
-        toast({
-          title: "Error",
-          description: `Please select start time for ${missingStart.name || "every service"}`,
-          variant: "destructive",
-        })
-        return
-      }
-      // Within-form overlap check on same staff (mirrors backend rule).
+      const effectiveStarts = selectedServices.map((_, idx) => getServiceStartMinutes(idx))
       for (let i = 0; i < selectedServices.length; i++) {
         const a = selectedServices[i]
-        const aStart = parseTimeToMinutes(a.startTime || "")
+        const aStart = effectiveStarts[i]
         const aEnd = aStart + (a.duration || 0)
         for (let j = i + 1; j < selectedServices.length; j++) {
           const b = selectedServices[j]
           if (!a.staffId || !b.staffId) continue
           if (a.staffId !== b.staffId) continue
-          const bStart = parseTimeToMinutes(b.startTime || "")
+          const bStart = effectiveStarts[j]
           const bEnd = bStart + (b.duration || 0)
           if (aStart < bEnd && aEnd > bStart) {
             toast({
@@ -1141,17 +1106,22 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             leadSource: leadSourceValue,
             bookingGroupId: groupId,
             schedulingMode,
-            services: newServicesDifferentStaff.map((s) => ({
-              serviceId: s.serviceId,
-              staffId: s.staffId,
-              name: s.name,
-              duration: s.duration,
-              price: s.price,
-              staffLocked: !!s.staffLocked,
-              ...(schedulingMode === "custom" && s.startTime
-                ? { startTime: formatTimeForApi(s.startTime) }
-                : {}),
-            })),
+            services: newServicesDifferentStaff.map((s) => {
+              const idx = selectedServices.findIndex((x) => x.id === s.id)
+              const effective = s.startTime
+                || (schedulingMode === "custom" && idx >= 0 ? minutesToTimeString(getServiceStartMinutes(idx)) : undefined)
+              return {
+                serviceId: s.serviceId,
+                staffId: s.staffId,
+                name: s.name,
+                duration: s.duration,
+                price: s.price,
+                staffLocked: !!s.staffLocked,
+                ...(schedulingMode === "custom" && effective
+                  ? { startTime: formatTimeForApi(effective) }
+                  : {}),
+              }
+            }),
             totalDuration: newServicesDifferentStaff.reduce((sum, s) => sum + (s.duration || 0), 0),
             totalAmount: newServicesDifferentStaff.reduce((sum, s) => sum + (s.price || 0), 0),
             notes: values.notes,
@@ -1174,17 +1144,21 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           time: formatTimeForApi(values.time),
           leadSource: leadSourceValue,
           schedulingMode,
-          services: selectedServices.map(service => ({
-            serviceId: service.serviceId,
-            staffId: service.staffId,
-            name: service.name,
-            duration: service.duration,
-            price: service.price,
-            staffLocked: !!service.staffLocked,
-            ...(schedulingMode === "custom" && service.startTime
-              ? { startTime: formatTimeForApi(service.startTime) }
-              : {}),
-          })),
+          services: selectedServices.map((service, idx) => {
+            const effective = service.startTime
+              || (schedulingMode === "custom" ? minutesToTimeString(getServiceStartMinutes(idx)) : undefined)
+            return {
+              serviceId: service.serviceId,
+              staffId: service.staffId,
+              name: service.name,
+              duration: service.duration,
+              price: service.price,
+              staffLocked: !!service.staffLocked,
+              ...(schedulingMode === "custom" && effective
+                ? { startTime: formatTimeForApi(effective) }
+                : {}),
+            }
+          }),
           totalDuration: calculateTotalDuration(),
           totalAmount: calculateTotalAmount(),
           notes: values.notes,
@@ -1450,46 +1424,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                 {!isDrawer && <p className="text-sm text-slate-500">Add services and assign staff members for this appointment</p>}
               </div>
 
-              {/* Scheduling mode toggle */}
-              <div className="flex flex-col gap-2">
-                <Label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Scheduling</Label>
-                <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 p-1 w-fit">
-                  <button
-                    type="button"
-                    disabled={editLockedMode && schedulingMode !== "sequential"}
-                    onClick={() => handleSchedulingModeChange("sequential")}
-                    className={cn(
-                      "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
-                      schedulingMode === "sequential"
-                        ? "bg-white text-slate-900 shadow-sm"
-                        : "text-slate-600 hover:text-slate-900",
-                      editLockedMode && schedulingMode !== "sequential" ? "opacity-50 cursor-not-allowed" : ""
-                    )}
-                  >
-                    Same time for all services
-                  </button>
-                  <button
-                    type="button"
-                    disabled={editLockedMode && schedulingMode !== "custom"}
-                    onClick={() => handleSchedulingModeChange("custom")}
-                    className={cn(
-                      "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
-                      schedulingMode === "custom"
-                        ? "bg-white text-slate-900 shadow-sm"
-                        : "text-slate-600 hover:text-slate-900",
-                      editLockedMode && schedulingMode !== "custom" ? "opacity-50 cursor-not-allowed" : ""
-                    )}
-                  >
-                    Custom time per service
-                  </button>
-                </div>
-                {editLockedMode && (
-                  <p className="text-[11px] text-slate-500">
-                    Scheduling mode is locked for existing bookings. Cancel and rebook to switch modes.
-                  </p>
-                )}
-              </div>
-
               {selectedServices.length > 0 ? (
                 <div className="space-y-2">
                   {selectedServices.map((service) => {
@@ -1604,6 +1538,69 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                         </Select>
                         <Button
                           type="button"
+                          variant={service.staffLocked ? "secondary" : "ghost"}
+                          size="sm"
+                          className={cn(
+                            "h-9 w-9 shrink-0 p-0 border border-transparent",
+                            service.staffLocked
+                              ? "text-amber-800 bg-amber-100/90 border-amber-300 hover:bg-amber-100"
+                              : "text-slate-400 hover:text-amber-700 hover:bg-amber-50 border-slate-200"
+                          )}
+                          disabled={!service.staffId}
+                          title={
+                            service.staffLocked
+                              ? "Client requested this stylist — staff locked"
+                              : service.staffId
+                                ? "Mark: client requests this stylist only"
+                                : "Select a stylist first"
+                          }
+                          aria-pressed={!!service.staffLocked}
+                          onClick={() =>
+                            service.staffId &&
+                            updateService(service.id, "staffLocked", !service.staffLocked)
+                          }
+                        >
+                          {service.staffLocked ? (
+                            <Lock className="h-4 w-4" aria-hidden />
+                          ) : (
+                            <LockOpen className="h-4 w-4" aria-hidden />
+                          )}
+                        </Button>
+                        {selectedServices.length >= 2 && (() => {
+                          // Show the effective start time as the picker's value so all rows look populated.
+                          // Row 0 reflects the appointment time picked above; later rows chain from it.
+                          const computedStart = minutesToTimeString(serviceStartM)
+                          const matchedSlot = timeSlots.find((t) => parseTimeToMinutes(t) === serviceStartM)
+                          const displayValue = service.startTime || (formTime ? (matchedSlot ?? computedStart) : undefined)
+                          return (
+                            <Select
+                              value={displayValue}
+                              onValueChange={(value) => updateService(service.id, "startTime", value)}
+                            >
+                              <SelectTrigger
+                                className="h-9 w-[110px] shrink-0 border-slate-200 rounded-md text-sm bg-white tabular-nums"
+                                title={
+                                  service.duration
+                                    ? `Starts ${formatMinutesAs12h(serviceStartM)} · Ends ${formatMinutesAs12h(serviceEndM)} · ${service.duration} min`
+                                    : serviceIndex === 0
+                                      ? "Defaults to the appointment time above"
+                                      : "Defaults to right after the previous service"
+                                }
+                              >
+                                <SelectValue placeholder="Start" />
+                              </SelectTrigger>
+                              <SelectContent className="max-h-60">
+                                {timeSlots.map((time) => (
+                                  <SelectItem key={time} value={time} className="text-xs tabular-nums">
+                                    {time}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )
+                        })()}
+                        <Button
+                          type="button"
                           variant="ghost"
                           size="sm"
                           onClick={() => removeService(service.id)}
@@ -1612,109 +1609,15 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
-                      <Select
-                        value={service.staffId}
-                        onValueChange={(value) => updateService(service.id, "staffId", value)}
-                      >
-                        <SelectTrigger className="h-9 w-[130px] shrink-0 border-slate-200 rounded-md text-sm">
-                          <SelectValue placeholder="Staff" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {loadingStaff ? (
-                            <SelectItem value="__loading__" disabled>Loading...</SelectItem>
-                          ) : staff.length === 0 ? (
-                            <SelectItem value="no-staff" disabled>No staff</SelectItem>
-                          ) : (
-                            (() => {
-                              const serviceIndex = selectedServices.indexOf(service)
-                              const list = getAvailableStaffForService(serviceIndex).filter((member: any) => member._id || member.id)
-                              const selectedId = service.staffId
-                              const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
-                              const options = selectedNotInList
-                                ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
-                                : list
-                              return options.map((member: any) => {
-                                const staffId = member._id || member.id
-                                const isUnavailable = selectedNotInList && staffId === selectedId
-                                return (
-                                  <SelectItem key={staffId} value={staffId}>
-                                    {member.name}
-                                    {isUnavailable ? " (unavailable)" : ""}
-                                  </SelectItem>
-                                )
-                              })
-                            })()
-                          )}
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        type="button"
-                        variant={service.staffLocked ? "secondary" : "ghost"}
-                        size="sm"
-                        className={cn(
-                          "h-9 w-9 shrink-0 p-0 border border-transparent",
-                          service.staffLocked
-                            ? "text-amber-800 bg-amber-100/90 border-amber-300 hover:bg-amber-100"
-                            : "text-slate-400 hover:text-amber-700 hover:bg-amber-50 border-slate-200"
-                        )}
-                        disabled={!service.staffId}
-                        title={
-                          service.staffLocked
-                            ? "Client requested this stylist — staff locked"
-                            : service.staffId
-                              ? "Mark: client requests this stylist only"
-                              : "Select a stylist first"
-                        }
-                        aria-pressed={!!service.staffLocked}
-                        onClick={() =>
-                          service.staffId &&
-                          updateService(service.id, "staffLocked", !service.staffLocked)
-                        }
-                      >
-                        {service.staffLocked ? (
-                          <Lock className="h-4 w-4" aria-hidden />
-                        ) : (
-                          <LockOpen className="h-4 w-4" aria-hidden />
-                        )}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeService(service.id)}
-                        className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                      {schedulingMode === "custom" && (
-                        <div className="flex items-center gap-2 pl-8">
-                          <Label className="text-[11px] font-medium text-slate-500 uppercase tracking-wide shrink-0">Start</Label>
-                          <Select
-                            value={service.startTime || undefined}
-                            onValueChange={(value) => updateService(service.id, "startTime", value)}
-                          >
-                            <SelectTrigger className="h-8 w-[110px] shrink-0 border-slate-200 rounded-md text-xs bg-white">
-                              <SelectValue placeholder="--:--" />
-                            </SelectTrigger>
-                            <SelectContent className="max-h-60">
-                              {timeSlots.map((time) => (
-                                <SelectItem key={time} value={time} className="text-xs">
-                                  {time}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <span className="text-[11px] text-slate-400">→</span>
-                          <span className="text-[11px] font-medium text-slate-600 tabular-nums">
-                            {service.startTime && service.duration
-                              ? `End ${formatMinutesAs12h(serviceEndM)}`
-                              : "End —"}
-                          </span>
-                          <span className="text-[11px] text-slate-400 ml-auto">
-                            {service.duration ? `${service.duration} min` : ""}
-                          </span>
+                      {selectedServices.length >= 2 && service.duration ? (
+                        <div className="flex items-center gap-2 pl-8 text-[11px] text-slate-500 tabular-nums">
+                          <span>Starts {formatMinutesAs12h(serviceStartM)}</span>
+                          <span className="text-slate-300">·</span>
+                          <span>Ends {formatMinutesAs12h(serviceEndM)}</span>
+                          <span className="text-slate-300">·</span>
+                          <span>{service.duration} min</span>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   )})}
                 </div>
@@ -1725,19 +1628,18 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                 </div>
               )}
 
-              {/* Timeline preview (custom mode only) */}
-              {schedulingMode === "custom" && selectedServices.length > 0 && (
+              {/* Timeline preview (visible whenever there are 2+ services) */}
+              {selectedServices.length >= 2 && (
                 <details className="rounded-lg border border-slate-200 bg-white">
                   <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 select-none">
-                    Timeline preview ({selectedServices.length} {selectedServices.length === 1 ? "service" : "services"})
+                    Timeline preview ({selectedServices.length} services)
                   </summary>
                   <div className="px-3 pb-3 pt-1 space-y-1.5">
                     {[...selectedServices]
-                      .map((s, idx) => ({ ...s, _idx: idx }))
-                      .filter((s) => s.startTime)
-                      .sort((a, b) => parseTimeToMinutes(a.startTime || "") - parseTimeToMinutes(b.startTime || ""))
+                      .map((s, idx) => ({ ...s, _idx: idx, _startM: getServiceStartMinutes(idx) }))
+                      .sort((a, b) => a._startM - b._startM)
                       .map((s) => {
-                        const startM = parseTimeToMinutes(s.startTime || "")
+                        const startM = s._startM
                         const endM = startM + (s.duration || 0)
                         const fmt = (m: number) => {
                           const h24 = Math.floor(m / 60) % 24
@@ -1756,7 +1658,12 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           >
                             <div className="min-w-0 flex-1">
                               <div className="font-medium text-slate-800 truncate">{serviceLabel}</div>
-                              <div className="text-slate-500 truncate">{staffLabel}</div>
+                              <div className="text-slate-500 truncate">
+                                {staffLabel}
+                                {!s.startTime && s._idx >= 1 ? (
+                                  <span className="ml-1 text-slate-400">· auto</span>
+                                ) : null}
+                              </div>
                             </div>
                             <div className="text-slate-700 tabular-nums shrink-0">
                               {fmt(startM)} <span className="text-slate-400">–</span> {fmt(endM)}
@@ -1764,9 +1671,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           </div>
                         )
                       })}
-                    {selectedServices.every((s) => !s.startTime) && (
-                      <p className="text-xs text-slate-500">Set a start time on each service to see the timeline.</p>
-                    )}
                   </div>
                 </details>
               )}

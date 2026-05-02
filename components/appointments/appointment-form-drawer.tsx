@@ -65,7 +65,7 @@ export function AppointmentFormDrawer({
         side="right"
         className={cn(
           "w-full overflow-hidden p-0 flex flex-col transition-[max-width] duration-200",
-          selectedClient ? "sm:max-w-4xl" : "sm:max-w-2xl"
+          selectedClient ? "sm:max-w-5xl" : "sm:max-w-3xl"
         )}
       >
         <div className="flex h-full overflow-hidden">

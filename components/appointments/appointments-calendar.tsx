@@ -945,8 +945,7 @@ export const AppointmentsCalendar = forwardRef<
                         onDragEnd={handleCardDragEnd}
                         className={`${getStatusCardFill(appointment.status)} border rounded-lg transition-colors duration-200 overflow-hidden flex flex-col ${
                           isDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
-                        } ${anyAppt.staffLocked === true ? '!border-[3px] !border-amber-600' : ''} ${isDragging ? 'opacity-50' : ''}`}
-                        } ${isDragging ? 'opacity-50' : ''} ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ''}`}
+                        } ${anyAppt.staffLocked === true ? '!border-[3px] !border-amber-600' : ''} ${isDragging ? 'opacity-50' : ''} ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ''}`}
                         onClick={() => {
                           if (justDropped) return
                           setSelectedAppointment(appointment)
