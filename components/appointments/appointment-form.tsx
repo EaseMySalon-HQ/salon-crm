@@ -30,6 +30,7 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
 import { ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, BlockTimeAPI } from "@/lib/api"
+import { isHiddenAppointment } from "@/lib/appointment-calendar-helpers"
 
 /** Convert 24h time (e.g. "09:00") to 12h for API storage ("9:00 AM") for backward compatibility */
 function formatTimeForApi(time: string): string {
@@ -366,7 +367,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         if (s.id.startsWith("related-")) idsBeingEdited.add(s.id.replace("related-", ""))
       })
       const hasOverlappingAppointment = appointmentsForDate.some((apt: any) => {
-        if (apt.status === "cancelled") return false
+        if (isHiddenAppointment(apt)) return false
         const aptId = apt._id || apt.id
         if (aptId && idsBeingEdited.has(String(aptId))) return false
         const aptStaffId = apt.staffId?._id || apt.staffId?.id || apt.staffId
@@ -430,7 +431,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         }> = []
         const related = (res as any).relatedAppointments as any[] | undefined
 
-        const nonCancelledRelated = (related ?? []).filter((r: any) => r.status !== "cancelled")
+        const nonCancelledRelated = (related ?? []).filter((r: any) => !isHiddenAppointment(r))
         // Detect custom scheduling mode from the loaded booking. When custom, each service
         // gets an explicit startTime below — that alone causes the derived schedulingMode to be "custom".
         const groupIsCustom =
@@ -974,12 +975,10 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const newServices = selectedServices.filter((s) => !["edit-service"].includes(s.id) && !s.id.startsWith("related-") && !s.id.startsWith("additional-"))
         const primary = selectedServices.find((s) => s.id === "edit-service")
         const existingAdditional = selectedServices.filter((s) => s.id.startsWith("additional-"))
-        // Newly added services (via Add Service) with same staff as primary → merge into same card
-        const newServicesSameStaff = primary ? newServices.filter((s) => s.staffId && s.staffId === primary.staffId) : []
-        const newServicesDifferentStaff = primary ? newServices.filter((s) => !s.staffId || s.staffId !== primary.staffId) : newServices
 
-        if (hasAdditional || newServicesSameStaff.length > 0) {
-          // Same staff, multiple services: update single appointment with primary + additionalServiceIds
+        if (hasAdditional) {
+          // Legacy single-doc booking with additionalServiceIds: keep existing additionals on the same doc.
+          // Newly added services (regardless of staff) flow to the trailing block to become new linked cards.
           // If primary (edit-service) was removed: promote first additional to primary
           const effectivePrimary = primary ?? (existingAdditional.length > 0 ? { ...existingAdditional[0], id: "edit-service" } : null)
           if (!effectivePrimary) {
@@ -987,10 +986,10 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             return
           }
           const restAdditional = primary ? existingAdditional : existingAdditional.slice(1)
-          const allAdditional = [...restAdditional, ...newServicesSameStaff]
-          const additionalIds = allAdditional.map((s) => s.serviceId)
-          const totalDur = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
-          const totalPrice = selectedServices.reduce((sum, s) => sum + (s.price || 0), 0)
+          const additionalIds = restAdditional.map((s) => s.serviceId)
+          const legacyServices = [effectivePrimary, ...restAdditional]
+          const totalDur = legacyServices.reduce((sum, s) => sum + (s.duration || 0), 0)
+          const totalPrice = legacyServices.reduce((sum, s) => sum + (s.price || 0), 0)
           const updateRes = await AppointmentsAPI.update(appointmentId, {
             date: dateStr,
             time: timeStr,
@@ -1083,15 +1082,16 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
         }
 
-        if (newServicesDifferentStaff.length > 0) {
-          // Link new cards to existing group (or create group for originally single card)
+        if (newServices.length > 0) {
+          // Link new cards to existing group (or create group for originally single card).
+          // Each newly added service — same staff or different staff — becomes its own linked card.
           const groupId = existingBookingGroupId || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
           if (!existingBookingGroupId && !appointmentIdDeleted) {
             await AppointmentsAPI.update(appointmentId, { bookingGroupId: groupId })
           }
           // New services must start after all existing services (sequential, no overlap)
           const firstNewIdx = selectedServices.findIndex((s) =>
-            newServicesDifferentStaff.some((n) => n.serviceId === s.serviceId && n.staffId === s.staffId)
+            newServices.some((n) => n.serviceId === s.serviceId && n.staffId === s.staffId)
           )
           const baseTimeForNew =
             firstNewIdx >= 0
@@ -1106,7 +1106,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             leadSource: leadSourceValue,
             bookingGroupId: groupId,
             schedulingMode,
-            services: newServicesDifferentStaff.map((s) => {
+            services: newServices.map((s) => {
               const idx = selectedServices.findIndex((x) => x.id === s.id)
               const effective = s.startTime
                 || (schedulingMode === "custom" && idx >= 0 ? minutesToTimeString(getServiceStartMinutes(idx)) : undefined)
@@ -1122,18 +1122,25 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                   : {}),
               }
             }),
-            totalDuration: newServicesDifferentStaff.reduce((sum, s) => sum + (s.duration || 0), 0),
-            totalAmount: newServicesDifferentStaff.reduce((sum, s) => sum + (s.price || 0), 0),
+            totalDuration: newServices.reduce((sum, s) => sum + (s.duration || 0), 0),
+            totalAmount: newServices.reduce((sum, s) => sum + (s.price || 0), 0),
             notes: values.notes,
             status: "scheduled",
           })
           if (!createRes?.success) {
-            toast({ title: "Error", description: "Failed to create new services.", variant: "destructive" })
+            toast({
+              title:
+                /\balready booked\b/i.test(createRes?.error || "")
+                  ? "Scheduling conflict"
+                  : "Error",
+              description: createRes?.error || "Failed to create new services.",
+              variant: "destructive",
+            })
             return
           }
         }
 
-        toast({ title: "Appointment Updated", description: newServicesSameStaff.length > 0 || newServicesDifferentStaff.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
+        toast({ title: "Appointment Updated", description: newServices.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
         if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("appointments-refresh"))
         onSuccess ? onSuccess() : router.push("/appointments")
       } else {
@@ -1165,16 +1172,25 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           status: "scheduled",
         }
         const response = await AppointmentsAPI.create(appointmentData)
-        if (response.success) {
-          toast({ title: "Appointment Created", description: "New appointment has been successfully scheduled." })
-          onSuccess ? onSuccess() : router.push("/appointments")
-        } else {
-          toast({ title: "Error", description: "Failed to create appointment. Please try again.", variant: "destructive" })
+        if (!response.success) {
+          toast({
+            title:
+              /\balready booked\b/i.test(response.error || "")
+                ? "Scheduling conflict"
+                : "Error",
+            description: response.error || "Failed to create appointment.",
+            variant: "destructive",
+          })
+          return
         }
+        toast({ title: "Appointment Created", description: "New appointment has been successfully scheduled." })
+        onSuccess ? onSuccess() : router.push("/appointments")
       }
     } catch (error: any) {
-      console.error('Error creating appointment:', error)
       const serverMsg = error?.responseData?.error || error?.response?.data?.error
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[appointment-form]", error?.message || error)
+      }
       toast({
         title: "Error",
         description: serverMsg || "Failed to create appointment. Please try again.",
@@ -1750,6 +1766,16 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
           if (isEditMode && appointmentId) {
             saleData.appointmentId = appointmentId
+            // Multi-doc booking groups: forward every sibling id so the quick-sale
+            // page bulk-completes them on successful payment (matches the calendar
+            // entry points). Without this, only the anchor card would be marked
+            // completed and other linked cards would be stuck in 'scheduled'.
+            if (existingGroupAppointmentIds && existingGroupAppointmentIds.length > 0) {
+              saleData.linkedAppointmentIds = existingGroupAppointmentIds
+            }
+            if (existingBookingGroupId) {
+              saleData.bookingGroupId = existingBookingGroupId
+            }
           }
           router.push(`/quick-sale?appointment=${btoa(JSON.stringify(saleData))}`)
         }}

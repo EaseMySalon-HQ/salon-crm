@@ -35,7 +35,9 @@ const itemSchema = new mongoose.Schema({
   // Price per unit excluding GST (for receipt display)
   priceExcludingGST: { type: Number },
   // Applicable tax rate % (for receipt display)
-  taxRate: { type: Number }
+  taxRate: { type: Number },
+  /** For bills linked to a booking: pre-booked service vs checkout add-on (reports / receipts). Server-set only. */
+  lineSource: { type: String, enum: ['appointment', 'walk_in'], required: false }
 }, { _id: false });
 
 const paymentHistorySchema = new mongoose.Schema({

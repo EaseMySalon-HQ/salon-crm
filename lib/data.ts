@@ -122,6 +122,8 @@ export interface ReceiptItem {
   staffContributions?: ReceiptStaffContribution[]
   total: number
   hsnSacCode?: string
+  /** When set on API sale items: checkout add-on vs pre-booked (`appointment` — not shown on receipt). */
+  lineSource?: string
 }
 
 export interface PaymentMethod {

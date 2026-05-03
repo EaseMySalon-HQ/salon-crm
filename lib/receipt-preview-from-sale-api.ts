@@ -71,6 +71,7 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
         taxAmount: item.taxAmount,
         priceExcludingGST: item.priceExcludingGST,
         taxRate: item.taxRate,
+        lineSource: item.lineSource,
       })) || [],
     subtotal: saleData.netTotal,
     subtotalExcludingTax,

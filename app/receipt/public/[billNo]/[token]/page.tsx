@@ -105,7 +105,8 @@ export default function PublicReceiptPage() {
                 hsnSacCode: item.hsnSacCode || '',
                 taxAmount: item.taxAmount,
                 priceExcludingGST: item.priceExcludingGST,
-                taxRate: item.taxRate
+                taxRate: item.taxRate,
+                lineSource: item.lineSource,
               })),
               netTotal: saleData.netTotal,
               taxAmount: saleData.taxAmount,

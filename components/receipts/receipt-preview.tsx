@@ -6,6 +6,7 @@ import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { Card, CardContent } from "@/components/ui/card"
 import { useCurrency } from "@/hooks/use-currency"
 
@@ -114,9 +115,17 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
                     )}
                     {(() => {
                       const staffLabel = formatReceiptItemStaffNames(item)
-                      return staffLabel ? (
-                        <span className="block text-xs text-gray-600">{staffLabel}</span>
-                      ) : null
+                      const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+                      return (
+                        <>
+                          {staffLabel ? (
+                            <span className="block text-xs text-gray-600">{staffLabel}</span>
+                          ) : null}
+                          {walkInLabel ? (
+                            <span className="block text-xs text-amber-800 font-medium">{walkInLabel}</span>
+                          ) : null}
+                        </>
+                      )
                     })()}
                   </td>
                   <td className="py-1.5 text-right">{formatAmount(item.price)}</td>

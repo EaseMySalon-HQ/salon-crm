@@ -32,7 +32,12 @@ import {
   getBookingGroupSiblings,
   collectSaleLinesFromAppointmentCard,
   buildRaiseSaleAppointmentPayload,
+  isHiddenAppointment,
 } from "@/lib/appointment-calendar-helpers"
+import {
+  RaiseSaleConfirmationModal,
+  type RaiseSaleConfirmationResult,
+} from "@/components/appointments/raise-sale-confirmation-modal"
 
 interface Appointment {
   _id: string
@@ -58,7 +63,7 @@ interface Appointment {
   date: string
   time: string
   duration: number
-  status: "scheduled" | "confirmed" | "arrived" | "service_started" | "completed" | "cancelled"
+  status: "scheduled" | "confirmed" | "arrived" | "service_started" | "completed" | "cancelled" | "cancelled_at_billing"
   notes?: string
   price: number
   createdAt: string
@@ -250,6 +255,8 @@ function getStatusBadgeClass(status: string): string {
       return "bg-emerald-100 text-emerald-700 border border-emerald-200"
     case "cancelled":
       return "bg-red-100 text-red-700 border border-red-200"
+    case "cancelled_at_billing":
+      return "bg-slate-200 text-slate-700 border border-slate-300"
     default:
       return "bg-slate-100 text-slate-700 border border-slate-200"
   }
@@ -268,6 +275,8 @@ function getStatusText(status: string): string {
       return "Completed"
     case "cancelled":
       return "Cancelled"
+    case "cancelled_at_billing":
+      return "Cancelled at billing"
     default:
       return status
   }
@@ -305,6 +314,10 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [appointmentToCancel, setAppointmentToCancel] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  // Per-service "Raise Sale" confirmation modal — opens only for multi-service bookings.
+  const [showRaiseSaleModal, setShowRaiseSaleModal] = useState(false)
+  const [raiseSaleAnchor, setRaiseSaleAnchor] = useState<Appointment | null>(null)
+  const [raiseSaleSiblings, setRaiseSaleSiblings] = useState<Appointment[]>([])
   const [showDeleteInvoiceConfirm, setShowDeleteInvoiceConfirm] = useState(false)
   const [deleteInvoiceReason, setDeleteInvoiceReason] = useState("")
   const [deletingInvoice, setDeletingInvoice] = useState(false)
@@ -596,7 +609,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     return appointments.filter((apt) => {
       const norm = dateNorm(apt.date)
       if (norm !== selectedDate) return false
-      if (apt.status === "cancelled") return false
+      if (isHiddenAppointment(apt)) return false
       if (staffFilter) {
         const primaryId = getPrimaryStaffId(apt)
         return primaryId === staffFilter
@@ -1003,7 +1016,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       .filter((a) => {
         const aptDate = new Date(a.date)
         aptDate.setHours(0, 0, 0, 0)
-        return aptDate >= today && a.status !== "cancelled"
+        return aptDate >= today && !isHiddenAppointment(a)
       })
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
   }
@@ -1091,25 +1104,19 @@ export const AppointmentsCalendarGrid = forwardRef<
         alert("Failed to delete invoice. Please try again.")
         return
       }
+      // Appointment cards are removed server-side with the bill; drop any local rows for this group immediately.
       const a = selectedAppointment as any
-      const idsToDelete = a.bookingGroupId
+      const idsToHide = a.bookingGroupId
         ? appointments.filter((apt) => (apt as Appointment).bookingGroupId === a.bookingGroupId).map((apt) => apt._id)
         : [selectedAppointment._id]
-      let allAptDeleted = true
-      for (const id of idsToDelete) {
-        const aptRes = await AppointmentsAPI.delete(id)
-        if (!aptRes?.success) allAptDeleted = false
-      }
-      if (allAptDeleted) {
-        const idsSet = new Set(idsToDelete)
-        setAppointments((prev) => prev.filter((apt) => !idsSet.has(apt._id)))
-      }
+      const idsSet = new Set(idsToHide)
+      setAppointments((prev) => prev.filter((apt) => !idsSet.has(apt._id)))
       setLinkedSale(null)
       setShowDetails(false)
       setShowDeleteInvoiceConfirm(false)
       setDeleteInvoiceReason("")
       window.dispatchEvent(new CustomEvent("appointments-refresh"))
-      alert(allAptDeleted ? "Invoice and appointment(s) deleted successfully" : "Invoice deleted. Failed to delete some appointment(s).")
+      alert(saleRes?.message || "Invoice and appointment(s) deleted successfully.")
     } catch (e) {
       console.error(e)
       alert("Failed to delete invoice. Please try again.")
@@ -1146,7 +1153,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   const handleTimeDragStart = (e: React.MouseEvent, apt: Appointment) => {
-    if (apt.status === "cancelled" || apt.status === "completed") return
+    if (isHiddenAppointment(apt) || apt.status === "completed") return
     e.preventDefault()
     e.stopPropagation()
     const cardEl = (e.target as HTMLElement).closest("[data-appointment-card]") as HTMLElement
@@ -1167,7 +1174,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   const handleResizeStart = (e: React.MouseEvent, apt: Appointment, mode: "resize-top" | "resize-bottom") => {
-    if (apt.status === "cancelled" || apt.status === "completed") return
+    if (isHiddenAppointment(apt) || apt.status === "completed") return
     e.preventDefault()
     e.stopPropagation()
     const cardEl = (e.target as HTMLElement).closest("[data-appointment-card]") as HTMLElement
@@ -2073,7 +2080,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                     const isUpdating = updatingTimeForId === apt._id
                     const staffLockedCard = a.staffLocked === true
                     const canDrag =
-                      apt.status !== "cancelled" && apt.status !== "completed"
+                      !isHiddenAppointment(apt) && apt.status !== "completed"
                     const baseHeight = Math.max(slotHeight * 0.6, height)
                     const resizeBottomHeight =
                       isDragging && draggingApt?.mode === "resize-bottom"
@@ -2211,7 +2218,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                                   Linked
                                 </span>
                               )}
-                              {a.prepaidAtBooking && apt.status !== "completed" && apt.status !== "cancelled" && (
+                              {a.prepaidAtBooking && apt.status !== "completed" && !isHiddenAppointment(apt) && (
                                 <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
                                   Paid
                                 </span>
@@ -2805,10 +2812,22 @@ export const AppointmentsCalendarGrid = forwardRef<
                             if (!selectedAppointment) return
                             const a = selectedAppointment as any
                             const siblings = getBookingGroupSiblings(appointments, a)
-                            const allServices = siblings.flatMap((sib: any) => collectSaleLinesFromAppointmentCard(sib))
-                            const appointmentData = buildRaiseSaleAppointmentPayload(a, siblings, allServices)
+                            // Modal only opens for multi-doc booking groups (≥2 sibling docs).
+                            // Single docs — including legacy bookings with `additionalServiceIds`
+                            // — fall back to the existing direct-to-quick-sale flow because the
+                            // backend doesn't yet support splitting an additional service off a
+                            // single Appointment row.
+                            if (siblings.length <= 1) {
+                              const allServices = collectSaleLinesFromAppointmentCard(a)
+                              const appointmentData = buildRaiseSaleAppointmentPayload(a, [a], allServices)
+                              setShowDetails(false)
+                              router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                              return
+                            }
+                            setRaiseSaleAnchor(a)
+                            setRaiseSaleSiblings(siblings as Appointment[])
                             setShowDetails(false)
-                            router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                            setShowRaiseSaleModal(true)
                           }}
                         >
                           Raise Sale
@@ -3248,6 +3267,25 @@ export const AppointmentsCalendarGrid = forwardRef<
           </div>
         </DialogContent>
       </Dialog>
+
+      <RaiseSaleConfirmationModal
+        open={showRaiseSaleModal}
+        anchor={raiseSaleAnchor as any}
+        siblings={raiseSaleSiblings as any}
+        onClose={() => setShowRaiseSaleModal(false)}
+        onConfirm={(result: RaiseSaleConfirmationResult) => {
+          setShowRaiseSaleModal(false)
+          if (result.skipBilling) {
+            toast({ title: "Booking cancelled", description: "All services were marked cancelled at billing." })
+            return
+          }
+          if (result.performed.length === 0 || !raiseSaleAnchor) return
+          const performedAnchor = (result.performed.find((p: any) => p._id === raiseSaleAnchor._id) || result.performed[0]) as any
+          const allServices = result.performed.flatMap((sib: any) => collectSaleLinesFromAppointmentCard(sib))
+          const appointmentData = buildRaiseSaleAppointmentPayload(performedAnchor, result.performed, allServices)
+          router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+        }}
+      />
     </div>
   )
 })

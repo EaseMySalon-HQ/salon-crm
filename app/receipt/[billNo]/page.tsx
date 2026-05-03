@@ -135,7 +135,8 @@ export default function ReceiptPage() {
                 hsnSacCode: item.hsnSacCode || '',
                 taxAmount: item.taxAmount,
                 priceExcludingGST: item.priceExcludingGST,
-                taxRate: item.taxRate
+                taxRate: item.taxRate,
+                lineSource: item.lineSource,
               })),
               netTotal: frontendData.subtotal,
               taxAmount: frontendData.tax,
@@ -215,7 +216,8 @@ export default function ReceiptPage() {
                 hsnSacCode: item.hsnSacCode || '',
                 taxAmount: item.taxAmount,
                 priceExcludingGST: item.priceExcludingGST,
-                taxRate: item.taxRate
+                taxRate: item.taxRate,
+                lineSource: item.lineSource,
               })),
               netTotal: saleData.netTotal,
               taxAmount: saleData.taxAmount,
@@ -379,7 +381,8 @@ ${publicUrl}`
         hsnSacCode: (item as any).hsnSacCode || "",
         taxAmount: (item as any).taxAmount,
         priceExcludingGST: (item as any).priceExcludingGST,
-        taxRate: (item as any).taxRate
+        taxRate: (item as any).taxRate,
+        lineSource: (item as any).lineSource,
       })),
       subtotal: receipt.netTotal,
       tip: receipt.tip || 0,

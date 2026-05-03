@@ -6,6 +6,7 @@ import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 
 interface ReceiptGeneratorProps {
@@ -189,10 +190,14 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
                 .map(
                   (item) => {
                   const staffLabel = formatReceiptItemStaffNames(item)
+                  const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+                  const lineMeta =
+                    (staffLabel || walkInLabel) &&
+                    `${staffLabel ? `<br><span style="font-size: 10px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 10px; color: #92400e;">${walkInLabel}</span>` : ""}`
                   return `
                 <tr style="border-bottom: 1px dashed #999;">
                   <td style="padding: 3px 2px;">${item.hsnSacCode || "-"}</td>
-                  <td style="padding: 3px 2px;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}${staffLabel ? `<br><span style="font-size: 10px; color: #666;">${staffLabel}</span>` : ""}</td>
+                  <td style="padding: 3px 2px;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}${lineMeta || ""}</td>
                   <td style="text-align: right; padding: 3px 2px;">${formatCurrency(item.price, businessSettings)}</td>
                   <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : formatCurrency(item.discount, businessSettings)) : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>

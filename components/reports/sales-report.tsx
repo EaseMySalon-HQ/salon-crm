@@ -1420,7 +1420,9 @@ export function SalesReport() {
         setIsDeleteDialogOpen(false)
         setSelectedSale(null)
         setDeleteSaleReason("")
-        
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("appointments-refresh"))
+        }
         toast({
           title: "Sale Deleted",
           description: `Sale record for ${selectedSale.customerName} has been successfully deleted.`,

@@ -55,8 +55,17 @@ const appointmentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['scheduled', 'confirmed', 'arrived', 'service_started', 'completed', 'cancelled', 'missed'],
+    enum: ['scheduled', 'confirmed', 'arrived', 'service_started', 'completed', 'cancelled', 'cancelled_at_billing', 'missed'],
     default: 'scheduled'
+  },
+  /** Audit: when a service was cancelled during the Raise Sale confirmation step */
+  cancelledAtBillingAt: {
+    type: Date,
+    default: null
+  },
+  cancelledAtBillingBy: {
+    type: String,
+    default: ''
   },
   notes: {
     type: String,

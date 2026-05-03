@@ -2,6 +2,7 @@
 
 import { Receipt } from "@/lib/data"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
@@ -204,10 +205,14 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
               ${receipt.items.map(item => {
                 const staffLabel = formatReceiptItemStaffNames(item)
+                const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+                const lineMeta =
+                  (staffLabel || walkInLabel) &&
+                  `${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 15px; color: #92400e;">${walkInLabel}</span>` : ""}`
                 return `
                 <tr style="border-bottom: 1px dashed #999;">
                   <td>${(item as any).hsnSacCode || "-"}</td>
-                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}</td>
+                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
                   <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                   <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                   <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
@@ -496,10 +501,14 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
             ${receipt.items.map(item => {
               const staffLabel = formatReceiptItemStaffNames(item)
+              const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+              const lineMeta =
+                (staffLabel || walkInLabel) &&
+                `${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 15px; color: #92400e;">${walkInLabel}</span>` : ""}`
               return `
               <tr style="border-bottom: 1px dashed #999;">
                 <td>${(item as any).hsnSacCode || "-"}</td>
-                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}</td>
+                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
                 <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                 <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                 <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>

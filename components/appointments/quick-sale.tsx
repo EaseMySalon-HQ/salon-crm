@@ -108,10 +108,14 @@ import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
 import { computePackageLineTotal } from "@/lib/package-tax"
 import { useRouter } from "next/navigation"
 import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
+import type { RaiseSaleLinkageSnapshot } from "@/lib/quick-sale-helpers"
 import {
   decodeQuickSaleAppointmentParam,
   extractAppointmentIdsFromPayload,
   resolveAppointmentIdsToComplete,
+  calendarYmdLocal,
+  raiseSaleLinkageSnapshotFromCheckoutState,
+  areRaiseSaleLinkageSnapshotsEqual,
 } from "@/lib/quick-sale-helpers"
 import type { ClientWalletLedgerRow } from "@/lib/client-wallet-ledger"
 import { flattenClientWalletLedger, walletActivityStatusDisplay } from "@/lib/client-wallet-ledger"
@@ -545,6 +549,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
   const [linkedAppointmentIds, setLinkedAppointmentIds] = useState<string[]>([])
   const [linkedAppointmentTime, setLinkedAppointmentTime] = useState<string | null>(null)
+  /** Raise Sale URL prefill only: compare checkout to this; drift → save without appointmentId / completion. */
+  const raiseSaleLinkageBaselineRef = useRef<RaiseSaleLinkageSnapshot | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
@@ -1305,6 +1311,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         const { primaryId, linkedIds } = extractAppointmentIdsFromPayload(rawAppointment)
         if (primaryId) setLinkedAppointmentId(primaryId)
         if (linkedIds.length > 0) setLinkedAppointmentIds(linkedIds)
+        if (!primaryId) raiseSaleLinkageBaselineRef.current = null
 
         const appointmentData = rawAppointment as any
         if (appointmentData.time) {
@@ -1403,6 +1410,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             })
             console.log("Pre-filled service:", service.name)
           }
+        }
+
+        if (primaryId) {
+          const dateYmd =
+            appointmentData.date != null && appointmentData.date !== ""
+              ? calendarYmdLocal(new Date(appointmentData.date))
+              : calendarYmdLocal(new Date())
+          raiseSaleLinkageBaselineRef.current = raiseSaleLinkageSnapshotFromCheckoutState({
+            clientId: String(appointmentData.clientId ?? "").trim(),
+            dateYYYYMMDD: dateYmd,
+            remarksNormalized: String(appointmentData.notes ?? "").trim(),
+            serviceLines: serviceItemsToAdd.map((si) => ({
+              serviceId: String(si.serviceId ?? ""),
+              staffId: String(si.staffId ?? ""),
+              quantity: Math.max(1, Math.floor(Number(si.quantity) || 1)),
+            })),
+            extraProducts: 0,
+            extraMemberships: 0,
+            extraPackages: 0,
+            extraPrepaid: 0,
+          })
         }
 
         if (serviceItemsToAdd.length > 0) {
@@ -4449,6 +4477,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       
       // Handle different modes: create, edit, exchange
       try {
+        let raiseSaleLinkageVoided = false
         let receiptNumber
         let saleId: string | undefined
 
@@ -4510,6 +4539,35 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           })
           return
         }
+
+        const linkageBaseline = raiseSaleLinkageBaselineRef.current
+        let appointmentLinkageIntact = true
+        if (mode === "create" && linkedAppointmentId && linkageBaseline !== null) {
+          const membershipLineCountCheckout = membershipItems.filter((m) => m.planId).length
+          const checkoutSnap = raiseSaleLinkageSnapshotFromCheckoutState({
+            clientId: String(getCustomerId(customer) || "").trim(),
+            dateYYYYMMDD: calendarYmdLocal(selectedDate),
+            remarksNormalized: String(remarks || "").trim(),
+            serviceLines: validServiceItems.map((item) => ({
+              serviceId: String(item.serviceId || ""),
+              staffId: String(item.staffId || ""),
+              quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+            })),
+            extraProducts: validProductItems.length,
+            extraMemberships: membershipLineCountCheckout,
+            extraPackages: validPackageItems.length,
+            extraPrepaid: validPrepaidPlanItems.length,
+          })
+          appointmentLinkageIntact = areRaiseSaleLinkageSnapshotsEqual(linkageBaseline, checkoutSnap)
+          raiseSaleLinkageVoided = !appointmentLinkageIntact
+        }
+        const effectiveAppointmentId =
+          mode === "create"
+            ? appointmentLinkageIntact
+              ? linkedAppointmentId || undefined
+              : undefined
+            : linkedAppointmentId || undefined
+
         const saleData = {
           billNo: receiptNumber,
           customerId: getCustomerId(customer),
@@ -4667,7 +4725,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
           staffName: primaryStaff?.staffName || staff[0]?.name || "Unassigned Staff",
           notes: remarks || '',
-          appointmentId: linkedAppointmentId || undefined,
+          appointmentId: effectiveAppointmentId,
           date: selectedDate.toISOString(),
           time: format(new Date(), "HH:mm"),
           ...(membershipItems.filter((m) => m.planId).length > 0 && {
@@ -4685,6 +4743,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           changeToCredit > 0.005 && {
             billChangeCreditedToWallet: changeToCredit,
           }),
+          ...(mode === "create" && raiseSaleLinkageVoided
+            ? {
+                suppressStandaloneWalkInCalendarCards: true,
+                voidBookingAppointmentIds: resolveAppointmentIdsToComplete(
+                  linkedAppointmentIds,
+                  linkedAppointmentId
+                ),
+              }
+            : {}),
         }
 
         console.log('💾 Creating sale in backend:', saleData)
@@ -4877,8 +4944,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               console.warn('⚠️ No WhatsApp status in response')
             }
             
-            // Mark all linked appointments as completed if fully paid
-            if (linkedAppointmentId && (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')) {
+            // Mark linked appointments completed only when the bill still matches Raise Sale confirmation
+            if (
+              appointmentLinkageIntact &&
+              linkedAppointmentId &&
+              (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')
+            ) {
               try {
                 const idsToComplete = resolveAppointmentIdsToComplete(linkedAppointmentIds, linkedAppointmentId)
                 await Promise.all(idsToComplete.map(id => AppointmentsAPI.update(id, { status: "completed" })))
@@ -4892,6 +4963,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               } catch (error) {
                 console.error("Failed to update appointment status:", error)
               }
+            }
+            if (raiseSaleLinkageVoided) {
+              toast({
+                title: "Bill saved without appointment link",
+                description:
+                  "This sale no longer matched the confirmed booking snapshot, so it was billed as a direct sale. The original booking rows were cleared from the calendar (no duplicate walk-in cards added).",
+              })
             }
             // Refresh calendar so new walk-in cards (multi-staff services) appear - for both linked and standalone sales
             if (typeof window !== "undefined" && (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')) {
