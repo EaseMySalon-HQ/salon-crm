@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, Loader2, Receipt, Calendar as CalendarIcon } from "lucide-react"
+import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, Loader2, Receipt, Calendar as CalendarIcon, Lock, LockOpen } from "lucide-react"
 import { format, isBefore, startOfDay } from "date-fns"
 import { DayPicker } from "react-day-picker"
 
@@ -30,6 +30,7 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
 import { ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, BlockTimeAPI } from "@/lib/api"
+import { isHiddenAppointment } from "@/lib/appointment-calendar-helpers"
 
 /** Convert 24h time (e.g. "09:00") to 12h for API storage ("9:00 AM") for backward compatibility */
 function formatTimeForApi(time: string): string {
@@ -53,6 +54,14 @@ function parseTimeToMinutes(time: string): number {
 }
 
 /** Add minutes to a time string, return "9:30 AM" format */
+/** Convert an absolute minutes-of-day value to a 24h "HH:mm" string. */
+function minutesToTimeString(absMinutes: number): string {
+  const total = ((absMinutes % (24 * 60)) + 24 * 60) % (24 * 60)
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
+}
+
 function addMinutesToTime(timeStr: string, minutesToAdd: number): string {
   const baseM = parseTimeToMinutes(timeStr)
   const totalM = baseM + minutesToAdd
@@ -122,7 +131,13 @@ interface SelectedService {
   name: string
   duration: number
   price: number
+  /** Client requested this stylist; shown on calendar cards */
+  staffLocked?: boolean
+  /** Per-service start time in 24h "HH:mm". Only used in custom scheduling mode. */
+  startTime?: string
 }
+
+type SchedulingMode = "sequential" | "custom"
 
 interface ServiceDropdownState {
   [key: string]: {
@@ -161,6 +176,14 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   const [selectedServices, setSelectedServices] = useState<SelectedService[]>([])
   const [existingBookingGroupId, setExistingBookingGroupId] = useState<string | null>(null)
   const [existingGroupAppointmentIds, setExistingGroupAppointmentIds] = useState<string[]>([])
+  /**
+   * Effective scheduling mode is derived: any service with an explicit startTime puts the
+   * booking in "custom" mode. Otherwise services chain sequentially from the appointment time.
+   */
+  const schedulingMode = useMemo<SchedulingMode>(
+    () => (selectedServices.some((s) => !!s.startTime) ? "custom" : "sequential"),
+    [selectedServices]
+  )
 
   // Prefer URL params (from calendar slot) over props so time is correct on first paint
   const urlDate = searchParams?.get("date") ?? initialDate
@@ -278,21 +301,39 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   }, [selectedServices])
 
   /**
+   * Compute the start minutes for a given service row.
+   * If the row has its own startTime, use it. Otherwise the row chains from the previous
+   * service's effective end (whether the previous was sequential or custom).
+   */
+  const getServiceStartMinutes = useCallback((serviceIndex: number): number => {
+    const own = selectedServices[serviceIndex]?.startTime
+    if (own) return parseTimeToMinutes(own)
+    let cursorM = formTime ? parseTimeToMinutes(formTime) : 0
+    for (let i = 0; i < serviceIndex; i++) {
+      const prev = selectedServices[i]
+      if (prev?.startTime) {
+        cursorM = parseTimeToMinutes(prev.startTime) + (prev.duration || 0)
+      } else {
+        cursorM += prev?.duration ?? 60
+      }
+    }
+    return cursorM
+  }, [selectedServices, formTime])
+
+  /**
    * Get staff available for a specific service's time block only.
-   * Services are sequential: Service 0 = formTime to formTime+dur0, Service 1 = formTime+dur0 to formTime+dur0+dur1, etc.
+   * Sequential: Service 0 = formTime to formTime+dur0, Service 1 = formTime+dur0 to formTime+dur0+dur1, etc.
+   * Custom: each service uses its own startTime.
    * Availability is checked per service time block - NOT against full appointment duration.
    * Excludes: current appointment when editing (so editing one service doesn't invalidate others).
    */
   const getAvailableStaffForService = useCallback((serviceIndex: number) => {
-    if (!formDate || !formTime) return staff
+    if (!formDate) return staff
+    if (schedulingMode === "sequential" && !formTime) return staff
     const dateStr = format(formDate, "yyyy-MM-dd")
     const dayIndex = formDate.getDay()
 
-    // Compute this service's start and end (sequential)
-    let serviceStartM = parseTimeToMinutes(formTime)
-    for (let i = 0; i < serviceIndex; i++) {
-      serviceStartM += selectedServices[i]?.duration ?? 60
-    }
+    const serviceStartM = getServiceStartMinutes(serviceIndex)
     const serviceDuration = selectedServices[serviceIndex]?.duration ?? 60
     const serviceEndM = serviceStartM + serviceDuration
 
@@ -326,7 +367,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         if (s.id.startsWith("related-")) idsBeingEdited.add(s.id.replace("related-", ""))
       })
       const hasOverlappingAppointment = appointmentsForDate.some((apt: any) => {
-        if (apt.status === "cancelled") return false
+        if (isHiddenAppointment(apt)) return false
         const aptId = apt._id || apt.id
         if (aptId && idsBeingEdited.has(String(aptId))) return false
         const aptStaffId = apt.staffId?._id || apt.staffId?.id || apt.staffId
@@ -344,7 +385,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       })
       return !hasOverlappingAppointment
     })
-  }, [staff, formDate, formTime, selectedServices, blockTimesForDate, appointmentsForDate, appointmentId])
+  }, [staff, formDate, formTime, selectedServices, blockTimesForDate, appointmentsForDate, appointmentId, schedulingMode, getServiceStartMinutes])
 
   // Load services and staff on component mount
   useEffect(() => {
@@ -379,10 +420,31 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const staffIdVal = a.staffId?._id || a.staffId || (a.staffAssignments?.[0]?.staffId?._id ?? a.staffAssignments?.[0]?.staffId)
 
         // Build selectedServices: multi-staff group OR primary+additional (same staff)
-        let servicesToShow: Array<{ id: string; serviceId: string; staffId: string; name: string; duration: number; price: number }> = []
+        let servicesToShow: Array<{
+          id: string
+          serviceId: string
+          staffId: string
+          name: string
+          duration: number
+          price: number
+          staffLocked?: boolean
+        }> = []
         const related = (res as any).relatedAppointments as any[] | undefined
 
-        const nonCancelledRelated = (related ?? []).filter((r: any) => r.status !== "cancelled")
+        const nonCancelledRelated = (related ?? []).filter((r: any) => !isHiddenAppointment(r))
+        // Detect custom scheduling mode from the loaded booking. When custom, each service
+        // gets an explicit startTime below — that alone causes the derived schedulingMode to be "custom".
+        const groupIsCustom =
+          a.schedulingMode === "custom" ||
+          nonCancelledRelated.some((r: any) => r.schedulingMode === "custom")
+
+        const timeStringTo24h = (t: string): string => {
+          const m = parseTimeToMinutes(t)
+          const h = Math.floor(m / 60) % 24
+          const min = m % 60
+          return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`
+        }
+
         if (nonCancelledRelated.length > 0) {
           // Multi-staff: merge main + related, sort by time. Exclude cancelled (should not appear when editing).
           const allApts = [{ ...a, _id: a._id }, ...nonCancelledRelated.map((r: any) => ({ ...r, _id: r._id }))]
@@ -401,6 +463,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               name: (typeof s === "object" && s?.name) || "Service",
               duration: apt.duration ?? (typeof s === "object" && s?.duration) ?? 60,
               price: apt.price ?? (typeof s === "object" && s?.price) ?? 0,
+              staffLocked: !!apt.staffLocked,
+              ...(groupIsCustom ? { startTime: timeStringTo24h(apt.time || "") } : {}),
             }
           })
         } else if (a.additionalServices && a.additionalServices.length > 0) {
@@ -417,6 +481,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: (typeof svc === "object" && svc?.name) || "Service",
             duration: (typeof svc === "object" && svc?.duration) ?? a.duration ?? 60,
             price: primaryPrice || ((typeof svc === "object" && svc?.price) ?? 0),
+            staffLocked: !!a.staffLocked,
           }
           const additional = (a.additionalServices as any[]).map((s: any, idx: number) => ({
             id: `additional-${idx}`,
@@ -425,6 +490,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: s?.name || "Service",
             duration: s?.duration ?? 60,
             price: s?.price ?? 0,
+            staffLocked: !!a.staffLocked,
           }))
           servicesToShow = [primary, ...additional]
         } else {
@@ -435,6 +501,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             name: (typeof svc === "object" && svc?.name) || "Service",
             duration: a.duration ?? (typeof svc === "object" && svc?.duration) ?? 60,
             price: a.price ?? (typeof svc === "object" && svc?.price) ?? 0,
+            staffLocked: !!a.staffLocked,
           }]
         }
 
@@ -734,6 +801,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       name: "",
       duration: 0,
       price: 0,
+      staffLocked: false,
     }
     setSelectedServices([...selectedServices, newService])
   }
@@ -758,6 +826,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               updatedService.duration = selectedService.duration
               updatedService.price = selectedService.price
             }
+          }
+          if (field === "staffId" && !value) {
+            updatedService.staffLocked = false
           }
           
           return updatedService
@@ -843,6 +914,32 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       return
     }
 
+    // Custom mode (any service has an explicit startTime): check same-staff overlap on effective times.
+    // Services without a picked time fall back to sequential chaining via getServiceStartMinutes.
+    if (schedulingMode === "custom") {
+      const effectiveStarts = selectedServices.map((_, idx) => getServiceStartMinutes(idx))
+      for (let i = 0; i < selectedServices.length; i++) {
+        const a = selectedServices[i]
+        const aStart = effectiveStarts[i]
+        const aEnd = aStart + (a.duration || 0)
+        for (let j = i + 1; j < selectedServices.length; j++) {
+          const b = selectedServices[j]
+          if (!a.staffId || !b.staffId) continue
+          if (a.staffId !== b.staffId) continue
+          const bStart = effectiveStarts[j]
+          const bEnd = bStart + (b.duration || 0)
+          if (aStart < bEnd && aEnd > bStart) {
+            toast({
+              title: "Error",
+              description: "Same staff has overlapping services. Please adjust the start times.",
+              variant: "destructive",
+            })
+            return
+          }
+        }
+      }
+    }
+
     if (values.date && values.time) {
       const unavailable = selectedServices.filter((s, idx) => {
         if (!s.staffId) return false
@@ -878,12 +975,10 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         const newServices = selectedServices.filter((s) => !["edit-service"].includes(s.id) && !s.id.startsWith("related-") && !s.id.startsWith("additional-"))
         const primary = selectedServices.find((s) => s.id === "edit-service")
         const existingAdditional = selectedServices.filter((s) => s.id.startsWith("additional-"))
-        // Newly added services (via Add Service) with same staff as primary → merge into same card
-        const newServicesSameStaff = primary ? newServices.filter((s) => s.staffId && s.staffId === primary.staffId) : []
-        const newServicesDifferentStaff = primary ? newServices.filter((s) => !s.staffId || s.staffId !== primary.staffId) : newServices
 
-        if (hasAdditional || newServicesSameStaff.length > 0) {
-          // Same staff, multiple services: update single appointment with primary + additionalServiceIds
+        if (hasAdditional) {
+          // Legacy single-doc booking with additionalServiceIds: keep existing additionals on the same doc.
+          // Newly added services (regardless of staff) flow to the trailing block to become new linked cards.
           // If primary (edit-service) was removed: promote first additional to primary
           const effectivePrimary = primary ?? (existingAdditional.length > 0 ? { ...existingAdditional[0], id: "edit-service" } : null)
           if (!effectivePrimary) {
@@ -891,10 +986,10 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             return
           }
           const restAdditional = primary ? existingAdditional : existingAdditional.slice(1)
-          const allAdditional = [...restAdditional, ...newServicesSameStaff]
-          const additionalIds = allAdditional.map((s) => s.serviceId)
-          const totalDur = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
-          const totalPrice = selectedServices.reduce((sum, s) => sum + (s.price || 0), 0)
+          const additionalIds = restAdditional.map((s) => s.serviceId)
+          const legacyServices = [effectivePrimary, ...restAdditional]
+          const totalDur = legacyServices.reduce((sum, s) => sum + (s.duration || 0), 0)
+          const totalPrice = legacyServices.reduce((sum, s) => sum + (s.price || 0), 0)
           const updateRes = await AppointmentsAPI.update(appointmentId, {
             date: dateStr,
             time: timeStr,
@@ -906,13 +1001,14 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             price: totalPrice,
             leadSource: leadSourceValue || "",
             notes: values.notes,
+            staffLocked: selectedServices.some((s) => s.staffLocked),
           })
           if (!updateRes?.success) {
             toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
             return
           }
         } else if (hasRelated) {
-          // Multi staff: delete removed appointments, update remaining with sequential times
+          // Multi staff: delete removed appointments, update remaining with sequential or per-row custom times.
           const idsToUpdate = selectedServices
             .map((s) => (s.id === "edit-service" ? appointmentId : s.id.startsWith("related-") ? s.id.replace("related-", "") : null))
             .filter(Boolean)
@@ -932,7 +1028,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
           for (let i = 0; i < selectedServices.length; i++) {
             const s = selectedServices[i]
-            const serviceTime = getSequentialServiceStartTime(selectedServices, values.time, i)
+            const serviceTime = schedulingMode === "custom" && s.startTime
+              ? s.startTime
+              : getSequentialServiceStartTime(selectedServices, values.time, i)
             const apiTime = formatTimeForApi(serviceTime)
             const aptId = s.id === "edit-service" ? appointmentId : s.id.startsWith("related-") ? s.id.replace("related-", "") : null
             if (!aptId) continue
@@ -946,6 +1044,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               price: s.price,
               leadSource: leadSourceValue || "",
               notes: values.notes,
+              staffLocked: !!s.staffLocked,
+              ...(schedulingMode === "custom" ? { schedulingMode: "custom" } : {}),
             })
             if (!updateRes?.success) {
               toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -956,9 +1056,12 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           // Single service or edit-service only
           const originalService = selectedServices.find((s) => s.id === "edit-service")
           if (originalService) {
+            const customTimeStr = schedulingMode === "custom" && originalService.startTime
+              ? formatTimeForApi(originalService.startTime)
+              : timeStr
             const updateRes = await AppointmentsAPI.update(appointmentId, {
               date: dateStr,
-              time: timeStr,
+              time: customTimeStr,
               serviceId: originalService.serviceId,
               additionalServiceIds: [],
               staffId: originalService.staffId,
@@ -967,6 +1070,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               price: originalService.price,
               leadSource: leadSourceValue || "",
               notes: values.notes,
+              staffLocked: !!originalService.staffLocked,
+              ...(schedulingMode === "custom" ? { schedulingMode: "custom" } : {}),
             })
             if (!updateRes?.success) {
               toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -977,15 +1082,16 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
         }
 
-        if (newServicesDifferentStaff.length > 0) {
-          // Link new cards to existing group (or create group for originally single card)
+        if (newServices.length > 0) {
+          // Link new cards to existing group (or create group for originally single card).
+          // Each newly added service — same staff or different staff — becomes its own linked card.
           const groupId = existingBookingGroupId || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
           if (!existingBookingGroupId && !appointmentIdDeleted) {
             await AppointmentsAPI.update(appointmentId, { bookingGroupId: groupId })
           }
           // New services must start after all existing services (sequential, no overlap)
           const firstNewIdx = selectedServices.findIndex((s) =>
-            newServicesDifferentStaff.some((n) => n.serviceId === s.serviceId && n.staffId === s.staffId)
+            newServices.some((n) => n.serviceId === s.serviceId && n.staffId === s.staffId)
           )
           const baseTimeForNew =
             firstNewIdx >= 0
@@ -999,25 +1105,42 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             time: timeStrForNew,
             leadSource: leadSourceValue,
             bookingGroupId: groupId,
-            services: newServicesDifferentStaff.map((s) => ({
-              serviceId: s.serviceId,
-              staffId: s.staffId,
-              name: s.name,
-              duration: s.duration,
-              price: s.price,
-            })),
-            totalDuration: newServicesDifferentStaff.reduce((sum, s) => sum + (s.duration || 0), 0),
-            totalAmount: newServicesDifferentStaff.reduce((sum, s) => sum + (s.price || 0), 0),
+            schedulingMode,
+            services: newServices.map((s) => {
+              const idx = selectedServices.findIndex((x) => x.id === s.id)
+              const effective = s.startTime
+                || (schedulingMode === "custom" && idx >= 0 ? minutesToTimeString(getServiceStartMinutes(idx)) : undefined)
+              return {
+                serviceId: s.serviceId,
+                staffId: s.staffId,
+                name: s.name,
+                duration: s.duration,
+                price: s.price,
+                staffLocked: !!s.staffLocked,
+                ...(schedulingMode === "custom" && effective
+                  ? { startTime: formatTimeForApi(effective) }
+                  : {}),
+              }
+            }),
+            totalDuration: newServices.reduce((sum, s) => sum + (s.duration || 0), 0),
+            totalAmount: newServices.reduce((sum, s) => sum + (s.price || 0), 0),
             notes: values.notes,
             status: "scheduled",
           })
           if (!createRes?.success) {
-            toast({ title: "Error", description: "Failed to create new services.", variant: "destructive" })
+            toast({
+              title:
+                /\balready booked\b/i.test(createRes?.error || "")
+                  ? "Scheduling conflict"
+                  : "Error",
+              description: createRes?.error || "Failed to create new services.",
+              variant: "destructive",
+            })
             return
           }
         }
 
-        toast({ title: "Appointment Updated", description: newServicesSameStaff.length > 0 || newServicesDifferentStaff.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
+        toast({ title: "Appointment Updated", description: newServices.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
         if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("appointments-refresh"))
         onSuccess ? onSuccess() : router.push("/appointments")
       } else {
@@ -1027,29 +1150,47 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           date: format(values.date, "yyyy-MM-dd"),
           time: formatTimeForApi(values.time),
           leadSource: leadSourceValue,
-          services: selectedServices.map(service => ({
-            serviceId: service.serviceId,
-            staffId: service.staffId,
-            name: service.name,
-            duration: service.duration,
-            price: service.price,
-          })),
+          schedulingMode,
+          services: selectedServices.map((service, idx) => {
+            const effective = service.startTime
+              || (schedulingMode === "custom" ? minutesToTimeString(getServiceStartMinutes(idx)) : undefined)
+            return {
+              serviceId: service.serviceId,
+              staffId: service.staffId,
+              name: service.name,
+              duration: service.duration,
+              price: service.price,
+              staffLocked: !!service.staffLocked,
+              ...(schedulingMode === "custom" && effective
+                ? { startTime: formatTimeForApi(effective) }
+                : {}),
+            }
+          }),
           totalDuration: calculateTotalDuration(),
           totalAmount: calculateTotalAmount(),
           notes: values.notes,
           status: "scheduled",
         }
         const response = await AppointmentsAPI.create(appointmentData)
-        if (response.success) {
-          toast({ title: "Appointment Created", description: "New appointment has been successfully scheduled." })
-          onSuccess ? onSuccess() : router.push("/appointments")
-        } else {
-          toast({ title: "Error", description: "Failed to create appointment. Please try again.", variant: "destructive" })
+        if (!response.success) {
+          toast({
+            title:
+              /\balready booked\b/i.test(response.error || "")
+                ? "Scheduling conflict"
+                : "Error",
+            description: response.error || "Failed to create appointment.",
+            variant: "destructive",
+          })
+          return
         }
+        toast({ title: "Appointment Created", description: "New appointment has been successfully scheduled." })
+        onSuccess ? onSuccess() : router.push("/appointments")
       }
     } catch (error: any) {
-      console.error('Error creating appointment:', error)
       const serverMsg = error?.responseData?.error || error?.response?.data?.error
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[appointment-form]", error?.message || error)
+      }
       toast({
         title: "Error",
         description: serverMsg || "Failed to create appointment. Please try again.",
@@ -1301,122 +1442,253 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
 
               {selectedServices.length > 0 ? (
                 <div className="space-y-2">
-                  {selectedServices.map((service) => (
-                    <div key={service.id} className="flex items-center gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
-                      <span className="text-xs font-medium text-slate-500 w-6 shrink-0">{selectedServices.indexOf(service) + 1}.</span>
-                      <div className="relative service-dropdown-container flex-1 min-w-0">
-                        {service.serviceId && service.name ? (
-                          <div className="flex items-center justify-between h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 min-w-0">
-                            <span className="truncate">{service.name}</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                updateService(service.id, "serviceId", "")
-                                updateService(service.id, "name", "")
-                                updateDropdownState(service.id, { search: '', isOpen: false })
-                              }}
-                              className="ml-1.5 shrink-0 text-slate-400 hover:text-slate-600"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="relative">
-                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                            <Input
-                              placeholder="Search service..."
-                              value={getDropdownState(service.id).search}
-                              onChange={(e) => updateDropdownState(service.id, { search: e.target.value, isOpen: true })}
-                              onFocus={() => updateDropdownState(service.id, { isOpen: true })}
-                              className="h-9 pl-8 pr-8 text-sm border-slate-200 rounded-md"
-                            />
-                            {getDropdownState(service.id).search && (
+                  {selectedServices.map((service) => {
+                    const serviceIndex = selectedServices.indexOf(service)
+                    const serviceStartM = getServiceStartMinutes(serviceIndex)
+                    const serviceEndM = serviceStartM + (service.duration || 0)
+                    const formatMinutesAs12h = (m: number) => {
+                      const h24 = Math.floor(m / 60) % 24
+                      const min = m % 60
+                      const period = h24 >= 12 ? "PM" : "AM"
+                      const h12 = h24 % 12 === 0 ? 12 : h24 % 12
+                      return `${h12}:${String(min).padStart(2, "0")} ${period}`
+                    }
+                    return (
+                    <div key={service.id} className="flex flex-col gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-slate-500 w-6 shrink-0">{serviceIndex + 1}.</span>
+                        <div className="relative service-dropdown-container flex-1 min-w-0">
+                          {service.serviceId && service.name ? (
+                            <div className="flex items-center justify-between h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 min-w-0">
+                              <span className="truncate">{service.name}</span>
                               <button
                                 type="button"
-                                onClick={() => updateDropdownState(service.id, { search: '', isOpen: false })}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                onClick={() => {
+                                  updateService(service.id, "serviceId", "")
+                                  updateService(service.id, "name", "")
+                                  updateDropdownState(service.id, { search: '', isOpen: false })
+                                }}
+                                className="ml-1.5 shrink-0 text-slate-400 hover:text-slate-600"
                               >
                                 <X className="h-3.5 w-3.5" />
                               </button>
-                            )}
-                          </div>
-                        )}
-                        {getDropdownState(service.id).isOpen && !service.serviceId && (
-                          <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-48 overflow-auto">
-                            {loadingServices ? (
-                              <div className="p-2 text-center text-xs text-slate-500">Loading...</div>
-                            ) : getFilteredServices(service.id).length === 0 ? (
-                              <div className="p-2 text-center text-xs text-slate-500">No matches</div>
-                            ) : (
-                              getFilteredServices(service.id).map((s) => (
-                                <div
-                                  key={s._id || s.id}
-                                  className="px-2.5 py-2 hover:bg-slate-50 cursor-pointer border-b last:border-b-0 text-sm"
-                                  onClick={() => {
-                                    updateService(service.id, "serviceId", s._id || s.id)
-                                    updateDropdownState(service.id, { search: '', isOpen: false })
-                                  }}
-                                >
-                                  <div className="font-medium text-slate-800">{s.name}</div>
-                                  <div className="text-xs text-slate-500">{s.duration} min · ₹{s.price}</div>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <Select
-                        value={service.staffId}
-                        onValueChange={(value) => updateService(service.id, "staffId", value)}
-                      >
-                        <SelectTrigger className="h-9 w-[130px] shrink-0 border-slate-200 rounded-md text-sm">
-                          <SelectValue placeholder="Staff" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {loadingStaff ? (
-                            <SelectItem value="__loading__" disabled>Loading...</SelectItem>
-                          ) : staff.length === 0 ? (
-                            <SelectItem value="no-staff" disabled>No staff</SelectItem>
+                            </div>
                           ) : (
-                            (() => {
-                              const serviceIndex = selectedServices.indexOf(service)
-                              const list = getAvailableStaffForService(serviceIndex).filter((member: any) => member._id || member.id)
-                              const selectedId = service.staffId
-                              const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
-                              const options = selectedNotInList
-                                ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
-                                : list
-                              return options.map((member: any) => {
-                                const staffId = member._id || member.id
-                                const isUnavailable = selectedNotInList && staffId === selectedId
-                                return (
-                                  <SelectItem key={staffId} value={staffId}>
-                                    {member.name}
-                                    {isUnavailable ? " (unavailable)" : ""}
-                                  </SelectItem>
-                                )
-                              })
-                            })()
+                            <div className="relative">
+                              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                              <Input
+                                placeholder="Search service..."
+                                value={getDropdownState(service.id).search}
+                                onChange={(e) => updateDropdownState(service.id, { search: e.target.value, isOpen: true })}
+                                onFocus={() => updateDropdownState(service.id, { isOpen: true })}
+                                className="h-9 pl-8 pr-8 text-sm border-slate-200 rounded-md"
+                              />
+                              {getDropdownState(service.id).search && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateDropdownState(service.id, { search: '', isOpen: false })}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
                           )}
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeService(service.id)}
-                        className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                          {getDropdownState(service.id).isOpen && !service.serviceId && (
+                            <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-48 overflow-auto">
+                              {loadingServices ? (
+                                <div className="p-2 text-center text-xs text-slate-500">Loading...</div>
+                              ) : getFilteredServices(service.id).length === 0 ? (
+                                <div className="p-2 text-center text-xs text-slate-500">No matches</div>
+                              ) : (
+                                getFilteredServices(service.id).map((s) => (
+                                  <div
+                                    key={s._id || s.id}
+                                    className="px-2.5 py-2 hover:bg-slate-50 cursor-pointer border-b last:border-b-0 text-sm"
+                                    onClick={() => {
+                                      updateService(service.id, "serviceId", s._id || s.id)
+                                      updateDropdownState(service.id, { search: '', isOpen: false })
+                                    }}
+                                  >
+                                    <div className="font-medium text-slate-800">{s.name}</div>
+                                    <div className="text-xs text-slate-500">{s.duration} min · ₹{s.price}</div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <Select
+                          value={service.staffId}
+                          onValueChange={(value) => updateService(service.id, "staffId", value)}
+                        >
+                          <SelectTrigger className="h-9 w-[130px] shrink-0 border-slate-200 rounded-md text-sm">
+                            <SelectValue placeholder="Staff" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {loadingStaff ? (
+                              <SelectItem value="__loading__" disabled>Loading...</SelectItem>
+                            ) : staff.length === 0 ? (
+                              <SelectItem value="no-staff" disabled>No staff</SelectItem>
+                            ) : (
+                              (() => {
+                                const list = getAvailableStaffForService(serviceIndex).filter((member: any) => member._id || member.id)
+                                const selectedId = service.staffId
+                                const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
+                                const options = selectedNotInList
+                                  ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
+                                  : list
+                                return options.map((member: any) => {
+                                  const staffId = member._id || member.id
+                                  const isUnavailable = selectedNotInList && staffId === selectedId
+                                  return (
+                                    <SelectItem key={staffId} value={staffId}>
+                                      {member.name}
+                                      {isUnavailable ? " (unavailable)" : ""}
+                                    </SelectItem>
+                                  )
+                                })
+                              })()
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          type="button"
+                          variant={service.staffLocked ? "secondary" : "ghost"}
+                          size="sm"
+                          className={cn(
+                            "h-9 w-9 shrink-0 p-0 border border-transparent",
+                            service.staffLocked
+                              ? "text-amber-800 bg-amber-100/90 border-amber-300 hover:bg-amber-100"
+                              : "text-slate-400 hover:text-amber-700 hover:bg-amber-50 border-slate-200"
+                          )}
+                          disabled={!service.staffId}
+                          title={
+                            service.staffLocked
+                              ? "Client requested this stylist — staff locked"
+                              : service.staffId
+                                ? "Mark: client requests this stylist only"
+                                : "Select a stylist first"
+                          }
+                          aria-pressed={!!service.staffLocked}
+                          onClick={() =>
+                            service.staffId &&
+                            updateService(service.id, "staffLocked", !service.staffLocked)
+                          }
+                        >
+                          {service.staffLocked ? (
+                            <Lock className="h-4 w-4" aria-hidden />
+                          ) : (
+                            <LockOpen className="h-4 w-4" aria-hidden />
+                          )}
+                        </Button>
+                        {selectedServices.length >= 2 && (() => {
+                          // Show the effective start time as the picker's value so all rows look populated.
+                          // Row 0 reflects the appointment time picked above; later rows chain from it.
+                          const computedStart = minutesToTimeString(serviceStartM)
+                          const matchedSlot = timeSlots.find((t) => parseTimeToMinutes(t) === serviceStartM)
+                          const displayValue = service.startTime || (formTime ? (matchedSlot ?? computedStart) : undefined)
+                          return (
+                            <Select
+                              value={displayValue}
+                              onValueChange={(value) => updateService(service.id, "startTime", value)}
+                            >
+                              <SelectTrigger
+                                className="h-9 w-[110px] shrink-0 border-slate-200 rounded-md text-sm bg-white tabular-nums"
+                                title={
+                                  service.duration
+                                    ? `Starts ${formatMinutesAs12h(serviceStartM)} · Ends ${formatMinutesAs12h(serviceEndM)} · ${service.duration} min`
+                                    : serviceIndex === 0
+                                      ? "Defaults to the appointment time above"
+                                      : "Defaults to right after the previous service"
+                                }
+                              >
+                                <SelectValue placeholder="Start" />
+                              </SelectTrigger>
+                              <SelectContent className="max-h-60">
+                                {timeSlots.map((time) => (
+                                  <SelectItem key={time} value={time} className="text-xs tabular-nums">
+                                    {time}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )
+                        })()}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeService(service.id)}
+                          className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      {selectedServices.length >= 2 && service.duration ? (
+                        <div className="flex items-center gap-2 pl-8 text-[11px] text-slate-500 tabular-nums">
+                          <span>Starts {formatMinutesAs12h(serviceStartM)}</span>
+                          <span className="text-slate-300">·</span>
+                          <span>Ends {formatMinutesAs12h(serviceEndM)}</span>
+                          <span className="text-slate-300">·</span>
+                          <span>{service.duration} min</span>
+                        </div>
+                      ) : null}
                     </div>
-                  ))}
+                  )})}
                 </div>
               ) : (
                 <div className={cn("text-center border-2 border-dashed border-slate-200 rounded-lg bg-slate-50/50", isDrawer ? "p-4" : "p-8")}>
                   <FileText className={cn("text-slate-300 mx-auto", isDrawer ? "h-8 w-8 mb-2" : "h-12 w-12 mb-4")} />
                   <p className="text-slate-500 text-sm">No services added yet</p>
                 </div>
+              )}
+
+              {/* Timeline preview (visible whenever there are 2+ services) */}
+              {selectedServices.length >= 2 && (
+                <details className="rounded-lg border border-slate-200 bg-white">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 select-none">
+                    Timeline preview ({selectedServices.length} services)
+                  </summary>
+                  <div className="px-3 pb-3 pt-1 space-y-1.5">
+                    {[...selectedServices]
+                      .map((s, idx) => ({ ...s, _idx: idx, _startM: getServiceStartMinutes(idx) }))
+                      .sort((a, b) => a._startM - b._startM)
+                      .map((s) => {
+                        const startM = s._startM
+                        const endM = startM + (s.duration || 0)
+                        const fmt = (m: number) => {
+                          const h24 = Math.floor(m / 60) % 24
+                          const min = m % 60
+                          const period = h24 >= 12 ? "PM" : "AM"
+                          const h12 = h24 % 12 === 0 ? 12 : h24 % 12
+                          return `${h12}:${String(min).padStart(2, "0")} ${period}`
+                        }
+                        const staffMember = staff.find((st: any) => (st._id || st.id) === s.staffId)
+                        const staffLabel = staffMember?.name || (s.staffId ? "Selected staff" : "Unassigned")
+                        const serviceLabel = s.name || "Untitled service"
+                        return (
+                          <div
+                            key={s.id}
+                            className="flex items-center justify-between gap-3 text-xs rounded-md bg-slate-50 px-2.5 py-1.5"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium text-slate-800 truncate">{serviceLabel}</div>
+                              <div className="text-slate-500 truncate">
+                                {staffLabel}
+                                {!s.startTime && s._idx >= 1 ? (
+                                  <span className="ml-1 text-slate-400">· auto</span>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="text-slate-700 tabular-nums shrink-0">
+                              {fmt(startM)} <span className="text-slate-400">–</span> {fmt(endM)}
+                            </div>
+                          </div>
+                        )
+                      })}
+                  </div>
+                </details>
               )}
             </div>
 
@@ -1494,6 +1766,16 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           }
           if (isEditMode && appointmentId) {
             saleData.appointmentId = appointmentId
+            // Multi-doc booking groups: forward every sibling id so the quick-sale
+            // page bulk-completes them on successful payment (matches the calendar
+            // entry points). Without this, only the anchor card would be marked
+            // completed and other linked cards would be stuck in 'scheduled'.
+            if (existingGroupAppointmentIds && existingGroupAppointmentIds.length > 0) {
+              saleData.linkedAppointmentIds = existingGroupAppointmentIds
+            }
+            if (existingBookingGroupId) {
+              saleData.bookingGroupId = existingBookingGroupId
+            }
           }
           router.push(`/quick-sale?appointment=${btoa(JSON.stringify(saleData))}`)
         }}

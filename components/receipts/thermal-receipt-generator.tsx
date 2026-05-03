@@ -2,8 +2,53 @@
 
 import { Receipt } from "@/lib/data"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
+import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
+
+/** Shared thermal HTML block: TOTAL … Total Paid (Bill). */
+function buildThermalSettlementTotals(receipt: Receipt): string {
+  const s = getReceiptSettlementSummary(receipt)
+  let h = `
+            <div class="total-line total-amount">
+              <span>TOTAL:</span>
+              <span>₹${s.billTotal.toFixed(2)}</span>
+            </div>`
+  if (s.showReceivedAndAdjusted) {
+    h += `
+            <div class="total-line" style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #000;">
+              <span>Amount Received:</span>
+              <span>₹${s.amountReceived.toFixed(2)}</span>
+            </div>
+            <div class="total-line">
+              <span>Adjusted:</span>
+              <span>₹${s.paidTowardBill.toFixed(2)}</span>
+            </div>`
+    if (s.showWalletCreditLine) {
+      h += `
+            <div class="total-line">
+              <span>Wallet Credit:</span>
+              <span>₹${s.walletCredit.toFixed(2)}</span>
+            </div>`
+    }
+    if (s.showOutstandingLine) {
+      h += `
+            <div class="total-line" style="color: #dc2626; font-weight: 600;">
+              <span>Outstanding:</span>
+              <span>₹${s.outstanding.toFixed(2)}</span>
+            </div>`
+    }
+  }
+  h += `
+            <div class="total-line" style="margin-top: 8px; padding-top: 6px; border-top: ${
+              s.showReceivedAndAdjusted ? "2px solid #000" : "1px dashed #000"
+            };">
+              <span>Total Paid (Bill):</span>
+              <span>₹${s.paidTowardBill.toFixed(2)}</span>
+            </div>`
+  return h
+}
 
 interface ThermalReceiptGeneratorProps {
   receipt: Receipt
@@ -160,10 +205,14 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
               ${receipt.items.map(item => {
                 const staffLabel = formatReceiptItemStaffNames(item)
+                const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+                const lineMeta =
+                  (staffLabel || walkInLabel) &&
+                  `${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 15px; color: #92400e;">${walkInLabel}</span>` : ""}`
                 return `
                 <tr style="border-bottom: 1px dashed #999;">
                   <td>${(item as any).hsnSacCode || "-"}</td>
-                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}</td>
+                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
                   <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                   <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                   <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
@@ -247,25 +296,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
                 <span>₹${receipt.roundOff.toFixed(2)}</span>
               </div>
             ` : ''}
-            <div class="total-line total-amount">
-              <span>TOTAL:</span>
-              <span>₹${receipt.total.toFixed(2)}</span>
-            </div>
-            ${(() => {
-              const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
-              const outstanding = receipt.total - totalPaid
-              const outstandingStyle = outstanding > 0 ? ' style="color: #dc2626; font-weight: 500;"' : ''
-              return `
-            <div class="total-line" style="margin-top: 6px;">
-              <span>Total Paid:</span>
-              <span>₹${totalPaid.toFixed(2)}</span>
-            </div>
-            <div class="total-line" style="margin-top: 4px;"${outstandingStyle}>
-              <span>Outstanding:</span>
-              <span>₹${outstanding.toFixed(2)}</span>
-            </div>
-            `
-            })()}
+            ${buildThermalSettlementTotals(receipt)}
           </div>
 
           <div class="payments">
@@ -292,7 +323,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             `
               })
               .join("")}
-          </div>
+        </div>
 
           <div class="footer">
             <div>Thank you for visiting!</div>
@@ -303,7 +334,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             </div>
           </div>
           ${(() => {
-            const stamp = getReceiptPaymentStamp(receipt as any, receipt.total)
+            const stamp = getReceiptPaymentStamp(receipt as any, getReceiptSettlementSummary(receipt).billTotal)
             return `<div class="payment-stamp" style="border: 2px solid ${stamp.color}; color: ${stamp.color};">${stamp.checkPrefix}${stamp.label}</div>`
           })()}
         </body>
@@ -470,10 +501,14 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
             ${receipt.items.map(item => {
               const staffLabel = formatReceiptItemStaffNames(item)
+              const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+              const lineMeta =
+                (staffLabel || walkInLabel) &&
+                `${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 15px; color: #92400e;">${walkInLabel}</span>` : ""}`
               return `
               <tr style="border-bottom: 1px dashed #999;">
                 <td>${(item as any).hsnSacCode || "-"}</td>
-                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}</td>
+                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
                 <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                 <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                 <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
@@ -557,25 +592,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               <span>₹${receipt.roundOff.toFixed(2)}</span>
             </div>
           ` : ''}
-          <div class="total-line total-amount">
-            <span>TOTAL:</span>
-            <span>₹${receipt.total.toFixed(2)}</span>
-          </div>
-          ${(() => {
-            const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0)
-            const outstanding = receipt.total - totalPaid
-            const outstandingStyle = outstanding > 0 ? ' style="color: #dc2626; font-weight: 500;"' : ''
-            return `
-          <div class="total-line" style="margin-top: 6px;">
-            <span>Total Paid:</span>
-            <span>₹${totalPaid.toFixed(2)}</span>
-          </div>
-          <div class="total-line" style="margin-top: 4px;"${outstandingStyle}>
-            <span>Outstanding:</span>
-            <span>₹${outstanding.toFixed(2)}</span>
-          </div>
-          `
-          })()}
+          ${buildThermalSettlementTotals(receipt)}
         </div>
 
         <div class="payments">
@@ -613,7 +630,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           </div>
         </div>
         ${(() => {
-          const stamp = getReceiptPaymentStamp(receipt as any, receipt.total)
+          const stamp = getReceiptPaymentStamp(receipt as any, getReceiptSettlementSummary(receipt).billTotal)
           return `<div class="payment-stamp" style="border: 2px solid ${stamp.color}; color: ${stamp.color};">${stamp.checkPrefix}${stamp.label}</div>`
         })()}
       </body>

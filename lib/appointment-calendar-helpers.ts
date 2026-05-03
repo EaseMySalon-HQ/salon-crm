@@ -9,6 +9,19 @@ export type SaleServiceLine = {
   price: number
 }
 
+/**
+ * Statuses that should be hidden from active calendar views (Kanban time columns,
+ * grid time slots, conflict checks). 'cancelled_at_billing' joins 'cancelled' here
+ * so services dropped during the Raise Sale confirmation step disappear from the
+ * day view but remain queryable for reports / audit.
+ */
+export const INACTIVE_STATUSES: ReadonlySet<string> = new Set(["cancelled", "cancelled_at_billing"])
+
+export function isHiddenAppointment(apt: { status?: string } | null | undefined): boolean {
+  if (!apt || !apt.status) return false
+  return INACTIVE_STATUSES.has(apt.status)
+}
+
 export function getServiceDisplayNames(apt: {
   serviceId?: { name?: string; _id?: unknown }
   additionalServices?: Array<{ name?: string }>

@@ -66,6 +66,7 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
   const [showAddDialog, setShowAddDialog] = React.useState(false)
   const [newCategoryName, setNewCategoryName] = React.useState("")
   const [addingCategory, setAddingCategory] = React.useState(false)
+  const [portalContainer, setPortalContainer] = React.useState<HTMLDivElement | null>(null)
   const { toast } = useToast()
 
   // Load categories on mount and when type changes
@@ -258,7 +259,9 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
 
   return (
     <>
-      <Popover open={open} onOpenChange={setOpen} modal>
+      {/* Portal container rendered in-tree so it stays inside any parent Dialog's FocusScope */}
+      <div ref={setPortalContainer} />
+      <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
             variant="outline"
@@ -274,9 +277,7 @@ export function CategoryCombobox({ value, onChange, disabled, onManageCategories
         <PopoverContent
           className="w-full p-0"
           align="start"
-          // Popover is portaled to body while parent can be inside a Radix Dialog; the dialog
-          // focus trap otherwise fights focus moving into the popover and it closes instantly.
-          onOpenAutoFocus={(e) => e.preventDefault()}
+          container={portalContainer}
         >
           <Command shouldFilter={false}>
             <CommandInput

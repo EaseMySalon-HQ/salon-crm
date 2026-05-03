@@ -55,8 +55,17 @@ const appointmentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['scheduled', 'confirmed', 'arrived', 'service_started', 'completed', 'cancelled', 'missed'],
+    enum: ['scheduled', 'confirmed', 'arrived', 'service_started', 'completed', 'cancelled', 'cancelled_at_billing', 'missed'],
     default: 'scheduled'
+  },
+  /** Audit: when a service was cancelled during the Raise Sale confirmation step */
+  cancelledAtBillingAt: {
+    type: Date,
+    default: null
+  },
+  cancelledAtBillingBy: {
+    type: String,
+    default: ''
   },
   notes: {
     type: String,
@@ -124,6 +133,14 @@ const appointmentSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  /**
+   * Client has requested this stylist for this booking — salon should prefer not to reassign.
+   * Stored per appointment row (each card in a booking group may differ).
+   */
+  staffLocked: {
+    type: Boolean,
+    default: false,
+  },
   /** Timestamp when WhatsApp reminder was sent — used to prevent duplicate sends */
   reminderSentAt: {
     type: Date,
@@ -133,6 +150,12 @@ const appointmentSchema = new mongoose.Schema({
   slotKey: {
     type: String,
     required: false
+  },
+  /** How services within the booking group are scheduled. Per-service custom start times use 'custom'. */
+  schedulingMode: {
+    type: String,
+    enum: ['sequential', 'custom'],
+    default: 'sequential'
   }
 }, {
   timestamps: true

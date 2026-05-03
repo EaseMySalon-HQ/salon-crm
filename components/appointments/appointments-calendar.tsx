@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, forwardRef, useImperativeHandle, useMemo }
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format } from "date-fns"
-import { Pencil, Eye, ChevronDown, Square, List, Calendar } from "lucide-react"
+import { Pencil, Eye, ChevronDown, Square, List, Calendar, Lock } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { AppointmentsAPI, SalesAPI, StaffDirectoryAPI } from "@/lib/api"
+import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { resolveCreatedByDisplay } from "@/lib/utils"
 import {
@@ -28,7 +29,12 @@ import {
   getBookingGroupSiblings,
   collectSaleLinesFromAppointmentCard,
   buildRaiseSaleAppointmentPayload,
+  isHiddenAppointment,
 } from "@/lib/appointment-calendar-helpers"
+import {
+  RaiseSaleConfirmationModal,
+  type RaiseSaleConfirmationResult,
+} from "@/components/appointments/raise-sale-confirmation-modal"
 
 interface Appointment {
   _id: string
@@ -54,7 +60,7 @@ interface Appointment {
   date: string
   time: string
   duration: number
-  status: "scheduled" | "confirmed" | "arrived" | "service_started" | "completed" | "cancelled"
+  status: "scheduled" | "confirmed" | "arrived" | "service_started" | "completed" | "cancelled" | "cancelled_at_billing"
   notes?: string
   price: number
   createdAt: string
@@ -62,6 +68,8 @@ interface Appointment {
   leadSource?: string
   bookingGroupId?: string | null
   prepaidAtBooking?: boolean
+  /** Client preference: keep this stylist */
+  staffLocked?: boolean
 }
 
 function parseTimeToMinutes(time: string): number {
@@ -129,6 +137,7 @@ export const AppointmentsCalendar = forwardRef<
 >(({ onShowCancelled, initialAppointmentId, onOpenAppointmentForm, view = "list", onSwitchView }, ref) => {
   const { user } = useAuth()
   const router = useRouter()
+  const { toast } = useToast()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [staffList, setStaffList] = useState<StaffMember[]>([])
@@ -152,6 +161,10 @@ export const AppointmentsCalendar = forwardRef<
   const [showUpcomingModal, setShowUpcomingModal] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [appointmentToCancel, setAppointmentToCancel] = useState<string | null>(null)
+  // Per-service "Raise Sale" confirmation modal — opens only for multi-service bookings.
+  const [showRaiseSaleModal, setShowRaiseSaleModal] = useState(false)
+  const [raiseSaleAnchor, setRaiseSaleAnchor] = useState<Appointment | null>(null)
+  const [raiseSaleSiblings, setRaiseSaleSiblings] = useState<Appointment[]>([])
   const [draggingAppointmentId, setDraggingAppointmentId] = useState<string | null>(null)
   const [dropTargetColumn, setDropTargetColumn] = useState<string | null>(null)
   const [updatingFromDrop, setUpdatingFromDrop] = useState(false)
@@ -208,6 +221,36 @@ export const AppointmentsCalendar = forwardRef<
     () => staffList.filter((s) => s.allowAppointmentScheduling !== false),
     [staffList]
   )
+
+  // Multi-card booking groups: stable color per bookingGroupId so service cards belonging to one
+  // logical booking are visually linked across the Kanban board.
+  const groupAccents = useMemo(() => {
+    const palette = [
+      "ring-rose-300/70",
+      "ring-amber-300/70",
+      "ring-emerald-300/70",
+      "ring-sky-300/70",
+      "ring-violet-300/70",
+      "ring-pink-300/70",
+      "ring-teal-300/70",
+      "ring-indigo-300/70",
+    ]
+    const counts = new Map<string, number>()
+    appointments.forEach((apt) => {
+      const gid = (apt as any).bookingGroupId
+      if (!gid) return
+      counts.set(gid, (counts.get(gid) || 0) + 1)
+    })
+    const colorByGroup = new Map<string, string>()
+    let idx = 0
+    counts.forEach((cnt, gid) => {
+      if (cnt > 1) {
+        colorByGroup.set(gid, palette[idx % palette.length])
+        idx += 1
+      }
+    })
+    return colorByGroup
+  }, [appointments])
 
   const dayChips = useMemo(() => {
     const today = new Date()
@@ -321,6 +364,8 @@ export const AppointmentsCalendar = forwardRef<
         return "bg-emerald-100 text-emerald-700 border border-emerald-200"
       case "cancelled":
         return "bg-red-100 text-red-700 border border-red-200"
+      case "cancelled_at_billing":
+        return "bg-slate-200 text-slate-700 border border-slate-300"
       default:
         return "bg-slate-100 text-slate-700 border border-slate-200"
     }
@@ -339,6 +384,8 @@ export const AppointmentsCalendar = forwardRef<
         return "Completed"
       case "cancelled":
         return "Cancelled"
+      case "cancelled_at_billing":
+        return "Cancelled at billing"
       default:
         return status
     }
@@ -370,7 +417,7 @@ export const AppointmentsCalendar = forwardRef<
         const month = String(aptDate.getMonth() + 1).padStart(2, '0')
         const date = String(aptDate.getDate()).padStart(2, '0')
         const aptDateString = `${year}-${month}-${date}`
-        return aptDateString === selectedDate && apt.status !== 'cancelled' && matchesStaffFilter(apt)
+        return aptDateString === selectedDate && !isHiddenAppointment(apt) && matchesStaffFilter(apt)
       })
       .sort((a, b) => {
         const timeA = a.time || '00:00'
@@ -442,7 +489,7 @@ export const AppointmentsCalendar = forwardRef<
       .filter(apt => {
         const aptDate = new Date(apt.date)
         aptDate.setHours(0, 0, 0, 0)
-        return aptDate >= today && apt.status !== 'cancelled' && matchesStaffFilter(apt)
+        return aptDate >= today && !isHiddenAppointment(apt) && matchesStaffFilter(apt)
       })
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
   }
@@ -537,21 +584,13 @@ export const AppointmentsCalendar = forwardRef<
         alert('Failed to delete invoice. Please try again.')
         return
       }
-      const a = selectedAppointment as any
-      const idsToDelete = a.bookingGroupId
-        ? appointments.filter((apt) => apt.bookingGroupId === a.bookingGroupId).map((apt) => apt._id)
-        : [selectedAppointment._id]
-      let allAptDeleted = true
-      for (const id of idsToDelete) {
-        const aptRes = await AppointmentsAPI.delete(id)
-        if (!aptRes?.success) allAptDeleted = false
-      }
+      // Linked appointment rows are deleted server-side with the invoice so the calendar stays in sync everywhere (Reports delete, calendar delete, …).
       setLinkedSale(null)
       setShowDetails(false)
       setShowDeleteInvoiceConfirm(false)
       setDeleteInvoiceReason('')
       await fetchAppointments()
-      alert(allAptDeleted ? 'Invoice and appointment(s) deleted successfully' : 'Invoice deleted. Failed to delete some appointment(s).')
+      alert(saleRes?.message || 'Invoice and appointment(s) deleted successfully.')
     } catch (e) {
       console.error(e)
       alert('Failed to delete invoice. Please try again.')
@@ -904,6 +943,7 @@ export const AppointmentsCalendar = forwardRef<
                     const duration = getTotalDuration(anyAppt)
                     const isDraggable = appointment.status !== 'completed'
                     const isDragging = draggingAppointmentId === appointment._id
+                    const groupAccentRing = anyAppt?.bookingGroupId ? groupAccents.get(anyAppt.bookingGroupId) : undefined
                     return (
                       <Card
                         key={appointment._id}
@@ -912,7 +952,7 @@ export const AppointmentsCalendar = forwardRef<
                         onDragEnd={handleCardDragEnd}
                         className={`${getStatusCardFill(appointment.status)} border rounded-lg transition-colors duration-200 overflow-hidden flex flex-col ${
                           isDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
-                        } ${isDragging ? 'opacity-50' : ''}`}
+                        } ${anyAppt.staffLocked === true ? '!border-[3px] !border-amber-600' : ''} ${isDragging ? 'opacity-50' : ''} ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ''}`}
                         onClick={() => {
                           if (justDropped) return
                           setSelectedAppointment(appointment)
@@ -928,7 +968,7 @@ export const AppointmentsCalendar = forwardRef<
                               </Badge>
                               {(anyAppt as { prepaidAtBooking?: boolean }).prepaidAtBooking &&
                                 appointment.status !== 'completed' &&
-                                appointment.status !== 'cancelled' && (
+                                !isHiddenAppointment(appointment) && (
                                   <Badge
                                     variant="outline"
                                     className="text-[10px] shrink-0 border-emerald-600 text-emerald-800 bg-emerald-50"
@@ -936,10 +976,30 @@ export const AppointmentsCalendar = forwardRef<
                                     Paid
                                   </Badge>
                                 )}
+                              {anyAppt.staffLocked === true && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] shrink-0 gap-0.5 px-1 border-amber-400 text-amber-900 bg-amber-50"
+                                  title="Staff locked"
+                                >
+                                  <Lock className="h-2.5 w-2.5" />
+                                </Badge>
+                              )}
                             </div>
-                            <Badge variant="outline" className={`text-[10px] shrink-0 ${col.timeBadgeClass}`}>
-                              {appointment.time}
-                            </Badge>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {groupAccentRing && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] border-slate-300 text-slate-600 bg-white"
+                                  title="Linked to a multi-service booking"
+                                >
+                                  Linked
+                                </Badge>
+                              )}
+                              <Badge variant="outline" className={`text-[10px] ${col.timeBadgeClass}`}>
+                                {appointment.time}
+                              </Badge>
+                            </div>
                           </div>
                           {serviceNames.length === 1 ? (
                             <div className="font-medium text-slate-800 text-sm truncate">{serviceNames[0]}</div>
@@ -1065,7 +1125,15 @@ export const AppointmentsCalendar = forwardRef<
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Stylist Name</div>
-                        <div>{staffName}</div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span>{staffName}</span>
+                          {(a.staffLocked === true) && (
+                            <Badge variant="outline" className="text-[11px] gap-1 border-amber-300 bg-amber-50 text-amber-900">
+                              <Lock className="h-3 w-3" />
+                              Locked
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Payment Status</div>
@@ -1129,7 +1197,7 @@ export const AppointmentsCalendar = forwardRef<
                         const anySel: any = selectedAppointment as any
                         handleCancelClick(anySel._id)
                       }}
-                      disabled={cancelling || selectedAppointment?.status === 'cancelled'}
+                      disabled={cancelling || isHiddenAppointment(selectedAppointment)}
                       className="bg-red-600 hover:bg-red-700 text-white shrink-0"
                     >
                       {cancelling ? 'Cancelling...' : 'Cancel Appointment'}
@@ -1163,10 +1231,22 @@ export const AppointmentsCalendar = forwardRef<
                             if (!selectedAppointment) return
                             const a = selectedAppointment as any
                             const siblings = getBookingGroupSiblings(appointments, a)
-                            const allServices = siblings.flatMap((sib: any) => collectSaleLinesFromAppointmentCard(sib))
-                            const appointmentData = buildRaiseSaleAppointmentPayload(a, siblings, allServices)
+                            // Modal only opens for multi-doc booking groups (≥2 sibling docs).
+                            // Single docs — including legacy bookings with `additionalServiceIds`
+                            // — fall back to the existing direct-to-quick-sale flow because the
+                            // backend doesn't yet support splitting an additional service off a
+                            // single Appointment row.
+                            if (siblings.length <= 1) {
+                              const allServices = collectSaleLinesFromAppointmentCard(a)
+                              const appointmentData = buildRaiseSaleAppointmentPayload(a, [a], allServices)
+                              setShowDetails(false)
+                              router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                              return
+                            }
+                            setRaiseSaleAnchor(a)
+                            setRaiseSaleSiblings(siblings as Appointment[])
                             setShowDetails(false)
-                            router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                            setShowRaiseSaleModal(true)
                           }}
                         >
                           Raise Sale
@@ -1204,7 +1284,11 @@ export const AppointmentsCalendar = forwardRef<
                   return (
                     <Card
                       key={appointment._id}
-                      className="bg-indigo-50/50 border-indigo-200 shadow-lg hover:shadow-xl transition-all duration-300 rounded-2xl cursor-pointer"
+                      className={`bg-indigo-50/50 shadow-lg hover:shadow-xl transition-all duration-300 rounded-2xl cursor-pointer ${
+                        anyAppt.staffLocked === true
+                          ? 'border-[3px] border-amber-600 ring-2 ring-amber-500/80'
+                          : 'border border-indigo-200'
+                      }`}
                       onClick={() => {
                         setSelectedAppointment(appointment)
                         setShowDetails(true)
@@ -1219,7 +1303,7 @@ export const AppointmentsCalendar = forwardRef<
                             </Badge>
                             {anyAppt.prepaidAtBooking &&
                               appointment.status !== 'completed' &&
-                              appointment.status !== 'cancelled' && (
+                              !isHiddenAppointment(appointment) && (
                                 <Badge
                                   variant="outline"
                                   className="text-xs shrink-0 border-emerald-600 text-emerald-800 bg-emerald-50"
@@ -1227,6 +1311,16 @@ export const AppointmentsCalendar = forwardRef<
                                   Paid
                                 </Badge>
                               )}
+                            {(anyAppt.staffLocked === true) && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs shrink-0 gap-1 border-amber-400 bg-amber-50 text-amber-900"
+                                title="Client requested this stylist"
+                              >
+                                <Lock className="h-3 w-3" />
+                                Staff locked
+                              </Badge>
+                            )}
                           </div>
                           <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50 shrink-0">
                             {appointment.time}
@@ -1390,6 +1484,26 @@ export const AppointmentsCalendar = forwardRef<
           </div>
         </DialogContent>
       </Dialog>
+
+      <RaiseSaleConfirmationModal
+        open={showRaiseSaleModal}
+        anchor={raiseSaleAnchor as any}
+        siblings={raiseSaleSiblings as any}
+        onClose={() => setShowRaiseSaleModal(false)}
+        onConfirm={(result: RaiseSaleConfirmationResult) => {
+          setShowRaiseSaleModal(false)
+          if (result.skipBilling) {
+            toast({ title: "Booking cancelled", description: "All services were marked cancelled at billing." })
+            return
+          }
+          if (result.performed.length === 0 || !raiseSaleAnchor) return
+          // Build the quick-sale payload from the post-shift performed siblings only.
+          const performedAnchor = (result.performed.find((p: any) => p._id === raiseSaleAnchor._id) || result.performed[0]) as any
+          const allServices = result.performed.flatMap((sib: any) => collectSaleLinesFromAppointmentCard(sib))
+          const appointmentData = buildRaiseSaleAppointmentPayload(performedAnchor, result.performed, allServices)
+          router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+        }}
+      />
     </div>
   )
 })

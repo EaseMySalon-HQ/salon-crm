@@ -35,7 +35,9 @@ const itemSchema = new mongoose.Schema({
   // Price per unit excluding GST (for receipt display)
   priceExcludingGST: { type: Number },
   // Applicable tax rate % (for receipt display)
-  taxRate: { type: Number }
+  taxRate: { type: Number },
+  /** For bills linked to a booking: pre-booked service vs checkout add-on (reports / receipts). Server-set only. */
+  lineSource: { type: String, enum: ['appointment', 'walk_in'], required: false }
 }, { _id: false });
 
 const paymentHistorySchema = new mongoose.Schema({
@@ -126,7 +128,9 @@ const saleSchema = new mongoose.Schema({
   loyaltyPointsRedeemed: { type: Number, default: 0, min: 0 },
   loyaltyDiscountAmount: { type: Number, default: 0, min: 0 },
   loyaltyPointsEarned: { type: Number, default: 0 },
-  loyaltyReversedAt: { type: Date, default: null }
+  loyaltyReversedAt: { type: Date, default: null },
+  /** When customer paid cash above bill due and excess was credited to prepaid wallet (POS). Amount in ₹. */
+  billChangeCreditedToWallet: { type: Number, default: undefined, min: 0 },
 }, {
   timestamps: true
 });

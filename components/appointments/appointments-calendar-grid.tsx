@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2, List, Calendar, AlertCircle } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil, CalendarPlus, PencilIcon, CalendarClock, XCircle, Eye, Trash2, List, Calendar, AlertCircle, Lock } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -32,7 +32,12 @@ import {
   getBookingGroupSiblings,
   collectSaleLinesFromAppointmentCard,
   buildRaiseSaleAppointmentPayload,
+  isHiddenAppointment,
 } from "@/lib/appointment-calendar-helpers"
+import {
+  RaiseSaleConfirmationModal,
+  type RaiseSaleConfirmationResult,
+} from "@/components/appointments/raise-sale-confirmation-modal"
 
 interface Appointment {
   _id: string
@@ -58,7 +63,7 @@ interface Appointment {
   date: string
   time: string
   duration: number
-  status: "scheduled" | "confirmed" | "arrived" | "service_started" | "completed" | "cancelled"
+  status: "scheduled" | "confirmed" | "arrived" | "service_started" | "completed" | "cancelled" | "cancelled_at_billing"
   notes?: string
   price: number
   createdAt: string
@@ -66,6 +71,8 @@ interface Appointment {
   leadSource?: string
   bookingGroupId?: string | null
   prepaidAtBooking?: boolean
+  /** Client requested this stylist — show lock on cards */
+  staffLocked?: boolean
 }
 
 interface StaffWorkDay {
@@ -248,6 +255,8 @@ function getStatusBadgeClass(status: string): string {
       return "bg-emerald-100 text-emerald-700 border border-emerald-200"
     case "cancelled":
       return "bg-red-100 text-red-700 border border-red-200"
+    case "cancelled_at_billing":
+      return "bg-slate-200 text-slate-700 border border-slate-300"
     default:
       return "bg-slate-100 text-slate-700 border border-slate-200"
   }
@@ -266,6 +275,8 @@ function getStatusText(status: string): string {
       return "Completed"
     case "cancelled":
       return "Cancelled"
+    case "cancelled_at_billing":
+      return "Cancelled at billing"
     default:
       return status
   }
@@ -303,6 +314,10 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [appointmentToCancel, setAppointmentToCancel] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  // Per-service "Raise Sale" confirmation modal — opens only for multi-service bookings.
+  const [showRaiseSaleModal, setShowRaiseSaleModal] = useState(false)
+  const [raiseSaleAnchor, setRaiseSaleAnchor] = useState<Appointment | null>(null)
+  const [raiseSaleSiblings, setRaiseSaleSiblings] = useState<Appointment[]>([])
   const [showDeleteInvoiceConfirm, setShowDeleteInvoiceConfirm] = useState(false)
   const [deleteInvoiceReason, setDeleteInvoiceReason] = useState("")
   const [deletingInvoice, setDeletingInvoice] = useState(false)
@@ -322,6 +337,8 @@ export const AppointmentsCalendarGrid = forwardRef<
     duration: number
     mode: "move" | "resize-top" | "resize-bottom"
     sourceStaffId: string
+    /** Only time/duration may change — never reassign staff */
+    staffLocked?: boolean
   } | null>(null)
   const [updatingTimeForId, setUpdatingTimeForId] = useState<string | null>(null)
   const [dragOffsetY, setDragOffsetY] = useState(0)
@@ -592,7 +609,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     return appointments.filter((apt) => {
       const norm = dateNorm(apt.date)
       if (norm !== selectedDate) return false
-      if (apt.status === "cancelled") return false
+      if (isHiddenAppointment(apt)) return false
       if (staffFilter) {
         const primaryId = getPrimaryStaffId(apt)
         return primaryId === staffFilter
@@ -857,6 +874,36 @@ export const AppointmentsCalendarGrid = forwardRef<
     return result
   }, [columns, blocksByColumn])
 
+  // Multi-card booking groups: stable color per bookingGroupId so service cards belonging to one
+  // logical booking are visually linked across the calendar.
+  const groupAccents = useMemo(() => {
+    const palette = [
+      "ring-rose-300/70",
+      "ring-amber-300/70",
+      "ring-emerald-300/70",
+      "ring-sky-300/70",
+      "ring-violet-300/70",
+      "ring-pink-300/70",
+      "ring-teal-300/70",
+      "ring-indigo-300/70",
+    ]
+    const counts = new Map<string, number>()
+    appointments.forEach((apt) => {
+      const gid = (apt as Appointment).bookingGroupId
+      if (!gid) return
+      counts.set(gid, (counts.get(gid) || 0) + 1)
+    })
+    const colorByGroup = new Map<string, string>()
+    let idx = 0
+    counts.forEach((cnt, gid) => {
+      if (cnt > 1) {
+        colorByGroup.set(gid, palette[idx % palette.length])
+        idx += 1
+      }
+    })
+    return colorByGroup
+  }, [appointments])
+
   const WALK_IN_SALE_DURATION = 30
 
   const salesByColumn = useMemo(() => {
@@ -969,7 +1016,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       .filter((a) => {
         const aptDate = new Date(a.date)
         aptDate.setHours(0, 0, 0, 0)
-        return aptDate >= today && a.status !== "cancelled"
+        return aptDate >= today && !isHiddenAppointment(a)
       })
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
   }
@@ -1057,25 +1104,19 @@ export const AppointmentsCalendarGrid = forwardRef<
         alert("Failed to delete invoice. Please try again.")
         return
       }
+      // Appointment cards are removed server-side with the bill; drop any local rows for this group immediately.
       const a = selectedAppointment as any
-      const idsToDelete = a.bookingGroupId
+      const idsToHide = a.bookingGroupId
         ? appointments.filter((apt) => (apt as Appointment).bookingGroupId === a.bookingGroupId).map((apt) => apt._id)
         : [selectedAppointment._id]
-      let allAptDeleted = true
-      for (const id of idsToDelete) {
-        const aptRes = await AppointmentsAPI.delete(id)
-        if (!aptRes?.success) allAptDeleted = false
-      }
-      if (allAptDeleted) {
-        const idsSet = new Set(idsToDelete)
-        setAppointments((prev) => prev.filter((apt) => !idsSet.has(apt._id)))
-      }
+      const idsSet = new Set(idsToHide)
+      setAppointments((prev) => prev.filter((apt) => !idsSet.has(apt._id)))
       setLinkedSale(null)
       setShowDetails(false)
       setShowDeleteInvoiceConfirm(false)
       setDeleteInvoiceReason("")
       window.dispatchEvent(new CustomEvent("appointments-refresh"))
-      alert(allAptDeleted ? "Invoice and appointment(s) deleted successfully" : "Invoice deleted. Failed to delete some appointment(s).")
+      alert(saleRes?.message || "Invoice and appointment(s) deleted successfully.")
     } catch (e) {
       console.error(e)
       alert("Failed to delete invoice. Please try again.")
@@ -1112,7 +1153,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   const handleTimeDragStart = (e: React.MouseEvent, apt: Appointment) => {
-    if (apt.status === "cancelled" || apt.status === "completed") return
+    if (isHiddenAppointment(apt) || apt.status === "completed") return
     e.preventDefault()
     e.stopPropagation()
     const cardEl = (e.target as HTMLElement).closest("[data-appointment-card]") as HTMLElement
@@ -1128,11 +1169,12 @@ export const AppointmentsCalendarGrid = forwardRef<
       duration: getTotalDuration(apt as any),
       mode: "move",
       sourceStaffId,
+      staffLocked: (apt as any).staffLocked === true,
     })
   }
 
   const handleResizeStart = (e: React.MouseEvent, apt: Appointment, mode: "resize-top" | "resize-bottom") => {
-    if (apt.status === "cancelled" || apt.status === "completed") return
+    if (isHiddenAppointment(apt) || apt.status === "completed") return
     e.preventDefault()
     e.stopPropagation()
     const cardEl = (e.target as HTMLElement).closest("[data-appointment-card]") as HTMLElement
@@ -1148,6 +1190,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       duration: getTotalDuration(apt as any),
       mode,
       sourceStaffId,
+      staffLocked: (apt as any).staffLocked === true,
     })
   }
 
@@ -1190,7 +1233,8 @@ export const AppointmentsCalendarGrid = forwardRef<
       justDraggedRef.current = true
       setDragOffsetY(e.clientY - draggingApt.startY)
       if (draggingApt.mode === "move" || draggingApt.mode === "resize-top") {
-        setDragOffsetX(e.clientX - draggingApt.startX)
+        if (draggingApt.staffLocked) setDragOffsetX(0)
+        else setDragOffsetX(e.clientX - draggingApt.startX)
         const el = blocksContainerRef.current
         if (el && columns.length > 0) {
           const rect = el.getBoundingClientRect()
@@ -1199,10 +1243,24 @@ export const AppointmentsCalendarGrid = forwardRef<
           const colIndex = Math.floor(relX / (rect.width / columns.length))
           const slotIndex = Math.floor(relY / slotHeight)
           const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
-          const inBounds = colIndex >= 0 && colIndex < columns.length && slotMinutes >= extendedStartMinutes && slotMinutes < extendedEndMinutes
-          const valid = inBounds && isValidDropTarget(colIndex, slotMinutes, draggingApt.duration ?? 60)
-          if (valid) {
-            const slot = { colIndex, slotMinutes }
+          const dur = draggingApt.duration ?? 60
+          const inBoundsVert =
+            slotMinutes >= extendedStartMinutes && slotMinutes < extendedEndMinutes
+          let valid = false
+          let slotCol = colIndex
+          if (draggingApt.staffLocked) {
+            const sourceIx = columns.findIndex((c) => c._id === draggingApt.sourceStaffId)
+            if (sourceIx >= 0 && inBoundsVert) {
+              valid = isValidDropTarget(sourceIx, slotMinutes, dur)
+              slotCol = sourceIx
+            }
+          } else {
+            const inBounds =
+              colIndex >= 0 && colIndex < columns.length && inBoundsVert
+            valid = inBounds && isValidDropTarget(colIndex, slotMinutes, dur)
+          }
+          if (valid && slotCol >= 0 && slotCol < columns.length) {
+            const slot = { colIndex: slotCol, slotMinutes }
             setDragHoverSlot(slot)
             dragHoverSlotRef.current = slot
           } else {
@@ -1306,7 +1364,9 @@ export const AppointmentsCalendarGrid = forwardRef<
           setTimeout(() => { justDraggedRef.current = false }, 0)
           return
         }
-        if (isStaffChange) {
+        if (isStaffChange && current.staffLocked) {
+          await applyDrop({ mode: "move", newTime: clampedTime })
+        } else if (isStaffChange) {
           await applyDrop({ mode: "staff", newStaffId: targetStaffId!, newTime: clampedTime })
         } else {
           await applyDrop({ mode: "move", newTime: clampedTime })
@@ -1348,7 +1408,9 @@ export const AppointmentsCalendarGrid = forwardRef<
           setTimeout(() => { justDraggedRef.current = false }, 0)
           return
         }
-        if (isStaffChange) {
+        if (isStaffChange && current.staffLocked) {
+          await applyDrop({ mode: "resize-top", newTime: clampedTime })
+        } else if (isStaffChange) {
           await applyDrop({ mode: "staff", newStaffId: targetStaffId!, newTime: clampedTime })
         } else {
           await applyDrop({ mode: "resize-top", newTime: clampedTime })
@@ -2016,7 +2078,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                     const clientName = a?.clientId?.name || "Client"
                     const isDragging = draggingApt?.id === apt._id
                     const isUpdating = updatingTimeForId === apt._id
-                    const canDrag = apt.status !== "cancelled" && apt.status !== "completed"
+                    const staffLockedCard = a.staffLocked === true
+                    const canDrag =
+                      !isHiddenAppointment(apt) && apt.status !== "completed"
                     const baseHeight = Math.max(slotHeight * 0.6, height)
                     const resizeBottomHeight =
                       isDragging && draggingApt?.mode === "resize-bottom"
@@ -2033,14 +2097,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                       transformParts.push(`translateY(${dragOffsetY}px)`)
                     }
                     const minBlockHeight = Math.max(72, resizeBottomHeight)
-                    const accentColorMap: Record<string, string> = {
-                      scheduled: "bg-amber-500",
-                      arrived: "bg-blue-500",
-                      confirmed: "bg-emerald-500",
-                      service_started: "bg-violet-500",
-                      completed: "bg-emerald-500",
-                      cancelled: "bg-red-500",
-                    }
                     const statusDotColorMap: Record<string, string> = {
                       confirmed: "bg-emerald-500",
                       scheduled: "bg-amber-400",
@@ -2049,18 +2105,22 @@ export const AppointmentsCalendarGrid = forwardRef<
                       completed: "bg-emerald-500",
                       cancelled: "bg-red-500",
                     }
-                    const accentColor = accentColorMap[apt.status] || "bg-slate-500"
                     const statusDotColor = statusDotColorMap[apt.status] || "bg-slate-400"
                     const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(apt as any))
                     const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
+                    const groupAccentRing = (apt as Appointment).bookingGroupId
+                      ? groupAccents.get((apt as Appointment).bookingGroupId as string)
+                      : undefined
                     return (
                       <div
                         data-appointment-card
                         key={apt._id}
-                        className={`group absolute overflow-hidden text-left z-10 pointer-events-auto flex flex-col select-none animate-appointment-card-enter ${
+                        className={`group absolute overflow-hidden rounded-md text-left z-10 pointer-events-auto flex flex-col select-none animate-appointment-card-enter ${
                           isDragging
                             ? "ring-2 ring-violet-400/80 transition-none opacity-40"
-                            : "transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
+                            : staffLockedCard
+                              ? `shadow-[0_0_0_3px_rgb(217,119,6)] transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ""}`
+                              : `transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ""}`
                         } ${isUpdating ? "opacity-70" : ""}`}
                         style={{
                           top: top,
@@ -2077,11 +2137,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                           if (!isDragging) e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)"
                         }}
                       >
-                        {/* 4px vertical accent strip - full height, rounded */}
-                        <div
-                          className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor} shrink-0`}
-                          aria-hidden
-                        />
                         {/* Drag handle - top */}
                         <div
                           className={`absolute top-0 left-0 right-0 z-20 h-3 flex flex-col items-center justify-center ${canDrag ? "!cursor-grab active:!cursor-grabbing hover:bg-black/[0.06]" : ""}`}
@@ -2089,7 +2144,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                           onMouseDown={(e) => {
                             if (canDrag) handleResizeStart(e, apt, "resize-top")
                           }}
-                          title={canDrag ? "Drag to change start time or reassign staff" : undefined}
+                          title={
+                            staffLockedCard
+                              ? "Drag vertically to change start time (stylist stays fixed)"
+                              : canDrag
+                                ? "Drag to change start time or reassign staff"
+                                : undefined
+                          }
                         >
                           {canDrag && (
                             <div className="pointer-events-none w-6 h-0.5 rounded-full bg-slate-400/50" aria-hidden />
@@ -2097,7 +2158,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                         </div>
                         {/* Main card body */}
                         <div
-                          className={`flex-1 pl-[14px] pr-3 pt-6 pb-4 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+                          className={`relative flex-1 rounded-md pl-[14px] pr-3 pt-6 pb-4 min-h-0 overflow-hidden border ${getStatusCardFill(apt.status)} ${
+                            staffLockedCard ? "!border-[3px] !border-amber-600" : ""
+                          } ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
                           onMouseDown={(e) => {
                             if (canDrag) handleTimeDragStart(e, apt)
                           }}
@@ -2109,7 +2172,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                             setSelectedAppointment(apt)
                             setShowDetails(true)
                           }}
-                          title={canDrag ? "Drag to move • Click for details" : "Click to view details"}
+                          title={
+                            staffLockedCard
+                              ? "Drag vertically to move time — staff stays on this column • Click for details"
+                              : canDrag
+                                ? "Drag to move • Click for details"
+                                : "Click to view details"
+                          }
                         >
                           {/* Status dot - 6-8px top-left */}
                           <div
@@ -2140,11 +2209,30 @@ export const AppointmentsCalendarGrid = forwardRef<
                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80">
                               {getTotalDuration(apt as any)} min
                             </span>
-                            {a.prepaidAtBooking && apt.status !== "completed" && apt.status !== "cancelled" && (
-                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">
-                                Paid
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1 flex-wrap justify-end shrink-0">
+                              {groupAccentRing && (
+                                <span
+                                  className="text-[10px] font-semibold text-slate-600 bg-white px-1.5 py-0.5 rounded-md border border-slate-200"
+                                  title="Linked to a multi-service booking"
+                                >
+                                  Linked
+                                </span>
+                              )}
+                              {a.prepaidAtBooking && apt.status !== "completed" && !isHiddenAppointment(apt) && (
+                                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                                  Paid
+                                </span>
+                              )}
+                              {(a.staffLocked === true) && (
+                                <span
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/90"
+                                  title="Client requested this stylist"
+                                >
+                                  <Lock className="h-3 w-3 shrink-0" aria-hidden />
+                                  Staff locked
+                                </span>
+                              )}
+                            </div>
                           </div>
                           {apt.notes && (
                             <div className="text-slate-400 text-[11px] truncate mt-1.5 italic border-t border-slate-100 pt-1.5">
@@ -2196,15 +2284,25 @@ export const AppointmentsCalendarGrid = forwardRef<
                             </div>
                           )}
                         </div>
-                        {/* Resize handle - bottom */}
+                        {/* Resize handle - bottom (visible on card hover) */}
                         <div
-                          className={`absolute bottom-0 left-0 right-0 z-20 h-4 flex items-center justify-center bg-slate-100/80 ${canDrag ? "hover:bg-slate-200/80 cursor-n-resize active:bg-slate-300/80" : ""}`}
+                          className={`absolute bottom-0 left-0 right-0 z-20 h-4 flex items-center justify-center bg-slate-100/80 ${
+                            canDrag
+                              ? "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-150 hover:bg-slate-200/80 cursor-n-resize active:bg-slate-300/80"
+                              : "pointer-events-none opacity-0"
+                          }`}
                           aria-hidden
                           onMouseDown={(e) => {
                             e.stopPropagation()
                             if (canDrag) handleResizeStart(e, apt, "resize-bottom")
                           }}
-                          title={canDrag ? "Drag to extend or shorten duration" : undefined}
+                          title={
+                            staffLockedCard
+                              ? "Drag to change duration"
+                              : canDrag
+                                ? "Drag to extend or shorten duration"
+                                : undefined
+                          }
                         >
                           {canDrag && (
                             <div className="pointer-events-none w-8 h-1 rounded-full bg-slate-400/60" aria-hidden />
@@ -2363,16 +2461,15 @@ export const AppointmentsCalendarGrid = forwardRef<
         const a = apt as any
         const serviceNames = getServiceDisplayNames(a)
         const clientName = a?.clientId?.name || "Client"
-        const accentColorMap: Record<string, string> = {
-          scheduled: "bg-amber-500", arrived: "bg-blue-500", confirmed: "bg-emerald-500",
-          service_started: "bg-violet-500", completed: "bg-slate-400", cancelled: "bg-red-500",
-        }
-        const accentColor = accentColorMap[apt.status] || "bg-slate-500"
         const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(a))
         const timeRangeStr = `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
         return createPortal(
           <div
-            className="fixed z-[9999] overflow-hidden shadow-xl border border-slate-200/80 bg-white pointer-events-none cursor-grabbing"
+            className={`fixed z-[9999] overflow-hidden rounded-md shadow-xl bg-white pointer-events-none cursor-grabbing ${
+              a.staffLocked === true
+                ? "border-[3px] border-amber-600 ring-2 ring-amber-500/90"
+                : "border border-slate-200/80"
+            }`}
             style={{
               left: dragStartRect.left + dragOffsetX,
               top: dragStartRect.top + dragOffsetY,
@@ -2380,7 +2477,6 @@ export const AppointmentsCalendarGrid = forwardRef<
               height: dragStartRect.height,
             }}
           >
-            <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentColor}`} />
             <div className="pl-[14px] pr-3 pt-6 pb-3 h-full flex flex-col justify-center">
               <div className="font-semibold text-slate-800 text-[14px] truncate">{clientName}</div>
               {serviceNames.length === 1 ? (
@@ -2397,6 +2493,12 @@ export const AppointmentsCalendarGrid = forwardRef<
               <span className="inline-flex mt-2 px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-500 bg-slate-100/80 w-fit">
                 {getTotalDuration(a)} min
               </span>
+              {(a.staffLocked === true) && (
+                <span className="inline-flex mt-1.5 items-center gap-1 text-[11px] font-semibold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/90 w-fit">
+                  <Lock className="h-3 w-3" aria-hidden />
+                  Staff locked
+                </span>
+              )}
             </div>
           </div>,
           document.body
@@ -2602,7 +2704,19 @@ export const AppointmentsCalendarGrid = forwardRef<
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Stylist Name</div>
-                        <div>{staffName}</div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span>{staffName}</span>
+                          {(a.staffLocked === true) && (
+                            <Badge
+                              variant="outline"
+                              className="text-[11px] font-semibold gap-1 border-amber-300 bg-amber-50 text-amber-900"
+                              title="Client requested this stylist"
+                            >
+                              <Lock className="h-3 w-3" />
+                              Locked
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <div className="text-muted-foreground text-xs">Payment Status</div>
@@ -2698,10 +2812,22 @@ export const AppointmentsCalendarGrid = forwardRef<
                             if (!selectedAppointment) return
                             const a = selectedAppointment as any
                             const siblings = getBookingGroupSiblings(appointments, a)
-                            const allServices = siblings.flatMap((sib: any) => collectSaleLinesFromAppointmentCard(sib))
-                            const appointmentData = buildRaiseSaleAppointmentPayload(a, siblings, allServices)
+                            // Modal only opens for multi-doc booking groups (≥2 sibling docs).
+                            // Single docs — including legacy bookings with `additionalServiceIds`
+                            // — fall back to the existing direct-to-quick-sale flow because the
+                            // backend doesn't yet support splitting an additional service off a
+                            // single Appointment row.
+                            if (siblings.length <= 1) {
+                              const allServices = collectSaleLinesFromAppointmentCard(a)
+                              const appointmentData = buildRaiseSaleAppointmentPayload(a, [a], allServices)
+                              setShowDetails(false)
+                              router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                              return
+                            }
+                            setRaiseSaleAnchor(a)
+                            setRaiseSaleSiblings(siblings as Appointment[])
                             setShowDetails(false)
-                            router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+                            setShowRaiseSaleModal(true)
                           }}
                         >
                           Raise Sale
@@ -3141,6 +3267,25 @@ export const AppointmentsCalendarGrid = forwardRef<
           </div>
         </DialogContent>
       </Dialog>
+
+      <RaiseSaleConfirmationModal
+        open={showRaiseSaleModal}
+        anchor={raiseSaleAnchor as any}
+        siblings={raiseSaleSiblings as any}
+        onClose={() => setShowRaiseSaleModal(false)}
+        onConfirm={(result: RaiseSaleConfirmationResult) => {
+          setShowRaiseSaleModal(false)
+          if (result.skipBilling) {
+            toast({ title: "Booking cancelled", description: "All services were marked cancelled at billing." })
+            return
+          }
+          if (result.performed.length === 0 || !raiseSaleAnchor) return
+          const performedAnchor = (result.performed.find((p: any) => p._id === raiseSaleAnchor._id) || result.performed[0]) as any
+          const allServices = result.performed.flatMap((sib: any) => collectSaleLinesFromAppointmentCard(sib))
+          const appointmentData = buildRaiseSaleAppointmentPayload(performedAnchor, result.performed, allServices)
+          router.push(`/quick-sale?appointment=${btoa(JSON.stringify(appointmentData))}`)
+        }}
+      />
     </div>
   )
 })

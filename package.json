@@ -5,6 +5,8 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:all": "concurrently -k -n web,api -c blue,magenta \"npm run dev\" \"npm run dev --prefix backend\"",
     "lint": "next lint",
     "start": "next start",
     "test:unit": "vitest run"
@@ -70,6 +72,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "concurrently": "^9.2.0",
     "@types/jspdf": "^1.3.3",
     "@types/node": "^22",
     "@types/react": "^19",

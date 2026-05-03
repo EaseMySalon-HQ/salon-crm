@@ -108,11 +108,17 @@ import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
 import { computePackageLineTotal } from "@/lib/package-tax"
 import { useRouter } from "next/navigation"
 import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
+import type { RaiseSaleLinkageSnapshot } from "@/lib/quick-sale-helpers"
 import {
   decodeQuickSaleAppointmentParam,
   extractAppointmentIdsFromPayload,
   resolveAppointmentIdsToComplete,
+  calendarYmdLocal,
+  raiseSaleLinkageSnapshotFromCheckoutState,
+  areRaiseSaleLinkageSnapshotsEqual,
 } from "@/lib/quick-sale-helpers"
+import type { ClientWalletLedgerRow } from "@/lib/client-wallet-ledger"
+import { flattenClientWalletLedger, walletActivityStatusDisplay } from "@/lib/client-wallet-ledger"
 
 // Mock data for customers
 // const mockCustomers = [
@@ -270,63 +276,6 @@ type BillingMode = "create" | "edit" | "exchange"
 
 function isLikelyMongoObjectId(id: string | null | undefined): boolean {
   return !!id && /^[a-f\d]{24}$/i.test(String(id))
-}
-
-type ClientWalletLedgerStatus = "Credit" | "Debit" | "Adjustment"
-
-type ClientWalletLedgerRow = {
-  _id: string
-  createdAt: string
-  billNo: string | null
-  amount: number
-  statusLabel: ClientWalletLedgerStatus
-  walletPlan: string
-  description: string
-}
-
-function txTypeToLedgerStatus(type: string): ClientWalletLedgerStatus {
-  const t = String(type || "").toLowerCase()
-  if (t === "debit") return "Debit"
-  if (t === "credit" || t === "refund_credit") return "Credit"
-  return "Adjustment"
-}
-
-function saleRefToBillNo(saleId: unknown): string | null {
-  if (!saleId) return null
-  if (typeof saleId === "object" && saleId !== null && "billNo" in saleId) {
-    const bn = (saleId as { billNo?: string }).billNo
-    return bn != null && String(bn) !== "" ? String(bn) : null
-  }
-  return null
-}
-
-function flattenClientWalletLedger(
-  wallets: any[] | undefined,
-  transactionsByWallet: Record<string, any[]> | undefined
-): ClientWalletLedgerRow[] {
-  const by = transactionsByWallet || {}
-  const rows: ClientWalletLedgerRow[] = []
-  for (const w of wallets || []) {
-    const wid = String(w._id)
-    const ps = w.planSnapshot
-    const plan =
-      ps?.openedFromBillChangeCredit === true || ps?.billChangeCashCreditNonExpiring === true
-        ? "Bill change credit"
-        : ps?.planName || "Wallet"
-    for (const tx of by[wid] || []) {
-      rows.push({
-        _id: String(tx._id),
-        createdAt: tx.createdAt || new Date().toISOString(),
-        billNo: saleRefToBillNo(tx.saleId),
-        amount: Number(tx.amount) || 0,
-        statusLabel: txTypeToLedgerStatus(String(tx.type)),
-        walletPlan: plan,
-        description: String(tx.description || "").trim(),
-      })
-    }
-  }
-  rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-  return rows
 }
 
 /** Unique staff names on a sale (header + line items + multi-staff contributions). */
@@ -600,6 +549,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
   const [linkedAppointmentIds, setLinkedAppointmentIds] = useState<string[]>([])
   const [linkedAppointmentTime, setLinkedAppointmentTime] = useState<string | null>(null)
+  /** Raise Sale URL prefill only: compare checkout to this; drift → save without appointmentId / completion. */
+  const raiseSaleLinkageBaselineRef = useRef<RaiseSaleLinkageSnapshot | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
@@ -1360,6 +1311,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         const { primaryId, linkedIds } = extractAppointmentIdsFromPayload(rawAppointment)
         if (primaryId) setLinkedAppointmentId(primaryId)
         if (linkedIds.length > 0) setLinkedAppointmentIds(linkedIds)
+        if (!primaryId) raiseSaleLinkageBaselineRef.current = null
 
         const appointmentData = rawAppointment as any
         if (appointmentData.time) {
@@ -1458,6 +1410,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             })
             console.log("Pre-filled service:", service.name)
           }
+        }
+
+        if (primaryId) {
+          const dateYmd =
+            appointmentData.date != null && appointmentData.date !== ""
+              ? calendarYmdLocal(new Date(appointmentData.date))
+              : calendarYmdLocal(new Date())
+          raiseSaleLinkageBaselineRef.current = raiseSaleLinkageSnapshotFromCheckoutState({
+            clientId: String(appointmentData.clientId ?? "").trim(),
+            dateYYYYMMDD: dateYmd,
+            remarksNormalized: String(appointmentData.notes ?? "").trim(),
+            serviceLines: serviceItemsToAdd.map((si) => ({
+              serviceId: String(si.serviceId ?? ""),
+              staffId: String(si.staffId ?? ""),
+              quantity: Math.max(1, Math.floor(Number(si.quantity) || 1)),
+            })),
+            extraProducts: 0,
+            extraMemberships: 0,
+            extraPackages: 0,
+            extraPrepaid: 0,
+          })
         }
 
         if (serviceItemsToAdd.length > 0) {
@@ -4504,6 +4477,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       
       // Handle different modes: create, edit, exchange
       try {
+        let raiseSaleLinkageVoided = false
         let receiptNumber
         let saleId: string | undefined
 
@@ -4565,6 +4539,35 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           })
           return
         }
+
+        const linkageBaseline = raiseSaleLinkageBaselineRef.current
+        let appointmentLinkageIntact = true
+        if (mode === "create" && linkedAppointmentId && linkageBaseline !== null) {
+          const membershipLineCountCheckout = membershipItems.filter((m) => m.planId).length
+          const checkoutSnap = raiseSaleLinkageSnapshotFromCheckoutState({
+            clientId: String(getCustomerId(customer) || "").trim(),
+            dateYYYYMMDD: calendarYmdLocal(selectedDate),
+            remarksNormalized: String(remarks || "").trim(),
+            serviceLines: validServiceItems.map((item) => ({
+              serviceId: String(item.serviceId || ""),
+              staffId: String(item.staffId || ""),
+              quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+            })),
+            extraProducts: validProductItems.length,
+            extraMemberships: membershipLineCountCheckout,
+            extraPackages: validPackageItems.length,
+            extraPrepaid: validPrepaidPlanItems.length,
+          })
+          appointmentLinkageIntact = areRaiseSaleLinkageSnapshotsEqual(linkageBaseline, checkoutSnap)
+          raiseSaleLinkageVoided = !appointmentLinkageIntact
+        }
+        const effectiveAppointmentId =
+          mode === "create"
+            ? appointmentLinkageIntact
+              ? linkedAppointmentId || undefined
+              : undefined
+            : linkedAppointmentId || undefined
+
         const saleData = {
           billNo: receiptNumber,
           customerId: getCustomerId(customer),
@@ -4722,7 +4725,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
           staffName: primaryStaff?.staffName || staff[0]?.name || "Unassigned Staff",
           notes: remarks || '',
-          appointmentId: linkedAppointmentId || undefined,
+          appointmentId: effectiveAppointmentId,
           date: selectedDate.toISOString(),
           time: format(new Date(), "HH:mm"),
           ...(membershipItems.filter((m) => m.planId).length > 0 && {
@@ -4736,6 +4739,19 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           },
           loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
           loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+          ...(creditChangeEffective &&
+          changeToCredit > 0.005 && {
+            billChangeCreditedToWallet: changeToCredit,
+          }),
+          ...(mode === "create" && raiseSaleLinkageVoided
+            ? {
+                suppressStandaloneWalkInCalendarCards: true,
+                voidBookingAppointmentIds: resolveAppointmentIdsToComplete(
+                  linkedAppointmentIds,
+                  linkedAppointmentId
+                ),
+              }
+            : {}),
         }
 
         console.log('💾 Creating sale in backend:', saleData)
@@ -4928,8 +4944,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               console.warn('⚠️ No WhatsApp status in response')
             }
             
-            // Mark all linked appointments as completed if fully paid
-            if (linkedAppointmentId && (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')) {
+            // Mark linked appointments completed only when the bill still matches Raise Sale confirmation
+            if (
+              appointmentLinkageIntact &&
+              linkedAppointmentId &&
+              (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')
+            ) {
               try {
                 const idsToComplete = resolveAppointmentIdsToComplete(linkedAppointmentIds, linkedAppointmentId)
                 await Promise.all(idsToComplete.map(id => AppointmentsAPI.update(id, { status: "completed" })))
@@ -4943,6 +4963,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               } catch (error) {
                 console.error("Failed to update appointment status:", error)
               }
+            }
+            if (raiseSaleLinkageVoided) {
+              toast({
+                title: "Bill saved without appointment link",
+                description:
+                  "This sale no longer matched the confirmed booking snapshot, so it was billed as a direct sale. The original booking rows were cleared from the calendar (no duplicate walk-in cards added).",
+              })
             }
             // Refresh calendar so new walk-in cards (multi-staff services) appear - for both linked and standalone sales
             if (typeof window !== "undefined" && (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')) {
@@ -5216,6 +5243,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         tipStaffName: tipStaff?.name || undefined,
         notes: remarks,
         shareToken: result.data?.shareToken,
+        ...(creditChangeEffective &&
+        changeToCredit > 0.005 && {
+          billChangeCreditedToWallet: changeToCredit,
+        }),
       }
 
             // Store the receipt locally
@@ -6243,16 +6274,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         </span>
                       </span>
                     )}
-                    <span
-                      className={cn(
-                        "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium capitalize",
-                        selectedCustomer.status === "active"
-                          ? "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200/70"
-                          : "bg-slate-100 text-slate-700 ring-1 ring-slate-200/80"
-                      )}
-                    >
-                      {selectedCustomer.status}
-                    </span>
                   </div>
                   {membershipData?.subscription?.expiryDate && (
                     <p className="text-xs text-slate-500">
@@ -8684,99 +8705,90 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      
-      {walletLedgerOpen && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4"
-          style={{ zIndex: 99999 }}
-          onClick={() => setWalletLedgerOpen(false)}
+
+      <Dialog open={walletLedgerOpen} onOpenChange={setWalletLedgerOpen}>
+        <DialogContent
+          overlayClassName="z-[109]"
+          className="max-w-3xl gap-0 overflow-hidden p-0 z-[110] flex max-h-[min(85vh,48rem)] flex-col sm:max-w-3xl"
         >
-          <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
-            style={{ zIndex: 100000 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3 px-5 py-4 border-b shrink-0">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">Wallet activity</h2>
-                <p className="text-sm text-muted-foreground">{selectedCustomer?.name}</p>
-              </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => setWalletLedgerOpen(false)}>
-                <X className="h-4 w-4" />
-              </Button>
+          <DialogHeader className="shrink-0 flex-row flex-wrap items-start justify-between gap-3 space-y-0 border-b px-5 py-4 text-left sm:text-left">
+            <div className="min-w-0 space-y-1">
+              <DialogTitle>Wallet activity</DialogTitle>
+              <DialogDescription>{selectedCustomer?.name}</DialogDescription>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-4">
-              {walletLedgerLoading ? (
-                <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
-                  <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
-                  <span className="text-sm">Loading transactions…</span>
-                </div>
-              ) : walletLedgerRows.length === 0 ? (
-                <p className="text-center text-sm text-muted-foreground py-12">No wallet transactions yet.</p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Bill / receipt</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {walletLedgerRows.map((row) => (
-                      <TableRow key={row._id}>
-                        <TableCell className="whitespace-nowrap text-sm">
-                          {format(new Date(row.createdAt), "dd MMM yyyy, h:mm a")}
-                        </TableCell>
-                        <TableCell className="text-sm">
-                          <div className="font-medium text-gray-900">
-                            {row.billNo ? `#${row.billNo}` : "—"}
-                          </div>
-                          <div className="text-xs text-muted-foreground">{row.walletPlan}</div>
-                          {row.description ? (
-                            <div className="text-xs text-muted-foreground mt-0.5">{row.description}</div>
-                          ) : null}
-                        </TableCell>
-                        <TableCell
+            <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setWalletLedgerOpen(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {walletLedgerLoading ? (
+              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+                <span className="text-sm">Loading transactions…</span>
+              </div>
+            ) : walletLedgerRows.length === 0 ? (
+              <p className="text-center text-sm text-muted-foreground py-12">No wallet transactions yet.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Bill / receipt</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {walletLedgerRows.map((row) => {
+                    const st = walletActivityStatusDisplay(row.statusLabel)
+                    return (
+                    <TableRow key={row._id}>
+                      <TableCell className="whitespace-nowrap text-sm">
+                        {format(new Date(row.createdAt), "dd MMM yyyy, h:mm a")}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        <div className="font-medium text-gray-900">
+                          {row.billNo ? `#${row.billNo}` : "—"}
+                        </div>
+                        <div className="text-xs text-muted-foreground">{row.walletPlan}</div>
+                        {row.description ? (
+                          <div className="text-xs text-muted-foreground mt-0.5">{row.description}</div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell
                           className={cn(
                             "text-right font-mono text-sm font-semibold tabular-nums",
-                            row.statusLabel === "Debit" && "text-red-700",
-                            row.statusLabel === "Credit" && "text-emerald-700",
-                            row.statusLabel === "Adjustment" && "text-slate-700"
+                            st === "Debit" && "text-red-700",
+                            st === "Credit" && "text-emerald-700"
                           )}
-                        >
-                          {row.statusLabel === "Debit"
-                            ? `−₹${row.amount.toFixed(2)}`
-                            : row.statusLabel === "Credit"
-                              ? `+₹${row.amount.toFixed(2)}`
-                              : `₹${row.amount.toFixed(2)}`}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant="outline"
+                      >
+                        {st === "Debit"
+                          ? `−₹${row.amount.toFixed(2)}`
+                          : `+₹${row.amount.toFixed(2)}`}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
                             className={cn(
                               "text-xs font-medium",
-                              row.statusLabel === "Debit" &&
+                              st === "Debit" &&
                                 "border-red-200 bg-red-50 text-red-800",
-                              row.statusLabel === "Credit" &&
-                                "border-emerald-200 bg-emerald-50 text-emerald-800",
-                              row.statusLabel === "Adjustment" &&
-                                "border-slate-200 bg-slate-50 text-slate-800"
+                              st === "Credit" &&
+                                "border-emerald-200 bg-emerald-50 text-emerald-800"
                             )}
-                          >
-                            {row.statusLabel}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </div>
+                        >
+                          {st}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            )}
           </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
       {/* Payment Collection Modal for Dues */}
       <PaymentCollectionModal

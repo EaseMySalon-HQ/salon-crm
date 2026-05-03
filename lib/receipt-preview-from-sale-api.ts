@@ -71,6 +71,7 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
         taxAmount: item.taxAmount,
         priceExcludingGST: item.priceExcludingGST,
         taxRate: item.taxRate,
+        lineSource: item.lineSource,
       })) || [],
     subtotal: saleData.netTotal,
     subtotalExcludingTax,
@@ -91,5 +92,10 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
           ? "cancelled"
           : "completed",
     invoiceDeleted: saleData.invoiceDeleted === true,
+    billChangeCreditedToWallet:
+      saleData.billChangeCreditedToWallet != null &&
+      Number(saleData.billChangeCreditedToWallet) > 0.005
+        ? Number(saleData.billChangeCreditedToWallet)
+        : undefined,
   } as Receipt
 }
