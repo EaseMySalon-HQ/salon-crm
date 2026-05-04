@@ -57,6 +57,36 @@ async function decryptToken(account) {
   return token;
 }
 
+/**
+ * Map thrown pre-flight errors (account missing / wrong status / decrypt) to a
+ * stable API payload so routes never 500 when Meta was never called.
+ */
+function accountUnavailablePayload(err) {
+  const m = err?.message || String(err);
+  if (m.includes('WhatsApp account not connected')) {
+    return {
+      code: 'WABA_ACCOUNT_MISSING',
+      error:
+        'WhatsApp is not connected for this business. Open Settings → WhatsApp Integration to connect your Meta account.',
+    };
+  }
+  if (m.includes('WhatsApp account is in status:')) {
+    return {
+      code: 'WABA_ACCOUNT_NOT_CONNECTED',
+      error:
+        'WhatsApp is not in a connected state (disconnected, error, or token issue). Open Settings → WhatsApp Integration to reconnect or refresh the token, then try again.',
+    };
+  }
+  if (m.includes('decrypt') || m.includes('access token missing')) {
+    return {
+      code: 'WABA_TOKEN_UNAVAILABLE',
+      error:
+        'Could not use the stored WhatsApp credentials. Reconnect under Settings → WhatsApp Integration.',
+    };
+  }
+  return { code: 'WABA_ACCOUNT_UNAVAILABLE', error: m };
+}
+
 function authHeaders(token) {
   return {
     Authorization: `Bearer ${token}`,
@@ -168,8 +198,15 @@ async function listTemplates({ businessId, limit = 100 }) {
 
 /** Submit a new template for Meta review. */
 async function submitTemplate({ businessId, name, language, category, components }) {
-  const account = await getAccount(businessId);
-  const token = await decryptToken(account);
+  let account;
+  let token;
+  try {
+    account = await getAccount(businessId);
+    token = await decryptToken(account);
+  } catch (err) {
+    logger.warn('[meta-whatsapp] submitTemplate account preflight failed:', err?.message || err);
+    return { success: false, ...accountUnavailablePayload(err) };
+  }
   const url = `${GRAPH_BASE}/${account.wabaId}/message_templates`;
   try {
     const { data } = await axios.post(

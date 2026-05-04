@@ -424,8 +424,15 @@ const wa_buttonSchema = z
   .object({
     type: z.enum(['QUICK_REPLY', 'URL', 'PHONE_NUMBER']),
     text: z.string().trim().min(1).max(25),
-    url: z.string().trim().url().max(2000).optional().nullable(),
-    phone: z.string().trim().min(3).max(32).optional().nullable(),
+    /** UI sends `""` for unused fields; treat as absent so url() / min() do not run. */
+    url: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : v),
+      z.string().trim().url().max(2000).optional()
+    ),
+    phone: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : v),
+      z.string().trim().min(3).max(32).optional()
+    ),
   })
   .strict()
   .superRefine((val, ctx) => {

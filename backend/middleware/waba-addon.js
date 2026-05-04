@@ -17,20 +17,27 @@
 'use strict';
 
 const databaseManager = require('../config/database-manager');
+const { resolveTenantBusinessObjectId } = require('../lib/tenant-business-id');
 const { logger } = require('../utils/logger');
 
 async function requireWabaAddon(req, res, next) {
   try {
-    const businessId = req.user?.branchId;
-    if (!businessId) {
+    const rawBranchId = req.user?.branchId;
+    if (!rawBranchId) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
     }
 
     if (req._wabaAddonChecked === true) return next();
 
-    const main = await databaseManager.getMainConnection();
+    const main = req.mainConnection || (await databaseManager.getMainConnection());
+    const resolved = await resolveTenantBusinessObjectId(rawBranchId, main);
+    if (resolved.error || !resolved.businessObjectId) {
+      return res.status(400).json({ success: false, error: resolved.error || 'Invalid business id' });
+    }
+    req._tenantBusinessObjectId = resolved.businessObjectId;
+
     const Business = main.model('Business', require('../models/Business').schema);
-    const business = await Business.findById(businessId).select('plan.addons.waba').lean();
+    const business = await Business.findById(resolved.businessObjectId).select('plan.addons.waba').lean();
 
     const enabled = Boolean(business?.plan?.addons?.waba?.enabled);
     req._wabaAddonChecked = true;

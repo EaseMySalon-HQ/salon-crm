@@ -231,6 +231,13 @@ export function WhatsAppTemplatesPage() {
         const err = typeof res.error === "string" ? res.error : JSON.stringify(res.error)
         toast({ title: "Submission failed", description: err, variant: "destructive" })
       }
+    } catch (err: any) {
+      const apiErr = err?.response?.data
+      const description =
+        (typeof apiErr?.error === "string" ? apiErr.error : "") ||
+        err?.message ||
+        "Submission failed"
+      toast({ title: "Submission failed", description, variant: "destructive" })
     } finally {
       setBusy(null)
     }
@@ -705,8 +712,25 @@ function TemplateForm({
         samples: { body: bodySamples },
       }
       let res
-      if (editing) res = await WhatsAppTemplatesAPI.update(editing._id, payload)
-      else res = await WhatsAppTemplatesAPI.create(payload)
+      try {
+        if (editing) res = await WhatsAppTemplatesAPI.update(editing._id, payload)
+        else res = await WhatsAppTemplatesAPI.create(payload)
+      } catch (err: any) {
+        const apiErr = err?.response?.data
+        const detailStr = Array.isArray(apiErr?.details)
+          ? apiErr.details
+              .map((d: any) => `${Array.isArray(d.path) ? d.path.join('.') : d.path || ''}: ${d.message}`)
+              .filter(Boolean)
+              .join('; ')
+          : ''
+        const description =
+          detailStr ||
+          (typeof apiErr?.error === 'string' ? apiErr.error : '') ||
+          err?.message ||
+          'Could not save template'
+        toast({ title: 'Save failed', description, variant: 'destructive' })
+        return
+      }
       if (res.success) {
         toast({ title: editing ? "Template updated" : "Template created" })
         onClose()

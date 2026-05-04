@@ -40,6 +40,96 @@ const {
   whatsappTemplateListQuerySchema,
 } = require('../validation/schemas');
 
+const {
+  resolveTenantBusinessObjectId,
+  normalizeOptionalObjectId,
+} = require('../lib/tenant-business-id');
+
+/**
+ * Zod v4 exposes `.issues` (v3 was `.errors`). Support both so bumping the
+ * package never silently regresses to a cryptic "Cannot read properties of
+ * undefined (reading '0')".
+ */
+function firstZodMessage(error, fallback) {
+  const list = (error && (error.issues || error.errors)) || [];
+  return list[0]?.message || fallback;
+}
+
+async function tenantBusinessObjectId(req, res) {
+  if (req._tenantBusinessObjectId) {
+    return req._tenantBusinessObjectId;
+  }
+  const r = await resolveTenantBusinessObjectId(req.user.branchId, req.mainConnection);
+  if (r.error || !r.businessObjectId) {
+    res.status(400).json({ success: false, error: r.error || 'Invalid business id' });
+    return null;
+  }
+  return r.businessObjectId;
+}
+
+/**
+ * Persist only Mongoose-declared nested fields so unknown keys cannot break
+ * template writes; normalise body.examples to [[String]]
+ */
+function sanitizeComponentsForPersist(components) {
+  if (!components || typeof components !== 'object') return {};
+
+  let header = null;
+  const h = components.header;
+  if (h != null && typeof h === 'object') {
+    const format = h.format ?? null;
+    const text = h.text ?? null;
+    const mediaSampleUrl = h.mediaSampleUrl ?? null;
+    if (format || text || mediaSampleUrl) {
+      header = { format, text, mediaSampleUrl };
+    }
+  }
+
+  let body = null;
+  const b = components.body;
+  if (b != null && typeof b === 'object' && typeof b.text === 'string') {
+    /** @type {string[][]} */
+    let examples = [];
+    const ex = b.examples;
+    if (Array.isArray(ex)) {
+      examples = ex
+        .map((row) => {
+          if (Array.isArray(row)) return row.map((v) => String(v ?? ''));
+          if (row == null || row === '') return [];
+          return [String(row)];
+        })
+        .filter((row) => row.some((cell) => String(cell || '').trim() !== ''));
+    }
+    body = { text: b.text, examples };
+  }
+
+  let footer = null;
+  const f = components.footer;
+  if (f && typeof f === 'object' && f.text) {
+    footer = { text: f.text };
+  }
+
+  const buttons = Array.isArray(components.buttons)
+    ? components.buttons.map((btn) => ({
+        type: btn.type,
+        text: btn.text ?? '',
+        url: btn.url ?? null,
+        phone: btn.phone ?? null,
+      }))
+    : [];
+
+  return { header, body, footer, buttons };
+}
+
+function mongoValidationErrorMessage(err) {
+  if (!err || err.name !== 'ValidationError') return null;
+  if (err.errors) {
+    const parts = Object.values(err.errors).map((e) => e.message || String(e.path || ''));
+    if (parts.length) return parts.join('; ');
+  }
+  return err.message || null;
+}
+
 async function getModel() {
   const main = await databaseManager.getMainConnection();
   return main.model('WhatsAppTemplate', require('../models/WhatsAppTemplate').schema);
@@ -153,11 +243,12 @@ function applyRemoteToLocal(tpl, remote) {
 
 router.get('/', authenticateToken, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
-    const businessId = req.user.branchId;
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const Template = await getModel();
     const parsed = whatsappTemplateListQuerySchema.safeParse(req.query);
     if (!parsed.success) {
-      return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message || 'Invalid query' });
+      return res.status(400).json({ success: false, error: firstZodMessage(parsed.error, 'Invalid query') });
     }
     const { status, search, limit = 50, skip = 0 } = parsed.data;
     const filter = { businessId };
@@ -181,7 +272,8 @@ router.get('/', authenticateToken, setupMainDatabase, requireWabaAddon, async (r
 
 router.get('/from-meta', authenticateToken, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
-    const businessId = req.user.branchId;
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const result = await metaWhatsApp.listTemplates({ businessId, limit: 100 });
     if (!result.success) {
       return res.status(400).json({ success: false, error: result.error });
@@ -195,10 +287,19 @@ router.get('/from-meta', authenticateToken, setupMainDatabase, requireWabaAddon,
 
 router.post('/', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
-    const businessId = req.user.branchId;
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const parsed = whatsappTemplateBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message || 'Invalid payload' });
+      const issues = parsed.error?.issues || parsed.error?.errors || [];
+      logger.warn('[whatsapp-templates] create validation failed:', {
+        issues: issues.map((i) => ({ path: i.path, message: i.message, code: i.code })),
+      });
+      return res.status(400).json({
+        success: false,
+        error: firstZodMessage(parsed.error, 'Invalid payload'),
+        details: issues.map((i) => ({ path: i.path, message: i.message })),
+      });
     }
     const { name, language = 'en_US', category, components = {}, variables = {}, samples = {} } =
       parsed.data;
@@ -209,16 +310,20 @@ router.post('/', authenticateToken, requireManager, setupMainDatabase, requireWa
       name,
       language,
       category: category.toUpperCase(),
-      components,
+      components: sanitizeComponentsForPersist(components),
       variables,
       samples,
       status: 'draft',
-      createdBy: req.user._id,
+      createdBy: normalizeOptionalObjectId(req.user._id || req.user.id),
     });
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     if (err?.code === 11000) {
       return res.status(409).json({ success: false, error: 'Template name already exists for this language' });
+    }
+    const validationMsg = mongoValidationErrorMessage(err);
+    if (validationMsg) {
+      return res.status(400).json({ success: false, error: validationMsg });
     }
     logger.error('[whatsapp-templates] create failed:', err);
     res.status(500).json({ success: false, error: 'Failed to create template' });
@@ -227,8 +332,10 @@ router.post('/', authenticateToken, requireManager, setupMainDatabase, requireWa
 
 router.put('/:id', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const Template = await getModel();
-    const tpl = await Template.findOne({ _id: req.params.id, businessId: req.user.branchId });
+    const tpl = await Template.findOne({ _id: req.params.id, businessId });
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
     if (tpl.status !== 'draft' && tpl.status !== 'rejected') {
       return res.status(400).json({
@@ -238,18 +345,38 @@ router.put('/:id', authenticateToken, requireManager, setupMainDatabase, require
     }
     const parsed = whatsappTemplateUpdateBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ success: false, error: parsed.error.errors[0]?.message || 'Invalid payload' });
+      const issues = parsed.error?.issues || parsed.error?.errors || [];
+      logger.warn('[whatsapp-templates] update validation failed:', {
+        issues: issues.map((i) => ({ path: i.path, message: i.message, code: i.code })),
+      });
+      return res.status(400).json({
+        success: false,
+        error: firstZodMessage(parsed.error, 'Invalid payload'),
+        details: issues.map((i) => ({ path: i.path, message: i.message })),
+      });
     }
     const { name, language, category, components, variables, samples } = parsed.data;
     if (name !== undefined) tpl.name = name;
     if (language !== undefined) tpl.language = language;
     if (category !== undefined) tpl.category = category.toUpperCase();
-    if (components !== undefined) tpl.components = components;
+    if (components !== undefined) {
+      const prior =
+        tpl.components && typeof tpl.components.toObject === 'function'
+          ? tpl.components.toObject()
+          : tpl.components && typeof tpl.components === 'object'
+            ? { ...tpl.components }
+            : {};
+      tpl.components = sanitizeComponentsForPersist({ ...prior, ...components });
+    }
     if (variables !== undefined) tpl.variables = variables;
     if (samples !== undefined) tpl.samples = samples;
     await tpl.save();
     res.json({ success: true, data: tpl });
   } catch (err) {
+    const validationMsg = mongoValidationErrorMessage(err);
+    if (validationMsg) {
+      return res.status(400).json({ success: false, error: validationMsg });
+    }
     logger.error('[whatsapp-templates] update failed:', err);
     res.status(500).json({ success: false, error: 'Failed to update template' });
   }
@@ -257,8 +384,10 @@ router.put('/:id', authenticateToken, requireManager, setupMainDatabase, require
 
 router.delete('/:id', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const Template = await getModel();
-    const tpl = await Template.findOne({ _id: req.params.id, businessId: req.user.branchId });
+    const tpl = await Template.findOne({ _id: req.params.id, businessId });
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
 
     /**
@@ -269,7 +398,7 @@ router.delete('/:id', authenticateToken, requireManager, setupMainDatabase, requ
      */
     if (tpl.metaTemplateId || tpl.status !== 'draft') {
       const remote = await metaWhatsApp.deleteTemplate({
-        businessId: req.user.branchId,
+        businessId,
         name: tpl.name,
         metaTemplateId: tpl.metaTemplateId,
       });
@@ -284,7 +413,7 @@ router.delete('/:id', authenticateToken, requireManager, setupMainDatabase, requ
 
     await tpl.deleteOne();
     await logEvent({
-      businessId: req.user.branchId,
+      businessId,
       actorType: 'user',
       actorId: req.user._id,
       event: 'template_disabled',
@@ -300,7 +429,8 @@ router.delete('/:id', authenticateToken, requireManager, setupMainDatabase, requ
 
 router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
-    const businessId = req.user.branchId;
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const Template = await getModel();
     const tpl = await Template.findOne({ _id: req.params.id, businessId });
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
@@ -317,7 +447,20 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
       components,
     });
     if (!submission.success) {
-      return res.status(400).json({ success: false, error: submission.error });
+      let errMsg;
+      if (typeof submission.error === 'string') {
+        errMsg = submission.error;
+      } else if (submission.error?.error?.message) {
+        errMsg = submission.error.error.message;
+      } else {
+        errMsg = 'Meta rejected the template submission';
+      }
+      return res.status(400).json({
+        success: false,
+        error: errMsg,
+        code: submission.code,
+        details: typeof submission.error === 'object' && submission.error !== null ? submission.error : undefined,
+      });
     }
     tpl.metaTemplateId = submission.data?.id || null;
     tpl.metaTemplateName = tpl.name;
@@ -345,7 +488,8 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
 
 router.post('/:id/sync', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
-    const businessId = req.user.branchId;
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const Template = await getModel();
     const tpl = await Template.findOne({ _id: req.params.id, businessId });
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
@@ -367,7 +511,8 @@ router.post('/:id/sync', authenticateToken, requireManager, setupMainDatabase, r
 
 router.post('/sync-all', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
-    const businessId = req.user.branchId;
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const Template = await getModel();
     const result = await metaWhatsApp.listTemplates({ businessId, limit: 100 });
     if (!result.success) {
@@ -421,8 +566,10 @@ router.post('/sync-all', authenticateToken, requireManager, setupMainDatabase, r
 
 router.get('/:id', authenticateToken, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
     const Template = await getModel();
-    const tpl = await Template.findOne({ _id: req.params.id, businessId: req.user.branchId }).lean();
+    const tpl = await Template.findOne({ _id: req.params.id, businessId }).lean();
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
     res.json({ success: true, data: tpl });
   } catch (err) {
