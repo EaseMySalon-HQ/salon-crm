@@ -953,6 +953,47 @@ export class InventoryAPI {
   }
 }
 
+/** User-facing fallback when Mongo unique `slotKey` collides or API returns bare 409. */
+const APPOINTMENT_SLOT_TIME_CONFLICT =
+  "This time slot is already booked for the selected staff member. Please choose a different time."
+
+function recoverAppointmentMutationFromAxiosError(e: unknown): ApiResponse<any> | null {
+  const ax = e as AxiosError<{
+    success?: boolean
+    error?: string
+    conflicts?: Array<{ appointmentId: string; reason: string }>
+  }>
+  if (!ax.response) return null
+  const status = ax.response.status
+  const d = ax.response.data
+  if (!d || typeof d !== "object") {
+    if (status === 409) return { success: false, error: APPOINTMENT_SLOT_TIME_CONFLICT }
+    return null
+  }
+  const apiErr =
+    typeof (d as any).error === "string"
+      ? (d as any).error.trim()
+      : typeof (d as any).message === "string"
+        ? String((d as any).message).trim()
+        : ""
+
+  if (status === 409) {
+    const out: ApiResponse<any> & {
+      conflicts?: Array<{ appointmentId: string; reason: string }>
+    } = {
+      success: false,
+      error: apiErr || APPOINTMENT_SLOT_TIME_CONFLICT,
+    }
+    if (Array.isArray((d as any).conflicts))
+      out.conflicts = (d as any).conflicts
+    return out
+  }
+  if (status != null && status >= 400 && status < 500 && apiErr) {
+    return { success: false, error: apiErr }
+  }
+  return null
+}
+
 export class AppointmentsAPI {
   static async getAll(params?: { page?: number; limit?: number; date?: string; status?: string; clientId?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/appointments', { params })
@@ -965,13 +1006,25 @@ export class AppointmentsAPI {
   }
 
   static async create(data: any): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/appointments', data)
-    return response.data
+    try {
+      const response = await apiClient.post("/appointments", data)
+      return response.data
+    } catch (e: unknown) {
+      const recovered = recoverAppointmentMutationFromAxiosError(e)
+      if (recovered) return recovered
+      throw e
+    }
   }
 
   static async update(id: string, data: any): Promise<ApiResponse<any>> {
-    const response = await apiClient.put(`/appointments/${id}`, data)
-    return response.data
+    try {
+      const response = await apiClient.put(`/appointments/${id}`, data)
+      return response.data
+    } catch (e: unknown) {
+      const recovered = recoverAppointmentMutationFromAxiosError(e)
+      if (recovered) return recovered
+      throw e
+    }
   }
 
   static async delete(id: string): Promise<ApiResponse> {
@@ -982,6 +1035,34 @@ export class AppointmentsAPI {
   static async updateStatus(id: string, status: string): Promise<ApiResponse<any>> {
     const response = await apiClient.patch(`/appointments/${id}/status`, { status })
     return response.data
+  }
+
+  /**
+   * Per-service Raise Sale confirmation step. Each decision either marks an
+   * appointment as performed (optionally shifting it earlier when leading
+   * services are cancelled) or as 'cancelled_at_billing'.
+   *
+   * dryRun=true returns conflict info without persisting.
+   */
+  static async finalizeForBilling(
+    payload: {
+      decisions: Array<{
+        appointmentId: string
+        action: "perform" | "cancel"
+        /** Only the new wall-clock time is required; the server derives startAt/endAt. */
+        shift?: { time: string }
+      }>
+      dryRun?: boolean
+    },
+  ): Promise<ApiResponse<any> & { conflicts?: Array<{ appointmentId: string; reason: string }> }> {
+    try {
+      const response = await apiClient.post(`/appointments/finalize-for-billing`, payload)
+      return response.data
+    } catch (err: unknown) {
+      const recovered = recoverAppointmentMutationFromAxiosError(err)
+      if (recovered) return recovered as ApiResponse<any> & { conflicts?: any[] }
+      throw err
+    }
   }
 }
 

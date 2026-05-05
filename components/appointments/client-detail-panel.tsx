@@ -3,12 +3,20 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard, Wallet, Gift } from "lucide-react"
+import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard, Wallet, Gift, X } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -25,6 +33,7 @@ import type { Client } from "@/lib/client-store"
 import { useCurrency } from "@/hooks/use-currency"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
+import { flattenClientWalletLedger, walletActivityStatusDisplay, type ClientWalletLedgerRow } from "@/lib/client-wallet-ledger"
 import { useToast } from "@/hooks/use-toast"
 
 interface CustomerNote {
@@ -109,6 +118,9 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   const [membershipCardOpen, setMembershipCardOpen] = useState(false)
   const [prepaidWalletOpen, setPrepaidWalletOpen] = useState(false)
   const [prepaidWallets, setPrepaidWallets] = useState<any[]>([])
+  const [walletLedgerOpen, setWalletLedgerOpen] = useState(false)
+  const [walletLedgerLoading, setWalletLedgerLoading] = useState(false)
+  const [walletLedgerRows, setWalletLedgerRows] = useState<ClientWalletLedgerRow[]>([])
   const [rewardSummary, setRewardSummary] = useState<{
     balance: number
     lifetimeEarned: number
@@ -165,6 +177,8 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   useEffect(() => {
     setMembershipCardOpen(false)
     setPrepaidWalletOpen(false)
+    setWalletLedgerOpen(false)
+    setWalletLedgerRows([])
     setPrepaidWallets([])
     setRewardSummary(null)
     setExpandedClientPkgId(null)
@@ -378,6 +392,33 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     }
   }, [])
 
+  const openClientWalletLedger = useCallback(async () => {
+    const cid = clientId ? String(clientId) : ""
+    if (!cid || !/^([a-f\d]{24})$/i.test(cid)) {
+      toast({
+        title: "Client required",
+        description: "Save this client to view prepaid wallet activity.",
+        variant: "destructive",
+      })
+      return
+    }
+    setWalletLedgerOpen(true)
+    setWalletLedgerLoading(true)
+    setWalletLedgerRows([])
+    try {
+      const res = await ClientWalletAPI.getClientWallets(cid)
+      if (!res.success || !res.data) {
+        toast({ title: res.message || "Could not load wallet", variant: "destructive" })
+        return
+      }
+      setWalletLedgerRows(flattenClientWalletLedger(res.data.wallets, res.data.transactionsByWallet))
+    } catch {
+      toast({ title: "Could not load wallet activity", variant: "destructive" })
+    } finally {
+      setWalletLedgerLoading(false)
+    }
+  }, [clientId, toast])
+
   const freeServicesRemainingDisplay = (() => {
     const d = membershipData as {
       freeServicesRemaining?: number
@@ -477,7 +518,8 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   }
 
   return (
-    <Card className={panelClass}>
+    <>
+      <Card className={panelClass}>
       {panelHeader}
       <CardContent className="relative p-4 sm:p-5 lg:p-6 space-y-3 sm:space-y-4 lg:space-y-5 flex-1 flex flex-col min-h-0">
         {membershipData?.subscription?.expiryDate && (
@@ -559,7 +601,12 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
               {formatAmount(duesUnpaid)}
             </span>
           </div>
-          <div className="flex items-center justify-between text-sm sm:text-base">
+          <button
+            type="button"
+            onClick={() => void openClientWalletLedger()}
+            title="View wallet activity"
+            className="flex w-full items-center justify-between rounded-lg text-sm sm:text-base text-left transition-colors hover:bg-slate-50/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40 -mx-1 px-1 py-0.5 sm:-mx-1.5 sm:px-1.5 min-h-[2.25rem]"
+          >
             <span className="text-slate-600 flex items-center gap-2">
               <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" aria-hidden />
               Wallet balance
@@ -567,7 +614,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
             <span className="font-semibold text-slate-900 truncate ml-2 tabular-nums">
               {formatAmount(totalPrepaidWalletBalance)}
             </span>
-          </div>
+          </button>
           <div className="flex items-center justify-between text-sm sm:text-base">
             <span className="text-slate-600 flex items-center gap-2">
               <Gift className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-indigo-500 shrink-0" aria-hidden />
@@ -1207,7 +1254,92 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
       </CardContent>
     </Card>
+
+      <Dialog open={walletLedgerOpen} onOpenChange={setWalletLedgerOpen}>
+        <DialogContent
+          overlayClassName="z-[109]"
+          className="max-w-3xl gap-0 overflow-hidden p-0 z-[110] flex max-h-[min(85vh,48rem)] flex-col sm:max-w-3xl">
+          <DialogHeader className="shrink-0 flex-row flex-wrap items-start justify-between gap-3 space-y-0 border-b px-5 py-4 text-left sm:text-left">
+            <div className="min-w-0 space-y-1">
+              <DialogTitle>Wallet activity</DialogTitle>
+              <DialogDescription>{displayName}</DialogDescription>
+            </div>
+            <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setWalletLedgerOpen(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {walletLedgerLoading ? (
+              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+                <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+                <span className="text-sm">Loading transactions…</span>
+              </div>
+            ) : walletLedgerRows.length === 0 ? (
+              <p className="text-center text-sm text-muted-foreground py-12">No wallet transactions yet.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Bill / receipt</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {walletLedgerRows.map((row) => {
+                    const st = walletActivityStatusDisplay(row.statusLabel)
+                    return (
+                    <TableRow key={row._id}>
+                      <TableCell className="whitespace-nowrap text-sm">
+                        {format(new Date(row.createdAt), "dd MMM yyyy, h:mm a")}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        <div className="font-medium text-gray-900">
+                          {row.billNo ? `#${row.billNo}` : "—"}
+                        </div>
+                        <div className="text-xs text-muted-foreground">{row.walletPlan}</div>
+                        {row.description ? (
+                          <div className="text-xs text-muted-foreground mt-0.5">{row.description}</div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "text-right font-mono text-sm font-semibold tabular-nums",
+                          st === "Debit" && "text-red-700",
+                          st === "Credit" && "text-emerald-700"
+                        )}
+                      >
+                        {st === "Debit"
+                          ? `−${formatAmount(row.amount)}`
+                          : `+${formatAmount(row.amount)}`}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "text-xs font-medium",
+                            st === "Debit" &&
+                              "border-red-200 bg-red-50 text-red-800",
+                            st === "Credit" &&
+                              "border-emerald-200 bg-emerald-50 text-emerald-800"
+                          )}
+                        >
+                          {st}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

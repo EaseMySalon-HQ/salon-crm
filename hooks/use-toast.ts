@@ -1,8 +1,7 @@
 "use client"
 
 /**
- * Re-export shared toast module so `<Toaster />` sees the same in-memory queue.
- * Duplicate implementations used to live here and in `@/components/ui/use-toast` — calls from
- * `hooks` never reached the toaster UI (no visible toasts).
+ * Single source of truth: the layout `<Toaster />` subscribes to
+ * `@/components/ui/use-toast`. Re-export so every `toast()` call updates the same store.
  */
 export { useToast, toast } from "@/components/ui/use-toast"

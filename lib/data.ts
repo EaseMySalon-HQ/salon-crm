@@ -97,6 +97,8 @@ export interface Receipt {
   /** Sale/bill status; cancelled + deleted archived bills show Cancelled stamp instead of payment state */
   status?: string
   invoiceDeleted?: boolean
+  /** When set, excess cash over bill was credited to prepaid wallet instead of cash back (POS). ₹ amount. */
+  billChangeCreditedToWallet?: number
 }
 
 export interface ReceiptStaffContribution {
@@ -120,6 +122,8 @@ export interface ReceiptItem {
   staffContributions?: ReceiptStaffContribution[]
   total: number
   hsnSacCode?: string
+  /** When set on API sale items: checkout add-on vs pre-booked (`appointment` — not shown on receipt). */
+  lineSource?: string
 }
 
 export interface PaymentMethod {

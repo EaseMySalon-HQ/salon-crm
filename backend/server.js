@@ -7855,6 +7855,29 @@ app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
+/** Normalize POS staff references (ObjectId instance, {_id}, or hex string). */
+function normalizeSaleStaffReferenceToIdString(raw) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'object' && raw !== null && raw._id != null) {
+    return String(raw._id).trim();
+  }
+  return String(raw).trim();
+}
+
+/**
+ * Canonical performing staff on a sale service line — prefer legacy `staffId` (what Quick Sale persists on each row)
+ * so we never attribute billing to stale `staffContributions[0]` after the stylist is changed at checkout.
+ */
+function resolvePrimarySaleLineStaffIdString(item) {
+  if (!item) return '';
+  const lineSid = normalizeSaleStaffReferenceToIdString(item.staffId);
+  const c0 = (item.staffContributions || [])[0];
+  const contribSid = normalizeSaleStaffReferenceToIdString(c0?.staffId);
+  if (lineSid && mongoose.Types.ObjectId.isValid(lineSid)) return lineSid;
+  if (contribSid && mongoose.Types.ObjectId.isValid(contribSid)) return contribSid;
+  return '';
+}
+
 /** Resolve catalog service ObjectId from a sale line (handles ObjectId, hex string, populated { _id }). */
 function extractSaleLineServiceId(item) {
   if (!item || item.type !== 'service') return null;
@@ -7897,6 +7920,69 @@ function serviceIdsFromBookedAppointment(appointment) {
   return ids;
 }
 
+/** Primary staff id string from a plain appointment doc (lean or hydrated). */
+function getPrimaryStaffIdStringFromAppointmentShape(a) {
+  if (!a) return null;
+  const sid = a.staffId;
+  if (sid) {
+    const v = typeof sid === 'object' && sid !== null && sid._id != null ? sid._id : sid;
+    return v != null ? String(v) : null;
+  }
+  const p = (a.staffAssignments || [])[0];
+  if (p?.staffId) {
+    const v = typeof p.staffId === 'object' && p.staffId !== null && p.staffId._id != null ? p.staffId._id : p.staffId;
+    return v != null ? String(v) : null;
+  }
+  return null;
+}
+
+/**
+ * Set `lineSource` on each service row for appointment-linked bills: catalog services that were part of the
+ * original booking snapshot are `appointment`; checkout-only add-ons are `walk_in`.
+ * Drops any client-sent `lineSource` (trusted server derivation only).
+ */
+async function annotateAppointmentLinkedSaleItemsLineSource(AppointmentModel, appointmentId, items) {
+  const mongooseSales = require('mongoose');
+  if (!AppointmentModel || !appointmentId || !Array.isArray(items)) return items;
+  const aidStr = String(appointmentId);
+  if (!mongooseSales.Types.ObjectId.isValid(aidStr)) return items;
+
+  const anchor = await AppointmentModel.findById(aidStr).select('bookingGroupId').lean();
+  if (!anchor) {
+    return items.map((row) => {
+      if (!row || typeof row !== 'object') return row;
+      const { lineSource: _d, ...rest } = row;
+      return rest;
+    });
+  }
+
+  let snapshot = [];
+  if (anchor.bookingGroupId) {
+    snapshot = await AppointmentModel.find({ bookingGroupId: anchor.bookingGroupId }).lean();
+  } else {
+    const full = await AppointmentModel.findById(aidStr).lean();
+    if (full) snapshot = [full];
+  }
+
+  const bookedCatalogIds = new Set();
+  for (const a of snapshot) {
+    for (const oid of serviceIdsFromBookedAppointment(a)) {
+      bookedCatalogIds.add(String(oid));
+    }
+  }
+
+  return items.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const { lineSource: _discard, ...rest } = row;
+    if (rest.type !== 'service') return rest;
+    const sid = extractSaleLineServiceId(rest);
+    const key = sid ? String(sid) : '';
+    if (!key) return rest;
+    const source = bookedCatalogIds.has(key) ? 'appointment' : 'walk_in';
+    return { ...rest, lineSource: source };
+  });
+}
+
 const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = null, businessModels = null) => {
   if (!AppointmentModel || !appointmentId) return;
   try {
@@ -7906,11 +7992,12 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
       return;
     }
 
-    if (appointment.status === 'completed' || appointment.status === 'cancelled') {
+    if (appointment.status === 'cancelled' || appointment.status === 'cancelled_at_billing') {
       return;
     }
 
-    appointment.status = 'completed';
+    /** When the anchor card is already `completed`, still replay misassign cleanup + billing walk-ins (e.g. bill edited in POS after checkout). */
+    const onlyReplayBillingArtifacts = appointment.status === 'completed';
 
     const aptStaffId = appointment.staffId ? String(appointment.staffId) : null;
     const aptStaffFromAssignments = (appointment.staffAssignments || [])[0]?.staffId;
@@ -7919,7 +8006,10 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
     // Sync appointment services with actual services performed (added during checkout)
     // Same staff: update this card with primary + additional. Different staff: create new card(s).
     if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
+      // sale.items entries are Mongoose subdocuments — spreading them with `...` skips real data
+      // and copies internal getters instead, so we explicitly toObject() before any mutation.
       const serviceItems = sale.items
+        .map((i) => (i && typeof i.toObject === 'function' ? i.toObject() : i))
         .filter((i) => {
           if (i.type !== 'service') return false;
           if (extractSaleLineServiceId(i)) return true;
@@ -7929,13 +8019,37 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
           return false;
         })
         .map((i) => {
-          const contrib = (i.staffContributions || [])[0];
-          const staffId = contrib ? String(contrib.staffId) : (i.staffId ? String(i.staffId) : null);
+          const staffId = resolvePrimarySaleLineStaffIdString(i) || null;
           return { ...i, _primaryStaffId: staffId };
         });
 
       if (serviceItems.length > 0) {
         const { Service } = businessModels;
+
+        let initialGroupSnapshot = [];
+        if (appointment.bookingGroupId) {
+          initialGroupSnapshot = await AppointmentModel.find({ bookingGroupId: appointment.bookingGroupId }).lean();
+        } else {
+          initialGroupSnapshot = [appointment.toObject ? appointment.toObject() : appointment];
+        }
+        if (!initialGroupSnapshot.length) {
+          initialGroupSnapshot = [appointment.toObject ? appointment.toObject() : appointment];
+        }
+
+        const bookedServiceIdsGlobal = new Set();
+        const scheduledStaffByServiceId = new Map();
+        for (const a of initialGroupSnapshot) {
+          const st = getPrimaryStaffIdStringFromAppointmentShape(a);
+          if (!st) continue;
+          for (const oid of serviceIdsFromBookedAppointment(a)) {
+            const key = String(oid);
+            bookedServiceIdsGlobal.add(key);
+            scheduledStaffByServiceId.set(key, st);
+          }
+        }
+
+        const bookedIdsOnThisCard = new Set(serviceIdsFromBookedAppointment(appointment).map((x) => String(x)));
+
         const servicesByStaff = new Map();
         serviceItems.forEach((item, idx) => {
           const sid = item._primaryStaffId || 'unknown';
@@ -7943,14 +8057,21 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
           servicesByStaff.get(sid).push({ ...item, _order: idx });
         });
 
-        const linkedServices = linkedStaffId ? (servicesByStaff.get(linkedStaffId) || []) : [];
+        // Only merge sale lines onto THIS card when the booked service belongs on this card and the billed staff matches whom it was scheduled with.
+        const servicesMatchingScheduledStaffForThisCard = serviceItems.filter((i) => {
+          const id = extractSaleLineServiceId(i)?.toString();
+          if (!id || !bookedIdsOnThisCard.has(id)) return false;
+          if (!i._primaryStaffId) return false;
+          const sched = scheduledStaffByServiceId.get(id);
+          if (!sched) return true;
+          return String(i._primaryStaffId) === String(sched);
+        });
 
-        // Booked staff A but sale attributes work to staff B: linkedServices is empty. Move this card to
-        // the performing staff (first invoice line) and apply their lines here — do not leave card under A
-        // nor duplicate a second completed card for B.
-        let servicesToApplyToMain = linkedServices;
-        let reassignedPrimaryStaffId = null;
-        if (linkedServices.length === 0) {
+        // Booked staff A but invoice attributes work on this card's services to staff B: try first sale line staff for lines that belong on THIS card only.
+        let servicesToApplyToMain = [...servicesMatchingScheduledStaffForThisCard].sort(
+          (a, b) => (a._order ?? 0) - (b._order ?? 0)
+        );
+        if (servicesToApplyToMain.length === 0) {
           const primaryFromSale = getPrimaryStaffFromSaleServiceItems(sale.items);
           const psid =
             primaryFromSale?.staffId && mongoose.Types.ObjectId.isValid(primaryFromSale.staffId)
@@ -7958,9 +8079,14 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
               : null;
           if (psid && (!linkedStaffId || psid !== linkedStaffId)) {
             const primaryGroup = servicesByStaff.get(psid) || [];
-            if (primaryGroup.length > 0) {
-              servicesToApplyToMain = primaryGroup;
-              reassignedPrimaryStaffId = psid;
+            const filteredPrimary = primaryGroup
+              .filter((i) => {
+                const id = extractSaleLineServiceId(i)?.toString();
+                return id && bookedIdsOnThisCard.has(id);
+              })
+              .sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+            if (filteredPrimary.length > 0) {
+              servicesToApplyToMain = filteredPrimary;
               appointment.staffId = new mongoose.Types.ObjectId(psid);
               appointment.staffAssignments = [
                 {
@@ -7974,70 +8100,69 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
           }
         }
 
-        const otherStaffServices = [];
-        servicesByStaff.forEach((items, sid) => {
-          if (sid !== 'unknown' && (!linkedStaffId || sid !== linkedStaffId)) {
-            if (reassignedPrimaryStaffId && sid === reassignedPrimaryStaffId) {
-              return;
-            }
-            otherStaffServices.push(...items);
-          }
-        });
-
-        if (servicesToApplyToMain.length > 0) {
-          let serviceIds = servicesToApplyToMain.map((i) => extractSaleLineServiceId(i)).filter(Boolean);
-          if (serviceIds.length === 0) {
-            const fromBooking = serviceIdsFromBookedAppointment(appointment);
-            if (fromBooking.length > 0) {
-              serviceIds = fromBooking;
-              logger.debug(
-                `Appointment ${appointmentId}: sale lines had no resolvable serviceIds; using booked service ids (${serviceIds.length})`
-              );
-            } else {
-              logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
-            }
-          }
-          const firstServiceId = serviceIds[0];
-          const firstItem = servicesToApplyToMain[0];
-          const firstService = firstServiceId ? await Service.findById(firstServiceId).lean() : null;
-          if (firstService) {
-            appointment.serviceId = firstServiceId;
-            appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
-            appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
-            let totalDuration = firstService.duration ?? appointment.duration ?? 60;
-            if (serviceIds.length > 1) {
-              const additionalServices = await Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
-              totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
-            }
-            appointment.duration = totalDuration;
-            logger.debug(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
-          }
+        const misassignedDocIds = [];
+        for (const a of initialGroupSnapshot) {
+          const aid = a._id;
+          const svcKey = String(a.serviceId?._id != null ? a.serviceId._id : a.serviceId);
+          if (!mongoose.Types.ObjectId.isValid(svcKey)) continue;
+          const sched = getPrimaryStaffIdStringFromAppointmentShape(a);
+          const line = serviceItems.find((it) => {
+            if (String(it.lineSource || '').toLowerCase() === 'walk_in') return false;
+            return extractSaleLineServiceId(it)?.toString() === svcKey;
+          });
+          if (!line || !line._primaryStaffId || !sched) continue;
+          if (String(line._primaryStaffId) === String(sched)) continue;
+          misassignedDocIds.push(aid);
         }
 
-        // Create new appointment cards for services with different staff (skip if staff already has a card in group)
-        if (otherStaffServices.length > 0) {
-          const existingGroupStaffIds = new Set();
-          if (appointment.bookingGroupId) {
-            const groupApts = await AppointmentModel.find({ bookingGroupId: appointment.bookingGroupId }).lean();
-            groupApts.forEach((a) => {
-              if (a.staffId) existingGroupStaffIds.add(String(a.staffId));
-              (a.staffAssignments || []).forEach((as) => { if (as.staffId) existingGroupStaffIds.add(String(as.staffId)); });
-            });
-          }
-          const baseTimeM = parseTimeToMinutes(appointment.time || '09:00');
-          const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
-          const bookingGroupId = appointment.bookingGroupId || uuidv4();
-          if (!appointment.bookingGroupId) appointment.bookingGroupId = bookingGroupId;
+        if (misassignedDocIds.length > 0) {
+          await AppointmentModel.updateMany(
+            { _id: { $in: misassignedDocIds } },
+            { $set: { status: 'cancelled_at_billing' } }
+          );
+        }
 
-          for (const item of otherStaffServices) {
-            const contrib = (item.staffContributions || [])[0];
-            const staffId = contrib?.staffId || item.staffId;
-            if (!staffId || existingGroupStaffIds.has(String(staffId))) continue;
-            const itemSid = extractSaleLineServiceId(item)?.toString();
-            const idx = allOrdered.findIndex((o) => {
-              const oSid = extractSaleLineServiceId(o)?.toString();
-              return itemSid && oSid && itemSid === oSid;
-            });
+        const anchorMisassigned = misassignedDocIds.some((id) => String(id) === String(appointmentId));
+
+        const bookingGroupId = appointment.bookingGroupId || uuidv4();
+        if (!appointment.bookingGroupId) appointment.bookingGroupId = bookingGroupId;
+        const baseTimeM = parseTimeToMinutes(appointment.time || '09:00');
+        const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+
+        /** Cross-staff (booked service, different performer) and add-ons (service not on original booking): completed cards with Walk-in attribution. */
+        const createBillingWalkInCards = async () => {
+          const supplementalKeys = new Set();
+          for (const item of serviceItems) {
+            if (String(item.lineSource || '').toLowerCase() === 'walk_in') continue;
+            const rawStaffId = item._primaryStaffId;
+            const lineOid = extractSaleLineServiceId(item);
+            const lineKey = lineOid ? String(lineOid) : '';
+            if (!rawStaffId || !mongoose.Types.ObjectId.isValid(String(rawStaffId)) || !lineKey) continue;
+
+            let isBillingWalkIn = false;
+            if (!bookedServiceIdsGlobal.has(lineKey)) {
+              isBillingWalkIn = true;
+            } else {
+              const sched = scheduledStaffByServiceId.get(lineKey);
+              if (sched && String(rawStaffId) !== String(sched)) {
+                isBillingWalkIn = true;
+              }
+            }
+            if (!isBillingWalkIn) continue;
+
+            const dedupeKey = `${lineKey}:${String(rawStaffId)}:${item._order ?? 0}`;
+            if (supplementalKeys.has(dedupeKey)) continue;
+            supplementalKeys.add(dedupeKey);
+
+            const staffIdToStore = item._primaryStaffId;
+            const staffObjId =
+              mongoose.Types.ObjectId.isValid(String(staffIdToStore))
+                ? new mongoose.Types.ObjectId(String(staffIdToStore))
+                : null;
+            if (!staffObjId) continue;
+
+            const itemSidStr = extractSaleLineServiceId(item)?.toString();
+            const idx = allOrdered.findIndex((o) => extractSaleLineServiceId(o)?.toString() === itemSidStr);
             let cumulativeM = 0;
             for (let i = 0; i < idx; i++) {
               const oid = extractSaleLineServiceId(allOrdered[i]);
@@ -8046,32 +8171,108 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
             }
             const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
             const lineServiceId = extractSaleLineServiceId(item);
-            const service = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
-            if (!service) continue;
+            const serviceDoc = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
+            if (!serviceDoc) continue;
 
-            existingGroupStaffIds.add(String(staffId));
+            const dupWalkIn = await AppointmentModel.findOne({
+              branchId: appointment.branchId,
+              clientId: appointment.clientId,
+              date: appointment.date,
+              bookingGroupId,
+              staffId: staffObjId,
+              serviceId: lineServiceId,
+              status: 'completed',
+              leadSource: new RegExp('^walk-in$', 'i'),
+            }).lean();
+            if (dupWalkIn) continue;
+
             const newApt = new AppointmentModel({
               clientId: appointment.clientId,
               serviceId: lineServiceId,
               date: appointment.date,
               time: serviceTime,
-              duration: service.duration ?? 60,
+              duration: serviceDoc.duration ?? 60,
               status: 'completed',
-              price: item.price ?? item.total ?? service.price ?? 0,
+              price: item.price ?? item.total ?? serviceDoc.price ?? 0,
               branchId: appointment.branchId,
               bookingGroupId,
-              staffId,
-              staffAssignments: [{ staffId, percentage: 100, role: 'primary' }],
+              staffId: staffObjId,
+              staffAssignments: [{ staffId: staffObjId, percentage: 100, role: 'primary' }],
+              leadSource: 'Walk-in',
             });
             await newApt.save();
-            logger.debug(`✅ Created new appointment card for different-staff service: ${service.name}`);
+            logger.debug(
+              `✅ Billing walk-in card (${bookedServiceIdsGlobal.has(lineKey) ? 'cross-staff' : 'add-on'}): ${serviceDoc.name}`
+            );
+          }
+        };
+
+        await createBillingWalkInCards();
+        await createStandaloneStyleWalkInsForLinkedSaleAddons(
+          sale,
+          businessModels,
+          appointment.branchId || sale.branchId,
+        );
+
+        if (onlyReplayBillingArtifacts) {
+          logger.debug(
+            `✅ Billing calendar replay for already-completed appointment ${appointmentId} (walk-ins / mismatched-slot cleanup)`
+          );
+          return;
+        }
+
+        if (anchorMisassigned) {
+          appointment.status = 'cancelled_at_billing';
+          logger.debug(
+            `✅ Appointment ${appointmentId} cancelled_at_billing (invoice staff ≠ booked staff); supplemental walk-in rows created where applicable.`
+          );
+        } else {
+          appointment.status = 'completed';
+
+          if (servicesToApplyToMain.length > 0) {
+            let serviceIds = servicesToApplyToMain.map((i) => extractSaleLineServiceId(i)).filter(Boolean);
+            if (serviceIds.length === 0) {
+              const fromBooking = serviceIdsFromBookedAppointment(appointment);
+              if (fromBooking.length > 0) {
+                serviceIds = fromBooking;
+                logger.debug(
+                  `Appointment ${appointmentId}: sale lines had no resolvable serviceIds; using booked service ids (${serviceIds.length})`
+                );
+              } else {
+                logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
+              }
+            }
+            const firstServiceId = serviceIds[0];
+            const firstItem = servicesToApplyToMain[0];
+            const firstService = firstServiceId ? await Service.findById(firstServiceId).lean() : null;
+            if (firstService) {
+              appointment.serviceId = firstServiceId;
+              appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
+              appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
+              let totalDuration = firstService.duration ?? appointment.duration ?? 60;
+              if (serviceIds.length > 1) {
+                const additionalServices = await Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
+                totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
+              }
+              appointment.duration = totalDuration;
+              logger.debug(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
+            }
           }
         }
+
+      } else if (onlyReplayBillingArtifacts) {
+        return;
+      } else if (!onlyReplayBillingArtifacts) {
+        appointment.status = 'completed';
       }
+    } else if (!onlyReplayBillingArtifacts) {
+      appointment.status = 'completed';
     }
 
-    await appointment.save();
-    logger.debug(`✅ Appointment ${appointmentId} marked as completed after sale.`);
+    if (!onlyReplayBillingArtifacts) {
+      await appointment.save();
+      logger.debug(`✅ Appointment ${appointmentId} saved after sale completion flow.`);
+    }
 
     // Do not mark other appointments in bookingGroupId completed here. Multi-day (and separate cards for
     // same client) share a group but are billed independently; each sale completes only its linked appointment.
@@ -8080,22 +8281,20 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
   }
 };
 
-/** Primary staff on the first service line (same precedence as markAppointmentCompleted). */
+/** Primary staff on the first service row (canonical `staffId` wins over `staffContributions[0]`). */
 const getPrimaryStaffFromSaleServiceItems = (items) => {
   if (!items || !Array.isArray(items)) return null;
   for (const item of items) {
     if (item.type !== 'service') continue;
-    const contribs = item.staffContributions;
-    if (Array.isArray(contribs) && contribs.length > 0) {
-      const c = contribs[0];
-      const sid = c && c.staffId != null ? String(c.staffId) : '';
-      if (sid && mongoose.Types.ObjectId.isValid(sid)) {
-        return { staffId: sid, staffName: c.staffName || '' };
-      }
-    }
-    const legacyId = item.staffId != null ? String(item.staffId) : '';
-    if (legacyId && mongoose.Types.ObjectId.isValid(legacyId)) {
-      return { staffId: legacyId, staffName: item.staffName || '' };
+    if (String(item.lineSource || '').toLowerCase() === 'walk_in') continue;
+    const sid = resolvePrimarySaleLineStaffIdString(item);
+    if (sid && mongoose.Types.ObjectId.isValid(sid)) {
+      const c0 = (item.staffContributions || [])[0];
+      const name =
+        (item.staffName && String(item.staffName).trim()) ||
+        (c0?.staffName && String(c0.staffName).trim()) ||
+        '';
+      return { staffId: sid, staffName: name };
     }
   }
   return null;
@@ -8150,6 +8349,113 @@ const syncCompletedLinkedAppointmentStaffFromSale = async (AppointmentModel, sal
   }
 };
 
+/**
+ * Checkout-only service lines (`line_source: walk_in`) on an appointment-linked bill: mimic **standalone Quick Sale**
+ * calendar behaviour — attach to a synthetic bookingGroupId derived from this sale only; only create calendar rows
+ * when the addon subset has ≥2 performing staff (same rule as standalone). Does not reuse the appointment group's id.
+ */
+const createStandaloneStyleWalkInsForLinkedSaleAddons = async (sale, businessModels, branchId) => {
+  if (!sale || !businessModels?.Appointment || !businessModels?.Service) return;
+  if (!sale.appointmentId || String(sale.status || '').toLowerCase() !== 'completed') return;
+
+  try {
+    const { Appointment, Service } = businessModels;
+
+    let clientOid = sale.customerId;
+    if (!clientOid) return;
+    if (typeof clientOid !== 'object' && mongoose.Types.ObjectId.isValid(String(clientOid))) {
+      clientOid = new mongoose.Types.ObjectId(String(clientOid));
+    } else if (typeof clientOid === 'object' && clientOid?._id) {
+      clientOid = clientOid._id;
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(clientOid))) return;
+
+    const serviceItems = (sale.items || [])
+      .map((i) => (i && typeof i.toObject === 'function' ? i.toObject() : i))
+      .filter(
+        (i) =>
+          i &&
+          i.type === 'service' &&
+          String(i.lineSource || '').toLowerCase() === 'walk_in' &&
+          i.serviceId &&
+          mongoose.Types.ObjectId.isValid(String(extractSaleLineServiceId(i) || ''))
+      )
+      .map((i, idx) => {
+        const sid = resolvePrimarySaleLineStaffIdString(i);
+        return { ...i, _primaryStaffId: sid, _order: idx };
+      })
+      .filter((i) => i._primaryStaffId && mongoose.Types.ObjectId.isValid(String(i._primaryStaffId)));
+
+    if (serviceItems.length === 0) return;
+    const uniqueStaffIds = [...new Set(serviceItems.map((i) => String(i._primaryStaffId)))];
+    if (uniqueStaffIds.length < 2) return;
+
+    const saleDate =
+      sale.date != null && sale.date !== ''
+        ? typeof sale.date === 'string'
+          ? String(sale.date).slice(0, 10)
+          : new Date(sale.date).toISOString().slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+
+    const baseTimeM = parseTimeToMinutes(sale.time || '09:00');
+    const branchOid =
+      branchId && mongoose.Types.ObjectId.isValid(String(branchId))
+        ? new mongoose.Types.ObjectId(String(branchId))
+        : sale.branchId;
+    const bookingGroupId = sale._id ? `sale-addon-${String(sale._id)}` : uuidv4();
+    const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+
+    for (const item of serviceItems) {
+      const staffIdStr = String(item._primaryStaffId);
+      const svcOid = extractSaleLineServiceId(item);
+      const idx = allOrdered.findIndex((o) => extractSaleLineServiceId(o)?.toString() === svcOid.toString());
+      let cumulativeM = 0;
+      for (let i = 0; i < idx; i++) {
+        const oid = extractSaleLineServiceId(allOrdered[i]);
+        const s = oid ? await Service.findById(oid).select('duration').lean() : null;
+        cumulativeM += s?.duration ?? 60;
+      }
+      const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
+      const service = await Service.findById(svcOid).lean();
+      if (!service) continue;
+
+      const staffObjId = new mongoose.Types.ObjectId(staffIdStr);
+      const dup = await Appointment.findOne({
+        branchId: branchOid,
+        clientId: clientOid,
+        date: saleDate,
+        bookingGroupId,
+        staffId: staffObjId,
+        serviceId: svcOid,
+        status: 'completed',
+        leadSource: new RegExp('^walk-in$', 'i'),
+      }).lean();
+      if (dup) continue;
+
+      const newApt = new Appointment({
+        clientId: clientOid,
+        serviceId: svcOid,
+        date: saleDate,
+        time: serviceTime,
+        duration: service.duration ?? 60,
+        status: 'completed',
+        price: item.price ?? item.total ?? service.price ?? 0,
+        branchId: branchOid,
+        bookingGroupId,
+        staffId: staffObjId,
+        staffAssignments: [{ staffId: staffObjId, percentage: 100, role: 'primary' }],
+        leadSource: 'Walk-in',
+      });
+      await newApt.save();
+      logger.debug(
+        `✅ Addon walk-in (standalone-style, linked bill): sale ${sale.billNo || sale._id} staff ${staffIdStr} · ${service.name}`,
+      );
+    }
+  } catch (err) {
+    logger.error('❌ createStandaloneStyleWalkInsForLinkedSaleAddons failed:', err);
+  }
+};
+
 /** Create walk-in appointment cards for a completed sale with multiple staff when NOT linked to an appointment. */
 const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId) => {
   if (!sale || !businessModels?.Appointment || !businessModels?.Service || !businessModels?.Client) return;
@@ -8158,7 +8464,9 @@ const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId
 
   try {
     const { Appointment, Service, Client } = businessModels;
+    // Mongoose subdocs lose their data fields when spread with `...`, so flatten first.
     const serviceItems = (sale.items || [])
+      .map((i) => (i && typeof i.toObject === 'function' ? i.toObject() : i))
       .filter((i) => i.type === 'service' && i.serviceId)
       .map((i, idx) => {
         const contrib = (i.staffContributions || [])[0];
@@ -8343,8 +8651,9 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    const { Appointment } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId } = req.body;
+    const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode } = req.body;
+    const schedulingMode = rawSchedulingMode === 'custom' ? 'custom' : 'sequential';
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -8369,84 +8678,247 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       return id ? String(id) : null;
     };
 
-    // When all services have the same staff: create single appointment card listing all services
-    const allSameStaff = services.length > 1 && services.every((s, i) => {
-      const a = getPrimaryStaffId(services[0]);
-      const b = getPrimaryStaffId(s);
-      return a && b && a === b;
-    });
-
+    // Multi-service bookings always create one Appointment document per service so the
+    // calendar shows separate cards (visually linked via shared bookingGroupId).
+    // Legacy `additionalServiceIds` is no longer written from this path; existing rows
+    // that still use it are read by the GET handlers (backward compatible).
     const createdAppointments = [];
 
-    if (allSameStaff && services.length > 1) {
-      // Single appointment with multiple services (same staff)
-      const first = services[0];
-      const additionalIds = services.slice(1).map((s) => s.serviceId);
-      const totalDur = services.reduce((sum, s) => sum + (s.duration || 0), 0);
-      const totalPrice = services.reduce((sum, s) => sum + (s.price || 0), 0);
+    if (schedulingMode === 'custom') {
+      // Per-service custom start times: one Appointment doc per service even when staff is shared.
+      // Duration always comes from the Service catalog; endTime = startTime + duration (computed server-side).
+      const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
 
-      const appointmentData = {
-        clientId,
-        serviceId: first.serviceId,
-        additionalServiceIds: additionalIds,
-        date,
-        time,
-        duration: totalDur,
-        status,
-        notes,
-        leadSource: leadSource || '',
-        createdBy,
-        price: totalPrice,
-        branchId: req.user.branchId
-      };
+      // Pre-validate each service: startTime present + Service catalog duration exists.
+      const serviceCatalogIds = services.map(s => s.serviceId).filter(Boolean);
+      const catalogDocs = await BusinessService.find({ _id: { $in: serviceCatalogIds } })
+        .select('_id name duration')
+        .lean();
+      const catalogById = new Map(catalogDocs.map(d => [String(d._id), d]));
 
-      if (first.staffAssignments && Array.isArray(first.staffAssignments)) {
-        appointmentData.staffAssignments = first.staffAssignments;
-        const totalPercentage = first.staffAssignments.reduce((sum, a) => sum + a.percentage, 0);
-        if (Math.abs(totalPercentage - 100) > 0.01) {
-          return res.status(400).json({ success: false, error: 'Staff assignment percentages must add up to 100%' });
+      const resolved = [];
+      for (let i = 0; i < services.length; i++) {
+        const s = services[i];
+        const catalog = catalogById.get(String(s.serviceId));
+        const fallbackName = s.name || `Service ${i + 1}`;
+        const displayName = catalog?.name || fallbackName;
+        const startTimeRaw = s.startTime || s.time || null;
+        if (!startTimeRaw || typeof startTimeRaw !== 'string' || !/^\d{1,2}:\d{2}/.test(startTimeRaw)) {
+          return res.status(400).json({
+            success: false,
+            error: `Please select start time for ${displayName}`
+          });
         }
-      } else if (first.staffId) {
-        appointmentData.staffId = first.staffId;
-        appointmentData.staffAssignments = [{ staffId: first.staffId, percentage: 100, role: 'primary' }];
-      } else {
-        return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
+        if (!catalog || !catalog.duration || catalog.duration < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Service duration is missing in service settings for ${displayName}`
+          });
+        }
+        const duration = catalog.duration;
+        const startMinutes = parseTimeToMinutes(startTimeRaw);
+        const dayStart = parseDateIST(date);
+        const startAt = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
+        const endAt = new Date(startAt.getTime() + duration * 60 * 1000);
+        resolved.push({
+          raw: s,
+          name: displayName,
+          serviceId: s.serviceId,
+          time: minutesToTimeString(startMinutes),
+          duration,
+          price: typeof s.price === 'number' ? s.price : 0,
+          startAt,
+          endAt
+        });
       }
 
-      const newAppointment = new Appointment(appointmentData);
-      const savedAppointment = await newAppointment.save();
-      const populatedAppointment = await Appointment.findById(savedAppointment._id)
-        .populate('clientId', 'name phone email')
-        .populate('serviceId', 'name price duration')
-        .populate('staffId', 'name role')
-        .populate('staffAssignments.staffId', 'name role');
+      // Conflict pre-check across submitted services + existing bookings.
+      const formatTimeForError = (timeStr) => {
+        const m = parseTimeToMinutes(timeStr);
+        const h24 = Math.floor(m / 60);
+        const mins = m % 60;
+        const period = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+        return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
+      };
 
-      createdAppointments.push(populatedAppointment);
+      // Within-batch overlap check (same staff in this submission).
+      for (let i = 0; i < resolved.length; i++) {
+        const a = resolved[i];
+        const aStaffId = getPrimaryStaffId(a.raw);
+        for (let j = i + 1; j < resolved.length; j++) {
+          const b = resolved[j];
+          const bStaffId = getPrimaryStaffId(b.raw);
+          if (!aStaffId || !bStaffId) continue;
+          if (aStaffId !== bStaffId) continue;
+          if (a.startAt < b.endAt && a.endAt > b.startAt) {
+            return res.status(409).json({
+              success: false,
+              error: `Staff is already booked from ${formatTimeForError(a.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(a.time) + a.duration))}`
+            });
+          }
+        }
+      }
+
+      // External conflict check against existing appointments per staff.
+      for (const r of resolved) {
+        const staffId = getPrimaryStaffId(r.raw);
+        if (!staffId) {
+          return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
+        }
+        const result = await detectStaffConflict(
+          { Appointment, BookingHold },
+          {
+            branchId: req.user.branchId,
+            staffId,
+            start: r.startAt,
+            end: r.endAt,
+            skipHoldCheck: true
+          }
+        );
+        if (result.conflict) {
+          return res.status(409).json({
+            success: false,
+            error: `Staff is already booked from ${formatTimeForError(r.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(r.time) + r.duration))}`
+          });
+        }
+      }
+
+      const bookingGroupId = existingBookingGroupId || uuidv4();
+      for (const r of resolved) {
+        const appointmentData = {
+          clientId,
+          serviceId: r.serviceId,
+          date,
+          time: r.time,
+          duration: r.duration,
+          startAt: r.startAt,
+          endAt: r.endAt,
+          status,
+          notes,
+          leadSource: leadSource || '',
+          createdBy,
+          price: r.price,
+          branchId: req.user.branchId,
+          bookingGroupId,
+          schedulingMode: 'custom'
+        };
+
+        if (r.raw.staffAssignments && Array.isArray(r.raw.staffAssignments)) {
+          appointmentData.staffAssignments = r.raw.staffAssignments;
+          const totalPercentage = r.raw.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+          if (Math.abs(totalPercentage - 100) > 0.01) {
+            return res.status(400).json({
+              success: false,
+              error: 'Staff assignment percentages must add up to 100%'
+            });
+          }
+        } else if (r.raw.staffId) {
+          appointmentData.staffId = r.raw.staffId;
+          appointmentData.staffAssignments = [{
+            staffId: r.raw.staffId,
+            percentage: 100,
+            role: 'primary'
+          }];
+        }
+
+        const newAppointment = new Appointment(appointmentData);
+        const savedAppointment = await newAppointment.save();
+
+        const populatedAppointment = await Appointment.findById(savedAppointment._id)
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role')
+          .populate('staffAssignments.staffId', 'name role');
+
+        createdAppointments.push(populatedAppointment);
+      }
     } else {
-      // Different staff per service (or single service): create one appointment per service
-      // Each service starts after the previous ends (sequential: Service A 9:00–9:30, Service B 9:30–10:00)
-      // Use existingBookingGroupId when adding new staff cards from edit (link to existing group)
+      // Sequential mode: create one appointment per service so each service is its own card.
+      // Each service starts after the previous ends (Service A 9:00–9:30, Service B 9:30–10:00)
+      // and all cards share a bookingGroupId so the calendar links them visually.
+      // Single-service bookings get a unique group id too, but the UI only shows the link
+      // styling when more than one document shares the id.
+      const formatTimeForError = (timeStr) => {
+        const m = parseTimeToMinutes(timeStr);
+        const h24 = Math.floor(m / 60);
+        const mins = m % 60;
+        const period = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+        return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
+      };
+
+      const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
+
+      const serviceCatalogIds = [...new Set(services.map((s) => String(s.serviceId)).filter(Boolean))];
+      const catalogDocs = await BusinessService.find({ _id: { $in: serviceCatalogIds } })
+        .select('_id name duration')
+        .lean();
+      const catalogById = new Map(catalogDocs.map((d) => [String(d._id), d]));
+
       const bookingGroupId = existingBookingGroupId || uuidv4();
       const baseTimeMinutes = parseTimeToMinutes(time);
       let cumulativeMinutes = 0;
       for (let i = 0; i < services.length; i++) {
         const service = services[i];
+        const catalog = catalogById.get(String(service.serviceId));
+        const displayName = catalog?.name || service.name || 'Service';
+        let effectiveDuration = catalog && catalog.duration >= 1 ? catalog.duration : (typeof service.duration === 'number' ? service.duration : 0);
+        if (!Number.isFinite(effectiveDuration)) effectiveDuration = 0;
+        if (effectiveDuration < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Service duration is missing in service settings for ${displayName}`,
+          });
+        }
+
         const serviceStartMinutes = baseTimeMinutes + cumulativeMinutes;
         const serviceTime = minutesToTimeString(serviceStartMinutes);
-        cumulativeMinutes += service.duration || 0;
+        cumulativeMinutes += effectiveDuration;
+
+        const dayStart = parseDateIST(date);
+        const startAt = new Date(dayStart.getTime() + serviceStartMinutes * 60 * 1000);
+        const endAt = new Date(startAt.getTime() + effectiveDuration * 60 * 1000);
+
+        const seqStaffId = getPrimaryStaffId(service);
+        if (!seqStaffId) {
+          return res.status(400).json({
+            success: false,
+            error: 'Either staffId or staffAssignments is required',
+          });
+        }
+        const overlapResult = await detectStaffConflict(
+          { Appointment, BookingHold },
+          {
+            branchId: req.user.branchId,
+            staffId: seqStaffId,
+            start: startAt,
+            end: endAt,
+            skipHoldCheck: true,
+          }
+        );
+        if (overlapResult.conflict) {
+          const endMinuteStr = minutesToTimeString(serviceStartMinutes + effectiveDuration);
+          return res.status(409).json({
+            success: false,
+            error: `Staff is already booked from ${formatTimeForError(serviceTime)} to ${formatTimeForError(endMinuteStr)}`,
+          });
+        }
+
         const appointmentData = {
           clientId,
           serviceId: service.serviceId,
           date,
           time: serviceTime,
-          duration: service.duration,
+          duration: effectiveDuration,
           status,
           notes,
           leadSource: leadSource || '',
           createdBy,
           price: service.price,
           branchId: req.user.branchId,
-          bookingGroupId
+          bookingGroupId,
+          staffLocked: !!service.staffLocked,
         };
 
         if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
@@ -8455,7 +8927,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
           if (Math.abs(totalPercentage - 100) > 0.01) {
             return res.status(400).json({
               success: false,
-              error: 'Staff assignment percentages must add up to 100%'
+              error: 'Staff assignment percentages must add up to 100%',
             });
           }
         } else if (service.staffId) {
@@ -8463,12 +8935,12 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
           appointmentData.staffAssignments = [{
             staffId: service.staffId,
             percentage: 100,
-            role: 'primary'
+            role: 'primary',
           }];
         } else {
           return res.status(400).json({
             success: false,
-            error: 'Either staffId or staffAssignments is required'
+            error: 'Either staffId or staffAssignments is required',
           });
         }
 
@@ -9063,13 +9535,17 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         }));
       }
 
-      if (!item.staffContributions && item.staffId && item.staffName) {
-        item.staffContributions = [{
-          staffId: item.staffId,
-          staffName: item.staffName,
-          percentage: 100,
-          amount: linePreTax
-        }];
+      if ((!item.staffContributions || item.staffContributions.length === 0)) {
+        const trimmedStaffId = item.staffId != null ? String(item.staffId).trim() : '';
+        if (trimmedStaffId) {
+          const nm = item.staffName != null ? String(item.staffName).trim() : '';
+          item.staffContributions = [{
+            staffId: trimmedStaffId,
+            staffName: nm || 'Staff',
+            percentage: 100,
+            amount: linePreTax
+          }];
+        }
       }
       
       return item;
@@ -9575,12 +10051,188 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
   }
 });
 
+/**
+ * Finalize a multi-service booking for billing.
+ *
+ * Per-service confirmation step before Raise Sale:
+ *   - 'cancel' decisions set status='cancelled_at_billing' (audit fields written).
+ *   - 'perform' decisions optionally carry a `shift` (new time/startAt/endAt) when
+ *     compression freed an earlier slot — those rows are validated against
+ *     detectStaffConflict before persisting.
+ *
+ * dryRun mode runs all conflict checks WITHOUT persisting and returns a per-row
+ * conflict list so the modal can warn the user before they confirm.
+ */
+app.post('/api/appointments/finalize-for-billing', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Appointment, BookingHold } = req.businessModels;
+    const { decisions, dryRun: bodyDryRun } = req.body || {};
+    const dryRun = bodyDryRun === true || String(req.query.dryRun || '') === '1';
+
+    if (!Array.isArray(decisions) || decisions.length === 0) {
+      return res.status(400).json({ success: false, error: 'decisions[] is required' });
+    }
+
+    const ids = decisions.map((d) => String(d.appointmentId || ''));
+    if (ids.some((id) => !id)) {
+      return res.status(400).json({ success: false, error: 'Each decision needs an appointmentId' });
+    }
+
+    // Load all referenced appointments in one shot, scoped to the user's branch.
+    const docs = await Appointment.find({
+      _id: { $in: ids },
+      branchId: req.user.branchId,
+    });
+    if (docs.length !== ids.length) {
+      return res.status(404).json({ success: false, error: 'One or more appointments not found' });
+    }
+    const docById = new Map(docs.map((d) => [String(d._id), d]));
+
+    const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
+
+    const getPrimaryStaffId = (apt) => {
+      if (apt.staffId) return String(apt.staffId._id || apt.staffId);
+      const a = Array.isArray(apt.staffAssignments) ? apt.staffAssignments[0] : null;
+      return a?.staffId ? String(a.staffId._id || a.staffId) : null;
+    };
+
+    // Pre-flight: validate every shift before doing any writes.
+    // The frontend sends only the new wall-clock `time` (12h or 24h string); the
+    // backend derives startAt/endAt using parseDateIST so timezone logic stays
+    // centralized.
+    const cancelIdsInBatch = decisions.filter((d) => d.action === 'cancel').map((d) => String(d.appointmentId));
+    // Rows being cancelled haven't been persisted yet during dry-run, but they're still ACTIVE
+    // in Mongo — they'd overlap the sibling we're sliding earlier and cause a false conflict.
+    // Also exclude every perform row that carries a shift: their old UTC windows are still on
+    // disk until saves run, yet we're validating the booked state *after* the batch lands.
+    const shiftedPerformIds = decisions
+      .filter((d) => d.action === 'perform' && d.shift && d.shift.time)
+      .map((d) => String(d.appointmentId));
+    const finalizeBatchExcludeOverlapIds = [...new Set([...cancelIdsInBatch, ...shiftedPerformIds])];
+
+    const shiftPlan = new Map(); // appointmentId -> { time, startAt, endAt }
+    const conflicts = [];
+    for (const dec of decisions) {
+      if (dec.action !== 'perform' || !dec.shift) continue;
+      const apt = docById.get(String(dec.appointmentId));
+      if (!apt) continue;
+      const time = dec.shift.time;
+      if (!time || !/^\d{1,2}:\d{2}/.test(String(time))) {
+        return res.status(400).json({
+          success: false,
+          error: 'shift.time is required and must be HH:MM',
+        });
+      }
+      const dayStart = parseDateIST(apt.date);
+      const startMinutes = parseTimeToMinutes(time);
+      const startDate = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
+      const duration = apt.duration || 0;
+      if (duration < 1) {
+        return res.status(400).json({
+          success: false,
+          error: `Service duration is missing for appointment ${apt._id}`,
+        });
+      }
+      const endDate = new Date(startDate.getTime() + duration * 60 * 1000);
+
+      shiftPlan.set(String(apt._id), { time, startAt: startDate, endAt: endDate });
+
+      const staffId = getPrimaryStaffId(apt);
+      if (!staffId) {
+        conflicts.push({ appointmentId: String(apt._id), reason: 'missing_staff' });
+        continue;
+      }
+
+      const result = await detectStaffConflict(
+        { Appointment, BookingHold },
+        {
+          branchId: req.user.branchId,
+          staffId,
+          start: startDate,
+          end: endDate,
+          excludeAppointmentIds: finalizeBatchExcludeOverlapIds,
+          skipHoldCheck: true,
+        }
+      );
+      if (result.conflict) {
+        conflicts.push({
+          appointmentId: String(apt._id),
+          reason: result.reason || 'appointment_overlap',
+        });
+      }
+    }
+
+    if (conflicts.length > 0 && !dryRun) {
+      return res.status(409).json({ success: false, conflicts });
+    }
+    if (dryRun) {
+      return res.json({ success: true, conflicts, dryRun: true });
+    }
+
+    const cancelledBy = req.user?.name
+      || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null)
+      || req.user?.email
+      || '';
+
+    const updated = [];
+    for (const dec of decisions) {
+      const apt = docById.get(String(dec.appointmentId));
+      if (!apt) continue;
+
+      if (dec.action === 'cancel') {
+        // Edge Case 4: never re-cancel a service that already happened.
+        if (apt.status === 'completed') {
+          updated.push(apt);
+          continue;
+        }
+        apt.status = 'cancelled_at_billing';
+        apt.cancelledAtBillingAt = new Date();
+        apt.cancelledAtBillingBy = cancelledBy;
+        await apt.save();
+        updated.push(apt);
+        continue;
+      }
+
+      // perform
+      const plan = shiftPlan.get(String(apt._id));
+      if (plan) {
+        apt.time = plan.time;
+        apt.startAt = plan.startAt;
+        apt.endAt = plan.endAt;
+        await apt.save();
+      }
+      updated.push(apt);
+    }
+
+    return res.json({ success: true, data: updated });
+  } catch (error) {
+    const dupMsg = String(error?.message || error?.errmsg || '');
+    const isDup =
+      Number(error?.code) === 11000 ||
+      error?.codeName === 'DuplicateKey' ||
+      /duplicate key|E11000|slotKey_/i.test(dupMsg);
+    if (isDup) {
+      logger.warn(
+        'Finalize for billing duplicate slotKey (same staff + window already exists)',
+        dupMsg.slice(0, 500),
+      );
+      return res.status(409).json({
+        success: false,
+        error:
+          'This time slot is already booked for the selected staff member. Compression or reschedule caused a clash — use "Keep original timing" or pick another slot.',
+      });
+    }
+    logger.error('Error finalizing appointments for billing:', error);
+    return res.status(500).json({ success: false, error: 'Failed to finalize appointments' });
+  }
+});
+
 // Update appointment
 app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
-    const { Appointment } = req.businessModels;
+    const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
 
     // Find the appointment
     const appointment = await Appointment.findById(id)
@@ -9605,6 +10257,94 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       updateData.status !== 'cancelled' &&
       ((updateData.date && updateData.date !== appointment.date) ||
        (updateData.time && updateData.time !== appointment.time));
+
+    // When the time changes for a single appointment doc (per-service edit), refetch duration
+    // from the Service catalog as source of truth, recompute startAt/endAt, and pre-check staff conflict.
+    const timeIsChanging = updateData.time && updateData.time !== appointment.time;
+    const dateIsChanging = updateData.date && updateData.date !== appointment.date;
+    if ((timeIsChanging || dateIsChanging) && updateData.status !== 'cancelled') {
+      const newTime = updateData.time || appointment.time;
+      const newDate = updateData.date || appointment.date;
+      if (!/^\d{1,2}:\d{2}/.test(String(newTime || ''))) {
+        return res.status(400).json({ success: false, error: 'Please select a valid start time' });
+      }
+
+      const serviceCatalog = appointment.serviceId && typeof appointment.serviceId === 'object' && appointment.serviceId.duration
+        ? appointment.serviceId
+        : await BusinessService.findById(appointment.serviceId).select('_id name duration').lean();
+      const serviceName = serviceCatalog?.name || 'this service';
+      const catalogDuration = serviceCatalog?.duration;
+      // For sequential same-staff multi-service docs, appointment.duration is the sum across services and the
+      // catalog row only covers the primary service — keep the existing total in that case.
+      const hasAdditional = Array.isArray(appointment.additionalServiceIds) && appointment.additionalServiceIds.length > 0;
+      let durationForWindow = appointment.duration || 60;
+      if (!hasAdditional) {
+        if (!catalogDuration || catalogDuration < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Service duration is missing in service settings for ${serviceName}`
+          });
+        }
+        durationForWindow = catalogDuration;
+        updateData.duration = catalogDuration;
+      }
+
+      const dayStart = parseDateIST(newDate);
+      const startMinutes = parseTimeToMinutes(newTime);
+      const startAt = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
+      const endAt = new Date(startAt.getTime() + durationForWindow * 60 * 1000);
+      updateData.startAt = startAt;
+      updateData.endAt = endAt;
+
+      // Conflict detection (skip if newly cancelled).
+      const primaryStaffId = (() => {
+        if (updateData.staffId) return String(updateData.staffId);
+        if (Array.isArray(updateData.staffAssignments) && updateData.staffAssignments[0]?.staffId) {
+          return String(updateData.staffAssignments[0].staffId);
+        }
+        if (appointment.staffId) {
+          return String(appointment.staffId._id || appointment.staffId);
+        }
+        if (Array.isArray(appointment.staffAssignments) && appointment.staffAssignments[0]?.staffId) {
+          return String(appointment.staffAssignments[0].staffId);
+        }
+        return null;
+      })();
+      if (primaryStaffId) {
+        const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
+        const result = await detectStaffConflict(
+          { Appointment, BookingHold },
+          {
+            branchId: req.user.branchId,
+            staffId: primaryStaffId,
+            start: startAt,
+            end: endAt,
+            excludeAppointmentId: id,
+            skipHoldCheck: true
+          }
+        );
+        if (result.conflict) {
+          const formatTimeForError = (timeStr) => {
+            const m = parseTimeToMinutes(timeStr);
+            const h24 = Math.floor(m / 60);
+            const mins = m % 60;
+            const period = h24 >= 12 ? 'PM' : 'AM';
+            const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+            return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
+          };
+          const endStr = minutesToTimeString(startMinutes + durationForWindow);
+          return res.status(409).json({
+            success: false,
+            error: `Staff is already booked from ${formatTimeForError(newTime)} to ${formatTimeForError(endStr)}`
+          });
+        }
+      }
+    }
+
+    // Checkout often bulk PATCHes `{ status: 'completed' }` on siblings; never revive slots suppressed at billing.
+    if (previousStatus === 'cancelled_at_billing' && updateData.status === 'completed') {
+      delete updateData.status;
+    }
 
     // Update the appointment
     const updatedAppointment = await Appointment.findByIdAndUpdate(
@@ -9893,6 +10633,13 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       data: updatedAppointment
     });
   } catch (error) {
+    if (error.code === 11000 || error.codeName === 'DuplicateKey' || /duplicate key/i.test(String(error.message || ''))) {
+      logger.warn('Appointment slot conflict on update (duplicate slotKey):', error.message);
+      return res.status(409).json({
+        success: false,
+        error: 'This time slot is already booked for the selected staff member. Please choose a different time.'
+      });
+    }
     logger.error('Error updating appointment:', error);
     res.status(500).json({
       success: false,
@@ -10387,6 +11134,24 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     
     // Process items to handle staff contributions and preserve productId/serviceId
     const mongoose = require('mongoose');
+    /** Quick Sale drift (booking → direct bill): suppress synthetic walk-in calendar rows & cancel originals. Stripped before Sale ctor. */
+    const suppressStandaloneWalkInCalendarCards =
+      saleData.suppressStandaloneWalkInCalendarCards === true;
+    const rawVoidBookingAppointmentIds = Array.isArray(saleData.voidBookingAppointmentIds)
+      ? saleData.voidBookingAppointmentIds
+      : [];
+    delete saleData.suppressStandaloneWalkInCalendarCards;
+    delete saleData.voidBookingAppointmentIds;
+    const voidBookingAppointmentObjectIds = [
+      ...new Set(
+        rawVoidBookingAppointmentIds
+          .map((id) => (id != null ? String(id).trim() : ''))
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      ),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+    const skipStandaloneWalkInCalendarCards =
+      suppressStandaloneWalkInCalendarCards === true || voidBookingAppointmentObjectIds.length > 0;
+
     const { getItemPreTaxTotal } = require('./lib/sale-item-pretax');
     if (saleData.items && Array.isArray(saleData.items)) {
       saleData.items = saleData.items.map(item => {
@@ -10417,17 +11182,62 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           }));
         }
 
-        if (!item.staffContributions && item.staffId && item.staffName) {
-          item.staffContributions = [{
-            staffId: item.staffId,
-            staffName: item.staffName,
-            percentage: 100,
-            amount: linePreTax
-          }];
+        if ((!item.staffContributions || item.staffContributions.length === 0)) {
+          const trimmedStaffId = item.staffId != null ? String(item.staffId).trim() : '';
+          if (trimmedStaffId) {
+            const nm = item.staffName != null ? String(item.staffName).trim() : '';
+            item.staffContributions = [{
+              staffId: trimmedStaffId,
+              staffName: nm || 'Staff',
+              percentage: 100,
+              amount: linePreTax
+            }];
+          }
         }
-        
+
+        // Single-assign lines: if the checkout row `staffId` was changed but contributions stayed on the old stylist, fix before persist.
+        if (item.type === 'service') {
+          const lineSid = item.staffId != null ? String(item.staffId).trim() : '';
+          const contribs = item.staffContributions;
+          if (
+            lineSid &&
+            mongoose.Types.ObjectId.isValid(lineSid) &&
+            Array.isArray(contribs) &&
+            contribs.length === 1
+          ) {
+            const c0 = contribs[0];
+            const cSid = c0?.staffId != null ? String(c0.staffId).trim() : '';
+            const pct = Number(c0?.percentage) || 100;
+            if (pct === 100 && cSid && cSid !== lineSid) {
+              const nm =
+                (item.staffName != null && String(item.staffName).trim()) ||
+                String(c0?.staffName || 'Staff').trim() ||
+                'Staff';
+              item.staffContributions = [
+                { staffId: lineSid, staffName: nm, percentage: 100, amount: linePreTax },
+              ];
+            }
+          }
+        }
+
         return item;
       });
+      if (
+        saleData.appointmentId &&
+        mongoose.Types.ObjectId.isValid(String(saleData.appointmentId))
+      ) {
+        saleData.items = await annotateAppointmentLinkedSaleItemsLineSource(
+          Appointment,
+          saleData.appointmentId,
+          saleData.items,
+        );
+      } else if (Array.isArray(saleData.items)) {
+        saleData.items = saleData.items.map((row) => {
+          if (!row || typeof row !== 'object') return row;
+          const { lineSource, ...rest } = row;
+          return rest;
+        });
+      }
     }
     
     // Add branchId to sale data
@@ -10514,10 +11324,38 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       await savedSale.save();
     }
 
+    try {
+      if (
+        voidBookingAppointmentObjectIds.length > 0 &&
+        savedSale.customerId &&
+        mongoose.Types.ObjectId.isValid(String(savedSale.customerId))
+      ) {
+        const custId =
+          typeof savedSale.customerId === 'object' &&
+          savedSale.customerId &&
+          savedSale.customerId._id != null
+            ? savedSale.customerId._id
+            : savedSale.customerId;
+        await Appointment.updateMany(
+          {
+            _id: { $in: voidBookingAppointmentObjectIds },
+            branchId: req.user.branchId,
+            clientId: custId,
+          },
+          { $set: { status: 'cancelled_at_billing' } }
+        );
+        logger.debug('[Sale create] Cancelled bookings (cancelled_at_billing) from voidBookingAppointmentIds:', {
+          count: voidBookingAppointmentObjectIds.length,
+        });
+      }
+    } catch (voidAptErr) {
+      logger.error('❌ voidBookingAppointmentIds update failed:', voidAptErr);
+    }
+
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
       await syncCompletedLinkedAppointmentStaffFromSale(Appointment, savedSale);
-    } else if (String(savedSale.status).toLowerCase() === 'completed') {
+    } else if (String(savedSale.status).toLowerCase() === 'completed' && !skipStandaloneWalkInCalendarCards) {
       // Standalone sale with multiple staff: create walk-in cards for calendar
       await createWalkInCardsForStandaloneSale(savedSale, req.businessModels, req.user.branchId);
     }
@@ -11325,15 +12163,59 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
             ...contribution,
             amount: (linePreTax * (Number(contribution.percentage) || 0)) / 100,
           }));
-        } else if (plain.staffId && plain.staffName) {
-          plain.staffContributions = [{
-            staffId: plain.staffId,
-            staffName: plain.staffName,
-            percentage: 100,
-            amount: linePreTax,
-          }];
+        } else {
+          const trimmedStaffId = plain.staffId != null ? String(plain.staffId).trim() : '';
+          if (trimmedStaffId) {
+            const nm = plain.staffName != null ? String(plain.staffName).trim() : '';
+            plain.staffContributions = [{
+              staffId: trimmedStaffId,
+              staffName: nm || 'Staff',
+              percentage: 100,
+              amount: linePreTax,
+            }];
+          }
         }
+
+        if (plain.type === 'service') {
+          const lineSid = plain.staffId != null ? String(plain.staffId).trim() : '';
+          const contribs = plain.staffContributions;
+          if (
+            lineSid &&
+            mongooseSales.Types.ObjectId.isValid(lineSid) &&
+            Array.isArray(contribs) &&
+            contribs.length === 1
+          ) {
+            const c0 = contribs[0];
+            const cSid = c0?.staffId != null ? String(c0.staffId).trim() : '';
+            const pct = Number(c0?.percentage) || 100;
+            if (pct === 100 && cSid && cSid !== lineSid) {
+              const nm =
+                (plain.staffName != null && String(plain.staffName).trim()) ||
+                String(c0?.staffName || 'Staff').trim() ||
+                'Staff';
+              plain.staffContributions = [
+                { staffId: lineSid, staffName: nm, percentage: 100, amount: linePreTax },
+              ];
+            }
+          }
+        }
+
         return plain;
+      });
+    }
+
+    if (existingSale.appointmentId && mongooseSales.Types.ObjectId.isValid(String(existingSale.appointmentId))) {
+      const { Appointment: AppointmentPut } = req.businessModels;
+      updatedItems = await annotateAppointmentLinkedSaleItemsLineSource(
+        AppointmentPut,
+        existingSale.appointmentId,
+        updatedItems,
+      );
+    } else if (Array.isArray(updatedItems)) {
+      updatedItems = updatedItems.map((row) => {
+        if (!row || typeof row !== 'object') return row;
+        const { lineSource, ...rest } = row;
+        return rest;
       });
     }
 
@@ -11458,6 +12340,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'staffName', // Header staff on bill; keeps sale in sync when invoice staff changes
       'loyaltyPointsRedeemed',
       'loyaltyDiscountAmount',
+      'billChangeCreditedToWallet',
     ];
 
     editableRootFields.forEach((field) => {
@@ -12338,7 +13221,23 @@ app.post(
       });
     }
 
-    const updatedItems = Array.isArray(payload.items) ? payload.items : existingSale.items || [];
+    let updatedItems = Array.isArray(payload.items) ? payload.items : [...(existingSale.items || [])];
+
+    const { Appointment: AppointmentExchange } = req.businessModels;
+    if (existingSale.appointmentId && mongoose.Types.ObjectId.isValid(String(existingSale.appointmentId))) {
+      updatedItems = await annotateAppointmentLinkedSaleItemsLineSource(
+        AppointmentExchange,
+        existingSale.appointmentId,
+        updatedItems,
+      );
+    } else {
+      updatedItems = updatedItems.map((row) => {
+        const plain = row && typeof row.toObject === 'function' ? row.toObject() : row;
+        if (!plain || typeof plain !== 'object') return plain;
+        const { lineSource, ...rest } = plain;
+        return rest;
+      });
+    }
 
     // Archive original bill snapshot once per exchange
     try {
@@ -13635,6 +14534,41 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       await Sale.findByIdAndDelete(saleId).session(session);
     } else {
       await Sale.findByIdAndDelete(saleId);
+    }
+
+    // Remove calendar appointment(s) linked to this invoice (runs after bill row is
+    // removed so wallet/inventory bookkeeping stays coherent if this step fails ).
+    const { Appointment } = req.businessModels;
+    if (sale.appointmentId && Appointment) {
+      try {
+        const anchor = await Appointment.findOne({
+          _id: sale.appointmentId,
+          branchId: req.user.branchId,
+        })
+          .select('_id bookingGroupId')
+          .lean();
+        if (anchor) {
+          if (anchor.bookingGroupId) {
+            const delGrp = await Appointment.deleteMany({
+              branchId: req.user.branchId,
+              bookingGroupId: anchor.bookingGroupId,
+            });
+            logger.debug('Bill delete: removed booking group appointments', {
+              billNo: sale.billNo,
+              bookingGroupId: anchor.bookingGroupId,
+              deletedCount: delGrp.deletedCount,
+            });
+          } else {
+            await Appointment.findByIdAndDelete(anchor._id);
+            logger.debug('Bill delete: removed single linked appointment', {
+              billNo: sale.billNo,
+              appointmentId: String(anchor._id),
+            });
+          }
+        }
+      } catch (aptDelErr) {
+        logger.error('Bill delete: sale removed but linked appointment cleanup failed — please remove manually.', aptDelErr);
+      }
     }
 
     if (useTransactions && session) {
