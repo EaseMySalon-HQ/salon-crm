@@ -109,6 +109,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                 width={150}
                 height={40}
                 className="object-contain transition-all duration-300 group-hover:scale-105"
+                style={{ width: "auto", height: "auto" }}
                 priority
               />
             )}
