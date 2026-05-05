@@ -1,13 +1,18 @@
 "use client"
 
 import * as React from "react"
+import { Suspense } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent } from "@/components/ui/card"
-import { Users, FileText, CreditCard, ShoppingCart, AlertCircle, Loader2 } from "lucide-react"
+import { Users, FileText, CreditCard, ShoppingCart, Receipt, AlertCircle, Loader2 } from "lucide-react"
 import { SupplierTable } from "./supplier-table"
 import { POList } from "@/components/purchase-orders/po-list"
 import { PayableList } from "./payable-list"
+import { PurchaseInvoicesSettingsPanel } from "@/components/purchase-invoices/purchase-invoices-settings-panel"
 import { SuppliersAPI } from "@/lib/api"
+import type { SupplierOrdersSettingsTab } from "@/lib/settings-products-routes"
+import { SUPPLIER_ORDERS_TABS } from "@/lib/settings-products-routes"
 
 export function SuppliersAndOrdersTab() {
   const [refreshKey, setRefreshKey] = React.useState(0)
@@ -18,6 +23,36 @@ export function SuppliersAndOrdersTab() {
     overdueAmount: number
   } | null>(null)
   const [summaryLoading, setSummaryLoading] = React.useState(true)
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  const supplierOrdersTabRaw = searchParams.get("supplierOrdersTab")
+  const supplierOrdersTab: SupplierOrdersSettingsTab = SUPPLIER_ORDERS_TABS.includes(
+    supplierOrdersTabRaw as SupplierOrdersSettingsTab
+  )
+    ? (supplierOrdersTabRaw as SupplierOrdersSettingsTab)
+    : "suppliers"
+
+  const setSupplierOrdersTab = React.useCallback(
+    (tab: string) => {
+      const params = new URLSearchParams(searchParams.toString())
+      params.set("section", "products")
+      params.set("productsTab", "suppliers")
+      params.set("supplierOrdersTab", tab)
+      if (tab !== "invoices") {
+        params.delete("pi")
+        params.delete("piEdit")
+        params.delete("purchaseOrderId")
+        params.delete("newPurchaseInvoice")
+        params.delete("purchaseInvoiceSupplierId")
+      }
+      if (tab !== "payables") {
+        params.delete("payableId")
+      }
+      router.replace(`/settings?${params.toString()}`)
+    },
+    [router, searchParams]
+  )
 
   const onRefresh = React.useCallback(() => {
     setRefreshKey((k) => k + 1)
@@ -39,7 +74,7 @@ export function SuppliersAndOrdersTab() {
       <div>
         <h2 className="text-lg font-semibold text-gray-800 mb-1">Suppliers & Orders</h2>
         <p className="text-sm text-gray-600">
-          Manage suppliers, purchase orders, and supplier payables
+          Manage suppliers, purchase orders, purchase invoices, and supplier payables
         </p>
       </div>
 
@@ -104,8 +139,8 @@ export function SuppliersAndOrdersTab() {
         </Card>
       </div>
 
-      <Tabs defaultValue="suppliers" className="w-full">
-        <TabsList className="grid w-full grid-cols-3 mb-6">
+      <Tabs value={supplierOrdersTab} onValueChange={setSupplierOrdersTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-4 mb-6">
           <TabsTrigger value="suppliers" className="gap-2">
             <Users className="h-4 w-4" />
             Suppliers
@@ -113,6 +148,10 @@ export function SuppliersAndOrdersTab() {
           <TabsTrigger value="orders" className="gap-2">
             <FileText className="h-4 w-4" />
             Purchase Orders
+          </TabsTrigger>
+          <TabsTrigger value="invoices" className="gap-2">
+            <Receipt className="h-4 w-4" />
+            Purchase Invoices
           </TabsTrigger>
           <TabsTrigger value="payables" className="gap-2">
             <CreditCard className="h-4 w-4" />
@@ -126,6 +165,18 @@ export function SuppliersAndOrdersTab() {
 
         <TabsContent value="orders">
           <POList key={refreshKey} onRefresh={onRefresh} />
+        </TabsContent>
+
+        <TabsContent value="invoices">
+          <Suspense
+            fallback={
+              <div className="flex justify-center py-16">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            }
+          >
+            <PurchaseInvoicesSettingsPanel />
+          </Suspense>
         </TabsContent>
 
         <TabsContent value="payables">

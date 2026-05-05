@@ -54,6 +54,62 @@ function normalizeApiErrorMessage(data: unknown): string {
   return ''
 }
 
+/**
+ * Parses failed API responses thrown as Axios errors (caller usually uses `axios.isAxiosError`).
+ * Prefer this over reading `catch (e)` ad hoc across the codebase.
+ */
+export function apiErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const rd = error.response?.data as unknown
+    const fromBody = normalizeApiErrorMessage(rd)
+    if (fromBody) return fromBody
+    if (typeof rd === 'string' && rd.trim()) return rd.trim()
+
+    const st = error.response?.status
+    if (!error.response) {
+      const code = error.code
+      if (code === 'ECONNABORTED') return 'Request timed out. Check your connection and try again.'
+      if (code === 'ERR_NETWORK' || error.message === 'Network Error') {
+        return 'Unable to reach the server. Check your connection and API settings.'
+      }
+    }
+    if (typeof st === 'number') {
+      const txt = error.response?.statusText
+      return txt ? `${txt} (${st})` : `Request failed (${st})`
+    }
+    return error.message || 'Request failed'
+  }
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string' && error.trim()) return error.trim()
+  return 'Something went wrong'
+}
+
+/** When Axios rejects with `{ success:false, error? }`, turn it back into `ApiResponse` for uniform handling. */
+function coerceThrownResponseToFailure<T>(
+  caught: unknown
+): ApiResponse<T> | null {
+  if (!axios.isAxiosError(caught)) return null
+  const rd = caught.response?.data as unknown
+  if (rd == null || typeof rd !== 'object') return null
+  const raw = rd as Partial<ApiResponse<T>> & { error?: unknown; message?: unknown; success?: boolean }
+  if (raw.success === false) return rd as ApiResponse<T>
+  if (typeof raw.error === 'string' || typeof raw.message === 'string') {
+    return {
+      success: false,
+      error:
+        normalizeApiErrorMessage(rd) ||
+        (typeof raw.error === 'string'
+          ? raw.error
+          : typeof raw.message === 'string'
+            ? raw.message
+            : apiErrorMessage(caught)),
+      message: typeof raw.message === 'string' ? raw.message : undefined,
+      data: (raw.data ?? null) as unknown as T,
+    }
+  }
+  return null
+}
+
 /** True when 401/403 indicates invalid/expired session (not business-rule or RBAC). */
 function isTokenAuthFailure(status: number | undefined, errorMsg: string): boolean {
   const m = errorMsg.toLowerCase()
@@ -630,6 +686,35 @@ export class SuppliersAPI {
     return response.data
   }
 
+  static async getPaymentTimeline(id: string): Promise<
+    ApiResponse<
+      Array<{ _id: string; paymentDate: string; amount: number; paymentMethod: string; payableReferenceNumber?: string }>
+    >
+  > {
+    const response = await apiClient.get(`/suppliers/${id}/payments`)
+    return response.data
+  }
+
+  /** FIFO by due date: one payment splits across oldest bills first */
+  static async recordPaymentAutoAllocate(
+    supplierId: string,
+    body: {
+      amount: number
+      paymentMethod?: string
+      paymentDate?: string
+      reference?: string
+      notes?: string
+    }
+  ): Promise<
+    ApiResponse<{
+      totalApplied?: number
+      allocations?: Array<{ payableId: string; amountApplied: number; balanceAfter: number }>
+    }>
+  > {
+    const response = await apiClient.post(`/suppliers/${supplierId}/payments/auto-allocate`, body)
+    return response.data
+  }
+
   static async create(data: {
     name: string
     contactPerson?: string
@@ -672,7 +757,7 @@ export class SuppliersAPI {
 }
 
 export class PurchaseOrdersAPI {
-  static async getAll(params?: { supplier?: string; status?: string; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any[]>> {
+  static async getAll(params?: { supplier?: string; status?: string; dateFrom?: string; dateTo?: string; search?: string }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/purchase-orders', { params })
     return response.data
   }
@@ -709,6 +794,10 @@ export class PurchaseOrdersAPI {
     receivedItems: { productId: string; receivedQty: number; unitCost?: number }[]
     invoiceUrl?: string
     grnNotes?: string
+    /** Supplier bill / tax invoice ref for this GRN delivery */
+    supplierInvoiceNumber?: string
+    /** Defaults false: PO receipts only; stock applies when posting the linked purchase invoice. */
+    recordInventory?: boolean
   }): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`/purchase-orders/${id}/receive`, data)
     return response.data
@@ -718,10 +807,87 @@ export class PurchaseOrdersAPI {
     const response = await apiClient.post(`/purchase-orders/${id}/cancel`)
     return response.data
   }
+
+  static async updateStatus(id: string, data: { status: 'draft' | 'sent' | 'ordered' }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/purchase-orders/${id}/status`, data)
+    return response.data
+  }
+}
+
+export class PurchaseInvoicesAPI {
+  static async getAll(params?: {
+    supplier?: string
+    status?: string
+    paymentStatus?: string
+    dateFrom?: string
+    dateTo?: string
+    search?: string
+  }): Promise<ApiResponse<any[]>> {
+    try {
+      const response = await apiClient.get('/purchase-invoices', { params })
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any[]>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: [] as any[] }
+    }
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.get(`/purchase-invoices/${id}`)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async create(data: Record<string, unknown>): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.post('/purchase-invoices', data)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async update(id: string, data: Record<string, unknown>): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.put(`/purchase-invoices/${id}`, data)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async post(
+    id: string,
+    data?: { confirmLinkedPoDuplicate?: boolean; applyRetailPrices?: boolean; paidAmount?: number; paymentStatus?: string }
+  ): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.post(`/purchase-invoices/${id}/post`, data || {})
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async cancel(id: string): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.post(`/purchase-invoices/${id}/cancel`)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
 }
 
 export class SupplierPayablesAPI {
-  static async getAll(params?: { supplier?: string; status?: string }): Promise<ApiResponse<any[]>> {
+  static async getAll(params?: { supplier?: string; status?: string; search?: string; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/supplier-payables', { params })
     return response.data
   }

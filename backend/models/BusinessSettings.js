@@ -22,6 +22,7 @@ const businessSettingsSchema = new mongoose.Schema({
   receiptNumber: { type: Number, default: 1 },
   autoIncrementReceipt: { type: Boolean, default: true },
   purchaseOrderNumber: { type: Number, default: 1 },
+  purchaseInvoiceNumber: { type: Number, default: 1 },
   
   // Payment Settings
   currency: { type: String, default: "INR" },

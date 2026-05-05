@@ -392,9 +392,26 @@ export function SettingsPage() {
             </TabsContent>
           </Tabs>
         )
-      case "products":
+      case "products": {
+        const productsTabRaw = searchParams.get("productsTab")
+        const productsTab =
+          productsTabRaw === "categories" || productsTabRaw === "suppliers" ? productsTabRaw : "products"
+        const setProductsTab = (tab: string) => {
+          const params = new URLSearchParams(searchParams.toString())
+          params.set("section", "products")
+          params.set("productsTab", tab)
+          if (tab !== "suppliers") {
+            params.delete("supplierOrdersTab")
+            params.delete("pi")
+            params.delete("piEdit")
+            params.delete("purchaseOrderId")
+            params.delete("newPurchaseInvoice")
+            params.delete("purchaseInvoiceSupplierId")
+          }
+          router.replace(`/settings?${params.toString()}`)
+        }
         return (
-          <Tabs defaultValue="products" className="w-full">
+          <Tabs value={productsTab} onValueChange={setProductsTab} className="w-full">
             <TabsList className="mb-6 grid grid-cols-3">
               <TabsTrigger value="products" className="gap-2">
                 <Package className="h-4 w-4" />
@@ -427,6 +444,7 @@ export function SettingsPage() {
             </TabsContent>
           </Tabs>
         )
+      }
       case "packages":
         return <PackagesSettingsPanel />
       case "channel-usage":

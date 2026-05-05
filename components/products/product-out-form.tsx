@@ -13,7 +13,7 @@ import { X, Minus, Search, Plus, Trash2, Package, GripVertical } from "lucide-re
 import { useCurrency } from "@/hooks/use-currency"
 
 interface ProductOutFormProps {
-  onClose: () => void
+  onClose?: () => void
   onTransactionCreated?: () => void
 }
 
@@ -25,7 +25,7 @@ interface ProductItem {
   stock: number
 }
 
-export function ProductOutForm({ onClose, onTransactionCreated }: ProductOutFormProps) {
+export function ProductOutForm({ onClose = () => {}, onTransactionCreated }: ProductOutFormProps) {
   const { toast } = useToast()
   const { formatAmount } = useCurrency()
   const [products, setProducts] = useState<any[]>([])

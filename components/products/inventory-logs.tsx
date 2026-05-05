@@ -29,13 +29,13 @@ interface InventoryTransaction {
   _id: string;
   productId: string;
   productName: string;
-  transactionType: 'sale' | 'return' | 'adjustment' | 'restock' | 'damage' | 'expiry' | 'service_usage' | 'theft' | 'purchase';
+  transactionType: string;
   quantity: number;
   previousStock: number;
   newStock: number;
   unitCost: number;
   totalValue: number;
-  referenceType: 'sale' | 'return' | 'adjustment' | 'purchase' | 'other';
+  referenceType: string;
   referenceId: string;
   referenceNumber: string;
   processedBy: string;
@@ -47,7 +47,7 @@ interface InventoryTransaction {
   updatedAt: string;
 }
 
-export function InventoryLogs() {
+export function InventoryLogs({ embedded = false }: { embedded?: boolean } = {}) {
   const { toast } = useToast()
   const { formatAmount } = useCurrency()
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([])
@@ -217,7 +217,15 @@ export function InventoryLogs() {
     
     switch (type) {
       case 'purchase':
-        return <Badge className={`${baseClasses} bg-green-100 text-green-800 border-green-200`}>Purchase</Badge>
+        return <Badge className={`${baseClasses} bg-green-100 text-green-800 border-green-200`}>Purchase (legacy)</Badge>
+      case 'purchase_order_receipt':
+        return <Badge className={`${baseClasses} bg-emerald-100 text-emerald-900 border-emerald-200`}>PO receipt</Badge>
+      case 'purchase_invoice':
+        return <Badge className={`${baseClasses} bg-green-100 text-green-900 border-green-200`}>Purchase invoice</Badge>
+      case 'purchase_invoice_cancellation':
+        return <Badge className={`${baseClasses} bg-rose-100 text-rose-900 border-rose-200`}>PI cancel</Badge>
+      case 'purchase_return':
+        return <Badge className={`${baseClasses} bg-orange-100 text-orange-900 border-orange-200`}>Purchase return</Badge>
       case 'return':
         return <Badge className={`${baseClasses} bg-blue-100 text-blue-800 border-blue-200`}>Return</Badge>
       case 'restock':
@@ -253,15 +261,19 @@ export function InventoryLogs() {
     )
   }
 
-  return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <FileText className="h-4 w-4 mr-2" />
-          Inventory Logs
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-6xl max-h-[80vh] overflow-hidden">
+  const logsBody = (
+    <>
+      {embedded ? (
+        <div className="mb-4 space-y-1">
+          <h2 className="text-lg font-semibold flex items-center gap-2 text-slate-900">
+            <Package className="h-5 w-5" />
+            Inventory transaction logs
+          </h2>
+          <p className="text-sm text-slate-500">
+            Track all inventory movements including sales, returns, and adjustments
+          </p>
+        </div>
+      ) : (
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Package className="h-5 w-5" />
@@ -271,6 +283,7 @@ export function InventoryLogs() {
             Track all inventory movements including sales, returns, and adjustments
           </DialogDescription>
         </DialogHeader>
+      )}
         
         <div className="space-y-4">
           {/* Summary Stats */}
@@ -332,7 +345,11 @@ export function InventoryLogs() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All types</SelectItem>
-                  <SelectItem value="purchase">Purchase</SelectItem>
+                  <SelectItem value="purchase">Purchase (legacy)</SelectItem>
+                  <SelectItem value="purchase_order_receipt">PO receipt</SelectItem>
+                  <SelectItem value="purchase_invoice">Purchase invoice</SelectItem>
+                  <SelectItem value="purchase_invoice_cancellation">PI cancellation</SelectItem>
+                  <SelectItem value="purchase_return">Purchase return</SelectItem>
                   <SelectItem value="return">Return</SelectItem>
                   <SelectItem value="restock">Restock</SelectItem>
                   <SelectItem value="adjustment">Adjustment</SelectItem>
@@ -508,6 +525,23 @@ export function InventoryLogs() {
           </Card>
 
         </div>
+    </>
+  )
+
+  if (embedded) {
+    return <div className="w-full max-w-none">{logsBody}</div>
+  }
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          <FileText className="h-4 w-4 mr-2" />
+          Inventory Logs
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-6xl max-h-[80vh] overflow-hidden">
+        {logsBody}
       </DialogContent>
     </Dialog>
   )

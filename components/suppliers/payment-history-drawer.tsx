@@ -8,6 +8,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { SupplierPayablesAPI } from "@/lib/api"
+import { supplierPayableReferenceLabel } from "@/lib/supplier-payable-reference"
 import { Loader2, Circle } from "lucide-react"
 import { format } from "date-fns"
 
@@ -45,7 +46,9 @@ export function PaymentHistoryDrawer({ payable, open, onOpenChange }: PaymentHis
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="sm:max-w-md">
         <SheetHeader>
-          <SheetTitle>Payment History - {payable.purchaseOrderId?.poNumber || "PO"}</SheetTitle>
+          <SheetTitle>
+            Payment History – {supplierPayableReferenceLabel(detail || payable)}
+          </SheetTitle>
         </SheetHeader>
         <div className="mt-6 space-y-4">
           {loading ? (
