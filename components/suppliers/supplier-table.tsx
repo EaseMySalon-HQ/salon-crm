@@ -20,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { SuppliersAPI } from "@/lib/api"
-import { useToast } from "@/hooks/use-toast"
+import { useToast } from "@/components/ui/use-toast"
 import { SupplierForm } from "./supplier-form"
 import { SupplierFifoPaymentModal } from "./supplier-fifo-payment-modal"
 import { POForm } from "@/components/purchase-orders/po-form"

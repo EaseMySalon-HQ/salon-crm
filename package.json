@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "dev": "next dev",
+    "dev": "next dev --webpack",
+    "dev:turbo": "next dev --turbopack",
     "dev:backend": "npm run dev --prefix backend",
     "dev:all": "concurrently -k -n web,api -c blue,magenta \"npm run dev\" \"npm run dev --prefix backend\"",
     "lint": "next lint",
