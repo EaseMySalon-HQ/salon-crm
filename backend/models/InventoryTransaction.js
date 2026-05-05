@@ -12,7 +12,12 @@ const inventoryTransactionSchema = new mongoose.Schema({
   },
   transactionType: { 
     type: String, 
-    enum: ['sale', 'return', 'adjustment', 'restock', 'purchase', 'damage', 'expiry', 'service_usage', 'theft', 'transfer', 'other'],
+    enum: [
+      'sale', 'return', 'adjustment', 'restock', 'purchase',
+      'purchase_order_receipt', 'purchase_invoice', 'purchase_invoice_cancellation',
+      'purchase_return',
+      'damage', 'expiry', 'service_usage', 'theft', 'transfer', 'other'
+    ],
     required: true 
   },
   quantity: { 
@@ -40,7 +45,10 @@ const inventoryTransactionSchema = new mongoose.Schema({
   // Reference to related documents
   referenceType: { 
     type: String, 
-    enum: ['sale', 'return', 'adjustment', 'purchase', 'product_edit', 'other'],
+    enum: [
+      'sale', 'return', 'adjustment', 'purchase', 'purchase_order', 'purchase_invoice',
+      'product_edit', 'other'
+    ],
     required: true 
   },
   referenceId: { 
@@ -71,6 +79,17 @@ const inventoryTransactionSchema = new mongoose.Schema({
     type: String, 
     default: '' 
   },
+
+  purchaseInvoiceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseInvoice',
+    default: null
+  },
+  purchaseOrderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseOrder',
+    default: null
+  },
   
   // Timestamps
   transactionDate: { 
@@ -87,6 +106,8 @@ inventoryTransactionSchema.index({ productId: 1, transactionDate: -1 });
 inventoryTransactionSchema.index({ referenceType: 1, referenceId: 1 });
 inventoryTransactionSchema.index({ transactionType: 1 });
 inventoryTransactionSchema.index({ transactionDate: -1 });
+inventoryTransactionSchema.index({ purchaseInvoiceId: 1 });
+inventoryTransactionSchema.index({ purchaseOrderId: 1 });
 
 // Export both schema and model for flexibility
 module.exports = {

@@ -11,7 +11,8 @@ const cron = require('node-cron');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
-const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
+const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString, parseSupplierPaymentDateInput } = require('./utils/date-utils');
+const { supplierPayableReferenceLabel: formatSupplierPayableBillRef } = require('./utils/supplier-payable-reference-label');
 const {
   buildSalesListMatch,
   buildSalesListDuePaymentSplitMatches,
@@ -73,6 +74,7 @@ const {
 
 // Import Routes
 const cashRegistryRoutes = require('./routes/cashRegistry');
+const purchaseInvoicesRoutes = require('./routes/purchaseInvoices');
 const adminRoutes = require('./routes/admin');
 
 require('dotenv').config();
@@ -324,6 +326,7 @@ app.use('/api/reward-points', require('./routes/reward-points'));
 app.use('/api/plan', require('./routes/plan-checkout'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/packages', require('./routes/packages'));
+app.use('/api/purchase-invoices', purchaseInvoicesRoutes);
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 
@@ -5205,7 +5208,7 @@ app.get('/api/suppliers/summary', authenticateToken, setupBusinessDatabase, requ
     const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     const posThisMonth = await PurchaseOrder.find({
       branchId,
-      status: { $in: ['ordered', 'partially_received', 'received'] },
+      status: { $in: ['ordered', 'partially_received', 'received', 'fully_received'] },
       orderDate: { $gte: monthStart, $lte: monthEnd }
     }).lean().catch(() => []);
     const purchasesThisMonth = posThisMonth.reduce((sum, po) => sum + (po.grandTotal || 0), 0);
@@ -5238,7 +5241,7 @@ app.get('/api/suppliers/summary', authenticateToken, setupBusinessDatabase, requ
 app.get('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
-    const supplier = await Supplier.findById(req.params.id);
+    const supplier = await Supplier.findOne({ _id: req.params.id, branchId: req.user.branchId });
 
     if (!supplier) {
       return res.status(404).json({
@@ -5260,18 +5263,40 @@ app.get('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireS
   }
 });
 
-// Get supplier's purchase orders
+// Get supplier purchase order + purchase invoice history (newest first)
 app.get('/api/suppliers/:id/orders', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const { PurchaseOrder } = req.businessModels;
+    const { PurchaseOrder, PurchaseInvoice } = req.businessModels;
     const supplierId = req.params.id;
     const branchId = req.user.branchId;
 
-    const orders = await PurchaseOrder.find({ supplierId, branchId })
-      .sort({ orderDate: -1 })
-      .lean();
+    const [orders, invoices] = await Promise.all([
+      PurchaseOrder.find({ supplierId, branchId }).sort({ orderDate: -1, createdAt: -1, _id: -1 }).lean(),
+      PurchaseInvoice.find({ supplierId, branchId }).sort({ invoiceDate: -1, createdAt: -1, _id: -1 }).lean()
+    ]);
 
-    res.json({ success: true, data: orders });
+    const rows = [
+      ...orders.map((o) => ({
+        kind: 'purchase_order',
+        _id: o._id,
+        reference: o.poNumber || '',
+        date: o.orderDate,
+        status: o.status,
+        total: o.grandTotal || 0
+      })),
+      ...invoices.map((inv) => ({
+        kind: 'purchase_invoice',
+        _id: inv._id,
+        reference: String(inv.supplierInvoiceNumber || '').trim() || inv.invoiceNumber || '',
+        date: inv.invoiceDate,
+        status: inv.status,
+        total: inv.grandTotal || 0
+      }))
+    ];
+
+    rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    res.json({ success: true, data: rows });
   } catch (error) {
     logger.error('Error fetching supplier orders:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -5287,6 +5312,8 @@ app.get('/api/suppliers/:id/outstanding', authenticateToken, setupBusinessDataba
 
     const payables = await SupplierPayable.find({ supplierId, branchId, status: { $in: ['pending', 'partial'] } })
       .populate('purchaseOrderId', 'poNumber orderDate')
+      .populate('purchaseInvoiceId', 'invoiceNumber supplierInvoiceNumber invoiceDate')
+      .sort({ createdAt: -1, _id: -1 })
       .lean();
 
     const outstanding = payables.reduce((sum, p) => sum + (p.totalAmount - (p.amountPaid || 0)), 0);
@@ -5297,6 +5324,186 @@ app.get('/api/suppliers/:id/outstanding', authenticateToken, setupBusinessDataba
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
+
+/** All supplier payments recorded against any payable for this supplier (newest first). */
+app.get('/api/suppliers/:id/payments', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Supplier, SupplierPayable, SupplierPayment } = req.businessModels;
+    const supplierId = req.params.id;
+    const branchId = req.user.branchId;
+
+    const supplier = await Supplier.findOne({ _id: supplierId, branchId });
+    if (!supplier) {
+      return res.status(404).json({ success: false, error: 'Supplier not found' });
+    }
+
+    const payableIds = await SupplierPayable.find({ supplierId, branchId }).distinct('_id');
+    if (!payableIds.length) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const payments = await SupplierPayment.find({
+      supplierPayableId: { $in: payableIds },
+      branchId
+    })
+      .populate({
+        path: 'supplierPayableId',
+        select: 'purchaseOrderId purchaseInvoiceId',
+        populate: [
+          { path: 'purchaseOrderId', select: 'poNumber' },
+          { path: 'purchaseInvoiceId', select: 'invoiceNumber supplierInvoiceNumber' }
+        ]
+      })
+      .sort({ paymentDate: -1, createdAt: -1, _id: -1 })
+      .lean();
+
+    const data = payments.map((pay) => {
+      const payable = pay.supplierPayableId;
+      const payableRef =
+        payable && typeof payable === 'object'
+          ? formatSupplierPayableBillRef(payable)
+          : '—';
+      return {
+        _id: pay._id,
+        paymentDate: pay.paymentDate,
+        amount: pay.amount,
+        paymentMethod: pay.paymentMethod,
+        payableReferenceNumber: payableRef
+      };
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Error fetching supplier payments:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * One payment allocated across payables FIFO by due date (oldest due first), then _id tie-break.
+ * Mirrors paying the earliest bill in full before applying remainder to the next.
+ */
+app.post(
+  '/api/suppliers/:id/payments/auto-allocate',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireStaff,
+  async (req, res) => {
+    try {
+      const { Supplier, SupplierPayable, SupplierPayment } = req.businessModels;
+      const supplierId = req.params.id;
+      const branchId = req.user.branchId;
+
+      const supplier = await Supplier.findOne({ _id: supplierId, branchId });
+      if (!supplier) {
+        return res.status(404).json({ success: false, error: 'Supplier not found' });
+      }
+
+      const { amount, paymentMethod, paymentDate, reference, notes } = req.body;
+      const payAmountRaw = parseFloat(amount);
+      if (!payAmountRaw || payAmountRaw <= 0) {
+        return res.status(400).json({ success: false, error: 'Valid amount is required' });
+      }
+      const payAmountRound = Math.round(payAmountRaw * 100) / 100;
+
+      const payableDocs = await SupplierPayable.find({
+        supplierId,
+        branchId,
+        status: { $in: ['pending', 'partial'] },
+      }).sort({ dueDate: 1, _id: 1 });
+
+      const queue = [];
+      let totalDue = 0;
+      for (const p of payableDocs) {
+        const bal = Math.round((p.totalAmount - (p.amountPaid || 0)) * 100) / 100;
+        if (bal > 0.005) {
+          queue.push({ doc: p, balance: bal });
+          totalDue = Math.round((totalDue + bal) * 100) / 100;
+        }
+      }
+
+      if (totalDue <= 0.005) {
+        return res.status(400).json({ success: false, error: 'No outstanding dues for this supplier' });
+      }
+
+      if (payAmountRound > totalDue + 0.01) {
+        return res.status(400).json({
+          success: false,
+          error: `Amount cannot exceed total outstanding (₹${totalDue.toFixed(2)})`,
+        });
+      }
+
+      const meth = paymentMethod || 'Cash';
+      const pd =
+        paymentDate !== undefined &&
+        paymentDate !== null &&
+        String(paymentDate).trim()
+          ? parseSupplierPaymentDateInput(paymentDate)
+          : new Date();
+      const ref = reference != null ? String(reference).trim() : '';
+      const noteTxt = notes != null ? String(notes).trim() : '';
+
+      let remaining = payAmountRound;
+      const allocations = [];
+      const createdPayments = [];
+
+      for (const { doc: payable, balance } of queue) {
+        if (remaining <= 0.005) break;
+        const apply = Math.round(Math.min(remaining, balance) * 100) / 100;
+        if (apply <= 0) continue;
+
+        const payment = new SupplierPayment({
+          supplierPayableId: payable._id,
+          amount: apply,
+          paymentMethod: meth,
+          paymentDate: pd,
+          reference: ref,
+          notes: noteTxt,
+          branchId,
+          createdBy: req.user._id,
+        });
+        await payment.save();
+        createdPayments.push(payment);
+
+        payable.amountPaid = Math.round(((payable.amountPaid || 0) + apply) * 100) / 100;
+        payable.status = payable.amountPaid >= payable.totalAmount - 0.005 ? 'paid' : 'partial';
+        if (payable.status === 'paid') {
+          payable.paidOn = pd;
+        }
+        await payable.save();
+
+        await syncPurchaseInvoiceFromPayablePayment(req, payable, meth);
+
+        const balAfter = Math.max(
+          0,
+          Math.round((payable.totalAmount - payable.amountPaid) * 100) / 100
+        );
+        allocations.push({
+          payableId: payable._id,
+          amountApplied: apply,
+          balanceAfter: balAfter,
+        });
+
+        remaining = Math.round((remaining - apply) * 100) / 100;
+      }
+
+      if (remaining > 0.02) {
+        logger.warn('supplier auto-allocate remaining unexpected', { supplierId, remaining });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          totalApplied: Math.round((payAmountRound - Math.max(0, remaining)) * 100) / 100,
+          allocations,
+        },
+      });
+    } catch (error) {
+      logger.error('Error auto-allocating supplier payment:', error);
+      res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+    }
+  }
+);
 
 // Create a new supplier
 app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
@@ -5506,8 +5713,8 @@ app.post('/api/settings/business/increment-purchase-order', authenticateToken, a
 // Get all purchase orders
 app.get('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const { PurchaseOrder } = req.businessModels;
-    const { supplier, status, dateFrom, dateTo } = req.query;
+    const { PurchaseOrder, Supplier } = req.businessModels;
+    const { supplier, status, dateFrom, dateTo, search } = req.query;
     const branchId = req.user.branchId;
 
     let query = { branchId };
@@ -5522,13 +5729,28 @@ app.get('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requir
         query.orderDate.$lte = d;
       }
     }
+    if (search && String(search).trim()) {
+      const s = String(search).trim();
+      const rx = new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const supIds = await Supplier.find({ branchId, name: rx }).select('_id').lean();
+      const sidList = supIds.map((x) => x._id);
+      query.$or = [
+        { poNumber: rx },
+        ...(sidList.length ? [{ supplierId: { $in: sidList } }] : [])
+      ];
+    }
 
     const orders = await PurchaseOrder.find(query)
       .populate('supplierId', 'name contactPerson phone')
-      .sort({ orderDate: -1 })
+      .sort({ orderDate: -1, createdAt: -1, _id: -1 })
       .lean();
 
-    res.json({ success: true, data: orders });
+    const normalized = orders.map((o) => {
+      if (o.status === 'received') return { ...o, status: 'fully_received' };
+      return o;
+    });
+
+    res.json({ success: true, data: normalized });
   } catch (error) {
     logger.error('Error fetching purchase orders:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -5545,8 +5767,28 @@ app.get('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, re
     if (!order || order.branchId.toString() !== req.user.branchId.toString()) {
       return res.status(404).json({ success: false, error: 'Purchase order not found' });
     }
+    if (order.status === 'received') {
+      order.status = 'fully_received';
+    }
     const payable = await SupplierPayable.findOne({ purchaseOrderId: order._id }).lean();
-    res.json({ success: true, data: { ...order, payable } });
+    const receivedMap = {};
+    for (const ri of order.receivedItems || []) {
+      const pid = (ri.productId?._id || ri.productId)?.toString();
+      if (pid) receivedMap[pid] = parseFloat(ri.receivedQty) || 0;
+    }
+    const lineProgress = (order.items || []).map((item) => {
+      const pid = (item.productId?._id || item.productId)?.toString();
+      const ordered = parseFloat(item.quantity) || 0;
+      const received = receivedMap[pid] || 0;
+      return {
+        productId: item.productId,
+        productName: item.productName,
+        orderedQty: ordered,
+        receivedQty: received,
+        pendingQty: Math.max(0, ordered - received)
+      };
+    });
+    res.json({ success: true, data: { ...order, payable, lineProgress } });
   } catch (error) {
     logger.error('Error fetching purchase order:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -5559,8 +5801,28 @@ app.post('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requi
     const { PurchaseOrder, Supplier } = req.businessModels;
     const { supplierId, orderDate, expectedDeliveryDate, items, notes, status } = req.body;
 
+    const allowedCreateStatus = ['draft', 'sent', 'ordered'];
+    const initialStatus = status || 'draft';
+    if (!allowedCreateStatus.includes(initialStatus)) {
+      return res.status(400).json({ success: false, error: 'Invalid purchase order status' });
+    }
+
     if (!supplierId || !items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ success: false, error: 'Supplier and items are required' });
+    }
+
+    for (const it of items) {
+      const nameRaw = typeof it.productName === 'string' ? it.productName.trim() : '';
+      if (!nameRaw) {
+        return res.status(400).json({ success: false, error: 'Each line item needs a product name' });
+      }
+      const qty = parseFloat(it.quantity);
+      if (!(qty >= 1)) {
+        return res.status(400).json({ success: false, error: 'Each item needs quantity at least 1' });
+      }
+      if (!it.productId) {
+        return res.status(400).json({ success: false, error: 'Each item needs a product selected' });
+      }
     }
 
     const supplier = await Supplier.findById(supplierId);
@@ -5597,31 +5859,28 @@ app.post('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requi
       }
     }
 
-    let subtotal = 0, gstAmount = 0;
+    /** PO lines are qty-only; pricing is captured on the purchase invoice after receipt. */
     const validItems = items.map((it) => {
       const qty = parseFloat(it.quantity) || 0;
-      const cost = parseFloat(it.unitCost) || 0;
-      const gst = parseFloat(it.gstPercent) || 0;
-      const lineTotal = qty * cost * (1 + gst / 100);
-      subtotal += qty * cost;
-      gstAmount += lineTotal - qty * cost;
       return {
         productId: it.productId,
         productName: it.productName || 'Product',
         quantity: qty,
-        unitCost: cost,
-        gstPercent: gst,
-        total: Math.round(lineTotal * 100) / 100
+        unitCost: 0,
+        gstPercent: 0,
+        total: 0,
       };
     });
-    const grandTotal = Math.round((subtotal + gstAmount) * 100) / 100;
+    const subtotal = 0;
+    const gstAmount = 0;
+    const grandTotal = 0;
 
     const po = new PurchaseOrder({
       poNumber,
       supplierId,
       orderDate: orderDate ? new Date(orderDate) : new Date(),
       expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
-      status: status || 'draft',
+      status: initialStatus,
       items: validItems,
       subtotal,
       gstAmount,
@@ -5662,26 +5921,33 @@ app.put('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, re
     if (notes !== undefined) po.notes = notes;
 
     if (items && Array.isArray(items) && items.length > 0) {
-      let subtotal = 0, gstAmount = 0;
+      for (const it of items) {
+        const nameRaw = typeof it.productName === 'string' ? it.productName.trim() : '';
+        if (!nameRaw) {
+          return res.status(400).json({ success: false, error: 'Each line item needs a product name' });
+        }
+        const qty = parseFloat(it.quantity);
+        if (!(qty >= 1)) {
+          return res.status(400).json({ success: false, error: 'Each item needs quantity at least 1' });
+        }
+        if (!it.productId) {
+          return res.status(400).json({ success: false, error: 'Each item needs a product selected' });
+        }
+      }
       po.items = items.map((it) => {
         const qty = parseFloat(it.quantity) || 0;
-        const cost = parseFloat(it.unitCost) || 0;
-        const gst = parseFloat(it.gstPercent) || 0;
-        const lineTotal = qty * cost * (1 + gst / 100);
-        subtotal += qty * cost;
-        gstAmount += lineTotal - qty * cost;
         return {
           productId: it.productId,
           productName: it.productName || 'Product',
           quantity: qty,
-          unitCost: cost,
-          gstPercent: gst,
-          total: Math.round(lineTotal * 100) / 100
+          unitCost: 0,
+          gstPercent: 0,
+          total: 0,
         };
       });
-      po.subtotal = subtotal;
-      po.gstAmount = gstAmount;
-      po.grandTotal = Math.round((subtotal + gstAmount) * 100) / 100;
+      po.subtotal = 0;
+      po.gstAmount = 0;
+      po.grandTotal = 0;
     }
     await po.save();
     res.json({ success: true, data: po });
@@ -5702,8 +5968,23 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
     if (po.status === 'cancelled') {
       return res.status(400).json({ success: false, error: 'Cannot receive a cancelled order' });
     }
+    if (po.status === 'draft') {
+      return res.status(400).json({ success: false, error: 'Send or confirm the order before receiving stock' });
+    }
+    if (po.status === 'fully_received' || po.status === 'received') {
+      return res.status(400).json({ success: false, error: 'Order is already fully received' });
+    }
 
-    const { receivedItems, invoiceUrl, grnNotes } = req.body;
+    /** recordInventory: when true, bumps stock at GRN (legacy / explicit opt-in). */
+    const {
+      receivedItems,
+      invoiceUrl,
+      grnNotes,
+      supplierInvoiceNumber,
+      recordInventory,
+    } = req.body;
+    const bumpInventory = recordInventory === true;
+    const trimmedSupplierInvoice = typeof supplierInvoiceNumber === 'string' ? supplierInvoiceNumber.trim() : '';
     if (!receivedItems || !Array.isArray(receivedItems) || receivedItems.length === 0) {
       return res.status(400).json({ success: false, error: 'receivedItems array is required' });
     }
@@ -5714,12 +5995,47 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
       receivedMap[pid] = { receivedQty: parseFloat(ri.receivedQty) || 0, unitCost: parseFloat(ri.unitCost) || 0 };
     }
 
+    for (const item of po.items) {
+      const pid = item.productId.toString();
+      const rec = receivedMap[pid];
+      const thisDeliveryQty = rec ? rec.receivedQty : 0;
+      if (thisDeliveryQty > 0 && bumpInventory) {
+        const uc = rec.unitCost;
+        if (!(uc > 0)) {
+          return res.status(400).json({
+            success: false,
+            error: 'Enter a unit cost (landing cost ₹) greater than zero for each line you receive. Supplier billing stays on the purchase invoice.',
+          });
+        }
+      }
+    }
+
     // For partially_received POs, accumulate with previous deliveries
     const existingReceivedMap = {};
-    if (po.status === 'partially_received' && Array.isArray(po.receivedItems)) {
+    if (
+      (po.status === 'partially_received' || po.status === 'fully_received' || po.status === 'received') &&
+      Array.isArray(po.receivedItems)
+    ) {
       for (const ri of po.receivedItems) {
         const pid = (ri.productId || ri._id || ri).toString();
         existingReceivedMap[pid] = parseFloat(ri.receivedQty) || 0;
+      }
+    }
+
+    /** Book-only GRN: refuse duplicate booking when totals already match the PO */
+    if (!bumpInventory) {
+      const fullyBookedAlready = po.items.every((item) => {
+        const pid = item.productId.toString();
+        const prev = existingReceivedMap[pid] || 0;
+        const qty = parseFloat(item.quantity) || 0;
+        return prev >= qty - 1e-9;
+      });
+      if (fullyBookedAlready) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'All ordered quantities are already booked on this purchase order. Post the linked purchase invoice to complete it.',
+        });
       }
     }
 
@@ -5737,30 +6053,33 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
 
       if (thisDeliveryQty > 0) {
         anyReceived = true;
-        const product = await Product.findById(pid);
-        if (product) {
-          const prevStock = product.stock || 0;
-          const newStock = prevStock + thisDeliveryQty;
-          await Product.findByIdAndUpdate(pid, { stock: newStock, cost: unitCost });
+        if (bumpInventory) {
+          const product = await Product.findById(pid);
+          if (product) {
+            const prevStock = product.stock || 0;
+            const newStock = prevStock + thisDeliveryQty;
+            await Product.findByIdAndUpdate(pid, { stock: newStock, cost: unitCost });
 
-          await new InventoryTransaction({
-            productId: product._id,
-            productName: product.name,
-            transactionType: 'purchase',
-            quantity: thisDeliveryQty,
-            previousStock: prevStock,
-            newStock,
-            unitCost,
-            totalValue: thisDeliveryQty * unitCost,
-            referenceType: 'purchase',
-            referenceId: po._id.toString(),
-            referenceNumber: po.poNumber,
-            processedBy: req.user.email || 'System',
-            location: 'main',
-            reason: po.status === 'partially_received' ? 'Partial delivery - remaining goods received' : 'Goods received from PO',
-            notes: grnNotes || '',
-            transactionDate: new Date()
-          }).save();
+            await new InventoryTransaction({
+              productId: product._id,
+              productName: product.name,
+              transactionType: 'purchase_order_receipt',
+              quantity: thisDeliveryQty,
+              previousStock: prevStock,
+              newStock,
+              unitCost,
+              totalValue: thisDeliveryQty * unitCost,
+              referenceType: 'purchase_order',
+              referenceId: po._id.toString(),
+              referenceNumber: po.poNumber,
+              purchaseOrderId: po._id,
+              processedBy: req.user.email || 'System',
+              location: 'main',
+              reason: po.status === 'partially_received' ? 'Partial delivery - remaining goods received' : 'Goods received from PO',
+              notes: grnNotes || '',
+              transactionDate: new Date()
+            }).save();
+          }
         }
         processedItems.push({ productId: item.productId, orderedQty: item.quantity, receivedQty: cumulativeReceived, unitCost });
       } else {
@@ -5778,6 +6097,7 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
     po.receivedItems = processedItems;
     po.invoiceUrl = invoiceUrl || '';
     po.grnNotes = grnNotes || '';
+    po.supplierInvoiceNumber = trimmedSupplierInvoice;
 
     // Build delivery event for this receive (what was received in THIS delivery)
     const thisDeliveryItems = [];
@@ -5795,20 +6115,31 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
         });
       }
     }
-    const deliveryEvent = { receivedAt, receivedItems: thisDeliveryItems, grnNotes: grnNotes || '' };
+    const deliveryEvent = {
+      receivedAt,
+      receivedItems: thisDeliveryItems,
+      grnNotes: grnNotes || '',
+      supplierInvoiceNumber: trimmedSupplierInvoice,
+      recordedInventory: bumpInventory,
+    };
     if (!po.deliveryHistory) po.deliveryHistory = [];
     po.deliveryHistory.push(deliveryEvent);
 
-    po.status = allReceived ? 'received' : 'partially_received';
+    if (bumpInventory) {
+      po.status = allReceived ? 'fully_received' : 'partially_received';
+    } else {
+      po.status = 'partially_received';
+    }
     await po.save();
 
-    const grandTotal = po.grandTotal;
+    const grandTotal = po.grandTotal || 0;
     const paymentTerms = parseInt(po.supplierId?.paymentTerms || '30', 10) || 30;
     const dueDate = new Date(po.orderDate);
     dueDate.setDate(dueDate.getDate() + paymentTerms);
 
     let payable = await SupplierPayable.findOne({ purchaseOrderId: po._id });
-    if (!payable) {
+    /** Qty-only POs bill on purchase invoice — no ₹0 payable at GRN. */
+    if (!payable && grandTotal > 0.005) {
       payable = new SupplierPayable({
         purchaseOrderId: po._id,
         supplierId: po.supplierId._id || po.supplierId,
@@ -5828,6 +6159,39 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
   }
 });
 
+// Update purchase order workflow status (draft → sent → ordered)
+app.post('/api/purchase-orders/:id/status', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder } = req.businessModels;
+    const { status } = req.body;
+    const allowed = ['draft', 'sent', 'ordered'];
+    if (!status || !allowed.includes(status)) {
+      return res.status(400).json({ success: false, error: 'Invalid status. Use draft, sent, or ordered.' });
+    }
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po || po.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Purchase order not found' });
+    }
+    const rank = { draft: 0, sent: 1, ordered: 2 };
+    let current = po.status === 'received' ? 'fully_received' : po.status;
+    if (['partially_received', 'fully_received', 'cancelled'].includes(current)) {
+      return res.status(400).json({ success: false, error: 'Cannot change workflow status for this order' });
+    }
+    if (!(current in rank) || !(status in rank)) {
+      return res.status(400).json({ success: false, error: 'Invalid workflow transition' });
+    }
+    if (rank[status] < rank[current]) {
+      return res.status(400).json({ success: false, error: 'Cannot revert to an earlier workflow status' });
+    }
+    po.status = status;
+    await po.save();
+    res.json({ success: true, data: po });
+  } catch (error) {
+    logger.error('Error updating PO status:', error);
+    res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+});
+
 // Cancel purchase order
 app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
@@ -5836,7 +6200,7 @@ app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessData
     if (!po || po.branchId.toString() !== req.user.branchId.toString()) {
       return res.status(404).json({ success: false, error: 'Purchase order not found' });
     }
-    if (po.status === 'received' || po.status === 'partially_received') {
+    if (po.status === 'fully_received' || po.status === 'received' || po.status === 'partially_received') {
       return res.status(400).json({ success: false, error: 'Cannot cancel received order' });
     }
     po.status = 'cancelled';
@@ -5850,20 +6214,78 @@ app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessData
 
 // ==================== SUPPLIER PAYABLE ROUTES ====================
 
+/** Keep PurchaseInvoice paid/due in sync when payments are recorded against a payable tied to a PI. */
+async function syncPurchaseInvoiceFromPayablePayment(req, payable, lastPaymentMethod) {
+  try {
+    const { PurchaseInvoice } = req.businessModels;
+    const piId = payable.purchaseInvoiceId;
+    if (!piId) return;
+    const inv = await PurchaseInvoice.findById(piId);
+    if (!inv || inv.branchId.toString() !== req.user.branchId.toString()) return;
+    const grand = inv.grandTotal || 0;
+    const paidRaw = payable.amountPaid || 0;
+    const paid = Math.round(Math.min(paidRaw, grand) * 100) / 100;
+    inv.paidAmount = paid;
+    inv.dueAmount = Math.round((grand - paid) * 100) / 100;
+    if (paid <= 0.005) inv.paymentStatus = 'unpaid';
+    else if (paid >= grand - 0.005) inv.paymentStatus = 'paid';
+    else inv.paymentStatus = 'partially_paid';
+    if (lastPaymentMethod && String(lastPaymentMethod).trim()) {
+      inv.paymentMethod = String(lastPaymentMethod).trim();
+    }
+    await inv.save();
+  } catch (e) {
+    logger.error('syncPurchaseInvoiceFromPayablePayment', e);
+  }
+}
+
 app.get('/api/supplier-payables', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const { SupplierPayable, SupplierPayment } = req.businessModels;
-    const { supplier, status } = req.query;
+    const { SupplierPayable, SupplierPayment, PurchaseInvoice, PurchaseOrder } = req.businessModels;
+    const { supplier, status, search, dateFrom, dateTo } = req.query;
     const branchId = req.user.branchId;
 
     let query = { branchId };
     if (supplier) query.supplierId = supplier;
     if (status) query.status = status;
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const d = new Date(dateTo);
+        d.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = d;
+      }
+    }
+
+    const searchTrim = search != null ? String(search).trim() : '';
+    if (searchTrim) {
+      const rx = new RegExp(searchTrim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const [piIds, poIds] = await Promise.all([
+        PurchaseInvoice.find({
+          branchId,
+          $or: [{ supplierInvoiceNumber: rx }, { invoiceNumber: rx }]
+        })
+          .select('_id')
+          .lean(),
+        PurchaseOrder.find({ branchId, poNumber: rx }).select('_id').lean()
+      ]);
+      const piIdList = piIds.map((x) => x._id);
+      const poIdList = poIds.map((x) => x._id);
+      if (piIdList.length === 0 && poIdList.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+      query.$or = [
+        ...(piIdList.length ? [{ purchaseInvoiceId: { $in: piIdList } }] : []),
+        ...(poIdList.length ? [{ purchaseOrderId: { $in: poIdList } }] : [])
+      ];
+    }
 
     const payables = await SupplierPayable.find(query)
       .populate('supplierId', 'name contactPerson phone')
-      .populate('purchaseOrderId', 'poNumber orderDate')
-      .sort({ dueDate: 1 })
+      .populate('purchaseOrderId', 'poNumber orderDate status')
+      .populate('purchaseInvoiceId', 'invoiceNumber supplierInvoiceNumber invoiceDate status grandTotal')
+      .sort({ createdAt: -1, _id: -1 })
       .lean();
 
     const paidIdsWithoutPaidOn = payables.filter((p) => p.status === 'paid' && !p.paidOn).map((p) => p._id);
@@ -5902,6 +6324,7 @@ app.get('/api/supplier-payables/:id', authenticateToken, setupBusinessDatabase, 
     const payable = await SupplierPayable.findById(req.params.id)
       .populate('supplierId')
       .populate('purchaseOrderId')
+      .populate('purchaseInvoiceId', 'invoiceNumber supplierInvoiceNumber invoiceDate status grandTotal paymentStatus')
       .lean();
     if (!payable || payable.branchId.toString() !== req.user.branchId.toString()) {
       return res.status(404).json({ success: false, error: 'Payable not found' });
@@ -5939,11 +6362,18 @@ app.post('/api/supplier-payables/:id/payments', authenticateToken, setupBusiness
       return res.status(400).json({ success: false, error: `Amount cannot exceed balance due (₹${balance.toFixed(2)})` });
     }
 
+    const paymentInstant =
+      paymentDate !== undefined &&
+      paymentDate !== null &&
+      String(paymentDate).trim()
+        ? parseSupplierPaymentDateInput(paymentDate)
+        : new Date();
+
     const payment = new SupplierPayment({
       supplierPayableId: payable._id,
       amount: payAmount,
       paymentMethod: paymentMethod || 'Cash',
-      paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
+      paymentDate: paymentInstant,
       reference: reference || '',
       notes: notes || '',
       branchId: req.user.branchId,
@@ -5958,9 +6388,12 @@ app.post('/api/supplier-payables/:id/payments', authenticateToken, setupBusiness
     }
     await payable.save();
 
+    await syncPurchaseInvoiceFromPayablePayment(req, payable, payment.paymentMethod);
+
     const updated = await SupplierPayable.findById(req.params.id)
       .populate('supplierId')
       .populate('purchaseOrderId')
+      .populate('purchaseInvoiceId', 'invoiceNumber supplierInvoiceNumber invoiceDate status grandTotal paymentStatus paidAmount dueAmount')
       .lean();
 
     res.json({
@@ -5995,7 +6428,7 @@ app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requi
       }
     }
 
-    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received'] }, ...dateFilter })
+    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received', 'fully_received'] }, ...dateFilter })
       .populate('supplierId', 'name')
       .lean();
 
@@ -6060,7 +6493,7 @@ app.get('/api/reports/purchase', authenticateToken, setupBusinessDatabase, requi
       }
     }
 
-    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received'] }, ...dateFilter })
+    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received', 'fully_received'] }, ...dateFilter })
       .populate('supplierId', 'name categories')
       .lean();
 
@@ -14429,6 +14862,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
     let cashBalance = 0;
     let balanceDifference = 0;
     let onlinePosDifference = 0;
+    /** CRM Card+Online total for closing day (persisted on the row); derived from Sale when Sale model exists */
+    let onlineCashToSave = Number(onlineCash) || 0;
     let openingBalanceStored = Number(openingBalance) || 0;
 
     // Parse date in IST (Asia/Kolkata) - all dates use IST
@@ -14502,7 +14937,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
 
-      const { resolveOpeningBalanceForRegistryDay } = require('./utils/cash-registry-ledger');
+      const { resolveOpeningBalanceForRegistryDay, computeDayOnlineSales } = require('./utils/cash-registry-ledger');
       let effectiveOpening = Number(openingBalance) || 0;
       if (!effectiveOpening) {
         effectiveOpening = await resolveOpeningBalanceForRegistryDay({
@@ -14518,7 +14953,17 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       // Calculate cash balance and differences
       cashBalance = effectiveOpening + cashCollected - expenseValue;
       balanceDifference = closingTotalPhysical - cashBalance;
-      onlinePosDifference = onlineCash - posCash;
+      const posCashNum = Number(posCash) || 0;
+      let totalOnlineSales = Number(onlineCash) || 0;
+      if (Sale) {
+        totalOnlineSales = await computeDayOnlineSales({
+          Sale,
+          branchId,
+          registryDate: dateObj,
+        });
+      }
+      onlinePosDifference = posCashNum - totalOnlineSales;
+      onlineCashToSave = totalOnlineSales;
       openingBalanceStored = effectiveOpening;
     }
     
@@ -14536,7 +14981,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       cashBalance,
       balanceDifference,
       balanceDifferenceReason: balanceDifference !== 0 ? 'Manual adjustment required' : 'Balanced',
-      onlineCash: shiftType === 'closing' ? onlineCash : 0,
+      onlineCash: shiftType === 'closing' ? onlineCashToSave : 0,
       posCash: shiftType === 'closing' ? posCash : 0,
       onlinePosDifference,
       onlineCashDifferenceReason: onlinePosDifference !== 0 ? 'Difference detected' : 'Balanced',
@@ -14590,11 +15035,11 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
     
     if (cashRegistry.shiftType === 'closing') {
       updates.closingBalance = closingBalance;
-      updates.onlineCash = onlineCash;
       updates.posCash = posCash;
 
       const {
         computeDayCashLedger,
+        computeDayOnlineSales,
         resolveOpeningBalanceForRegistryDay,
       } = require('./utils/cash-registry-ledger');
       const branchId = cashRegistry.branchId || req.user.branchId;
@@ -14622,7 +15067,17 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
       const cashBalance = resolvedOpening + cashCollected - expenseValue;
       updates.cashBalance = cashBalance;
       updates.balanceDifference = closingBalance - cashBalance;
-      updates.onlinePosDifference = onlineCash - posCash;
+      const posCashNum = Number(posCash) || 0;
+      let totalOnlineSales = Number(onlineCash) || 0;
+      if (Sale) {
+        totalOnlineSales = await computeDayOnlineSales({
+          Sale,
+          branchId,
+          registryDate: cashRegistry.date,
+        });
+      }
+      updates.onlineCash = totalOnlineSales;
+      updates.onlinePosDifference = posCashNum - totalOnlineSales;
     }
     
     const updatedCashRegistry = await CashRegistry.findByIdAndUpdate(
@@ -14700,6 +15155,7 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
     if (cashRegistry.shiftType === 'closing' && Sale && Expense) {
       const {
         computeDayCashLedger,
+        computeDayOnlineSales,
         resolveOpeningBalanceForRegistryDay,
       } = require('./utils/cash-registry-ledger');
       const branchId = cashRegistry.branchId || req.user.branchId;
@@ -14716,11 +15172,15 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
         closingDocFallback: cashRegistry.openingBalance,
       });
       const closingBal = Number(cashRegistry.closingBalance) || 0;
-      const onlineCash = Number(cashRegistry.onlineCash) || 0;
-      const posCash = Number(cashRegistry.posCash) || 0;
+      const posCashNum = Number(cashRegistry.posCash) || 0;
+      const totalOnlineSales = await computeDayOnlineSales({
+        Sale,
+        branchId,
+        registryDate: cashRegistry.date,
+      });
       const cashBalance = resolvedOpening + cashCollected - expenseValue;
       const balanceDifference = closingBal - cashBalance;
-      const onlinePosDifference = onlineCash - posCash;
+      const onlinePosDifference = posCashNum - totalOnlineSales;
 
       hasBalanceDifference = !negligible(balanceDifference);
       hasOnlinePosDifference = !negligible(onlinePosDifference);
@@ -14731,6 +15191,7 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
         expenseValue,
         cashBalance,
         balanceDifference,
+        onlineCash: totalOnlineSales,
         onlinePosDifference,
       };
     }

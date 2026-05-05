@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { SupplierPayablesAPI } from "@/lib/api"
+import { supplierPayableReferenceLabel } from "@/lib/supplier-payable-reference"
 import { useToast } from "@/hooks/use-toast"
 import { Loader2, CreditCard, Circle } from "lucide-react"
 import { format } from "date-fns"
@@ -122,7 +123,8 @@ export function PaymentModal({ open, onOpenChange, payable, onSuccess }: Payment
             <span className="text-muted-foreground">Supplier:</span> {(fullPayable || payable).supplierId?.name || "-"}
           </p>
           <p>
-            <span className="text-muted-foreground">PO:</span> {(fullPayable || payable).purchaseOrderId?.poNumber || "-"}
+            <span className="text-muted-foreground">Ref:</span>{" "}
+            {supplierPayableReferenceLabel(fullPayable || payable)}
           </p>
           <p>
             <span className="text-muted-foreground">Balance due:</span>{" "}

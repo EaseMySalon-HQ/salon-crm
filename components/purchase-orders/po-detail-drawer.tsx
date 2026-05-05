@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useRouter } from "next/navigation"
 import { Package, Loader2, Circle } from "lucide-react"
 import {
   Sheet,
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { PurchaseOrdersAPI } from "@/lib/api"
+import { hrefPurchaseInvoiceNew } from "@/lib/settings-products-routes"
 import { format } from "date-fns"
 import {
   Table,
@@ -22,6 +24,21 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { GRNModal } from "./grn-modal"
 
+function poHasOutstandingReceiptGap(po: any): boolean {
+  if (!po?.items?.length) return false
+  const receivedMap: Record<string, number> = {}
+  for (const ri of po.receivedItems || []) {
+    const pid = (ri.productId?._id || ri.productId)?.toString?.() ?? ""
+    if (pid) receivedMap[pid] = parseFloat(String(ri.receivedQty)) || 0
+  }
+  return po.items.some((item: any) => {
+    const pid = (item.productId?._id || item.productId)?.toString?.() ?? ""
+    const ordered = parseFloat(String(item.quantity)) || 0
+    const rec = pid ? receivedMap[pid] || 0 : 0
+    return rec < ordered - 1e-9
+  })
+}
+
 interface PODetailDrawerProps {
   po: any
   open: boolean
@@ -30,6 +47,7 @@ interface PODetailDrawerProps {
 }
 
 export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDrawerProps) {
+  const router = useRouter()
   const [detail, setDetail] = React.useState<any>(null)
   const [loading, setLoading] = React.useState(false)
   const [showGRN, setShowGRN] = React.useState(false)
@@ -46,7 +64,10 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
     }
   }, [open, po?._id])
 
-  const canReceive = detail && !["received", "cancelled"].includes(detail.status)
+  const canReceive =
+    detail &&
+    !["fully_received", "received", "cancelled"].includes(detail.status) &&
+    poHasOutstandingReceiptGap(detail)
 
   const handleGRNSuccess = () => {
     setShowGRN(false)
@@ -54,6 +75,7 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
       if (r.success) setDetail(r.data)
     })
     onRefresh?.()
+    router.push(hrefPurchaseInvoiceNew(po._id))
   }
 
   if (!po) return null
@@ -61,8 +83,10 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
   const statusColors: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
     draft: "outline",
     ordered: "secondary",
+    sent: "outline",
     partially_received: "default",
     received: "default",
+    fully_received: "default",
     cancelled: "destructive",
   }
 
@@ -107,17 +131,18 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
 
                 <div>
                   <h4 className="text-sm font-medium text-muted-foreground mb-2">Items</h4>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Quantities only on the PO. Landing cost and GST are recorded on the purchase invoice when goods arrive.
+                  </p>
                   <div className="rounded-md border">
                     <Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead>Product</TableHead>
                           <TableHead className="text-right">Ordered</TableHead>
-                          {detail.status === "partially_received" && detail.receivedItems?.length > 0 && (
+                          {(detail.status === "partially_received" || detail.status === "fully_received" || detail.status === "received") && detail.receivedItems?.length > 0 && (
                             <TableHead className="text-right">Received</TableHead>
                           )}
-                          <TableHead className="text-right">Unit Cost</TableHead>
-                          <TableHead className="text-right">Total</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -129,27 +154,16 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
                             <TableRow key={idx}>
                               <TableCell>{item.productName}</TableCell>
                               <TableCell className="text-right">{item.quantity}</TableCell>
-                              {detail.status === "partially_received" && detail.receivedItems?.length > 0 && (
+                              {(detail.status === "partially_received" || detail.status === "fully_received" || detail.status === "received") && detail.receivedItems?.length > 0 && (
                                 <TableCell className="text-right">
                                   {rec?.receivedQty ?? 0} / {item.quantity}
                                 </TableCell>
                               )}
-                              <TableCell className="text-right">
-                                ₹{(item.unitCost || 0).toFixed(2)}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                ₹{(item.total || 0).toFixed(2)}
-                              </TableCell>
                             </TableRow>
                           )
                         })}
                       </TableBody>
                     </Table>
-                  </div>
-                  <div className="flex justify-end gap-4 mt-2 text-sm">
-                    <span>Subtotal: ₹{(detail.subtotal || 0).toFixed(2)}</span>
-                    <span>GST: ₹{(detail.gstAmount || 0).toFixed(2)}</span>
-                    <span className="font-semibold">Grand Total: ₹{(detail.grandTotal || 0).toFixed(2)}</span>
                   </div>
                 </div>
 
@@ -160,7 +174,12 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
                       const events = detail.deliveryHistory && detail.deliveryHistory.length > 0
                         ? detail.deliveryHistory
                         : detail.receivedAt
-                        ? [{ receivedAt: detail.receivedAt, receivedItems: detail.receivedItems || [], grnNotes: detail.grnNotes || '' }]
+                        ? [{
+                            receivedAt: detail.receivedAt,
+                            receivedItems: detail.receivedItems || [],
+                            grnNotes: detail.grnNotes || '',
+                            supplierInvoiceNumber: detail.supplierInvoiceNumber || "",
+                          }]
                         : []
                       return events.length > 0 ? (
                         <div className="relative pl-4 border-l-2 border-muted space-y-4">
@@ -175,14 +194,22 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
                                   <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
                                     {(evt.receivedItems || []).filter((i: any) => (i.receivedQty || 0) > 0).map((ri: any, i: number) => {
                                       const item = (detail.items || []).find((it: any) => (it.productId?._id || it.productId)?.toString() === (ri.productId?._id || ri.productId)?.toString())
+                                      const uc = ri.unitCost || 0
+                                      const showCost = uc > 0.005
                                       return (
                                         <li key={i}>
-                                          {(ri.productName || item?.productName || "Product")}: {ri.receivedQty} × ₹{(ri.unitCost || 0).toFixed(2)}
+                                          {(ri.productName || item?.productName || "Product")}: {ri.receivedQty}
+                                          {showCost ? ` × ₹${uc.toFixed(2)}` : ""}
                                         </li>
                                       )
                                     })}
                                   </ul>
                                 )}
+                                {(evt.supplierInvoiceNumber || "").trim() ? (
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    Invoice no.: <span className="font-medium text-foreground">{String(evt.supplierInvoiceNumber).trim()}</span>
+                                  </p>
+                                ) : null}
                                 {evt.grnNotes && <p className="text-xs text-muted-foreground mt-1 italic">{evt.grnNotes}</p>}
                               </div>
                             </div>
@@ -193,11 +220,22 @@ export function PODetailDrawer({ po, open, onOpenChange, onRefresh }: PODetailDr
                   </div>
                 )}
 
-                {canReceive && (
-                  <Button onClick={() => setShowGRN(true)} className="w-full">
-                    <Package className="h-4 w-4 mr-2" />
-                    {detail.status === "partially_received" ? "Receive Remaining" : "Mark as Received"}
-                  </Button>
+                {detail && detail.status !== "cancelled" && (
+                  <div className="space-y-2">
+                    {detail.deliveryHistory && detail.deliveryHistory.length > 0 && (
+                      <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200/80 rounded-md p-2.5">
+                        Delivery quantities are recorded here; stock increases when you post the purchase invoice for this shipment with matching received qty.
+                      </p>
+                    )}
+                    {canReceive && (
+                      <div className="flex flex-col gap-2">
+                        <Button onClick={() => setShowGRN(true)} className="w-full">
+                          <Package className="h-4 w-4 mr-2" />
+                          {detail.status === "partially_received" ? "Receive remaining → invoice" : "Record delivery → invoice"}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </>
             ) : null}

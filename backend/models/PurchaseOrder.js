@@ -24,7 +24,11 @@ const deliveryEventSchema = new mongoose.Schema({
     receivedQty: { type: Number, required: true, min: 0 },
     unitCost: { type: Number, required: true, min: 0 }
   }],
-  grnNotes: { type: String, default: '' }
+  grnNotes: { type: String, default: '' },
+  /** Supplier's bill / tax invoice reference for this delivery */
+  supplierInvoiceNumber: { type: String, default: '', trim: true },
+  /** False when GRN only records qty for billing; stock applies on PI post. Omitted entries are treated as inventory bumps on post (legacy). */
+  recordedInventory: Boolean
 }, { _id: false });
 
 const purchaseOrderSchema = new mongoose.Schema({
@@ -49,7 +53,7 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['draft', 'ordered', 'partially_received', 'received', 'cancelled'],
+    enum: ['draft', 'sent', 'ordered', 'partially_received', 'fully_received', 'received', 'cancelled'],
     default: 'draft'
   },
   items: {
@@ -87,6 +91,12 @@ const purchaseOrderSchema = new mongoose.Schema({
   invoiceUrl: {
     type: String,
     default: ''
+  },
+  /** Latest supplier invoice reference captured at GRN (per delivery history also stores this) */
+  supplierInvoiceNumber: {
+    type: String,
+    default: '',
+    trim: true
   },
   grnNotes: {
     type: String,

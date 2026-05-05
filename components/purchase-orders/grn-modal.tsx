@@ -4,7 +4,6 @@ import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
@@ -12,7 +11,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { PurchaseOrdersAPI } from "@/lib/api"
+import {
+  purchaseInvoiceGrnPrefillStorageKey,
+  type PurchaseInvoiceGrnPrefillPayload,
+} from "@/lib/purchase-invoice-grn-prefill"
 import { useToast } from "@/hooks/use-toast"
 import { Loader2 } from "lucide-react"
 
@@ -26,8 +28,9 @@ interface GRNModalProps {
 export function GRNModal({ open, onOpenChange, purchaseOrder, onSuccess }: GRNModalProps) {
   const { toast } = useToast()
   const [saving, setSaving] = React.useState(false)
-  const [receivedItems, setReceivedItems] = React.useState<{ productId: string; orderedQty: number; previouslyReceived: number; receivedQty: number; unitCost: number }[]>([])
-  const [grnNotes, setGrnNotes] = React.useState("")
+  const [receivedItems, setReceivedItems] = React.useState<
+    { productId: string; orderedQty: number; previouslyReceived: number; receivedQty: number }[]
+  >([])
   const isPartialReceive = purchaseOrder?.status === "partially_received"
 
   React.useEffect(() => {
@@ -51,11 +54,9 @@ export function GRNModal({ open, onOpenChange, purchaseOrder, onSuccess }: GRNMo
             orderedQty: ordered,
             previouslyReceived: prev,
             receivedQty: remaining,
-            unitCost: item.unitCost || 0,
           }
         })
       )
-      setGrnNotes("")
     }
   }, [open, purchaseOrder?.items, purchaseOrder?.receivedItems, purchaseOrder?.status])
 
@@ -68,27 +69,26 @@ export function GRNModal({ open, onOpenChange, purchaseOrder, onSuccess }: GRNMo
     }
     try {
       setSaving(true)
-      const res = await PurchaseOrdersAPI.receive(purchaseOrder._id, {
-        receivedItems: receivedItems.map((r) => ({
-          productId: r.productId,
-          receivedQty: r.receivedQty,
-          unitCost: r.unitCost,
-        })),
-        grnNotes,
-      })
-      if (res.success) {
-        toast({ title: "Success", description: "Goods received and inventory updated" })
-        onSuccess?.()
-        onOpenChange(false)
-      } else {
-        toast({ title: "Error", description: res.error || "Failed", variant: "destructive" })
+      const byProductId: Record<string, number> = {}
+      for (const r of receivedItems) {
+        if (r.receivedQty > 0) byProductId[String(r.productId)] = r.receivedQty
       }
-    } catch (err: any) {
+      const payload: PurchaseInvoiceGrnPrefillPayload = {
+        byProductId,
+        ts: Date.now(),
+      }
+      try {
+        sessionStorage.setItem(purchaseInvoiceGrnPrefillStorageKey(String(purchaseOrder._id)), JSON.stringify(payload))
+      } catch {
+        /* ignore quota / privacy mode */
+      }
       toast({
-        title: "Error",
-        description: err.response?.data?.error || "Something went wrong",
-        variant: "destructive",
+        title: "Opening supplier bill",
+        description:
+          "The purchase order stays on open status until posting. Stock increases only after you post the invoice.",
       })
+      onSuccess?.()
+      onOpenChange(false)
     } finally {
       setSaving(false)
     }
@@ -108,15 +108,15 @@ export function GRNModal({ open, onOpenChange, purchaseOrder, onSuccess }: GRNMo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Mark as Received - {purchaseOrder.poNumber}</DialogTitle>
+          <DialogTitle>Shipment quantities → {purchaseOrder.poNumber}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label>Received Quantities</Label>
+            <Label>Quantities for this delivery</Label>
             <p className="text-sm text-muted-foreground">
               {isPartialReceive
-                ? "Enter the quantity received in this delivery. Remaining items will be received next time."
-                : "Enter the quantity received for each item. Adjust if supplier sent less or more."}
+                ? "Quantities planned for this shipment. The PO stays open until posting; remaining items can be invoiced later."
+                : "Quantities for this shipment. The PO stays open until you post the purchase invoice—landing cost and GST go on that bill."}
             </p>
             <div className="rounded-md border">
               <table className="w-full text-sm">
@@ -125,7 +125,7 @@ export function GRNModal({ open, onOpenChange, purchaseOrder, onSuccess }: GRNMo
                     <th className="text-left p-2">Product</th>
                     <th className="text-right p-2 w-24">Ordered</th>
                     {isPartialReceive && <th className="text-right p-2 w-24">Prev. Received</th>}
-                    <th className="text-right p-2 w-28">Receive Now</th>
+                    <th className="text-right p-2 w-28">Qty this bill</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -156,24 +156,13 @@ export function GRNModal({ open, onOpenChange, purchaseOrder, onSuccess }: GRNMo
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="grnNotes">Notes</Label>
-            <Textarea
-              id="grnNotes"
-              value={grnNotes}
-              onChange={(e) => setGrnNotes(e.target.value)}
-              placeholder="Any notes about this delivery"
-              rows={2}
-            />
-          </div>
-
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={saving}>
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Confirm Receive
+              Continue to purchase invoice
             </Button>
           </DialogFooter>
         </form>

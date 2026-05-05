@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { Plus, Pencil, Eye, FileText, Loader2 } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Plus, Pencil, Eye, FileText, Receipt, Loader2, MoreHorizontal, IndianRupee } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -12,26 +13,34 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { SuppliersAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { SupplierForm } from "./supplier-form"
-import { SupplierDrawer } from "./supplier-drawer"
+import { SupplierFifoPaymentModal } from "./supplier-fifo-payment-modal"
 import { POForm } from "@/components/purchase-orders/po-form"
 import { format } from "date-fns"
+import { hrefPurchaseInvoiceNew, hrefSupplierDetail } from "@/lib/settings-products-routes"
 
 interface SupplierTableProps {
   onRefresh?: () => void
 }
 
 export function SupplierTable({ onRefresh }: SupplierTableProps) {
+  const router = useRouter()
   const [suppliers, setSuppliers] = React.useState<any[]>([])
   const [loading, setLoading] = React.useState(true)
   const [search, setSearch] = React.useState("")
   const [showForm, setShowForm] = React.useState(false)
   const [editingSupplier, setEditingSupplier] = React.useState<any | null>(null)
-  const [drawerSupplier, setDrawerSupplier] = React.useState<any | null>(null)
   const [showPOForm, setShowPOForm] = React.useState(false)
   const [poSupplierId, setPoSupplierId] = React.useState<string | null>(null)
+  const [paymentSupplier, setPaymentSupplier] = React.useState<any | null>(null)
   const { toast } = useToast()
 
   const loadSuppliers = React.useCallback(async () => {
@@ -69,6 +78,10 @@ export function SupplierTable({ onRefresh }: SupplierTableProps) {
     setShowPOForm(true)
   }
 
+  const handleNewPurchaseInvoice = (supplier: any) => {
+    router.push(hrefPurchaseInvoiceNew(null, supplier._id))
+  }
+
   const handlePOFormClose = () => {
     setShowPOForm(false)
     setPoSupplierId(null)
@@ -104,7 +117,7 @@ export function SupplierTable({ onRefresh }: SupplierTableProps) {
                 <TableHead>Contact</TableHead>
                 <TableHead className="text-right">Outstanding</TableHead>
                 <TableHead>Last Order</TableHead>
-                <TableHead className="w-[140px]">Actions</TableHead>
+                <TableHead className="w-[72px] text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -119,7 +132,7 @@ export function SupplierTable({ onRefresh }: SupplierTableProps) {
                   <TableRow
                     key={s._id}
                     className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => setDrawerSupplier(s)}
+                    onClick={() => router.push(hrefSupplierDetail(s._id))}
                   >
                     <TableCell className="font-medium">{s.name}</TableCell>
                     <TableCell>{s.contactPerson || s.phone || s.email || "-"}</TableCell>
@@ -137,33 +150,55 @@ export function SupplierTable({ onRefresh }: SupplierTableProps) {
                         ? format(new Date(s.lastOrderDate), "dd MMM yyyy")
                         : "-"}
                     </TableCell>
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setDrawerSupplier(s)}
-                          title="View"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => { setEditingSupplier(s); setShowForm(true) }}
-                          title="Edit"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleNewOrder(s)}
-                          title="New Order"
-                        >
-                          <FileText className="h-4 w-4" />
-                        </Button>
-                      </div>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            aria-label="Row actions"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-56" onClick={(e) => e.stopPropagation()}>
+                          <DropdownMenuItem
+                            className="cursor-pointer"
+                            onClick={() => router.push(hrefSupplierDetail(s._id))}
+                          >
+                            <Eye className="h-4 w-4 mr-2" />
+                            View
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="cursor-pointer"
+                            onClick={() => {
+                              setEditingSupplier(s)
+                              setShowForm(true)
+                            }}
+                          >
+                            <Pencil className="h-4 w-4 mr-2" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="cursor-pointer" onClick={() => handleNewOrder(s)}>
+                            <FileText className="h-4 w-4 mr-2" />
+                            New purchase order
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="cursor-pointer" onClick={() => handleNewPurchaseInvoice(s)}>
+                            <Receipt className="h-4 w-4 mr-2" />
+                            New purchase invoice
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="cursor-pointer"
+                            onClick={() => setPaymentSupplier(s)}
+                          >
+                            <IndianRupee className="h-4 w-4 mr-2" />
+                            Record payment
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                 ))
@@ -180,21 +215,6 @@ export function SupplierTable({ onRefresh }: SupplierTableProps) {
         onSaved={handleSaved}
       />
 
-      <SupplierDrawer
-        supplier={drawerSupplier}
-        open={!!drawerSupplier}
-        onOpenChange={(o) => { if (!o) setDrawerSupplier(null) }}
-        onEdit={() => {
-          if (drawerSupplier) {
-            setEditingSupplier(drawerSupplier)
-            setDrawerSupplier(null)
-            setShowForm(true)
-          }
-        }}
-        onNewOrder={() => drawerSupplier && handleNewOrder(drawerSupplier)}
-        onRefresh={loadSuppliers}
-      />
-
       {showPOForm && (
         <POForm
           open={showPOForm}
@@ -203,6 +223,18 @@ export function SupplierTable({ onRefresh }: SupplierTableProps) {
           onSaved={handlePOFormClose}
         />
       )}
+
+      <SupplierFifoPaymentModal
+        open={paymentSupplier != null}
+        supplier={paymentSupplier ? { _id: paymentSupplier._id, name: paymentSupplier.name } : null}
+        onOpenChange={(o) => {
+          if (!o) setPaymentSupplier(null)
+        }}
+        onSuccess={() => {
+          loadSuppliers()
+          onRefresh?.()
+        }}
+      />
     </div>
   )
 }

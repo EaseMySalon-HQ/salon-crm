@@ -72,8 +72,9 @@ export function VerificationModal({
 
   // Parent must pass per-day summary amounts (table row), not report-wide totals.
   // Server re-syncs ledger on verify so stale DB balanceDifference does not block a balanced day.
-  const hasBalanceDifference = cashDifference !== 0
-  const hasOnlinePosDifference = onlineCashDifference !== 0
+  const negligible = (n: number) => Math.abs(Number(n) || 0) < 0.01
+  const hasBalanceDifference = !negligible(cashDifference)
+  const hasOnlinePosDifference = !negligible(onlineCashDifference)
   const hasAnyDifference = hasBalanceDifference || hasOnlinePosDifference
 
   // Reset form when modal opens/closes

@@ -1,10 +1,19 @@
 const mongoose = require('mongoose');
 
+/**
+ * Payable for supplier purchases.
+ * - PO receive: purchaseOrderId set (purchaseInvoiceId null until linked PI updates same row).
+ * - PI post (standalone): purchaseInvoiceId set only.
+ * - PI post linked to PO: both refs may be set on one row (single liability, GRN + invoice aligned).
+ */
 const supplierPayableSchema = new mongoose.Schema({
   purchaseOrderId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'PurchaseOrder',
-    required: true
+  },
+  purchaseInvoiceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseInvoice',
   },
   supplierId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -46,12 +55,28 @@ const supplierPayableSchema = new mongoose.Schema({
 });
 
 supplierPayableSchema.virtual('balanceDue').get(function() {
-  return Math.max(0, this.totalAmount - this.amountPaid);
+  return Math.max(0, this.totalAmount - (this.amountPaid || 0));
 });
 
 supplierPayableSchema.index({ branchId: 1, supplierId: 1 });
 supplierPayableSchema.index({ branchId: 1, status: 1 });
-supplierPayableSchema.index({ purchaseOrderId: 1 }, { unique: true });
+supplierPayableSchema.index({ branchId: 1, createdAt: 1 });
+/** Unique per branch when a real PO is linked (standalone payables omit this field; null would collide under a plain unique index). */
+supplierPayableSchema.index(
+  { branchId: 1, purchaseOrderId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { purchaseOrderId: { $type: 'objectId' } },
+  }
+);
+/** Unique per branch when a real PI is linked. */
+supplierPayableSchema.index(
+  { branchId: 1, purchaseInvoiceId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { purchaseInvoiceId: { $type: 'objectId' } },
+  }
+);
 
 module.exports = {
   schema: supplierPayableSchema,
