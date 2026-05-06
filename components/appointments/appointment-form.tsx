@@ -1,14 +1,46 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Check, Plus, Trash2, Search, User, Phone, X, CalendarDays, FileText, Loader2, Receipt, Calendar as CalendarIcon, Lock, LockOpen } from "lucide-react"
+import {
+  Check,
+  Plus,
+  Trash2,
+  Search,
+  User,
+  Phone,
+  X,
+  CalendarDays,
+  FileText,
+  Loader2,
+  Receipt,
+  Calendar as CalendarIcon,
+  Heart,
+  MoreVertical,
+  CalendarPlus,
+  FilePlus,
+  History,
+  Repeat,
+  RefreshCw,
+  CalendarClock,
+  UserX,
+  ShoppingCart,
+  ChevronDown,
+  BadgeCheck,
+  MapPin,
+  Play,
+  CircleCheck,
+  Ban,
+} from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { format, isBefore, startOfDay } from "date-fns"
 import { DayPicker } from "react-day-picker"
 
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Button } from "@/components/ui/button"
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -29,8 +61,10 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
-import { ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, BlockTimeAPI } from "@/lib/api"
-import { isHiddenAppointment } from "@/lib/appointment-calendar-helpers"
+import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI } from "@/lib/api"
+import { isHiddenAppointment, getAppointmentStatusPillClass, getAppointmentEditAppearanceStatus } from "@/lib/appointment-calendar-helpers"
+import { readServiceCheckoutDraftByRef } from "@/lib/service-checkout-draft-storage"
+import { ServiceCheckoutDialog, type ServiceCheckoutLine } from "@/components/appointments/service-checkout-dialog"
 
 /** Convert 24h time (e.g. "09:00") to 12h for API storage ("9:00 AM") for backward compatibility */
 function formatTimeForApi(time: string): string {
@@ -85,32 +119,100 @@ function getSequentialServiceStartTime(
   return addMinutesToTime(baseTime, cumulativeM)
 }
 
-/** Check if a block applies on a given date (recurring logic) */
-function blockAppliesOnDate(block: { startDate: string; endDate?: string | null; recurringFrequency?: string }, dateStr: string): boolean {
-  const rec = block.recurringFrequency || "none"
-  if (rec === "none") return block.startDate === dateStr
-  const end = block.endDate
-  if (!end || dateStr < block.startDate || dateStr > end) return false
-  if (rec === "daily") return true
-  if (rec === "weekly") {
-    return new Date(block.startDate + "T00:00:00").getDay() === new Date(dateStr + "T00:00:00").getDay()
+/** Start minute for service index `targetIndex` (0-based), matching getServiceStartMinutes chaining. */
+function computeChainedStartMinutes(
+  services: Array<{ startTime?: string; duration?: number }>,
+  baseTime: string,
+  targetIndex: number
+): number {
+  if (!baseTime) return 0
+  let cursorM = parseTimeToMinutes(baseTime)
+  for (let i = 0; i < targetIndex; i++) {
+    const prev = services[i]
+    if (prev?.startTime) {
+      cursorM = parseTimeToMinutes(prev.startTime) + (prev.duration || 0)
+    } else {
+      cursorM += prev?.duration ?? 60
+    }
   }
-  if (rec === "monthly") {
-    return new Date(block.startDate + "T00:00:00").getDate() === new Date(dateStr + "T00:00:00").getDate()
-  }
-  return false
+  return cursorM
 }
 
-// Time slots for appointments (15-min intervals, 24-hour format)
+// Time slots for appointments (5-min intervals, 24-hour format)
 const timeSlots = (() => {
   const slots: string[] = []
   for (let h = 0; h <= 23; h++) {
-    for (let m = 0; m < 60; m += 15) {
+    for (let m = 0; m < 60; m += 5) {
       slots.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`)
     }
   }
   return slots
 })()
+
+type RecurrenceFrequency = "doesnt" | "repeat" | "daily" | "weekly" | "monthly" | "custom"
+
+interface RecurrenceFormState {
+  frequency: RecurrenceFrequency
+  customInterval: number
+  customUnit: "day" | "week" | "month"
+  endType: "never" | "count" | "date"
+  endAfterCount: number
+  endOnDate: Date | null
+}
+
+function defaultRecurrenceForm(): RecurrenceFormState {
+  return {
+    frequency: "doesnt",
+    customInterval: 1,
+    customUnit: "week",
+    endType: "never",
+    endAfterCount: 10,
+    endOnDate: null,
+  }
+}
+
+function recurrenceFromApi(raw: any | null | undefined): RecurrenceFormState {
+  const d = defaultRecurrenceForm()
+  if (!raw || typeof raw !== "object") return d
+  const f = raw.frequency
+  if (f === "doesnt" || f === "repeat" || f === "daily" || f === "weekly" || f === "monthly" || f === "custom") {
+    d.frequency = f
+  }
+  if (typeof raw.customInterval === "number" && raw.customInterval >= 1) d.customInterval = raw.customInterval
+  const u = raw.customUnit
+  if (u === "day" || u === "week" || u === "month") d.customUnit = u
+  const e = raw.endType
+  if (e === "never" || e === "count" || e === "date") d.endType = e
+  if (typeof raw.endAfterCount === "number" && raw.endAfterCount >= 1) d.endAfterCount = raw.endAfterCount
+  if (raw.endOnDate && typeof raw.endOnDate === "string") {
+    const parts = raw.endOnDate.split("-").map(Number)
+    if (parts.length >= 3 && parts[0] && parts[1] && parts[2]) {
+      d.endOnDate = new Date(parts[0], parts[1] - 1, parts[2])
+    }
+  }
+  return d
+}
+
+function recurrenceToApiPayload(form: RecurrenceFormState): Record<string, unknown> {
+  if (form.frequency === "doesnt") {
+    return {
+      frequency: "doesnt",
+      customInterval: 1,
+      customUnit: "week",
+      endType: "never",
+      endAfterCount: null,
+      endOnDate: null,
+    }
+  }
+  return {
+    frequency: form.frequency,
+    customInterval: form.frequency === "custom" ? form.customInterval : 1,
+    customUnit: form.frequency === "custom" ? form.customUnit : "week",
+    endType: form.endType,
+    endAfterCount: form.endType === "count" ? form.endAfterCount : null,
+    endOnDate: form.endType === "date" && form.endOnDate ? format(form.endOnDate, "yyyy-MM-dd") : null,
+  }
+}
 
 const formSchema = z.object({
   date: z.date({
@@ -137,7 +239,168 @@ interface SelectedService {
   startTime?: string
 }
 
+/** Stable snapshot for detecting unsaved appointment edits (drawer + page). */
+function serializeAppointmentEditState(
+  values: {
+    date?: Date
+    time?: string
+    notes?: string
+    leadSource?: string
+    leadSourceDetail?: string
+  },
+  services: SelectedService[]
+): string {
+  const dateStr = values.date ? format(values.date, "yyyy-MM-dd") : ""
+  const svc = services.map((s) => ({
+    id: s.id,
+    serviceId: String(s.serviceId || ""),
+    staffId: String(s.staffId || ""),
+    duration: Number(s.duration) || 0,
+    price: Number(s.price) || 0,
+    staffLocked: !!s.staffLocked,
+    startTime: s.startTime || "",
+  }))
+  const scheduling = services.some((s) => !!s.startTime) ? "custom" : "sequential"
+  return JSON.stringify({
+    date: dateStr,
+    time: values.time || "",
+    notes: (values.notes || "").trim(),
+    leadSource: values.leadSource || "",
+    leadSourceDetail: values.leadSourceDetail || "",
+    scheduling,
+    services: svc,
+  })
+}
+
 type SchedulingMode = "sequential" | "custom"
+
+function normalizedDrawerStatus(s: string | null): string {
+  if (!s) return "scheduled"
+  if (s === "cancelled_at_billing") return "cancelled"
+  return s
+}
+
+function drawerStatusTriggerLabel(s: string | null): string {
+  const key = normalizedDrawerStatus(s)
+  switch (key) {
+    case "scheduled":
+      return "Scheduled"
+    case "confirmed":
+      return "Confirmed"
+    case "arrived":
+      return "Arrived"
+    case "service_started":
+      return "Started"
+    case "completed":
+      return "Completed"
+    case "missed":
+      return "No show"
+    case "partial_payment":
+      return "Partial payment"
+    case "cancelled":
+      return "Cancelled"
+    default:
+      return key.replace(/_/g, " ")
+  }
+}
+
+type DrawerEditStatusDropdownProps = {
+  appointmentStatus: string | null
+  appearanceStatus: string
+  hasLinkedInvoice: boolean
+  terminal: boolean
+  busy: boolean
+  onApplyStatus: (next: string) => void | Promise<void>
+  onRequestNoShow: () => void
+  onRequestCancel: () => void
+}
+
+function DrawerEditStatusDropdown({
+  appointmentStatus,
+  appearanceStatus,
+  hasLinkedInvoice,
+  terminal,
+  busy,
+  onApplyStatus,
+  onRequestNoShow,
+  onRequestCancel,
+}: DrawerEditStatusDropdownProps) {
+  const current = normalizedDrawerStatus(appointmentStatus)
+  const disabled = terminal || busy
+  const row = (value: string, label: string, Icon: LucideIcon) => {
+    const active = current === value
+    return (
+      <DropdownMenuItem
+        key={value + label}
+        disabled={disabled || active}
+        className="gap-2 cursor-pointer"
+        onSelect={() => {
+          if (disabled || active) return
+          void onApplyStatus(value)
+        }}
+      >
+        <Icon className="h-4 w-4 shrink-0 opacity-80" aria-hidden />
+        <span className="flex-1">{label}</span>
+        {active ? <Check className="h-4 w-4 shrink-0 opacity-70" aria-hidden /> : null}
+      </DropdownMenuItem>
+    )
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          aria-label="Change appointment status"
+          className={cn(
+            "shrink-0 h-9 rounded-full px-3.5 gap-1.5 text-sm font-medium border",
+            getAppointmentStatusPillClass(appearanceStatus),
+            disabled && "opacity-70"
+          )}
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden /> : null}
+          <span>{drawerStatusTriggerLabel(appearanceStatus)}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={8} className="w-[min(18rem,calc(100vw-2rem))] z-[250] rounded-lg border-border p-1 shadow-lg">
+        {row("scheduled", "Scheduled", CalendarDays)}
+        {row("confirmed", "Confirmed", BadgeCheck)}
+        {row("arrived", "Arrived", MapPin)}
+        {row("service_started", "Started", Play)}
+        {hasLinkedInvoice ? row("completed", "Completed", CircleCheck) : null}
+        <DropdownMenuSeparator className="my-1" />
+        <DropdownMenuItem
+          disabled={disabled || current === "missed"}
+          className="gap-2 cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10"
+          onSelect={() => {
+            if (disabled || current === "missed") return
+            onRequestNoShow()
+          }}
+        >
+          <UserX className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="flex-1">No show</span>
+          {current === "missed" ? <Check className="h-4 w-4 shrink-0 opacity-70" aria-hidden /> : null}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={disabled || current === "cancelled"}
+          className="gap-2 cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10"
+          onSelect={() => {
+            if (disabled || current === "cancelled") return
+            onRequestCancel()
+          }}
+        >
+          <Ban className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="flex-1">Cancel appointment</span>
+          {current === "cancelled" ? <Check className="h-4 w-4 shrink-0 opacity-70" aria-hidden /> : null}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 interface ServiceDropdownState {
   [key: string]: {
@@ -161,15 +424,49 @@ export interface AppointmentFormProps {
   onSuccess?: () => void
   /** Called when user cancels (e.g. to close drawer) */
   onCancel?: () => void
+  /** Drawer: notify when Checkout Service overlay opens/closes (e.g. hide client details panel). */
+  onServiceCheckoutOpenChange?: (open: boolean) => void
+  /** When set (drawer), checkout overlay open state is owned by the parent. */
+  serviceCheckoutOpen?: boolean
+  /** Pre-select client when opening from a saved-checkout chip (new appointment draft). */
+  initialClientIdForPrefill?: string
+  /** Open drawer from calendar chip: load client then restore checkout from localStorage draft. */
+  resumeServiceCheckoutDraft?: boolean
+  /** Storage token from chip; required to load the correct draft when several exist. */
+  resumeSavedDraftToken?: string
   /** "drawer" = compact layout for right-side drawer; "page" = full card layout for standalone page */
   variant?: "page" | "drawer"
+  /** Drawer only: render a status control in the sheet header (right side). */
+  onDrawerHeaderEndChange?: (node: ReactNode) => void
+  /** Drawer edit: notify parent of raw appointment status for header chrome (full-bar tint). */
+  onDrawerHeaderStatusToneChange?: (status: string | null) => void
+  /** Drawer: number of service lines (for wider sheet when user adds more than one). */
+  onDrawerSelectedServiceCountChange?: (count: number) => void
 }
 
-export function AppointmentForm({ initialDate, initialTime, initialStaffId, appointmentId: appointmentIdProp, onClientSelect, onSuccess, onCancel, variant = "page" }: AppointmentFormProps = {}) {
+export function AppointmentForm({
+  initialDate,
+  initialTime,
+  initialStaffId,
+  appointmentId: appointmentIdProp,
+  onClientSelect,
+  onSuccess,
+  onCancel,
+  onServiceCheckoutOpenChange,
+  serviceCheckoutOpen: serviceCheckoutOpenProp,
+  initialClientIdForPrefill,
+  resumeServiceCheckoutDraft = false,
+  resumeSavedDraftToken,
+  variant = "page",
+  onDrawerHeaderEndChange,
+  onDrawerHeaderStatusToneChange,
+  onDrawerSelectedServiceCountChange,
+}: AppointmentFormProps = {}) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const appointmentId = appointmentIdProp ?? searchParams?.get("edit") ?? undefined
   const isEditMode = !!appointmentId
+  const prefillClientId = searchParams?.get("clientId") ?? initialClientIdForPrefill ?? undefined
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [loadingAppointment, setLoadingAppointment] = useState(false)
@@ -184,6 +481,11 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     () => (selectedServices.some((s) => !!s.startTime) ? "custom" : "sequential"),
     [selectedServices]
   )
+
+  useEffect(() => {
+    if (variant !== "drawer" || !onDrawerSelectedServiceCountChange) return
+    onDrawerSelectedServiceCountChange(selectedServices.length)
+  }, [variant, selectedServices.length, onDrawerSelectedServiceCountChange])
 
   // Prefer URL params (from calendar slot) over props so time is correct on first paint
   const urlDate = searchParams?.get("date") ?? initialDate
@@ -218,7 +520,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   // Services and staff state
   const [services, setServices] = useState<any[]>([])
   const [staff, setStaff] = useState<any[]>([])
-  const [blockTimesForDate, setBlockTimesForDate] = useState<any[]>([])
   const [appointmentsForDate, setAppointmentsForDate] = useState<any[]>([])
   const [loadingServices, setLoadingServices] = useState(true)
   const [loadingStaff, setLoadingStaff] = useState(true)
@@ -240,6 +541,129 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
 
   // Today's date for date picker (calculated once)
   const today = useMemo(() => startOfDay(new Date()), [])
+
+  const [editedAppointmentStatus, setEditedAppointmentStatus] = useState<string | null>(null)
+  const [activityDialogOpen, setActivityDialogOpen] = useState(false)
+  const [activityDetail, setActivityDetail] = useState<any>(null)
+  const [activityLoading, setActivityLoading] = useState(false)
+  const [cancelApptDialogOpen, setCancelApptDialogOpen] = useState(false)
+  const [noShowDialogOpen, setNoShowDialogOpen] = useState(false)
+  const [statusActionLoading, setStatusActionLoading] = useState(false)
+  const [linkedSaleForStatus, setLinkedSaleForStatus] = useState<unknown | null>(null)
+
+  const [addNoteDialogOpen, setAddNoteDialogOpen] = useState(false)
+  const [serviceCheckoutOpenInternal, setServiceCheckoutOpenInternal] = useState(false)
+  const serviceCheckoutControlled = serviceCheckoutOpenProp !== undefined
+  const serviceCheckoutOpen = serviceCheckoutControlled
+    ? Boolean(serviceCheckoutOpenProp)
+    : serviceCheckoutOpenInternal
+
+  const setServiceCheckoutOpen = useCallback(
+    (next: boolean) => {
+      if (!serviceCheckoutControlled) {
+        setServiceCheckoutOpenInternal(next)
+      }
+      onServiceCheckoutOpenChange?.(next)
+    },
+    [serviceCheckoutControlled, onServiceCheckoutOpenChange]
+  )
+
+  const resumeCheckoutDraftRef = useRef(false)
+  const consumeResumeDraftIntent = useCallback(() => {
+    const v = resumeCheckoutDraftRef.current
+    resumeCheckoutDraftRef.current = false
+    return v
+  }, [])
+
+  const autoResumeCheckoutDraftRef = useRef(false)
+
+  useEffect(() => {
+    if (!resumeServiceCheckoutDraft) {
+      autoResumeCheckoutDraftRef.current = false
+      return
+    }
+    if (autoResumeCheckoutDraftRef.current) return
+    if (loadingAppointment && isEditMode) return
+    const cid = selectedCustomer?._id || selectedCustomer?.id
+    if (!cid || !resumeSavedDraftToken) return
+    const draft = readServiceCheckoutDraftByRef(resumeSavedDraftToken)
+    if (!draft || String(draft.clientId) !== String(cid)) return
+    autoResumeCheckoutDraftRef.current = true
+    resumeCheckoutDraftRef.current = true
+    setServiceCheckoutOpen(true)
+  }, [
+    resumeServiceCheckoutDraft,
+    resumeSavedDraftToken,
+    loadingAppointment,
+    isEditMode,
+    selectedCustomer,
+    setServiceCheckoutOpen,
+  ])
+
+  const [noteDialogMode, setNoteDialogMode] = useState<"add" | "edit">("add")
+  const [addNoteDraft, setAddNoteDraft] = useState("")
+  const [addNoteSaving, setAddNoteSaving] = useState(false)
+  const [repeatingDialogOpen, setRepeatingDialogOpen] = useState(false)
+  const [recurrenceForm, setRecurrenceForm] = useState<RecurrenceFormState>(defaultRecurrenceForm)
+  const [recurrenceSaving, setRecurrenceSaving] = useState(false)
+  const [rebookDialogOpen, setRebookDialogOpen] = useState(false)
+  const [rebookDate, setRebookDate] = useState<Date>(() => startOfDay(new Date()))
+  const [rebookTime, setRebookTime] = useState("")
+  const [rebookDatePickerOpen, setRebookDatePickerOpen] = useState(false)
+  const [recurrenceEndDatePickerOpen, setRecurrenceEndDatePickerOpen] = useState(false)
+
+  const [editBaselineSerialized, setEditBaselineSerialized] = useState<string | null>(null)
+
+  useEffect(() => {
+    setEditBaselineSerialized(null)
+  }, [appointmentId])
+
+  const lastLoadedRecurrenceRef = useRef<Record<string, unknown> | null>(null)
+
+  const scrollToFormSection = useCallback((elementId: string) => {
+    if (typeof document === "undefined") return
+    document.getElementById(elementId)?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [])
+
+  const appointmentIdsForGroupActions = useMemo(() => {
+    if (!appointmentId) return []
+    if (existingGroupAppointmentIds.length > 0) return existingGroupAppointmentIds.map(String)
+    return [String(appointmentId)]
+  }, [appointmentId, existingGroupAppointmentIds])
+
+  const isTerminalAppointmentStatus = useMemo(() => {
+    const s = editedAppointmentStatus || ""
+    return s === "cancelled" || s === "cancelled_at_billing" || s === "completed" || s === "missed"
+  }, [editedAppointmentStatus])
+
+  const refreshLinkedSaleForStatus = useCallback(async () => {
+    if (!appointmentId || !isEditMode) {
+      setLinkedSaleForStatus(null)
+      return
+    }
+    try {
+      const res = await SalesAPI.getByAppointmentId(appointmentId)
+      setLinkedSaleForStatus(res?.success && res?.data ? res.data : null)
+    } catch {
+      setLinkedSaleForStatus(null)
+    }
+  }, [appointmentId, isEditMode])
+
+  useEffect(() => {
+    void refreshLinkedSaleForStatus()
+  }, [refreshLinkedSaleForStatus])
+
+  useEffect(() => {
+    const onRefresh = () => void refreshLinkedSaleForStatus()
+    window.addEventListener("appointments-refresh", onRefresh)
+    return () => window.removeEventListener("appointments-refresh", onRefresh)
+  }, [refreshLinkedSaleForStatus])
+
+  const editAppearanceStatus = useMemo(
+    () => getAppointmentEditAppearanceStatus(editedAppointmentStatus, linkedSaleForStatus),
+    [editedAppointmentStatus, linkedSaleForStatus]
+  )
+  const hasLinkedInvoice = Boolean(linkedSaleForStatus)
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -271,21 +695,41 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
 
   const formDate = form.watch("date")
   const formTime = form.watch("time")
+  const formNotes = form.watch("notes")
+  const formLeadSource = form.watch("leadSource")
+  const formLeadSourceDetail = form.watch("leadSourceDetail")
 
-  // Fetch block times and appointments when date is set (for availability filtering)
+  const isEditAppointmentDirty = useMemo(() => {
+    if (!isEditMode || editBaselineSerialized == null) return false
+    const current = serializeAppointmentEditState(
+      {
+        date: formDate,
+        time: formTime,
+        notes: formNotes,
+        leadSource: formLeadSource,
+        leadSourceDetail: formLeadSourceDetail,
+      },
+      selectedServices
+    )
+    return current !== editBaselineSerialized
+  }, [
+    isEditMode,
+    editBaselineSerialized,
+    formDate,
+    formTime,
+    formNotes,
+    formLeadSource,
+    formLeadSourceDetail,
+    selectedServices,
+  ])
+
+  // Fetch appointments when date is set (for staff availability / overlap filtering)
   useEffect(() => {
     if (!formDate) {
-      setBlockTimesForDate([])
       setAppointmentsForDate([])
       return
     }
     const dateStr = format(formDate, "yyyy-MM-dd")
-    BlockTimeAPI.getAll({ startDate: dateStr, endDate: dateStr })
-      .then((res) => {
-        if (res?.success && Array.isArray(res?.data)) setBlockTimesForDate(res.data)
-        else setBlockTimesForDate([])
-      })
-      .catch(() => setBlockTimesForDate([]))
     AppointmentsAPI.getAll({ date: dateStr, limit: 500 })
       .then((res) => {
         if (res?.success && Array.isArray(res?.data)) setAppointmentsForDate(res.data)
@@ -297,7 +741,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   // Total duration of selected services
   const totalDuration = useMemo(() => {
     const sum = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
-    return Math.max(sum || 60, 15)
+    return Math.max(sum || 60, 5)
   }, [selectedServices])
 
   /**
@@ -350,16 +794,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       const workEndM = parseTimeToMinutes(endStr)
       if (serviceStartM < workStartM || serviceEndM > workEndM) return false
 
-      const isBlocked = blockTimesForDate.some((block: any) => {
-        const blockStaffId = typeof block.staffId === "object" && block.staffId?._id ? block.staffId._id : String(block.staffId)
-        if (blockStaffId !== staffId) return false
-        if (!blockAppliesOnDate(block, dateStr)) return false
-        const blockStartM = parseTimeToMinutes(block.startTime)
-        const blockEndM = parseTimeToMinutes(block.endTime)
-        return serviceStartM < blockEndM && serviceEndM > blockStartM
-      })
-      if (isBlocked) return false
-
       // Only check conflicts for THIS service's time block; exclude all appointments we're editing (main + related)
       const idsBeingEdited = new Set<string>()
       if (appointmentId) idsBeingEdited.add(String(appointmentId))
@@ -385,13 +819,39 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       })
       return !hasOverlappingAppointment
     })
-  }, [staff, formDate, formTime, selectedServices, blockTimesForDate, appointmentsForDate, appointmentId, schedulingMode, getServiceStartMinutes])
+  }, [staff, formDate, formTime, selectedServices, appointmentsForDate, appointmentId, schedulingMode, getServiceStartMinutes])
 
   // Load services and staff on component mount
   useEffect(() => {
     fetchServices()
     fetchStaff()
   }, [])
+
+  // New appointment: start with one empty service row; pre-fill staff from calendar URL when present.
+  useEffect(() => {
+    if (appointmentId) return
+    setSelectedServices((prev) => {
+      if (prev.length === 0) {
+        return [
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            serviceId: "",
+            staffId: urlStaffId || "",
+            name: "",
+            duration: 0,
+            price: 0,
+            staffLocked: false,
+          },
+        ]
+      }
+      if (prev.length !== 1) return prev
+      const row = prev[0]
+      if (!row.serviceId && !row.staffId && urlStaffId) {
+        return [{ ...row, staffId: urlStaffId }]
+      }
+      return prev
+    })
+  }, [appointmentId, urlStaffId])
 
   // Load appointment when in edit mode
   useEffect(() => {
@@ -507,6 +967,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
 
         setSelectedServices(servicesToShow)
         setExistingBookingGroupId(a.bookingGroupId || null)
+        lastLoadedRecurrenceRef.current =
+          a.recurrence && typeof a.recurrence === "object" ? { ...a.recurrence } : null
+        setEditedAppointmentStatus(typeof a.status === "string" ? a.status : "scheduled")
         setExistingGroupAppointmentIds(
           nonCancelledRelated.length > 0
             ? [String(a._id), ...nonCancelledRelated.map((r: any) => String(r._id))]
@@ -553,7 +1016,14 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           form.setValue("leadSourceDetail", ls.replace(/^Other:\s*/, ""))
         } else {
           form.setValue("leadSource", ls || "")
+          form.setValue("leadSourceDetail", "")
         }
+        queueMicrotask(() => {
+          if (cancelled) return
+          setEditBaselineSerialized(
+            serializeAppointmentEditState(form.getValues(), servicesToShow as SelectedService[])
+          )
+        })
       })
       .catch(() => {
         if (!cancelled) toast({ title: "Error", description: "Failed to load appointment", variant: "destructive" })
@@ -791,19 +1261,33 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     }
   }
 
-  // Add a service to the appointment (pre-fill staff when coming from calendar slot)
+  // Add a service: inherit staff from the previous row (or calendar URL for first row),
+  // pre-fill chained start time for 2+ services when appointment time is set.
   const addService = () => {
-    const isFirstService = selectedServices.length === 0
-    const newService: SelectedService = {
-      id: Date.now().toString(),
-      serviceId: "",
-      staffId: isFirstService && urlStaffId ? urlStaffId : "",
-      name: "",
-      duration: 0,
-      price: 0,
-      staffLocked: false,
-    }
-    setSelectedServices([...selectedServices, newService])
+    const baseTime = formTime || ""
+    setSelectedServices((prev) => {
+      const last = prev[prev.length - 1]
+      const newIndex = prev.length
+      const inheritStaffId = last?.staffId || urlStaffId || ""
+      const inheritLocked = last ? !!last.staffLocked : false
+      let startTime: string | undefined
+      if (newIndex >= 1 && baseTime) {
+        const chainM = computeChainedStartMinutes(prev, baseTime, newIndex)
+        // Exact chain end (e.g. 7:00 + 20m → 7:20); do not round to 15m slots — that created gaps.
+        startTime = minutesToTimeString(chainM)
+      }
+      const newService: SelectedService = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        serviceId: "",
+        staffId: inheritStaffId,
+        name: "",
+        duration: 0,
+        price: 0,
+        staffLocked: inheritLocked,
+        ...(startTime ? { startTime } : {}),
+      }
+      return [...prev, newService]
+    })
   }
 
   // Remove a service from the appointment
@@ -874,6 +1358,22 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     return selectedServices.reduce((total, service) => total + service.price, 0)
   }
 
+  const checkoutInitialLines = useMemo((): ServiceCheckoutLine[] => {
+    return selectedServices
+      .filter((s) => !!s.serviceId)
+      .map((s) => ({
+        id: s.id,
+        serviceId: s.serviceId,
+        staffId: s.staffId,
+        name: s.name || "Service",
+        duration: s.duration || 0,
+        price: s.price || 0,
+        quantity: 1,
+        discountValue: 0,
+        discountIsPercent: true,
+      }))
+  }, [selectedServices])
+
   async function onSubmit(values: z.infer<typeof formSchema>) {
     if (!selectedCustomer) {
       toast({
@@ -914,50 +1414,10 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
       return
     }
 
-    // Custom mode (any service has an explicit startTime): check same-staff overlap on effective times.
-    // Services without a picked time fall back to sequential chaining via getServiceStartMinutes.
-    if (schedulingMode === "custom") {
-      const effectiveStarts = selectedServices.map((_, idx) => getServiceStartMinutes(idx))
-      for (let i = 0; i < selectedServices.length; i++) {
-        const a = selectedServices[i]
-        const aStart = effectiveStarts[i]
-        const aEnd = aStart + (a.duration || 0)
-        for (let j = i + 1; j < selectedServices.length; j++) {
-          const b = selectedServices[j]
-          if (!a.staffId || !b.staffId) continue
-          if (a.staffId !== b.staffId) continue
-          const bStart = effectiveStarts[j]
-          const bEnd = bStart + (b.duration || 0)
-          if (aStart < bEnd && aEnd > bStart) {
-            toast({
-              title: "Error",
-              description: "Same staff has overlapping services. Please adjust the start times.",
-              variant: "destructive",
-            })
-            return
-          }
-        }
-      }
-    }
-
-    if (values.date && values.time) {
-      const unavailable = selectedServices.filter((s, idx) => {
-        if (!s.staffId) return false
-        const availableForService = getAvailableStaffForService(idx)
-        const availableIds = new Set(availableForService.map((m: any) => m._id || m.id))
-        return !availableIds.has(s.staffId)
-      })
-      if (unavailable.length > 0) {
-        toast({
-          title: "Error",
-          description: "One or more selected staff are not available for their assigned service time. Please pick a different time or staff.",
-          variant: "destructive",
-        })
-        return
-      }
-    }
-
     setIsSubmitting(true)
+
+    /** Calendar allows overlapping bookings; staff may be marked (Not available) but still selectable. */
+    const parallelPayload = { allowParallelBooking: true as const }
 
     try {
       const leadSourceValue = values.leadSource
@@ -1002,6 +1462,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             leadSource: leadSourceValue || "",
             notes: values.notes,
             staffLocked: selectedServices.some((s) => s.staffLocked),
+            ...parallelPayload,
           })
           if (!updateRes?.success) {
             toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -1046,6 +1507,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               notes: values.notes,
               staffLocked: !!s.staffLocked,
               ...(schedulingMode === "custom" ? { schedulingMode: "custom" } : {}),
+              ...parallelPayload,
             })
             if (!updateRes?.success) {
               toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -1072,6 +1534,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
               notes: values.notes,
               staffLocked: !!originalService.staffLocked,
               ...(schedulingMode === "custom" ? { schedulingMode: "custom" } : {}),
+              ...parallelPayload,
             })
             if (!updateRes?.success) {
               toast({ title: "Error", description: updateRes?.error || "Failed to update.", variant: "destructive" })
@@ -1126,6 +1589,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             totalAmount: newServices.reduce((sum, s) => sum + (s.price || 0), 0),
             notes: values.notes,
             status: "scheduled",
+            ...parallelPayload,
           })
           if (!createRes?.success) {
             toast({
@@ -1141,6 +1605,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         }
 
         toast({ title: "Appointment Updated", description: newServices.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
+        setEditBaselineSerialized(serializeAppointmentEditState(values, selectedServices))
         if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("appointments-refresh"))
         onSuccess ? onSuccess() : router.push("/appointments")
       } else {
@@ -1170,6 +1635,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
           totalAmount: calculateTotalAmount(),
           notes: values.notes,
           status: "scheduled",
+          ...parallelPayload,
         }
         const response = await AppointmentsAPI.create(appointmentData)
         if (!response.success) {
@@ -1201,7 +1667,362 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
     }
   }
 
+  useEffect(() => {
+    if (appointmentId) return
+    setEditedAppointmentStatus(null)
+  }, [appointmentId])
+
+  useEffect(() => {
+    if (appointmentId || !prefillClientId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await ClientsAPI.getById(prefillClientId)
+        if (cancelled || !res?.success || !res.data) return
+        const c = res.data
+        const clientData: Client = {
+          _id: c._id,
+          id: c._id,
+          name: c.name || "",
+          phone: c.phone || "",
+          email: c.email,
+          status: "active",
+        }
+        setSelectedCustomer(clientData)
+        setCustomerSearch(clientData.name)
+        onClientSelect?.(clientData)
+      } catch {
+        // ignore failed client prefill
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [prefillClientId, appointmentId, onClientSelect])
+
+  const openActivityDialog = useCallback(async () => {
+    setActivityDialogOpen(true)
+    setActivityDetail(null)
+    if (!appointmentId) return
+    setActivityLoading(true)
+    try {
+      const res = await AppointmentsAPI.getById(appointmentId)
+      if (res?.success && res.data) setActivityDetail(res.data)
+    } finally {
+      setActivityLoading(false)
+    }
+  }, [appointmentId])
+
+  const openRebookDialog = useCallback(() => {
+    const d = form.getValues("date")
+    const t = form.getValues("time")
+    setRebookDate(d ? startOfDay(d) : startOfDay(new Date()))
+    setRebookTime(t || timeSlots[96] || timeSlots[0] || "")
+    setRebookDialogOpen(true)
+  }, [form])
+
+  const confirmRebook = useCallback(() => {
+    const cid = selectedCustomer?._id || selectedCustomer?.id
+    const params = new URLSearchParams()
+    if (cid) params.set("clientId", String(cid))
+    params.set("date", format(rebookDate, "yyyy-MM-dd"))
+    if (rebookTime) params.set("time", rebookTime)
+    const firstStaff = selectedServices[0]?.staffId
+    if (firstStaff) params.set("staffId", String(firstStaff))
+    router.push(`/appointments/new?${params.toString()}`)
+    setRebookDialogOpen(false)
+  }, [rebookDate, rebookTime, router, selectedCustomer, selectedServices])
+
+  const persistNotesEverywhere = useCallback(
+    async (notesValue: string) => {
+      if (appointmentIdsForGroupActions.length === 0) {
+        form.setValue("notes", notesValue)
+        return true
+      }
+      let ok = true
+      for (const id of appointmentIdsForGroupActions) {
+        const res = await AppointmentsAPI.update(id, { notes: notesValue })
+        if (!res?.success) ok = false
+      }
+      if (ok) form.setValue("notes", notesValue)
+      return ok
+    },
+    [appointmentIdsForGroupActions, form]
+  )
+
+  const submitNoteDialog = useCallback(async () => {
+    if (noteDialogMode === "add") {
+      const addition = addNoteDraft.trim()
+      if (!addition) {
+        toast({ title: "Empty note", description: "Enter some text to add.", variant: "destructive" })
+        return
+      }
+      const current = (form.getValues("notes") || "").trim()
+      const merged = current ? `${current}\n\n${addition}` : addition
+      setAddNoteSaving(true)
+      try {
+        const ok = await persistNotesEverywhere(merged)
+        if (ok) {
+          setAddNoteDialogOpen(false)
+          setAddNoteDraft("")
+          toast({ title: "Note saved" })
+          setEditBaselineSerialized(
+            serializeAppointmentEditState(form.getValues(), selectedServices)
+          )
+          window.dispatchEvent(new Event("appointments-refresh"))
+        } else {
+          toast({ title: "Could not save note", description: "Please try again.", variant: "destructive" })
+        }
+      } finally {
+        setAddNoteSaving(false)
+      }
+      return
+    }
+    const next = addNoteDraft.trim()
+    setAddNoteSaving(true)
+    try {
+      const ok = await persistNotesEverywhere(next)
+      if (ok) {
+        setAddNoteDialogOpen(false)
+        setAddNoteDraft("")
+        toast({ title: "Note updated" })
+        setEditBaselineSerialized(
+          serializeAppointmentEditState(form.getValues(), selectedServices)
+        )
+        window.dispatchEvent(new Event("appointments-refresh"))
+      } else {
+        toast({ title: "Could not update note", description: "Please try again.", variant: "destructive" })
+      }
+    } finally {
+      setAddNoteSaving(false)
+    }
+  }, [addNoteDraft, form, noteDialogMode, persistNotesEverywhere, selectedServices, toast])
+
+  const deleteNotesFromBooking = useCallback(async () => {
+    setAddNoteSaving(true)
+    try {
+      const ok = await persistNotesEverywhere("")
+      if (ok) {
+        setAddNoteDialogOpen(false)
+        setAddNoteDraft("")
+        toast({ title: "Notes removed" })
+        setEditBaselineSerialized(
+          serializeAppointmentEditState(form.getValues(), selectedServices)
+        )
+        window.dispatchEvent(new Event("appointments-refresh"))
+      } else {
+        toast({ title: "Could not remove notes", description: "Please try again.", variant: "destructive" })
+      }
+    } finally {
+      setAddNoteSaving(false)
+    }
+  }, [form, persistNotesEverywhere, selectedServices, toast])
+
+  const openRepeatingDialog = useCallback(() => {
+    setRecurrenceForm(recurrenceFromApi(lastLoadedRecurrenceRef.current))
+    setRepeatingDialogOpen(true)
+  }, [])
+
+  const saveRecurrence = useCallback(async () => {
+    if (!appointmentId || appointmentIdsForGroupActions.length === 0) return
+    if (recurrenceForm.frequency !== "doesnt") {
+      if (recurrenceForm.frequency === "custom") {
+        if (!recurrenceForm.customInterval || recurrenceForm.customInterval < 1) {
+          toast({ title: "Invalid interval", description: "Enter a positive number.", variant: "destructive" })
+          return
+        }
+      }
+      if (recurrenceForm.endType === "count") {
+        if (!recurrenceForm.endAfterCount || recurrenceForm.endAfterCount < 1) {
+          toast({
+            title: "Invalid end",
+            description: "Enter how many times the series should repeat.",
+            variant: "destructive",
+          })
+          return
+        }
+      }
+      if (recurrenceForm.endType === "date" && !recurrenceForm.endOnDate) {
+        toast({ title: "Pick an end date", variant: "destructive" })
+        return
+      }
+    }
+    const payload = recurrenceToApiPayload(recurrenceForm)
+    setRecurrenceSaving(true)
+    try {
+      let ok = true
+      for (const id of appointmentIdsForGroupActions) {
+        const res = await AppointmentsAPI.update(id, { recurrence: payload })
+        if (!res?.success) ok = false
+      }
+      if (ok) {
+        lastLoadedRecurrenceRef.current = { ...payload }
+        setRepeatingDialogOpen(false)
+        toast({ title: "Repeat settings saved" })
+        window.dispatchEvent(new Event("appointments-refresh"))
+      } else {
+        toast({ title: "Could not save", description: "Please try again.", variant: "destructive" })
+      }
+    } finally {
+      setRecurrenceSaving(false)
+    }
+  }, [appointmentId, appointmentIdsForGroupActions, recurrenceForm, toast])
+
+  const applyStatusToAllGroupDocs = useCallback(
+    async (status: string) => {
+      const ids = appointmentIdsForGroupActions
+      if (ids.length === 0) return false
+      let allOk = true
+      for (const id of ids) {
+        const res = await AppointmentsAPI.update(id, { status })
+        if (!res?.success) allOk = false
+      }
+      return allOk
+    },
+    [appointmentIdsForGroupActions]
+  )
+
+  const applyWorkflowStatus = useCallback(
+    async (next: string) => {
+      if (!appointmentId || appointmentIdsForGroupActions.length === 0) return
+      setStatusActionLoading(true)
+      try {
+        const ok = await applyStatusToAllGroupDocs(next)
+        if (ok) {
+          setEditedAppointmentStatus(next)
+          toast({ title: "Status updated" })
+          window.dispatchEvent(new Event("appointments-refresh"))
+        } else {
+          toast({
+            title: "Could not update status",
+            description: "Please try again.",
+            variant: "destructive",
+          })
+        }
+      } finally {
+        setStatusActionLoading(false)
+      }
+    },
+    [appointmentId, appointmentIdsForGroupActions.length, applyStatusToAllGroupDocs, toast]
+  )
+
+  const confirmCancelAppointmentAction = useCallback(async () => {
+    if (!appointmentId || appointmentIdsForGroupActions.length === 0) return
+    setStatusActionLoading(true)
+    try {
+      const ok = await applyStatusToAllGroupDocs("cancelled")
+      if (ok) {
+        toast({ title: "Appointment cancelled" })
+        setEditedAppointmentStatus("cancelled")
+        setCancelApptDialogOpen(false)
+        window.dispatchEvent(new Event("appointments-refresh"))
+        if (onSuccess) onSuccess()
+        else router.push("/appointments")
+      } else {
+        toast({ title: "Could not cancel", description: "Please try again.", variant: "destructive" })
+      }
+    } finally {
+      setStatusActionLoading(false)
+    }
+  }, [
+    appointmentId,
+    appointmentIdsForGroupActions.length,
+    applyStatusToAllGroupDocs,
+    onSuccess,
+    router,
+    toast,
+  ])
+
+  const confirmNoShowAction = useCallback(async () => {
+    if (!appointmentId || appointmentIdsForGroupActions.length === 0) return
+    setStatusActionLoading(true)
+    try {
+      const ok = await applyStatusToAllGroupDocs("missed")
+      if (ok) {
+        toast({ title: "Marked as no-show" })
+        setEditedAppointmentStatus("missed")
+        setNoShowDialogOpen(false)
+        window.dispatchEvent(new Event("appointments-refresh"))
+        if (onSuccess) onSuccess()
+        else router.push("/appointments")
+      } else {
+        toast({ title: "Could not update", description: "Please try again.", variant: "destructive" })
+      }
+    } finally {
+      setStatusActionLoading(false)
+    }
+  }, [
+    appointmentId,
+    appointmentIdsForGroupActions.length,
+    applyStatusToAllGroupDocs,
+    onSuccess,
+    router,
+    toast,
+  ])
+
   const isDrawer = variant === "drawer"
+
+  useEffect(() => {
+    if (!onDrawerHeaderEndChange) return
+    if (variant !== "drawer" || !isEditMode || !appointmentId || loadingAppointment || serviceCheckoutOpen) {
+      onDrawerHeaderEndChange(null)
+      return
+    }
+    onDrawerHeaderEndChange(
+      <DrawerEditStatusDropdown
+        appointmentStatus={editedAppointmentStatus}
+        appearanceStatus={editAppearanceStatus}
+        hasLinkedInvoice={hasLinkedInvoice}
+        terminal={isTerminalAppointmentStatus}
+        busy={statusActionLoading}
+        onApplyStatus={applyWorkflowStatus}
+        onRequestNoShow={() => setNoShowDialogOpen(true)}
+        onRequestCancel={() => setCancelApptDialogOpen(true)}
+      />
+    )
+  }, [
+    onDrawerHeaderEndChange,
+    variant,
+    isEditMode,
+    appointmentId,
+    loadingAppointment,
+    serviceCheckoutOpen,
+    editedAppointmentStatus,
+    editAppearanceStatus,
+    hasLinkedInvoice,
+    isTerminalAppointmentStatus,
+    statusActionLoading,
+    applyWorkflowStatus,
+  ])
+
+  useEffect(() => {
+    return () => {
+      onDrawerHeaderEndChange?.(null)
+    }
+  }, [onDrawerHeaderEndChange])
+
+  useEffect(() => {
+    if (!onDrawerHeaderStatusToneChange) return
+    if (variant !== "drawer" || !isEditMode || !appointmentId || loadingAppointment || serviceCheckoutOpen) {
+      onDrawerHeaderStatusToneChange(null)
+      return
+    }
+    onDrawerHeaderStatusToneChange(editAppearanceStatus)
+  }, [
+    onDrawerHeaderStatusToneChange,
+    variant,
+    isEditMode,
+    appointmentId,
+    loadingAppointment,
+    serviceCheckoutOpen,
+    editAppearanceStatus,
+  ])
+
+  useEffect(() => {
+    return () => {
+      onDrawerHeaderStatusToneChange?.(null)
+    }
+  }, [onDrawerHeaderStatusToneChange])
 
   const formContent = (
     <>
@@ -1324,7 +2145,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             </div>
 
             {/* Date & Time */}
-            <div className="space-y-6">
+            <div id="appointment-schedule-section" className="space-y-6">
               <div className="grid gap-6 pb-8 md:grid-cols-2">
                 <FormField
                 control={form.control}
@@ -1418,7 +2239,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             </div>
 
             {/* Services Section */}
-            <div className={cn("space-y-4", isDrawer ? "mt-6" : "mt-12")}>
+            <div id="appointment-services-section" className={cn("space-y-4", isDrawer ? "mt-6" : "mt-12")}>
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <h3 className={cn("font-semibold text-slate-800 flex items-center gap-2", isDrawer ? "text-base" : "text-lg")}>
@@ -1532,19 +2353,30 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                               <SelectItem value="no-staff" disabled>No staff</SelectItem>
                             ) : (
                               (() => {
-                                const list = getAvailableStaffForService(serviceIndex).filter((member: any) => member._id || member.id)
-                                const selectedId = service.staffId
-                                const selectedNotInList = selectedId && !list.some((m: any) => (m._id || m.id) === selectedId)
-                                const options = selectedNotInList
-                                  ? [...list, staff.find((m: any) => (m._id || m.id) === selectedId)].filter(Boolean)
-                                  : list
-                                return options.map((member: any) => {
+                                const availableForRow = getAvailableStaffForService(serviceIndex).filter(
+                                  (member: any) => member._id || member.id
+                                )
+                                const availableIds = new Set(
+                                  availableForRow.map((m: any) => String(m._id || m.id))
+                                )
+                                const allStaff = staff.filter((member: any) => member._id || member.id)
+                                const sorted = [...allStaff].sort((a: any, b: any) => {
+                                  const aId = String(a._id || a.id)
+                                  const bId = String(b._id || b.id)
+                                  const aAvail = availableIds.has(aId)
+                                  const bAvail = availableIds.has(bId)
+                                  if (aAvail !== bAvail) return aAvail ? -1 : 1
+                                  return (a.name || "").localeCompare(b.name || "", undefined, {
+                                    sensitivity: "base",
+                                  })
+                                })
+                                return sorted.map((member: any) => {
                                   const staffId = member._id || member.id
-                                  const isUnavailable = selectedNotInList && staffId === selectedId
+                                  const isUnavailable = !availableIds.has(String(staffId))
                                   return (
                                     <SelectItem key={staffId} value={staffId}>
                                       {member.name}
-                                      {isUnavailable ? " (unavailable)" : ""}
+                                      {isUnavailable ? " (Not available)" : ""}
                                     </SelectItem>
                                   )
                                 })
@@ -1559,8 +2391,8 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           className={cn(
                             "h-9 w-9 shrink-0 p-0 border border-transparent",
                             service.staffLocked
-                              ? "text-amber-800 bg-amber-100/90 border-amber-300 hover:bg-amber-100"
-                              : "text-slate-400 hover:text-amber-700 hover:bg-amber-50 border-slate-200"
+                              ? "text-red-600 bg-red-50 border-red-200 hover:bg-red-100"
+                              : "text-slate-400 hover:text-red-500 hover:bg-red-50/80 border-slate-200"
                           )}
                           disabled={!service.staffId}
                           title={
@@ -1577,9 +2409,9 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           }
                         >
                           {service.staffLocked ? (
-                            <Lock className="h-4 w-4" aria-hidden />
+                            <Heart className="h-4 w-4 fill-current" aria-hidden />
                           ) : (
-                            <LockOpen className="h-4 w-4" aria-hidden />
+                            <Heart className="h-4 w-4" aria-hidden />
                           )}
                         </Button>
                         {selectedServices.length >= 2 && (() => {
@@ -1588,6 +2420,12 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           const computedStart = minutesToTimeString(serviceStartM)
                           const matchedSlot = timeSlots.find((t) => parseTimeToMinutes(t) === serviceStartM)
                           const displayValue = service.startTime || (formTime ? (matchedSlot ?? computedStart) : undefined)
+                          const startTimeSelectOptions =
+                            displayValue && !timeSlots.includes(displayValue)
+                              ? [...timeSlots, displayValue].sort(
+                                  (a, b) => parseTimeToMinutes(a) - parseTimeToMinutes(b)
+                                )
+                              : timeSlots
                           return (
                             <Select
                               value={displayValue}
@@ -1606,7 +2444,7 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                                 <SelectValue placeholder="Start" />
                               </SelectTrigger>
                               <SelectContent className="max-h-60">
-                                {timeSlots.map((time) => (
+                                {startTimeSelectOptions.map((time) => (
                                   <SelectItem key={time} value={time} className="text-xs tabular-nums">
                                     {time}
                                   </SelectItem>
@@ -1625,15 +2463,6 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
-                      {selectedServices.length >= 2 && service.duration ? (
-                        <div className="flex items-center gap-2 pl-8 text-[11px] text-slate-500 tabular-nums">
-                          <span>Starts {formatMinutesAs12h(serviceStartM)}</span>
-                          <span className="text-slate-300">·</span>
-                          <span>Ends {formatMinutesAs12h(serviceEndM)}</span>
-                          <span className="text-slate-300">·</span>
-                          <span>{service.duration} min</span>
-                        </div>
-                      ) : null}
                     </div>
                   )})}
                 </div>
@@ -1690,33 +2519,33 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
                   </div>
                 </details>
               )}
+              {(formNotes || "").trim() ? (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  className="mt-3 rounded-lg border border-amber-200/90 bg-amber-50/60 px-3 py-2.5 sm:px-4 sm:py-3 cursor-pointer hover:bg-amber-50/95 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
+                  onClick={() => {
+                    setNoteDialogMode("edit")
+                    setAddNoteDraft((formNotes || "").trim())
+                    setAddNoteDialogOpen(true)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      setNoteDialogMode("edit")
+                      setAddNoteDraft((formNotes || "").trim())
+                      setAddNoteDialogOpen(true)
+                    }
+                  }}
+                >
+                  <p className="text-sm text-slate-800 whitespace-pre-wrap break-words leading-relaxed">
+                    {(formNotes || "").trim()}
+                  </p>
+                </div>
+              ) : null}
             </div>
 
-            {/* Notes */}
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-                  <FileText className="h-5 w-5 text-slate-600" />
-                  Additional Notes
-                </h3>
-              </div>
-              <FormField
-                control={form.control}
-                name="notes"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormControl>
-                      <Textarea
-                        placeholder="Enter any additional notes about the appointment"
-                        className="resize-none h-24 border-slate-200 focus:border-indigo-500 focus:ring-indigo-500 rounded-xl"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+
 
           </form>
         </Form>
@@ -1725,7 +2554,105 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
   )
 
   const footerButtons = (
-    <div className={cn("flex justify-end gap-3 w-full flex-nowrap", isDrawer ? "pt-4 border-t border-border/60" : "")}>
+    <div
+      className={cn(
+        "flex justify-end items-center gap-3 w-full flex-nowrap",
+        isDrawer ? "pt-4 border-t border-border/60" : ""
+      )}
+    >
+      {isEditMode ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="More appointment actions"
+              title="More options"
+              disabled={loadingAppointment || isTerminalAppointmentStatus}
+              className="shrink-0 h-10 w-10 rounded-full border-slate-200 bg-white text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <MoreVertical className="h-4 w-4" aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            sideOffset={8}
+            className="w-[min(20rem,calc(100vw-2rem))] z-[200] rounded-lg border-slate-200 p-1 shadow-lg"
+          >
+            <DropdownMenuItem
+              disabled={loadingAppointment}
+              className="gap-2 cursor-pointer"
+              onSelect={() => {
+                setNoteDialogMode("add")
+                setAddNoteDraft("")
+                setAddNoteDialogOpen(true)
+              }}
+            >
+              <CalendarPlus className="h-4 w-4 shrink-0" aria-hidden />
+              Add a note
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="gap-2 cursor-pointer"
+              onSelect={() =>
+                toast({
+                  title: "Add a form",
+                  description: "Client intake forms will be available in a future update.",
+                })
+              }
+            >
+              <FilePlus className="h-4 w-4 shrink-0" aria-hidden />
+              Add a form
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="my-1" />
+            <DropdownMenuItem
+              disabled={loadingAppointment}
+              className="gap-2 cursor-pointer"
+              onSelect={() => void openActivityDialog()}
+            >
+              <History className="h-4 w-4 shrink-0" aria-hidden />
+              View appointment activity
+            </DropdownMenuItem>
+            <DropdownMenuItem className="gap-2 cursor-pointer" onSelect={openRepeatingDialog}>
+              <Repeat className="h-4 w-4 shrink-0" aria-hidden />
+              Set as repeating
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={loadingAppointment || isTerminalAppointmentStatus}
+              className="gap-2 cursor-pointer"
+              onSelect={openRebookDialog}
+            >
+              <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+              Rebook
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="my-1" />
+            <DropdownMenuItem
+              disabled={loadingAppointment || isTerminalAppointmentStatus}
+              className="gap-2 cursor-pointer"
+              onSelect={() => scrollToFormSection("appointment-schedule-section")}
+            >
+              <CalendarClock className="h-4 w-4 shrink-0" aria-hidden />
+              Reschedule
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={loadingAppointment || isTerminalAppointmentStatus}
+              className="gap-2 cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50"
+              onSelect={() => setNoShowDialogOpen(true)}
+            >
+              <UserX className="h-4 w-4 shrink-0" aria-hidden />
+              No-show
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={loadingAppointment || isTerminalAppointmentStatus}
+              className="gap-2 cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50"
+              onSelect={() => setCancelApptDialogOpen(true)}
+            >
+              <X className="h-4 w-4 shrink-0" aria-hidden />
+              Cancel
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       <Button
         variant="outline"
         type="button"
@@ -1788,33 +2715,48 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
         Raise Sale
       </Button>
       <Button
-        type="submit"
-        form="appointmentForm"
+        variant="outline"
+        type="button"
         disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
+        onClick={() => setServiceCheckoutOpen(true)}
         className={cn(
-          "font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]",
-          isDrawer ? "rounded-lg bg-violet-600 hover:bg-violet-700 text-white" : "px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl"
+          "font-medium min-w-[140px]",
+          isDrawer ? "rounded-lg border-violet-300 text-violet-700 hover:bg-violet-50" : "px-8 py-3 border-violet-300 text-violet-700 hover:bg-violet-50 rounded-xl"
         )}
       >
-        {isSubmitting ? (
-          <>
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            {isEditMode ? "Updating..." : "Scheduling..."}
-          </>
-        ) : (
-          <>
-            <CalendarDays className="h-4 w-4 mr-2" />
-            {isEditMode ? "Update Appointment" : "Schedule Appointment"}
-          </>
-        )}
+        <ShoppingCart className="h-4 w-4 mr-2" />
+        Checkout Service
       </Button>
+      {(!isEditMode || isEditAppointmentDirty) ? (
+        <Button
+          type="submit"
+          form="appointmentForm"
+          disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
+          className={cn(
+            "font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]",
+            isDrawer ? "rounded-lg bg-violet-600 hover:bg-violet-700 text-white" : "px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl"
+          )}
+        >
+          {isSubmitting ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              {isEditMode ? "Updating..." : "Scheduling..."}
+            </>
+          ) : (
+            <>
+              <CalendarDays className="h-4 w-4 mr-2" />
+              {isEditMode ? "Update Appointment" : "Schedule Appointment"}
+            </>
+          )}
+        </Button>
+      ) : null}
     </div>
   )
 
   return (
     <>
       {isDrawer ? (
-        <div className="flex flex-col min-h-0 flex-1">
+        <div className="relative flex flex-col min-h-0 flex-1">
           <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
             {formContent}
           </div>
@@ -1827,6 +2769,24 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             )}
             {footerButtons}
           </div>
+          <ServiceCheckoutDialog
+            variant="drawer"
+            open={serviceCheckoutOpen}
+            onOpenChange={setServiceCheckoutOpen}
+            customer={selectedCustomer}
+            staff={staff}
+            catalogServices={services}
+            initialLines={checkoutInitialLines}
+            appointmentDate={formDate}
+            appointmentTime={formTime || ""}
+            notes={formNotes || ""}
+            isEditMode={isEditMode}
+            appointmentId={appointmentId}
+            existingGroupAppointmentIds={existingGroupAppointmentIds}
+            existingBookingGroupId={existingBookingGroupId}
+            consumeResumeDraftIntent={consumeResumeDraftIntent}
+            resumeSavedDraftToken={resumeSavedDraftToken ?? null}
+          />
         </div>
       ) : (
         <div className="w-full max-w-full">
@@ -1916,6 +2876,501 @@ export function AppointmentForm({ initialDate, initialTime, initialStaffId, appo
             </Button>
             <Button onClick={handleSaveNewCustomer}>
               Create Client
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {isDrawer ? null : (
+        <ServiceCheckoutDialog
+          variant="dialog"
+          open={serviceCheckoutOpen}
+          onOpenChange={setServiceCheckoutOpen}
+          customer={selectedCustomer}
+          staff={staff}
+          catalogServices={services}
+          initialLines={checkoutInitialLines}
+          appointmentDate={formDate}
+          appointmentTime={formTime || ""}
+          notes={formNotes || ""}
+          isEditMode={isEditMode}
+          appointmentId={appointmentId}
+          existingGroupAppointmentIds={existingGroupAppointmentIds}
+          existingBookingGroupId={existingBookingGroupId}
+          consumeResumeDraftIntent={consumeResumeDraftIntent}
+          resumeSavedDraftToken={resumeSavedDraftToken ?? null}
+        />
+      )}
+
+      <Dialog
+        open={addNoteDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && addNoteSaving) return
+          setAddNoteDialogOpen(open)
+          if (!open) {
+            setNoteDialogMode("add")
+            setAddNoteDraft("")
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg max-h-[min(90vh,520px)] overflow-y-auto">
+          <button
+            type="button"
+            className="absolute right-4 top-4 rounded-sm p-1 text-slate-500 opacity-70 ring-offset-background transition-opacity hover:opacity-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none z-10"
+            disabled={addNoteSaving}
+            onClick={() => setAddNoteDialogOpen(false)}
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+          <DialogHeader className="pr-10 sm:pr-12">
+            <DialogTitle>{noteDialogMode === "add" ? "Add a note" : "Edit note"}</DialogTitle>
+            <DialogDescription>
+              {noteDialogMode === "add"
+                ? "Your text is appended to this booking's notes and saved for all linked services (or on this draft until you schedule)."
+                : "Update or remove notes for all linked services in this booking (or this draft appointment)."}
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={addNoteDraft}
+            onChange={(e) => setAddNoteDraft(e.target.value)}
+            placeholder="Type your note…"
+            rows={6}
+            className="resize-none border-slate-200 rounded-xl"
+          />
+          <DialogFooter
+            className={cn(
+              "flex-col gap-2 sm:flex-row sm:items-center sm:justify-end",
+              noteDialogMode === "edit" && "sm:justify-between"
+            )}
+          >
+            {noteDialogMode === "edit" ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={addNoteSaving}
+                className="w-full sm:w-auto text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 sm:mr-auto"
+                onClick={() => void deleteNotesFromBooking()}
+              >
+                Delete
+              </Button>
+            ) : null}
+            <div className={cn("flex w-full flex-col-reverse gap-2 sm:flex-row sm:w-auto sm:justify-end")}>
+              {noteDialogMode === "edit" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={addNoteSaving}
+                  onClick={() => setAddNoteDialogOpen(false)}
+                  className="w-full sm:w-auto"
+                >
+                  Cancel
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                disabled={addNoteSaving}
+                onClick={() => void submitNoteDialog()}
+                className="w-full sm:w-auto"
+              >
+                {addNoteSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : noteDialogMode === "edit" ? (
+                  "Update"
+                ) : (
+                  "Save note"
+                )}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={repeatingDialogOpen}
+        onOpenChange={(open) => !recurrenceSaving && setRepeatingDialogOpen(open)}
+      >
+        <DialogContent className="sm:max-w-md max-h-[min(90vh,640px)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Set as repeating</DialogTitle>
+            <DialogDescription>
+              Choose how often this appointment repeats and when it should end. Applies to every row in this booking
+              group.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="space-y-2">
+              <Label>Frequency</Label>
+              <Select
+                value={recurrenceForm.frequency}
+                onValueChange={(v) =>
+                  setRecurrenceForm((f) => ({ ...f, frequency: v as RecurrenceFrequency }))
+                }
+              >
+                <SelectTrigger className="border-slate-200 rounded-xl">
+                  <SelectValue placeholder="Choose frequency" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="doesnt">Doesn&apos;t repeat</SelectItem>
+                  <SelectItem value="repeat">Repeat</SelectItem>
+                  <SelectItem value="daily">Every day</SelectItem>
+                  <SelectItem value="weekly">Every week</SelectItem>
+                  <SelectItem value="monthly">Every month</SelectItem>
+                  <SelectItem value="custom">Custom</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {recurrenceForm.frequency === "custom" ? (
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="space-y-2 min-w-[5rem] flex-1">
+                  <Label htmlFor="rec-custom-interval">Every</Label>
+                  <Input
+                    id="rec-custom-interval"
+                    type="number"
+                    min={1}
+                    value={recurrenceForm.customInterval}
+                    onChange={(e) =>
+                      setRecurrenceForm((f) => ({
+                        ...f,
+                        customInterval: Math.max(1, parseInt(e.target.value, 10) || 1),
+                      }))
+                    }
+                    className="border-slate-200 rounded-xl"
+                  />
+                </div>
+                <div className="space-y-2 w-full sm:w-40">
+                  <Label className="opacity-0 sm:block sm:h-5">Unit</Label>
+                  <Select
+                    value={recurrenceForm.customUnit}
+                    onValueChange={(v) =>
+                      setRecurrenceForm((f) => ({ ...f, customUnit: v as "day" | "week" | "month" }))
+                    }
+                  >
+                    <SelectTrigger className="border-slate-200 rounded-xl">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="day">Day(s)</SelectItem>
+                      <SelectItem value="week">Week(s)</SelectItem>
+                      <SelectItem value="month">Month(s)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            ) : null}
+
+            {recurrenceForm.frequency !== "doesnt" ? (
+              <div className="space-y-2">
+                <Label>Ends</Label>
+                <RadioGroup
+                  value={recurrenceForm.endType}
+                  onValueChange={(v) =>
+                    setRecurrenceForm((f) => ({ ...f, endType: v as "never" | "count" | "date" }))
+                  }
+                  className="grid gap-3"
+                >
+                  <div className="flex items-center space-x-2 rounded-lg border border-slate-100 px-2 py-2">
+                    <RadioGroupItem value="never" id="rec-end-never" />
+                    <Label htmlFor="rec-end-never" className="font-normal cursor-pointer flex-1">
+                      Never
+                    </Label>
+                  </div>
+                  <div className="flex flex-col gap-2 rounded-lg border border-slate-100 px-2 py-2 sm:flex-row sm:items-center">
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <RadioGroupItem value="count" id="rec-end-count" />
+                      <Label htmlFor="rec-end-count" className="font-normal cursor-pointer whitespace-nowrap">
+                        After
+                      </Label>
+                    </div>
+                    <div className="flex items-center gap-2 flex-1 flex-wrap pl-6 sm:pl-0">
+                      <Input
+                        type="number"
+                        min={1}
+                        disabled={recurrenceForm.endType !== "count"}
+                        value={recurrenceForm.endAfterCount}
+                        onChange={(e) =>
+                          setRecurrenceForm((f) => ({
+                            ...f,
+                            endAfterCount: Math.max(1, parseInt(e.target.value, 10) || 1),
+                            endType: "count",
+                          }))
+                        }
+                        onFocus={() => setRecurrenceForm((f) => ({ ...f, endType: "count" }))}
+                        className="h-9 w-20 border-slate-200 rounded-lg"
+                      />
+                      <span className="text-sm text-slate-600">times</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 rounded-lg border border-slate-100 px-2 py-2">
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="date" id="rec-end-date" />
+                      <Label htmlFor="rec-end-date" className="font-normal cursor-pointer">
+                        Specific date
+                      </Label>
+                    </div>
+                    {recurrenceForm.endType === "date" ? (
+                      <div className="pl-6">
+                        <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen} modal>
+                          <PopoverTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full justify-start border-slate-200 rounded-xl font-normal"
+                              onClick={() => setRecurrenceForm((f) => ({ ...f, endType: "date" }))}
+                            >
+                              {recurrenceForm.endOnDate
+                                ? format(recurrenceForm.endOnDate, "PPP")
+                                : "Pick end date"}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0" align="start">
+                            <DayPicker
+                              mode="single"
+                              selected={recurrenceForm.endOnDate ?? undefined}
+                              onSelect={(d) => {
+                                if (d) {
+                                  setRecurrenceForm((f) => ({ ...f, endOnDate: startOfDay(d) }))
+                                  setRecurrenceEndDatePickerOpen(false)
+                                }
+                              }}
+                              disabled={{ before: today }}
+                              className="p-3"
+                            />
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                    ) : null}
+                  </div>
+                </RadioGroup>
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" disabled={recurrenceSaving} onClick={() => setRepeatingDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" disabled={recurrenceSaving} onClick={() => void saveRecurrence()}>
+              {recurrenceSaving ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                "Save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={rebookDialogOpen} onOpenChange={setRebookDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rebook</DialogTitle>
+            <DialogDescription>Select a time to book. You&apos;ll open the new appointment flow with the same client.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="space-y-2">
+              <Label>Date</Label>
+              <Popover open={rebookDatePickerOpen} onOpenChange={setRebookDatePickerOpen} modal>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start border-slate-200 rounded-xl font-medium text-slate-700"
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4 opacity-70" />
+                    {format(rebookDate, "PPP")}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0 border border-slate-200 shadow-lg" align="start">
+                  <DayPicker
+                    mode="single"
+                    selected={rebookDate}
+                    onSelect={(d) => {
+                      if (d) {
+                        setRebookDate(startOfDay(d))
+                        setRebookDatePickerOpen(false)
+                      }
+                    }}
+                    disabled={{ before: today }}
+                    className="p-4"
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+            <div className="space-y-2">
+              <Label>Time</Label>
+              <Select value={rebookTime || undefined} onValueChange={setRebookTime}>
+                <SelectTrigger className="h-12 border-slate-200 rounded-xl">
+                  <SelectValue placeholder="Select a time" />
+                </SelectTrigger>
+                <SelectContent className="max-h-60 overflow-y-auto rounded-xl">
+                  {timeSlots.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setRebookDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirmRebook} disabled={!rebookTime}>
+              Continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={activityDialogOpen}
+        onOpenChange={(open) => {
+          setActivityDialogOpen(open)
+          if (!open) setActivityDetail(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Appointment activity</DialogTitle>
+            <DialogDescription className="text-slate-600">
+              Summary for this booking{existingBookingGroupId ? " (primary row)" : ""}.
+            </DialogDescription>
+          </DialogHeader>
+          {activityLoading ? (
+            <div className="flex items-center gap-2 py-6 text-sm text-slate-600">
+              <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden />
+              Loading…
+            </div>
+          ) : activityDetail ? (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-[7.5rem_1fr] gap-x-2 gap-y-2">
+                <span className="text-slate-500">Status</span>
+                <span className="font-medium text-slate-900 capitalize">{String(activityDetail.status || "—").replace(/_/g, " ")}</span>
+                <span className="text-slate-500">Date</span>
+                <span className="font-medium text-slate-900">{activityDetail.date || "—"}</span>
+                <span className="text-slate-500">Time</span>
+                <span className="font-medium text-slate-900">{activityDetail.time || "—"}</span>
+                {activityDetail.bookingGroupId ? (
+                  <>
+                    <span className="text-slate-500">Group</span>
+                    <span className="font-mono text-xs text-slate-800 break-all">{String(activityDetail.bookingGroupId)}</span>
+                  </>
+                ) : null}
+                <span className="text-slate-500">Created</span>
+                <span className="text-slate-800">
+                  {activityDetail.createdAt
+                    ? format(new Date(activityDetail.createdAt), "dd MMM yyyy, HH:mm")
+                    : "—"}
+                </span>
+                <span className="text-slate-500">Last updated</span>
+                <span className="text-slate-800">
+                  {activityDetail.updatedAt
+                    ? format(new Date(activityDetail.updatedAt), "dd MMM yyyy, HH:mm")
+                    : "—"}
+                </span>
+                {activityDetail.createdBy ? (
+                  <>
+                    <span className="text-slate-500">Created by</span>
+                    <span className="text-slate-800">{String(activityDetail.createdBy)}</span>
+                  </>
+                ) : null}
+              </div>
+              {(activityDetail.notes || "").trim() ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Note</div>
+                  <p className="mt-1 whitespace-pre-wrap text-slate-800">{String(activityDetail.notes).trim()}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-600 py-4">No details loaded.</p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setActivityDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cancelApptDialogOpen} onOpenChange={(o) => !statusActionLoading && setCancelApptDialogOpen(o)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel this appointment?</DialogTitle>
+            <DialogDescription className="text-slate-600">
+              {appointmentIdsForGroupActions.length > 1
+                ? `This will cancel all ${appointmentIdsForGroupActions.length} linked services in this booking.`
+                : "This will mark the appointment as cancelled."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={statusActionLoading}
+              onClick={() => setCancelApptDialogOpen(false)}
+            >
+              Back
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={statusActionLoading}
+              onClick={() => void confirmCancelAppointmentAction()}
+            >
+              {statusActionLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Cancelling…
+                </>
+              ) : (
+                "Confirm cancel"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={noShowDialogOpen} onOpenChange={(o) => !statusActionLoading && setNoShowDialogOpen(o)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark as no-show?</DialogTitle>
+            <DialogDescription className="text-slate-600">
+              {appointmentIdsForGroupActions.length > 1
+                ? `All ${appointmentIdsForGroupActions.length} linked services will be marked as no-show.`
+                : "This appointment will be marked as missed (no-show)."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={statusActionLoading}
+              onClick={() => setNoShowDialogOpen(false)}
+            >
+              Back
+            </Button>
+            <Button
+              type="button"
+              className="bg-red-600 hover:bg-red-700"
+              disabled={statusActionLoading}
+              onClick={() => void confirmNoShowAction()}
+            >
+              {statusActionLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Updating…
+                </>
+              ) : (
+                "Confirm no-show"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

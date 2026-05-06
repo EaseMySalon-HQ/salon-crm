@@ -225,6 +225,8 @@ interface ServiceItem {
   membershipDiscountPercent?: number
   /** Covered by prepaid package — show 100% discount, not ₹0 list price with 0% off */
   isPackageRedemption?: boolean
+  /** Prefilled from appointment (Raise Sale / Continue to payment) — only qty, price, discount editable */
+  appointmentLineLocked?: boolean
 }
 
 interface ProductItem {
@@ -235,6 +237,7 @@ interface ProductItem {
   price: number
   discount: number
   total: number
+  appointmentLineLocked?: boolean
 }
 
 interface MembershipItem {
@@ -246,6 +249,8 @@ interface MembershipItem {
   quantity: number
   total: number
   staffId: string
+  discount?: number
+  appointmentLineLocked?: boolean
 }
 
 interface PackageItem {
@@ -257,6 +262,8 @@ interface PackageItem {
   quantity: number
   total: number
   staffId: string
+  discount?: number
+  appointmentLineLocked?: boolean
 }
 
 /** Client prepaid wallet plan sold as a POS line (same bill as services/products). */
@@ -270,6 +277,16 @@ interface PrepaidPlanItem {
   quantity: number
   price: number
   total: number
+  /** Line discount % (0–100) before tax, same semantics as products. */
+  discount?: number
+  appointmentLineLocked?: boolean
+}
+
+/** List price × qty after line-level percent discount (0–100), before tax helpers. */
+function addonLineTaxableBase(unitPrice: number, quantity: number, discountPercent?: number): number {
+  const gross = Math.max(0, Number(unitPrice) || 0) * Math.max(1, Math.floor(Number(quantity) || 1))
+  const d = Math.min(100, Math.max(0, Number(discountPercent) || 0))
+  return gross * (1 - d / 100)
 }
 
 type BillingMode = "create" | "edit" | "exchange"
@@ -363,7 +380,7 @@ function getAvailableStaffIds(
   timeStr: string,
   durationMinutes: number,
   appointments: any[],
-  blockTimes: any[],
+  _blockTimes: any[],
   allStaffIds: string[],
   considerAllAppointments = false
 ): string[] {
@@ -385,17 +402,6 @@ function getAvailableStaffIds(
       const sid = a.staffId?._id || a.staffId?.id || a.staffId
       if (sid) busyStaffIds.add(String(sid))
     }
-  }
-
-  // Block times that apply on this date
-  for (const block of blockTimes) {
-    if (!blockAppliesOnDate(block, dateStr)) continue
-    const blockStaffId = block.staffId?._id || block.staffId?.id || block.staffId
-    if (!blockStaffId) continue
-    const blockStartM = parseTimeToMinutes(block.startTime || "0:00")
-    const blockEndM = parseTimeToMinutes(block.endTime || "23:59")
-    if (blockEndM <= startM || blockStartM >= endM) continue
-    busyStaffIds.add(String(blockStaffId))
   }
 
   return allStaffIds.filter((id) => !busyStaffIds.has(String(id)))
@@ -1219,6 +1225,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               quantity: item.quantity || 1,
               price: item.price || 0,
               total: item.total || (item.price || 0) * (item.quantity || 1),
+              discount: Number(item.discount) || 0,
             })
           }
         })
@@ -1314,6 +1321,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         if (!primaryId) raiseSaleLinkageBaselineRef.current = null
 
         const appointmentData = rawAppointment as any
+        if (
+          Array.isArray(appointmentData.products) &&
+          appointmentData.products.length > 0 &&
+          loadingProducts
+        ) {
+          return
+        }
+
         if (appointmentData.time) {
           setLinkedAppointmentTime(appointmentData.time)
         }
@@ -1366,20 +1381,33 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               const staffMember = staff.find(s =>
                 (s._id || s.id) === svcData.staffId
               )
+              const qty = Math.max(1, Math.floor(Number(svcData.quantity) || 1))
+              const unitPrice = Number(svcData.price) || Number(service.price) || 0
+              const baseAmount = unitPrice * qty
+              const discPct = Math.min(100, Math.max(0, Number(svcData.discount) || 0))
+              const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+              const applyTax = taxSettings?.enableTax !== false && service.taxApplicable === true
+              const { total: lineTotal } = computeLineTotalAndTax(
+                baseAmount,
+                discPct,
+                serviceTaxRate,
+                applyTax
+              )
               serviceItemsToAdd.push({
                 id: Date.now().toString() + Math.random(),
                 serviceId: service._id || service.id,
                 staffId: svcData.staffId || "",
-                quantity: 1,
-                price: svcData.price ?? service.price ?? 0,
-                discount: 0,
-                total: svcData.price ?? service.price ?? 0,
+                quantity: qty,
+                price: unitPrice,
+                discount: discPct,
+                total: lineTotal,
                 staffContributions: (svcData.staffId && staffMember) ? [{
                   staffId: svcData.staffId,
                   staffName: staffMember.name || svcData.staffName || "",
                   percentage: 100,
-                  amount: svcData.price ?? service.price ?? 0
-                }] : []
+                  amount: lineTotal
+                }] : [],
+                appointmentLineLocked: true,
               })
               console.log("Pre-filled service:", service.name)
             }
@@ -1393,22 +1421,232 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             const staffMember = staff.find(s =>
               (s._id || s.id) === appointmentData.staffId
             )
+            const qty = Math.max(1, Math.floor(Number(appointmentData.quantity) || 1))
+            const unitPrice = Number(appointmentData.servicePrice) || Number(service.price) || 0
+            const baseAmount = unitPrice * qty
+            const discPct = Math.min(100, Math.max(0, Number(appointmentData.discount) || 0))
+            const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+            const applyTax = taxSettings?.enableTax !== false && service.taxApplicable === true
+            const { total: lineTotal } = computeLineTotalAndTax(
+              baseAmount,
+              discPct,
+              serviceTaxRate,
+              applyTax
+            )
             serviceItemsToAdd.push({
               id: Date.now().toString(),
               serviceId: service._id || service.id,
               staffId: appointmentData.staffId || "",
-              quantity: 1,
-              price: service.price || appointmentData.servicePrice || 0,
-              discount: 0,
-              total: service.price || appointmentData.servicePrice || 0,
+              quantity: qty,
+              price: unitPrice,
+              discount: discPct,
+              total: lineTotal,
               staffContributions: (appointmentData.staffId && staffMember) ? [{
                 staffId: appointmentData.staffId,
                 staffName: staffMember.name || appointmentData.staffName || "",
                 percentage: 100,
-                amount: service.price || appointmentData.servicePrice || 0
-              }] : []
+                amount: lineTotal
+              }] : [],
+              appointmentLineLocked: true,
             })
             console.log("Pre-filled service:", service.name)
+          }
+        }
+
+        const productItemsToAdd: ProductItem[] = []
+        const productsFromPayload = appointmentData.products
+        const priceInclusiveOfTaxPrefill = paymentSettings?.priceInclusiveOfTax !== false
+        const lineTotalForProductPrefill = (
+          baseAmount: number,
+          discountPct: number,
+          taxRate: number,
+          applyTax: boolean
+        ): number => {
+          const discountedAmount = baseAmount * (1 - (discountPct || 0) / 100)
+          if (!applyTax) return discountedAmount
+          if (priceInclusiveOfTaxPrefill) return discountedAmount
+          return discountedAmount + (discountedAmount * taxRate) / 100
+        }
+
+        if (Array.isArray(productsFromPayload) && productsFromPayload.length > 0 && products.length > 0) {
+          for (const pData of productsFromPayload) {
+            const product = products.find(
+              (p) => String(p._id || p.id) === String(pData.productId)
+            )
+            if (!product) continue
+            const basePrice = Number(pData.price) || Number(product.price) || 0
+            const qty = Math.max(1, Math.floor(Number(pData.quantity) || 1))
+            let productTaxRate = 18
+            if (product?.taxCategory && taxSettings) {
+              switch (product.taxCategory) {
+                case "essential":
+                  productTaxRate = taxSettings.essentialProductRate || 5
+                  break
+                case "intermediate":
+                  productTaxRate = taxSettings.intermediateProductRate || 12
+                  break
+                case "standard":
+                  productTaxRate = taxSettings.standardProductRate || 18
+                  break
+                case "luxury":
+                  productTaxRate = taxSettings.luxuryProductRate || 28
+                  break
+                case "exempt":
+                  productTaxRate = taxSettings.exemptProductRate || 0
+                  break
+              }
+            }
+            const applyTax = taxSettings?.enableTax !== false
+            const baseAmount = basePrice * qty
+            const discPct = Math.min(100, Math.max(0, Number(pData.discount) || 0))
+            const lineTotal = lineTotalForProductPrefill(baseAmount, discPct, productTaxRate, applyTax)
+            productItemsToAdd.push({
+              id: `${Date.now()}-${Math.random()}`,
+              productId: product._id || product.id,
+              staffId: pData.staffId || "",
+              quantity: qty,
+              price: basePrice,
+              discount: discPct,
+              total: lineTotal,
+              appointmentLineLocked: true,
+            })
+            console.log("Pre-filled product:", product.name)
+          }
+        }
+
+        let membershipPlansResolved: any[] = []
+        if (Array.isArray(appointmentData.memberships) && appointmentData.memberships.length > 0) {
+          const plansRes = await MembershipAPI.getPlans({ isActive: true })
+          if (plansRes.success && Array.isArray(plansRes.data)) {
+            membershipPlansResolved = plansRes.data.filter((p: any) => p.isActive !== false)
+          }
+        }
+
+        let packagesResolved: any[] = []
+        if (Array.isArray(appointmentData.packages) && appointmentData.packages.length > 0) {
+          const pkgRes = await PackagesAPI.getAll({ status: "ACTIVE", limit: 500 })
+          if (pkgRes.success) {
+            packagesResolved = pkgRes.data?.packages || []
+          }
+        }
+
+        let prepaidPlansResolved: any[] = []
+        if (Array.isArray(appointmentData.prepaidPlans) && appointmentData.prepaidPlans.length > 0) {
+          const pwRes = await ClientWalletAPI.listPlans({ status: "active" })
+          if (pwRes.success && pwRes.data?.plans) {
+            prepaidPlansResolved = pwRes.data.plans
+          }
+        }
+
+        if (membershipPlansResolved.length > 0) {
+          setPlans(membershipPlansResolved as any)
+        }
+        if (packagesResolved.length > 0) {
+          setPackagesCatalog(packagesResolved)
+        }
+        if (prepaidPlansResolved.length > 0) {
+          setPrepaidWalletPlansForIssue(prepaidPlansResolved)
+        }
+
+        const membershipItemsToAdd: MembershipItem[] = []
+        if (Array.isArray(appointmentData.memberships) && appointmentData.memberships.length > 0) {
+          for (const mData of appointmentData.memberships) {
+            const plan = membershipPlansResolved.find(
+              (p) => String(p._id || p.id) === String(mData.planId)
+            )
+            if (!plan) continue
+            const unitPrice = Number(mData.price) || Number(plan.price) || 0
+            const qty = Math.max(1, Math.floor(Number(mData.quantity) || 1))
+            const discPct = Math.min(100, Math.max(0, Number(mData.discount) || 0))
+            const base = addonLineTaxableBase(unitPrice, qty, discPct)
+            const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { total } = computeMembershipPlanLineTotal(base, {
+              membershipTaxRate: mRate,
+              enableTax: taxSettings?.enableTax !== false,
+              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+            })
+            membershipItemsToAdd.push({
+              id: `${Date.now()}-${Math.random()}`,
+              planId: String(plan._id || plan.id),
+              planName: mData.planName || plan.planName || "Membership",
+              price: unitPrice,
+              durationInDays: Number(plan.durationInDays) || Number(mData.durationInDays) || 0,
+              quantity: qty,
+              total,
+              staffId: mData.staffId || "",
+              discount: discPct,
+              appointmentLineLocked: true,
+            })
+            console.log("Pre-filled membership:", plan.planName)
+          }
+        }
+
+        const packageItemsToAdd: PackageItem[] = []
+        if (Array.isArray(appointmentData.packages) && appointmentData.packages.length > 0) {
+          for (const pData of appointmentData.packages) {
+            const pkg = packagesResolved.find(
+              (p) => String(p._id || p.id) === String(pData.packageId)
+            )
+            if (!pkg) continue
+            const unitPrice =
+              Number(pData.price) || Number(pkg.total_price) || 0
+            const qty = Math.max(1, Math.floor(Number(pData.quantity) || 1))
+            const discPct = Math.min(100, Math.max(0, Number(pData.discount) || 0))
+            const base = addonLineTaxableBase(unitPrice, qty, discPct)
+            const pRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { total } = computePackageLineTotal(base, {
+              packageTaxRate: pRate,
+              enableTax: taxSettings?.enableTax !== false,
+              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+            })
+            packageItemsToAdd.push({
+              id: `${Date.now()}-${Math.random()}`,
+              packageId: String(pkg._id || pkg.id),
+              packageName: pData.packageName || pkg.name || "Package",
+              totalSittings: Number(pkg.total_sittings) || Number(pData.totalSittings) || 0,
+              price: unitPrice,
+              quantity: qty,
+              total,
+              staffId: pData.staffId || "",
+              discount: discPct,
+              appointmentLineLocked: true,
+            })
+            console.log("Pre-filled package:", pkg.name)
+          }
+        }
+
+        const prepaidPlanItemsToAdd: PrepaidPlanItem[] = []
+        if (Array.isArray(appointmentData.prepaidPlans) && appointmentData.prepaidPlans.length > 0) {
+          for (const prData of appointmentData.prepaidPlans) {
+            const wPlan = prepaidPlansResolved.find(
+              (p) => String(p._id || p.id) === String(prData.planId)
+            )
+            if (!wPlan) continue
+            const unitPrice = Number(prData.price) || Number(wPlan.payAmount) || 0
+            const qty = Math.max(1, Math.floor(Number(prData.quantity) || 1))
+            const discPct = Math.min(100, Math.max(0, Number(prData.discount) || 0))
+            const base = addonLineTaxableBase(unitPrice, qty, discPct)
+            const prepaidRate =
+              taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { total } = computeMembershipPlanLineTotal(base, {
+              membershipTaxRate: prepaidRate,
+              enableTax: taxSettings?.enableTax !== false,
+              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+            })
+            prepaidPlanItemsToAdd.push({
+              id: `${Date.now()}-${Math.random()}`,
+              planId: String(wPlan._id || wPlan.id),
+              planName: prData.planName || wPlan.name || "Prepaid",
+              creditAmount: Number(wPlan.creditAmount) || Number(prData.creditAmount) || 0,
+              validityDays: Number(wPlan.validityDays) || Number(prData.validityDays) || 0,
+              staffId: prData.staffId || "",
+              quantity: qty,
+              price: unitPrice,
+              total,
+              discount: discPct,
+              appointmentLineLocked: true,
+            })
+            console.log("Pre-filled prepaid plan:", wPlan.name)
           }
         }
 
@@ -1426,10 +1664,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               staffId: String(si.staffId ?? ""),
               quantity: Math.max(1, Math.floor(Number(si.quantity) || 1)),
             })),
-            extraProducts: 0,
-            extraMemberships: 0,
-            extraPackages: 0,
-            extraPrepaid: 0,
+            extraProducts: productItemsToAdd.length,
+            extraMemberships: membershipItemsToAdd.filter((m) => m.planId).length,
+            extraPackages: packageItemsToAdd.filter((p) => p.packageId).length,
+            extraPrepaid: prepaidPlanItemsToAdd.filter((p) => p.planId).length,
           })
         }
 
@@ -1437,11 +1675,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           setServiceItems(serviceItemsToAdd)
         }
 
-        // Clear the URL parameter after reading it
-        if (typeof window !== 'undefined') {
+        if (productItemsToAdd.length > 0) {
+          setProductItems(productItemsToAdd)
+        }
+
+        if (membershipItemsToAdd.length > 0) {
+          setMembershipItems(membershipItemsToAdd)
+        }
+
+        if (packageItemsToAdd.length > 0) {
+          setPackageItems(packageItemsToAdd)
+        }
+
+        if (prepaidPlanItemsToAdd.length > 0) {
+          setPrepaidPlanItems(prepaidPlanItemsToAdd)
+        }
+
+        // Clear the URL parameter after reading it (use router.replace so Next history state is preserved — Back returns to prior page)
+        if (typeof window !== "undefined") {
           const url = new URL(window.location.href)
-          url.searchParams.delete('appointment')
-          window.history.replaceState({}, '', url.toString())
+          url.searchParams.delete("appointment")
+          router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false })
         }
       } catch (error) {
         console.error('Failed to parse appointment data:', error)
@@ -1450,7 +1704,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     
     // Call the async function
     prefillAppointmentData()
-  }, [searchParams, services, clients, staff])
+  }, [searchParams, services, clients, staff, products, loadingProducts, taxSettings, paymentSettings, router])
 
   // Pre-fill form from lead data in URL
   useEffect(() => {
@@ -1528,11 +1782,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           }
         }
 
-        // Clear the URL parameter after reading it
-        if (typeof window !== 'undefined') {
+        // Clear the URL parameter after reading it (use router.replace so Next history state is preserved)
+        if (typeof window !== "undefined") {
           const url = new URL(window.location.href)
-          url.searchParams.delete('lead')
-          window.history.replaceState({}, '', url.toString())
+          url.searchParams.delete("lead")
+          router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false })
         }
       } catch (error) {
         console.error('Failed to parse lead data:', error)
@@ -1541,7 +1795,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     
     // Call the async function
     prefillLeadData()
-  }, [searchParams, services, clients, staff])
+  }, [searchParams, services, clients, staff, router])
 
   // Pre-fill from client panel: package service redemption (₹0 — prepaid with package)
   useEffect(() => {
@@ -1637,7 +1891,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         if (typeof window !== "undefined") {
           const url = new URL(window.location.href)
           url.searchParams.delete("packageRedeem")
-          window.history.replaceState({}, "", url.toString())
+          router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false })
         }
       } catch (error) {
         console.error("Failed to parse packageRedeem data:", error)
@@ -1645,7 +1899,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
 
     prefillPackageRedeem()
-  }, [searchParams, services, clients, staff])
+  }, [searchParams, services, clients, staff, router])
 
   // Open Quick Sale for client wallet issue: /quick-sale?clientId=...&prepaidWallet=1
   useEffect(() => {
@@ -1673,7 +1927,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           const url = new URL(window.location.href)
           url.searchParams.delete("clientId")
           url.searchParams.delete("prepaidWallet")
-          window.history.replaceState({}, "", url.toString())
+          router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false })
         }
       } catch (e) {
         console.error("Quick Sale clientId prefill:", e)
@@ -1681,7 +1935,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
 
     void run()
-  }, [searchParams, clients])
+  }, [searchParams, clients, router])
 
   useEffect(() => {
     if (addItemSection !== "prepaid") return
@@ -1719,6 +1973,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           quantity: 1,
           price: 0,
           total: 0,
+          discount: 0,
         },
       ]
     })
@@ -2597,7 +2852,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setMembershipItems((items) =>
       items.map((m) => {
         if (!m.planId) return m
-        const base = m.price * m.quantity
+        const base = addonLineTaxableBase(m.price, m.quantity, m.discount)
         const mRate = taxSettings.membershipTaxRate ?? taxSettings.serviceTaxRate ?? 5
         const { total } = computeMembershipPlanLineTotal(base, {
           membershipTaxRate: mRate,
@@ -2620,7 +2875,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setPackageItems((items) =>
       items.map((p) => {
         if (!p.packageId) return p
-        const base = p.price * p.quantity
+        const base = addonLineTaxableBase(p.price, p.quantity, p.discount)
         const pRate = taxSettings.packageTaxRate ?? taxSettings.serviceTaxRate ?? 5
         const { total } = computePackageLineTotal(base, {
           packageTaxRate: pRate,
@@ -2738,13 +2993,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       durationInDays: 0,
       quantity: 1,
       total: 0,
+      discount: 0,
     }
     setMembershipItems([...membershipItems, newItem])
   }
 
   // Remove membership item
   const removeMembershipItem = (id: string) => {
-    setMembershipItems((items) => items.filter((item) => item.id !== id))
+    setMembershipItems((items) =>
+      items.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   // Update membership item
@@ -2752,6 +3010,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setMembershipItems((items) =>
       items.map((item) => {
         if (item.id !== id) return item
+        if (item.appointmentLineLocked && field !== "quantity" && field !== "price") {
+          return item
+        }
         const updated = { ...item, [field]: value }
         if (field === "planId" && value) {
           const plan = plans.find((p) => (p._id || p.id) === value)
@@ -2759,7 +3020,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.planName = plan.planName
             updated.price = plan.price ?? 0
             updated.durationInDays = plan.durationInDays ?? 0
-            const base = updated.price * updated.quantity
+            const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
             const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
             const { total } = computeMembershipPlanLineTotal(base, {
               membershipTaxRate: mRate,
@@ -2769,7 +3030,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.total = total
           }
         } else if (field === "quantity") {
-          const base = updated.price * updated.quantity
+          const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
+          const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const { total } = computeMembershipPlanLineTotal(base, {
+            membershipTaxRate: mRate,
+            enableTax: taxSettings?.enableTax !== false,
+            priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+          })
+          updated.total = total
+        } else if (field === "price") {
+          const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
           const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
           const { total } = computeMembershipPlanLineTotal(base, {
             membershipTaxRate: mRate,
@@ -2801,18 +3071,24 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       quantity: 1,
       total: 0,
       staffId: "",
+      discount: 0,
     }
     setPackageItems([...packageItems, newItem])
   }
 
   const removePackageItem = (id: string) => {
-    setPackageItems((items) => items.filter((item) => item.id !== id))
+    setPackageItems((items) =>
+      items.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   const updatePackageItem = (id: string, field: keyof PackageItem, value: any) => {
     setPackageItems((items) =>
       items.map((item) => {
         if (item.id !== id) return item
+        if (item.appointmentLineLocked && field !== "quantity" && field !== "price") {
+          return item
+        }
         const updated = { ...item, [field]: value }
         if (field === "packageId" && value) {
           const pkg = packagesCatalog.find((p) => (p._id || p.id) === value)
@@ -2820,7 +3096,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.packageName = pkg.name || ""
             updated.totalSittings = pkg.total_sittings ?? 0
             updated.price = Number(pkg.total_price) || 0
-            const base = updated.price * updated.quantity
+            const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
             const pRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
             const { total } = computePackageLineTotal(base, {
               packageTaxRate: pRate,
@@ -2830,7 +3106,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.total = total
           }
         } else if (field === "quantity") {
-          const base = updated.price * updated.quantity
+          const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
+          const pRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const { total } = computePackageLineTotal(base, {
+            packageTaxRate: pRate,
+            enableTax: taxSettings?.enableTax !== false,
+            priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+          })
+          updated.total = total
+        } else if (field === "price") {
+          const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
           const pRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
           const { total } = computePackageLineTotal(base, {
             packageTaxRate: pRate,
@@ -2855,18 +3140,24 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       quantity: 1,
       price: 0,
       total: 0,
+      discount: 0,
     }
     setPrepaidPlanItems((rows) => [...rows, newItem])
   }
 
   const removePrepaidPlanItem = (id: string) => {
-    setPrepaidPlanItems((rows) => rows.filter((item) => item.id !== id))
+    setPrepaidPlanItems((rows) =>
+      rows.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   const updatePrepaidPlanItem = (id: string, field: keyof PrepaidPlanItem, value: any) => {
     setPrepaidPlanItems((rows) =>
       rows.map((item) => {
         if (item.id !== id) return item
+        if (item.appointmentLineLocked && field !== "quantity" && field !== "price") {
+          return item
+        }
         const updated: PrepaidPlanItem = { ...item, [field]: value }
         if (field === "planId" && value) {
           const plan = prepaidWalletPlansForIssue.find((p) => String(p._id) === String(value))
@@ -2875,7 +3166,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.price = Number(plan.payAmount) || 0
             updated.creditAmount = Number(plan.creditAmount) || 0
             updated.validityDays = Number(plan.validityDays) || 0
-            const base = updated.price * updated.quantity
+            const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
             const prepaidRate =
               taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
             const { total } = computeMembershipPlanLineTotal(base, {
@@ -2885,6 +3176,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             })
             updated.total = total
           }
+        } else if (field === "quantity" || field === "price") {
+          const q = Math.max(1, Math.floor(Number(updated.quantity) || 1))
+          updated.quantity = q
+          const base = addonLineTaxableBase(Number(updated.price), q, updated.discount)
+          const prepaidRate =
+            taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const { total } = computeMembershipPlanLineTotal(base, {
+            membershipTaxRate: prepaidRate,
+            enableTax: taxSettings?.enableTax !== false,
+            priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+          })
+          updated.total = total
         }
         return updated
       })
@@ -2900,6 +3203,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setServiceItems((items) =>
       items.map((item) => {
         if (item.id === id) {
+          if (
+            item.appointmentLineLocked &&
+            field !== "quantity" &&
+            field !== "price" &&
+            field !== "discount"
+          ) {
+            return item
+          }
           const updatedItem = { ...item, [field]: value }
 
           // Auto-fill price when service is selected (Price = base cost, Disc = membership discount %, Total = after discount)
@@ -2972,6 +3283,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setProductItems((items) =>
       items.map((item) => {
         if (item.id === id) {
+          if (
+            item.appointmentLineLocked &&
+            field !== "quantity" &&
+            field !== "price" &&
+            field !== "discount"
+          ) {
+            return item
+          }
           const updatedItem = { ...item, [field]: value }
 
           // Auto-fill price when product is selected
@@ -3016,12 +3335,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
   // Remove service item
   const removeServiceItem = (id: string) => {
-    setServiceItems((items) => items.filter((item) => item.id !== id))
+    setServiceItems((items) =>
+      items.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   // Remove product item
   const removeProductItem = (id: string) => {
-    setProductItems((items) => items.filter((item) => item.id !== id))
+    setProductItems((items) =>
+      items.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   /** Per included service: plan remaining minus *free* units allocated on this bill (same order as applyMembershipPricingRef). */
@@ -3323,7 +3646,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           .reduce((sum, m) => {
             const baseAmount = m.price * m.quantity
             const membershipTaxRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, membershipTaxRate, membershipTaxRate > 0)
+            const disc = m.discount ?? 0
+            const { taxAmount } = computeLineTotalAndTax(
+              baseAmount,
+              disc,
+              membershipTaxRate,
+              membershipTaxRate > 0
+            )
             return sum + taxAmount
           }, 0)
       : 0
@@ -3335,7 +3664,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           .reduce((sum, p) => {
             const baseAmount = p.price * p.quantity
             const packageTaxRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, packageTaxRate > 0)
+            const disc = p.discount ?? 0
+            const { taxAmount } = computeLineTotalAndTax(
+              baseAmount,
+              disc,
+              packageTaxRate,
+              packageTaxRate > 0
+            )
             return sum + taxAmount
           }, 0)
       : 0
@@ -3348,7 +3683,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             const baseAmount = p.price * p.quantity
             const prepaidTaxRate =
               taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, prepaidTaxRate, prepaidTaxRate > 0)
+            const disc = p.discount ?? 0
+            const { taxAmount } = computeLineTotalAndTax(
+              baseAmount,
+              disc,
+              prepaidTaxRate,
+              prepaidTaxRate > 0
+            )
             return sum + taxAmount
           }, 0)
       : 0
@@ -4335,7 +4676,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               .reduce((sum, m) => {
                 const baseAmount = m.price * m.quantity
                 const membershipTaxRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, membershipTaxRate, membershipTaxRate > 0)
+                const { taxAmount } = computeLineTotalAndTax(
+                  baseAmount,
+                  m.discount ?? 0,
+                  membershipTaxRate,
+                  membershipTaxRate > 0
+                )
                 return sum + taxAmount
               }, 0)
           : 0
@@ -4347,7 +4693,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               .reduce((sum, p) => {
                 const baseAmount = p.price * p.quantity
                 const packageTaxRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, packageTaxRate > 0)
+                const { taxAmount } = computeLineTotalAndTax(
+                  baseAmount,
+                  p.discount ?? 0,
+                  packageTaxRate,
+                  packageTaxRate > 0
+                )
                 return sum + taxAmount
               }, 0)
           : 0
@@ -4360,7 +4711,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 const baseAmount = p.price * p.quantity
                 const prepaidTaxRate =
                   taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, prepaidTaxRate, prepaidTaxRate > 0)
+                const { taxAmount } = computeLineTotalAndTax(
+                  baseAmount,
+                  p.discount ?? 0,
+                  prepaidTaxRate,
+                  prepaidTaxRate > 0
+                )
                 return sum + taxAmount
               }, 0)
           : 0
@@ -6609,7 +6965,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   {serviceItems.map((item, serviceIndex) => (
                   <div
                     key={item.id}
-                    className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200"
+                    title={
+                      item.appointmentLineLocked
+                        ? "From appointment — only quantity, price, and line discount can be changed"
+                        : undefined
+                    }
+                    className={cn(
+                      "grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200",
+                      item.appointmentLineLocked && "bg-slate-50/80 ring-1 ring-inset ring-amber-200/70"
+                    )}
                   >
                     <div className="relative" data-quicksale-dropdown>
                       {item.serviceId ? (
@@ -6619,8 +6983,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               {services.find(s => (s._id || s.id) === item.serviceId)?.name || 'Unknown Service'}
                             </span>
                             <button
+                              type="button"
                               onClick={() => updateServiceItem(item.id, "serviceId", "")}
-                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground"
+                              disabled={item.appointmentLineLocked}
+                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
                             >
                               ×
                             </button>
@@ -6654,6 +7020,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             onChange={(e) => setServiceDropdownSearch(e.target.value)}
                             className="h-8 pl-7 pr-8 text-sm"
                             onFocus={(e) => {
+                              if (item.appointmentLineLocked) {
+                                e.target.blur()
+                                return
+                              }
                               e.target.select()
                               setActiveServiceDropdown(item.id)
                             }}
@@ -6671,7 +7041,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           )}
                         </div>
                       )}
-                      {activeServiceDropdown === item.id && (
+                      {activeServiceDropdown === item.id && !item.appointmentLineLocked && (
                         <div className="absolute top-full left-0 right-0 z-[9999] mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
                           {loadingServices ? (
                             <div className="p-2 text-center text-sm text-muted-foreground">Loading services...</div>
@@ -6742,7 +7112,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         }
                       }}
                       initialContributions={item.staffContributions || []}
-                      disabled={loadingStaff}
+                      disabled={loadingStaff || !!item.appointmentLineLocked}
                     />
 
                     <div className="flex items-center gap-1">
@@ -6797,6 +7167,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                      disabled={!!item.appointmentLineLocked}
+                      title={item.appointmentLineLocked ? "Cannot remove appointment line" : undefined}
                       onClick={() => removeServiceItem(item.id)}
                     >
                       <X className="h-3 w-3" />
@@ -6835,8 +7207,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
                 <div style={{ overflow: 'visible' }}>
                   {productItems.map((item) => (
-                  <div key={item.id} className="space-y-2">
-                    <div className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-emerald-50/30 transition-all duration-200">
+                    <div key={item.id} className="space-y-2">
+                    <div
+                      title={
+                        item.appointmentLineLocked
+                          ? "From appointment — only quantity, price, and line discount can be changed"
+                          : undefined
+                      }
+                      className={cn(
+                        "grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-emerald-50/30 transition-all duration-200",
+                        item.appointmentLineLocked && "bg-slate-50/80 ring-1 ring-inset ring-amber-200/70"
+                      )}
+                    >
                       <div className="relative" data-quicksale-dropdown>
                         {item.productId ? (
                           <div className="flex items-center justify-between h-8 px-3 py-1 bg-muted rounded-md text-sm">
@@ -6844,8 +7226,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               {products.find(p => (p._id || p.id) === item.productId)?.name || 'Unknown Product'}
                             </span>
                             <button
+                              type="button"
                               onClick={() => updateProductItem(item.id, "productId", "")}
-                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground"
+                              disabled={item.appointmentLineLocked}
+                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
                             >
                               ×
                             </button>
@@ -6859,6 +7243,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               onChange={(e) => setProductDropdownSearch(e.target.value)}
                               className="h-8 pl-7 pr-8 text-sm"
                               onFocus={(e) => {
+                                if (item.appointmentLineLocked) {
+                                  e.target.blur()
+                                  return
+                                }
                                 e.target.select()
                                 setActiveProductDropdown(item.id)
                               }}
@@ -6876,7 +7264,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             )}
                           </div>
                         )}
-                        {activeProductDropdown === item.id && (
+                        {activeProductDropdown === item.id && !item.appointmentLineLocked && (
                           <div className="absolute top-full left-0 right-0 z-[9999] mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
                             {loadingProducts ? (
                               <div className="p-2 text-center text-sm text-muted-foreground">Loading products...</div>
@@ -6925,6 +7313,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         key={`product-${item.id}-staff`}
                         value={item.staffId}
                         onValueChange={(value) => updateProductItem(item.id, "staffId", value)}
+                        disabled={item.appointmentLineLocked}
                       >
                         <SelectTrigger className="h-8">
                           <SelectValue placeholder="Select staff" />
@@ -7020,6 +7409,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                        disabled={!!item.appointmentLineLocked}
+                        title={item.appointmentLineLocked ? "Cannot remove appointment line" : undefined}
                         onClick={() => removeProductItem(item.id)}
                       >
                         <X className="h-3 w-3" />
@@ -7093,11 +7484,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     {membershipItems.map((item) => (
                       <div
                         key={item.id}
-                        className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-indigo-50/30 transition-all duration-200"
+                        title={
+                          item.appointmentLineLocked
+                            ? "From appointment — only quantity and price can be changed"
+                            : undefined
+                        }
+                        className={cn(
+                          "grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-indigo-50/30 transition-all duration-200",
+                          item.appointmentLineLocked && "bg-slate-50/80 ring-1 ring-inset ring-amber-200/70"
+                        )}
                       >
                         <Select
                           value={item.planId || "__none__"}
                           onValueChange={(v) => updateMembershipItem(item.id, "planId", v === "__none__" ? "" : v)}
+                          disabled={item.appointmentLineLocked}
                         >
                           <SelectTrigger className="h-8">
                             <SelectValue placeholder="Select plan" />
@@ -7114,6 +7514,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         <Select
                           value={item.staffId || "__none__"}
                           onValueChange={(v) => updateMembershipItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                          disabled={item.appointmentLineLocked}
                         >
                           <SelectTrigger className="h-8">
                             <SelectValue placeholder="Select staff" />
@@ -7152,14 +7553,26 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         <Input
                           type="number"
                           value={item.price}
-                          readOnly
-                          className="h-8 bg-muted"
+                          readOnly={!item.appointmentLineLocked}
+                          onChange={
+                            item.appointmentLineLocked
+                              ? (e) =>
+                                  updateMembershipItem(
+                                    item.id,
+                                    "price",
+                                    Number(e.target.value)
+                                  )
+                              : undefined
+                          }
+                          className={cn("h-8", !item.appointmentLineLocked && "bg-muted")}
                         />
                         <div className="text-sm font-medium">₹{getDisplayTotal(item).toFixed(2)}</div>
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          disabled={!!item.appointmentLineLocked}
+                          title={item.appointmentLineLocked ? "Cannot remove appointment line" : undefined}
                           onClick={() => removeMembershipItem(item.id)}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -7193,11 +7606,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     {packageItems.map((item) => (
                       <div
                         key={item.id}
-                        className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-cyan-50/30 transition-all duration-200"
+                        title={
+                          item.appointmentLineLocked
+                            ? "From appointment — only quantity and price can be changed"
+                            : undefined
+                        }
+                        className={cn(
+                          "grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-cyan-50/30 transition-all duration-200",
+                          item.appointmentLineLocked && "bg-slate-50/80 ring-1 ring-inset ring-amber-200/70"
+                        )}
                       >
                         <Select
                           value={item.packageId || "__none__"}
                           onValueChange={(v) => updatePackageItem(item.id, "packageId", v === "__none__" ? "" : v)}
+                          disabled={item.appointmentLineLocked}
                         >
                           <SelectTrigger className="h-8">
                             <SelectValue placeholder="Select package" />
@@ -7214,6 +7636,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         <Select
                           value={item.staffId || "__none__"}
                           onValueChange={(v) => updatePackageItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                          disabled={item.appointmentLineLocked}
                         >
                           <SelectTrigger className="h-8">
                             <SelectValue placeholder="Select staff" />
@@ -7249,12 +7672,25 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             <Plus className="h-3 w-3" />
                           </Button>
                         </div>
-                        <Input type="number" value={item.price} readOnly className="h-8 bg-muted" />
+                        <Input
+                          type="number"
+                          value={item.price}
+                          readOnly={!item.appointmentLineLocked}
+                          onChange={
+                            item.appointmentLineLocked
+                              ? (e) =>
+                                  updatePackageItem(item.id, "price", Number(e.target.value))
+                              : undefined
+                          }
+                          className={cn("h-8", !item.appointmentLineLocked && "bg-muted")}
+                        />
                         <div className="text-sm font-medium">₹{getDisplayTotal(item).toFixed(2)}</div>
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          disabled={!!item.appointmentLineLocked}
+                          title={item.appointmentLineLocked ? "Cannot remove appointment line" : undefined}
                           onClick={() => removePackageItem(item.id)}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -7295,11 +7731,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         {prepaidPlanItems.map((item) => (
                           <div
                             key={item.id}
-                            className="grid grid-cols-[2fr_1.5fr_80px_100px_100px_40px] gap-2 p-3 border-b border-amber-50/80 last:border-0 items-center text-sm"
+                            title={
+                              item.appointmentLineLocked
+                                ? "From appointment — only quantity and pay amount can be changed"
+                                : undefined
+                            }
+                            className={cn(
+                              "grid grid-cols-[2fr_1.5fr_80px_100px_100px_40px] gap-2 p-3 border-b border-amber-50/80 last:border-0 items-center text-sm",
+                              item.appointmentLineLocked &&
+                                "bg-amber-50/40 ring-1 ring-inset ring-amber-200/60"
+                            )}
                           >
                             <Select
                               value={item.planId || "__none__"}
                               onValueChange={(v) => updatePrepaidPlanItem(item.id, "planId", v === "__none__" ? "" : v)}
+                              disabled={item.appointmentLineLocked}
                             >
                               <SelectTrigger className="h-8 bg-white">
                                 <SelectValue placeholder="Select plan" />
@@ -7316,6 +7762,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             <Select
                               value={item.staffId || "__none__"}
                               onValueChange={(v) => updatePrepaidPlanItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                              disabled={item.appointmentLineLocked}
                             >
                               <SelectTrigger className="h-8 bg-white">
                                 <SelectValue placeholder="Staff" />
@@ -7332,8 +7779,59 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                 })}
                               </SelectContent>
                             </Select>
-                            <div className="text-center text-muted-foreground tabular-nums">1</div>
-                            <div className="text-sm tabular-nums">{item.planId ? item.price.toFixed(0) : "—"}</div>
+                            {item.appointmentLineLocked ? (
+                              <div className="flex items-center gap-0.5 justify-center">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  className="h-7 w-7 p-0"
+                                  onClick={() =>
+                                    updatePrepaidPlanItem(
+                                      item.id,
+                                      "quantity",
+                                      Math.max(1, item.quantity - 1)
+                                    )
+                                  }
+                                >
+                                  <Minus className="h-3 w-3" />
+                                </Button>
+                                <div className="w-7 text-center text-xs font-medium tabular-nums">
+                                  {item.quantity}
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  className="h-7 w-7 p-0"
+                                  onClick={() =>
+                                    updatePrepaidPlanItem(item.id, "quantity", item.quantity + 1)
+                                  }
+                                >
+                                  <Plus className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="text-center text-muted-foreground tabular-nums">1</div>
+                            )}
+                            {item.appointmentLineLocked ? (
+                              <Input
+                                type="number"
+                                className="h-8 bg-white"
+                                value={item.planId ? item.price : ""}
+                                onChange={(e) =>
+                                  updatePrepaidPlanItem(
+                                    item.id,
+                                    "price",
+                                    Number(e.target.value)
+                                  )
+                                }
+                              />
+                            ) : (
+                              <div className="text-sm tabular-nums">
+                                {item.planId ? item.price.toFixed(0) : "—"}
+                              </div>
+                            )}
                             <div className="text-sm font-medium tabular-nums">
                               {item.planId ? `₹${item.total.toFixed(2)}` : "—"}
                             </div>
@@ -7342,6 +7840,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               variant="ghost"
                               size="icon"
                               className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              disabled={!!item.appointmentLineLocked}
+                              title={
+                                item.appointmentLineLocked
+                                  ? "Cannot remove appointment line"
+                                  : undefined
+                              }
                               onClick={() => removePrepaidPlanItem(item.id)}
                             >
                               <Trash2 className="h-4 w-4" />

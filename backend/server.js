@@ -7749,7 +7749,7 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
     }
     const rec = ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none';
     const blockEndDate = endDate && ['daily', 'weekly', 'monthly'].includes(rec) ? String(endDate) : null;
-    const conflicts = await getBlockTimeAppointmentConflicts(
+    const overlappingAppointments = await getBlockTimeAppointmentConflicts(
       Appointment,
       staffId,
       String(startDate),
@@ -7758,15 +7758,6 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
       String(endTime),
       rec
     );
-    if (conflicts.length > 0) {
-      const msg = conflicts.map((c) => `${c.date} ${c.time} - ${c.clientName} (${c.serviceName})`).join('; ');
-      return res.status(400).json({
-        success: false,
-        error: 'Staff has appointment(s) scheduled for the time being blocked',
-        conflicts,
-        errorDetail: msg
-      });
-    }
     const doc = {
       staffId,
       title: String(title).trim(),
@@ -7782,7 +7773,13 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
     const populated = await BlockTime.findById(created._id).lean();
     const staff = await req.businessModels.Staff.findById(created.staffId).select('name').lean();
     const data = { ...populated, staffId: { _id: created.staffId, name: staff?.name || 'Staff' } };
-    res.status(201).json({ success: true, data });
+    const payload = { success: true, data };
+    if (overlappingAppointments.length > 0) {
+      payload.overlappingAppointments = overlappingAppointments;
+      payload.warning =
+        'This block overlaps existing appointments; those appointments were not changed. The block appears on the calendar; bookings during this period are still allowed.';
+    }
+    res.status(201).json(payload);
   } catch (error) {
     logger.error('Error creating block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -7813,7 +7810,7 @@ app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, require
     const finalEndTime = updateData.endTime ?? existing.endTime;
     const finalRec = updateData.recurringFrequency ?? existing.recurringFrequency;
     const finalEndDate = updateData.endDate !== undefined ? updateData.endDate : existing.endDate;
-    const conflicts = await getBlockTimeAppointmentConflicts(
+    const overlappingAppointments = await getBlockTimeAppointmentConflicts(
       Appointment,
       existing.staffId,
       finalStartDate,
@@ -7822,19 +7819,16 @@ app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, require
       finalEndTime,
       finalRec
     );
-    if (conflicts.length > 0) {
-      const msg = conflicts.map((c) => `${c.date} ${c.time} - ${c.clientName} (${c.serviceName})`).join('; ');
-      return res.status(400).json({
-        success: false,
-        error: 'Staff has appointment(s) scheduled for the time being blocked',
-        conflicts,
-        errorDetail: msg
-      });
-    }
     const updated = await BlockTime.findByIdAndUpdate(req.params.id, { $set: updateData }, { new: true }).lean();
     const staff = await req.businessModels.Staff.findById(updated.staffId).select('name').lean();
     const data = { ...updated, staffId: { _id: updated.staffId, name: staff?.name || 'Staff' } };
-    res.json({ success: true, data });
+    const payload = { success: true, data };
+    if (overlappingAppointments.length > 0) {
+      payload.overlappingAppointments = overlappingAppointments;
+      payload.warning =
+        'This block overlaps existing appointments; those appointments were not changed. The block appears on the calendar; bookings during this period are still allowed.';
+    }
+    res.json(payload);
   } catch (error) {
     logger.error('Error updating block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -8613,7 +8607,11 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
     const allServiceIds = [...new Set([...primaryServiceIds.map((id) => id.toString()), ...additionalIds.map((id) => id.toString())])];
     const { Client, Service } = req.businessModels;
     const [clients, services] = await Promise.all([
-      clientIds.length ? Client.find({ _id: { $in: clientIds } }).select('name phone email').lean() : [],
+      clientIds.length
+        ? Client.find({ _id: { $in: clientIds } })
+            .select('name phone email totalVisits totalSpent lastVisit')
+            .lean()
+        : [],
       allServiceIds.length ? Service.find({ _id: { $in: allServiceIds } }).select('name price duration').lean() : [],
     ]);
     const clientMap = new Map(clients.map((c) => [c._id.toString(), c]));
@@ -8652,8 +8650,9 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode } = req.body;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel } = req.body;
     const schedulingMode = rawSchedulingMode === 'custom' ? 'custom' : 'sequential';
+    const allowParallelBooking = rawAllowParallel === true;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -8761,26 +8760,28 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       }
 
       // External conflict check against existing appointments per staff.
-      for (const r of resolved) {
-        const staffId = getPrimaryStaffId(r.raw);
-        if (!staffId) {
-          return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
-        }
-        const result = await detectStaffConflict(
-          { Appointment, BookingHold },
-          {
-            branchId: req.user.branchId,
-            staffId,
-            start: r.startAt,
-            end: r.endAt,
-            skipHoldCheck: true
+      if (!allowParallelBooking) {
+        for (const r of resolved) {
+          const staffId = getPrimaryStaffId(r.raw);
+          if (!staffId) {
+            return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
           }
-        );
-        if (result.conflict) {
-          return res.status(409).json({
-            success: false,
-            error: `Staff is already booked from ${formatTimeForError(r.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(r.time) + r.duration))}`
-          });
+          const result = await detectStaffConflict(
+            { Appointment, BookingHold },
+            {
+              branchId: req.user.branchId,
+              staffId,
+              start: r.startAt,
+              end: r.endAt,
+              skipHoldCheck: true
+            }
+          );
+          if (result.conflict) {
+            return res.status(409).json({
+              success: false,
+              error: `Staff is already booked from ${formatTimeForError(r.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(r.time) + r.duration))}`
+            });
+          }
         }
       }
 
@@ -8887,7 +8888,9 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             error: 'Either staffId or staffAssignments is required',
           });
         }
-        const overlapResult = await detectStaffConflict(
+        const overlapResult = allowParallelBooking
+          ? { conflict: false }
+          : await detectStaffConflict(
           { Appointment, BookingHold },
           {
             branchId: req.user.branchId,
@@ -10231,7 +10234,9 @@ app.post('/api/appointments/finalize-for-billing', authenticateToken, setupBusin
 app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = { ...req.body };
+    const allowParallelBooking = updateData.allowParallelBooking === true;
+    delete updateData.allowParallelBooking;
     const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
 
     // Find the appointment
@@ -10310,7 +10315,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
         }
         return null;
       })();
-      if (primaryStaffId) {
+      if (primaryStaffId && !allowParallelBooking) {
         const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
         const result = await detectStaffConflict(
           { Appointment, BookingHold },
@@ -10366,6 +10371,18 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           status: { $in: ['scheduled', 'confirmed'] }
         },
         { $set: { status: 'arrived' } }
+      );
+    }
+
+    // No-show: mark sibling pre-service cards in the same group so the day view stays in sync after refresh.
+    if (updateData.status === 'missed' && appointment.bookingGroupId) {
+      await Appointment.updateMany(
+        {
+          bookingGroupId: appointment.bookingGroupId,
+          _id: { $ne: appointment._id },
+          status: { $in: ['scheduled', 'confirmed', 'arrived'] }
+        },
+        { $set: { status: 'missed' } }
       );
     }
 

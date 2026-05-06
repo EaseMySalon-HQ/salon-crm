@@ -156,7 +156,32 @@ const appointmentSchema = new mongoose.Schema({
     type: String,
     enum: ['sequential', 'custom'],
     default: 'sequential'
-  }
+  },
+  /**
+   * Optional repeat rule (UI + storage; scheduler integration can use later).
+   * frequency: repeat = generic repeat (weekly-style); custom uses customInterval + customUnit.
+   */
+  recurrence: {
+    frequency: {
+      type: String,
+      enum: ['doesnt', 'repeat', 'daily', 'weekly', 'monthly', 'custom'],
+      default: 'doesnt',
+    },
+    customInterval: { type: Number, default: 1, min: 1 },
+    customUnit: {
+      type: String,
+      enum: ['day', 'week', 'month'],
+      default: 'week',
+    },
+    endType: {
+      type: String,
+      enum: ['never', 'count', 'date'],
+      default: 'never',
+    },
+    endAfterCount: { type: Number, default: null, min: 1 },
+    /** yyyy-MM-dd when endType === 'date' */
+    endOnDate: { type: String, default: null },
+  },
 }, {
   timestamps: true
 });

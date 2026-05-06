@@ -97,6 +97,13 @@ function getPrepaidWalletPurchaseDate(wallet: any): Date | null {
   return Number.isNaN(t.getTime()) ? null : t
 }
 
+/** One Past note per booking: multi-staff / multi-service rows share bookingGroupId. */
+function appointmentNotesDedupeKey(apt: any): string {
+  const bg = apt?.bookingGroupId
+  if (bg != null && String(bg).trim() !== "") return `bg:${String(bg)}`
+  return `id:${String(apt?._id || apt?.id || "")}`
+}
+
 export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelProps) {
   const router = useRouter()
   const { formatAmount } = useCurrency()
@@ -291,10 +298,16 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     try {
       const res = await AppointmentsAPI.getAll({ clientId, limit: 200 })
       const list = Array.isArray(res?.data) ? res.data : []
+      const withNotes = list.filter((apt: any) => (apt.notes || "").trim())
+      const byBooking = new Map<string, any>()
+      for (const apt of withNotes) {
+        const key = appointmentNotesDedupeKey(apt)
+        if (!byBooking.has(key)) byBooking.set(key, apt)
+      }
       const aptNotes: CustomerNote[] = []
-      list.forEach((apt: any) => {
+      for (const apt of byBooking.values()) {
         const content = (apt.notes || "").trim()
-        if (!content) return
+        if (!content) continue
         const staffName =
           apt.staffId?.name ||
           apt.staffAssignments?.[0]?.staffId?.name ||
@@ -309,7 +322,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
           recordId: aptId,
           href: `/appointments/new?edit=${aptId}`,
         })
-      })
+      }
       setCustomerNotes(prev => {
         const merged = [...prev, ...aptNotes]
         merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
