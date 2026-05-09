@@ -94,9 +94,34 @@ interface SalesRecord {
   staffName: string
   tipStaffId?: string
   tipStaffName?: string
+  tipLines?: Array<{ staffId?: string; staffName?: string; amount: number }>
   isEdited?: boolean // Track if bill has been edited
   editedAt?: Date | string
   items?: Array<{ type: string; [key: string]: unknown }>
+}
+
+function expandSaleTipAllocations(sale: SalesRecord): { staffId: string; staffName: string; amount: number }[] {
+  const raw = sale.tipLines
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .map((l) => ({
+        staffId: String(l.staffId || "").trim(),
+        staffName: String(l.staffName || "").trim(),
+        amount: Math.max(0, Number(l.amount) || 0),
+      }))
+      .filter((l) => l.amount > 0.005 && (l.staffId || l.staffName))
+  }
+  const tip = sale.tip || 0
+  if (tip > 0.005 && (sale.tipStaffId || sale.tipStaffName)) {
+    return [
+      {
+        staffId: String(sale.tipStaffId || "").trim(),
+        staffName: (sale.tipStaffName || "").trim() || "—",
+        amount: tip,
+      },
+    ]
+  }
+  return []
 }
 
 function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
@@ -112,6 +137,24 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
     tip: (sale.tip as number) || 0,
     tipStaffId: sale.tipStaffId != null ? String(sale.tipStaffId) : undefined,
     tipStaffName: sale.tipStaffName as string | undefined,
+    tipLines: Array.isArray(sale.tipLines)
+      ? (sale.tipLines as Record<string, unknown>[]).map((l) => {
+          const sid = l.staffId
+          const staffIdStr =
+            sid != null
+              ? String(
+                  typeof sid === "object" && sid !== null && "_id" in sid
+                    ? (sid as { _id?: unknown })._id
+                    : sid,
+                )
+              : ""
+          return {
+            staffId: staffIdStr || undefined,
+            staffName: l.staffName != null ? String(l.staffName) : undefined,
+            amount: Math.max(0, Number(l.amount) || 0),
+          }
+        })
+      : undefined,
     netTotal: Number(sale.netTotal ?? 0),
     taxAmount: Number(sale.taxAmount ?? 0),
     grossTotal: Number(sale.grossTotal ?? 0),
@@ -839,8 +882,10 @@ export function SalesReport() {
   const staffTipSales =
     reportType === "staff-tip" && staffTipDateRange && staffTipDateRange.from != null && staffTipDateRange.to != null
       ? staffTipData.filter((sale) => {
-          const hasTip = !!(sale.tip && sale.tip > 0) && (sale.tipStaffId || sale.tipStaffName)
-          const matchesStaff = staffTipFilter === "all" || sale.tipStaffId === staffTipFilter
+          const allocs = expandSaleTipAllocations(sale)
+          const hasTip = allocs.length > 0
+          const matchesStaff =
+            staffTipFilter === "all" || allocs.some((a) => a.staffId === staffTipFilter)
           return hasTip && matchesStaff
         })
       : []
@@ -866,27 +911,32 @@ export function SalesReport() {
   const staffTipAggregated = (() => {
     const map = new Map<string, { staffId: string; staffName: string; tipAmount: number; cashTipAmount: number; nonCashTipAmount: number; paymentModes: string[] }>()
     staffTipSales.forEach((sale) => {
-      const id = (sale.tipStaffId || sale.tipStaffName || "").toString()
-      const name = sale.tipStaffName || (salesStaff.find((s) => s._id === sale.tipStaffId)?.name) || "—"
-      const tipAmt = sale.tip || 0
       const mode = getTipPaymentMode(sale)
       const isCash = mode === "Cash"
-      const existing = map.get(id)
-      if (existing) {
-        existing.tipAmount += tipAmt
-        if (isCash) existing.cashTipAmount += tipAmt
-        else existing.nonCashTipAmount += tipAmt
-        if (!existing.paymentModes.includes(mode)) existing.paymentModes.push(mode)
-      } else {
-        map.set(id, {
-          staffId: id,
-          staffName: name,
-          tipAmount: tipAmt,
-          cashTipAmount: isCash ? tipAmt : 0,
-          nonCashTipAmount: isCash ? 0 : tipAmt,
-          paymentModes: [mode]
-        })
-      }
+      expandSaleTipAllocations(sale).forEach((alloc) => {
+        const id = (alloc.staffId || alloc.staffName || "—").toString()
+        const name =
+          alloc.staffName ||
+          (salesStaff.find((s) => s._id === alloc.staffId || String(s._id) === alloc.staffId)?.name) ||
+          "—"
+        const tipAmt = alloc.amount
+        const existing = map.get(id)
+        if (existing) {
+          existing.tipAmount += tipAmt
+          if (isCash) existing.cashTipAmount += tipAmt
+          else existing.nonCashTipAmount += tipAmt
+          if (!existing.paymentModes.includes(mode)) existing.paymentModes.push(mode)
+        } else {
+          map.set(id, {
+            staffId: id,
+            staffName: name,
+            tipAmount: tipAmt,
+            cashTipAmount: isCash ? tipAmt : 0,
+            nonCashTipAmount: isCash ? 0 : tipAmt,
+            paymentModes: [mode],
+          })
+        }
+      })
     })
     return Array.from(map.values()).sort((a, b) => b.tipAmount - a.tipAmount)
   })()
@@ -2439,6 +2489,12 @@ export function SalesReport() {
                           total: (bill.grossTotal || 0) + (bill.tip || 0),
                           tip: bill.tip || 0,
                           tipStaffName: bill.tipStaffName,
+                          tipLines: Array.isArray(bill.tipLines)
+                            ? bill.tipLines.map((tl: { staffName?: string; amount?: number }) => ({
+                                staffName: tl.staffName,
+                                amount: Math.max(0, Number(tl.amount) || 0),
+                              }))
+                            : undefined,
                           payments: (bill.payments || []).map((p: any) => ({ type: (p.mode || p.type || "cash").toLowerCase(), amount: p.amount })),
                           staffName: bill.staffName,
                           taxBreakdown: bill.taxBreakdown,

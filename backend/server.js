@@ -114,20 +114,47 @@ dbPromise
 app.use(helmet());
 
 // Enhanced CORS configuration for Railway deployment
-const allowedOrigins = process.env.CORS_ORIGINS 
-  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
+const rawCorsOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map((origin) => origin.trim())
   : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+
+/**
+ * Browsers send an exact Origin string; tablets often land on www vs apex first.
+ * Expand allowlist with the alternate hostname (skip IP / localhost).
+ */
+function expandAllowedOrigins(origins) {
+  const set = new Set(origins.filter(Boolean));
+  for (const o of [...set]) {
+    try {
+      const u = new URL(o);
+      if (u.hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)) continue;
+      if (u.hostname.startsWith('www.')) {
+        const alt = new URL(o);
+        alt.hostname = u.hostname.slice(4);
+        set.add(alt.origin);
+      } else {
+        const alt = new URL(o);
+        alt.hostname = `www.${u.hostname}`;
+        set.add(alt.origin);
+      }
+    } catch {
+      /* ignore non-URL entries */
+    }
+  }
+  return [...set];
+}
+
+const allowedOrigins = expandAllowedOrigins(rawCorsOrigins);
 
 logger.info('Environment: %s, CORS Origins: %s, MongoDB URI: %s, JWT Secret: %s',
   process.env.NODE_ENV || 'development', allowedOrigins,
   process.env.MONGODB_URI ? 'Set' : 'Not set', process.env.JWT_SECRET ? 'Set' : 'Not set');
 
-// Dynamic CORS configuration
-app.use(cors({
-  origin: function (origin, callback) {
+const tenantCorsOptions = {
+  origin(origin, callback) {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
-    
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -139,8 +166,11 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'X-XSRF-Token'],
   preflightContinue: false,
-  optionsSuccessStatus: 200
-}));
+  optionsSuccessStatus: 200,
+};
+
+// Dynamic CORS configuration (must match explicit OPTIONS handler for credentialed Safari preflights)
+app.use(cors(tenantCorsOptions));
 
 // Body + cookies before rate limiters so auth routes can key off JSON (email, etc.)
 app.use(express.json({ limit: '10mb' }));
@@ -181,8 +211,8 @@ if (process.env.NODE_ENV !== 'production' && process.env.HTTP_LOG !== '0') {
 const { csrfProtection, setCsrfCookie } = require('./middleware/csrf');
 app.use(csrfProtection);
 
-// Handle CORS preflight for all routes
-app.options('*', cors());
+// Handle CORS preflight for all routes (same options as app.use — avoid default cors() without credentials)
+app.options('*', cors(tenantCorsOptions));
 
 /** Public: set `ems_csrf` cookie for double-submit CSRF (safe before login; no auth). */
 app.get('/api/auth/csrf', (req, res) => {
@@ -7749,7 +7779,7 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
     }
     const rec = ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none';
     const blockEndDate = endDate && ['daily', 'weekly', 'monthly'].includes(rec) ? String(endDate) : null;
-    const conflicts = await getBlockTimeAppointmentConflicts(
+    const overlappingAppointments = await getBlockTimeAppointmentConflicts(
       Appointment,
       staffId,
       String(startDate),
@@ -7758,15 +7788,6 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
       String(endTime),
       rec
     );
-    if (conflicts.length > 0) {
-      const msg = conflicts.map((c) => `${c.date} ${c.time} - ${c.clientName} (${c.serviceName})`).join('; ');
-      return res.status(400).json({
-        success: false,
-        error: 'Staff has appointment(s) scheduled for the time being blocked',
-        conflicts,
-        errorDetail: msg
-      });
-    }
     const doc = {
       staffId,
       title: String(title).trim(),
@@ -7782,7 +7803,13 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
     const populated = await BlockTime.findById(created._id).lean();
     const staff = await req.businessModels.Staff.findById(created.staffId).select('name').lean();
     const data = { ...populated, staffId: { _id: created.staffId, name: staff?.name || 'Staff' } };
-    res.status(201).json({ success: true, data });
+    const payload = { success: true, data };
+    if (overlappingAppointments.length > 0) {
+      payload.overlappingAppointments = overlappingAppointments;
+      payload.warning =
+        'This block overlaps existing appointments; those appointments were not changed. The block appears on the calendar; bookings during this period are still allowed.';
+    }
+    res.status(201).json(payload);
   } catch (error) {
     logger.error('Error creating block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -7813,7 +7840,7 @@ app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, require
     const finalEndTime = updateData.endTime ?? existing.endTime;
     const finalRec = updateData.recurringFrequency ?? existing.recurringFrequency;
     const finalEndDate = updateData.endDate !== undefined ? updateData.endDate : existing.endDate;
-    const conflicts = await getBlockTimeAppointmentConflicts(
+    const overlappingAppointments = await getBlockTimeAppointmentConflicts(
       Appointment,
       existing.staffId,
       finalStartDate,
@@ -7822,19 +7849,16 @@ app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, require
       finalEndTime,
       finalRec
     );
-    if (conflicts.length > 0) {
-      const msg = conflicts.map((c) => `${c.date} ${c.time} - ${c.clientName} (${c.serviceName})`).join('; ');
-      return res.status(400).json({
-        success: false,
-        error: 'Staff has appointment(s) scheduled for the time being blocked',
-        conflicts,
-        errorDetail: msg
-      });
-    }
     const updated = await BlockTime.findByIdAndUpdate(req.params.id, { $set: updateData }, { new: true }).lean();
     const staff = await req.businessModels.Staff.findById(updated.staffId).select('name').lean();
     const data = { ...updated, staffId: { _id: updated.staffId, name: staff?.name || 'Staff' } };
-    res.json({ success: true, data });
+    const payload = { success: true, data };
+    if (overlappingAppointments.length > 0) {
+      payload.overlappingAppointments = overlappingAppointments;
+      payload.warning =
+        'This block overlaps existing appointments; those appointments were not changed. The block appears on the calendar; bookings during this period are still allowed.';
+    }
+    res.json(payload);
   } catch (error) {
     logger.error('Error updating block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -7862,6 +7886,39 @@ function normalizeSaleStaffReferenceToIdString(raw) {
     return String(raw._id).trim();
   }
   return String(raw).trim();
+}
+
+/** Client / Mongoose hybrids: never pass objects into ObjectId.isValid (String(obj) → "[object Object]"). */
+function normalizeClientAppointmentIdString(raw) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'object' && raw !== null && raw._id != null) {
+    return String(raw._id).trim();
+  }
+  return String(raw).trim();
+}
+
+/** IST wall time HH:mm (24h) for “now” — aligns with checkout add-on rows at payment time. */
+function getNowWallTimeHHmmIST() {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = parts.find((p) => p.type === 'hour')?.value ?? '00';
+  const m = parts.find((p) => p.type === 'minute')?.value ?? '00';
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function pickBillingWalkInDisplayTime(sale) {
+  const t = sale && sale.time != null ? String(sale.time).trim() : '';
+  if (t) return t;
+  return getNowWallTimeHHmmIST();
+}
+
+/** Minutes from midnight (IST-consistent via parseTimeToMinutes) — wall moment when checkout/payment completes. */
+function pickBillingWalkInCheckoutEndMinutes(sale) {
+  return parseTimeToMinutes(pickBillingWalkInDisplayTime(sale));
 }
 
 /**
@@ -7917,6 +7974,13 @@ function serviceIdsFromBookedAppointment(appointment) {
       pushId(id);
     }
   }
+  const addOns = appointment.addOnLineItems;
+  if (Array.isArray(addOns)) {
+    for (const row of addOns) {
+      const id = row?.serviceId?._id != null ? row.serviceId._id : row?.serviceId;
+      pushId(id);
+    }
+  }
   return ids;
 }
 
@@ -7944,8 +8008,8 @@ function getPrimaryStaffIdStringFromAppointmentShape(a) {
 async function annotateAppointmentLinkedSaleItemsLineSource(AppointmentModel, appointmentId, items) {
   const mongooseSales = require('mongoose');
   if (!AppointmentModel || !appointmentId || !Array.isArray(items)) return items;
-  const aidStr = String(appointmentId);
-  if (!mongooseSales.Types.ObjectId.isValid(aidStr)) return items;
+  const aidStr = normalizeClientAppointmentIdString(appointmentId);
+  if (!aidStr || !mongooseSales.Types.ObjectId.isValid(aidStr)) return items;
 
   const anchor = await AppointmentModel.findById(aidStr).select('bookingGroupId').lean();
   if (!anchor) {
@@ -8126,12 +8190,61 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
 
         const bookingGroupId = appointment.bookingGroupId || uuidv4();
         if (!appointment.bookingGroupId) appointment.bookingGroupId = bookingGroupId;
-        const baseTimeM = parseTimeToMinutes(appointment.time || '09:00');
-        const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+        const billingWalkInEndM = pickBillingWalkInCheckoutEndMinutes(sale);
 
         /** Cross-staff (booked service, different performer) and add-ons (service not on original booking): completed cards with Walk-in attribution. */
         const createBillingWalkInCards = async () => {
           const supplementalKeys = new Set();
+          // Parallel add-ons: each line ends at checkout; start = checkout − that line's duration (no sequential chaining).
+          const walkInLines = serviceItems.filter((i) => String(i.lineSource || '').toLowerCase() === 'walk_in');
+          const walkInStaffSet = new Set(
+            walkInLines.map((i) => String(i._primaryStaffId || '').trim()).filter((x) => x && mongoose.Types.ObjectId.isValid(x)),
+          );
+          if (walkInLines.length > 0 && walkInStaffSet.size === 1) {
+            for (const item of walkInLines) {
+              const rawStaffId = item._primaryStaffId;
+              const lineServiceId = extractSaleLineServiceId(item);
+              const lineKey = lineServiceId ? String(lineServiceId) : '';
+              if (!rawStaffId || !mongoose.Types.ObjectId.isValid(String(rawStaffId)) || !lineKey) continue;
+              if (bookedServiceIdsGlobal.has(lineKey)) continue;
+              const dedupeKey = `wi:${lineKey}:${String(rawStaffId)}`;
+              if (supplementalKeys.has(dedupeKey)) continue;
+              supplementalKeys.add(dedupeKey);
+              const staffObjId = new mongoose.Types.ObjectId(String(rawStaffId));
+              const serviceDoc = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
+              if (!serviceDoc) continue;
+              const dupWalkIn = await AppointmentModel.findOne({
+                branchId: appointment.branchId,
+                clientId: appointment.clientId,
+                date: appointment.date,
+                bookingGroupId,
+                staffId: staffObjId,
+                serviceId: lineServiceId,
+                status: 'completed',
+                leadSource: new RegExp('^walk-in$', 'i'),
+              }).lean();
+              if (dupWalkIn) continue;
+              const dur = serviceDoc.duration ?? 60;
+              const startMinutes = Math.max(0, billingWalkInEndM - dur);
+              const newApt = new AppointmentModel({
+                clientId: appointment.clientId,
+                serviceId: lineServiceId,
+                date: appointment.date,
+                time: minutesToTimeString(startMinutes),
+                duration: dur,
+                status: 'completed',
+                price: item.price ?? item.total ?? serviceDoc.price ?? 0,
+                branchId: appointment.branchId,
+                bookingGroupId,
+                staffId: staffObjId,
+                staffAssignments: [{ staffId: staffObjId, percentage: 100, role: 'primary' }],
+                leadSource: 'Walk-in',
+              });
+              await newApt.save();
+              logger.debug(`✅ Billing walk-in card (checkout add-on, single staff): ${serviceDoc.name}`);
+            }
+          }
+
           for (const item of serviceItems) {
             if (String(item.lineSource || '').toLowerCase() === 'walk_in') continue;
             const rawStaffId = item._primaryStaffId;
@@ -8161,18 +8274,11 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
                 : null;
             if (!staffObjId) continue;
 
-            const itemSidStr = extractSaleLineServiceId(item)?.toString();
-            const idx = allOrdered.findIndex((o) => extractSaleLineServiceId(o)?.toString() === itemSidStr);
-            let cumulativeM = 0;
-            for (let i = 0; i < idx; i++) {
-              const oid = extractSaleLineServiceId(allOrdered[i]);
-              const s = oid ? await Service.findById(oid).select('duration').lean() : null;
-              cumulativeM += s?.duration ?? 60;
-            }
-            const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
             const lineServiceId = extractSaleLineServiceId(item);
             const serviceDoc = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
             if (!serviceDoc) continue;
+            const dur = serviceDoc.duration ?? 60;
+            const serviceTime = minutesToTimeString(Math.max(0, billingWalkInEndM - dur));
 
             const dupWalkIn = await AppointmentModel.findOne({
               branchId: appointment.branchId,
@@ -8352,7 +8458,8 @@ const syncCompletedLinkedAppointmentStaffFromSale = async (AppointmentModel, sal
 /**
  * Checkout-only service lines (`line_source: walk_in`) on an appointment-linked bill: mimic **standalone Quick Sale**
  * calendar behaviour — attach to a synthetic bookingGroupId derived from this sale only; only create calendar rows
- * when the addon subset has ≥2 performing staff (same rule as standalone). Does not reuse the appointment group's id.
+ * when the addon subset has ≥2 performing staff. Each add-on is **parallel**: ends at checkout time (start = checkout − duration).
+ * Does not reuse the appointment group's id.
  */
 const createStandaloneStyleWalkInsForLinkedSaleAddons = async (sale, businessModels, branchId) => {
   if (!sale || !businessModels?.Appointment || !businessModels?.Service) return;
@@ -8397,27 +8504,20 @@ const createStandaloneStyleWalkInsForLinkedSaleAddons = async (sale, businessMod
           : new Date(sale.date).toISOString().slice(0, 10)
         : new Date().toISOString().slice(0, 10);
 
-    const baseTimeM = parseTimeToMinutes(sale.time || '09:00');
+    const checkoutEndM = pickBillingWalkInCheckoutEndMinutes(sale);
     const branchOid =
       branchId && mongoose.Types.ObjectId.isValid(String(branchId))
         ? new mongoose.Types.ObjectId(String(branchId))
         : sale.branchId;
     const bookingGroupId = sale._id ? `sale-addon-${String(sale._id)}` : uuidv4();
-    const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
 
     for (const item of serviceItems) {
       const staffIdStr = String(item._primaryStaffId);
       const svcOid = extractSaleLineServiceId(item);
-      const idx = allOrdered.findIndex((o) => extractSaleLineServiceId(o)?.toString() === svcOid.toString());
-      let cumulativeM = 0;
-      for (let i = 0; i < idx; i++) {
-        const oid = extractSaleLineServiceId(allOrdered[i]);
-        const s = oid ? await Service.findById(oid).select('duration').lean() : null;
-        cumulativeM += s?.duration ?? 60;
-      }
-      const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
       const service = await Service.findById(svcOid).lean();
       if (!service) continue;
+      const dur = service.duration ?? 60;
+      const serviceTime = minutesToTimeString(Math.max(0, checkoutEndM - dur));
 
       const staffObjId = new mongoose.Types.ObjectId(staffIdStr);
       const dup = await Appointment.findOne({
@@ -8437,7 +8537,7 @@ const createStandaloneStyleWalkInsForLinkedSaleAddons = async (sale, businessMod
         serviceId: svcOid,
         date: saleDate,
         time: serviceTime,
-        duration: service.duration ?? 60,
+        duration: dur,
         status: 'completed',
         price: item.price ?? item.total ?? service.price ?? 0,
         branchId: branchOid,
@@ -8613,7 +8713,11 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
     const allServiceIds = [...new Set([...primaryServiceIds.map((id) => id.toString()), ...additionalIds.map((id) => id.toString())])];
     const { Client, Service } = req.businessModels;
     const [clients, services] = await Promise.all([
-      clientIds.length ? Client.find({ _id: { $in: clientIds } }).select('name phone email').lean() : [],
+      clientIds.length
+        ? Client.find({ _id: { $in: clientIds } })
+            .select('name phone email totalVisits totalSpent lastVisit')
+            .lean()
+        : [],
       allServiceIds.length ? Service.find({ _id: { $in: allServiceIds } }).select('name price duration').lean() : [],
     ]);
     const clientMap = new Map(clients.map((c) => [c._id.toString(), c]));
@@ -8652,8 +8756,9 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode } = req.body;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel } = req.body;
     const schedulingMode = rawSchedulingMode === 'custom' ? 'custom' : 'sequential';
+    const allowParallelBooking = rawAllowParallel === true;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -8742,45 +8847,49 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
       };
 
-      // Within-batch overlap check (same staff in this submission).
-      for (let i = 0; i < resolved.length; i++) {
-        const a = resolved[i];
-        const aStaffId = getPrimaryStaffId(a.raw);
-        for (let j = i + 1; j < resolved.length; j++) {
-          const b = resolved[j];
-          const bStaffId = getPrimaryStaffId(b.raw);
-          if (!aStaffId || !bStaffId) continue;
-          if (aStaffId !== bStaffId) continue;
-          if (a.startAt < b.endAt && a.endAt > b.startAt) {
-            return res.status(409).json({
-              success: false,
-              error: `Staff is already booked from ${formatTimeForError(a.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(a.time) + a.duration))}`
-            });
+      // Within-batch overlap (same staff in this submission) — skip when parallel booking is allowed.
+      if (!allowParallelBooking) {
+        for (let i = 0; i < resolved.length; i++) {
+          const a = resolved[i];
+          const aStaffId = getPrimaryStaffId(a.raw);
+          for (let j = i + 1; j < resolved.length; j++) {
+            const b = resolved[j];
+            const bStaffId = getPrimaryStaffId(b.raw);
+            if (!aStaffId || !bStaffId) continue;
+            if (aStaffId !== bStaffId) continue;
+            if (a.startAt < b.endAt && a.endAt > b.startAt) {
+              return res.status(409).json({
+                success: false,
+                error: `Staff is already booked from ${formatTimeForError(a.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(a.time) + a.duration))}`
+              });
+            }
           }
         }
       }
 
       // External conflict check against existing appointments per staff.
-      for (const r of resolved) {
-        const staffId = getPrimaryStaffId(r.raw);
-        if (!staffId) {
-          return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
-        }
-        const result = await detectStaffConflict(
-          { Appointment, BookingHold },
-          {
-            branchId: req.user.branchId,
-            staffId,
-            start: r.startAt,
-            end: r.endAt,
-            skipHoldCheck: true
+      if (!allowParallelBooking) {
+        for (const r of resolved) {
+          const staffId = getPrimaryStaffId(r.raw);
+          if (!staffId) {
+            return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
           }
-        );
-        if (result.conflict) {
-          return res.status(409).json({
-            success: false,
-            error: `Staff is already booked from ${formatTimeForError(r.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(r.time) + r.duration))}`
-          });
+          const result = await detectStaffConflict(
+            { Appointment, BookingHold },
+            {
+              branchId: req.user.branchId,
+              staffId,
+              start: r.startAt,
+              end: r.endAt,
+              skipHoldCheck: true
+            }
+          );
+          if (result.conflict) {
+            return res.status(409).json({
+              success: false,
+              error: `Staff is already booked from ${formatTimeForError(r.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(r.time) + r.duration))}`
+            });
+          }
         }
       }
 
@@ -8801,7 +8910,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
           price: r.price,
           branchId: req.user.branchId,
           bookingGroupId,
-          schedulingMode: 'custom'
+          schedulingMode: 'custom',
+          ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
         };
 
         if (r.raw.staffAssignments && Array.isArray(r.raw.staffAssignments)) {
@@ -8887,7 +8997,9 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
             error: 'Either staffId or staffAssignments is required',
           });
         }
-        const overlapResult = await detectStaffConflict(
+        const overlapResult = allowParallelBooking
+          ? { conflict: false }
+          : await detectStaffConflict(
           { Appointment, BookingHold },
           {
             branchId: req.user.branchId,
@@ -8919,6 +9031,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
           branchId: req.user.branchId,
           bookingGroupId,
           staffLocked: !!service.staffLocked,
+          ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
         };
 
         if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
@@ -10231,7 +10344,9 @@ app.post('/api/appointments/finalize-for-billing', authenticateToken, setupBusin
 app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = { ...req.body };
+    const allowParallelBooking = updateData.allowParallelBooking === true;
+    delete updateData.allowParallelBooking;
     const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
 
     // Find the appointment
@@ -10310,7 +10425,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
         }
         return null;
       })();
-      if (primaryStaffId) {
+      if (primaryStaffId && !allowParallelBooking) {
         const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
         const result = await detectStaffConflict(
           { Appointment, BookingHold },
@@ -10366,6 +10481,18 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           status: { $in: ['scheduled', 'confirmed'] }
         },
         { $set: { status: 'arrived' } }
+      );
+    }
+
+    // No-show: mark sibling pre-service cards in the same group so the day view stays in sync after refresh.
+    if (updateData.status === 'missed' && appointment.bookingGroupId) {
+      await Appointment.updateMany(
+        {
+          bookingGroupId: appointment.bookingGroupId,
+          _id: { $ne: appointment._id },
+          status: { $in: ['scheduled', 'confirmed', 'arrived'] }
+        },
+        { $set: { status: 'missed' } }
       );
     }
 
@@ -11152,6 +11279,15 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     const skipStandaloneWalkInCalendarCards =
       suppressStandaloneWalkInCalendarCards === true || voidBookingAppointmentObjectIds.length > 0;
 
+    if (saleData.appointmentId != null && saleData.appointmentId !== '') {
+      const aptNorm = normalizeClientAppointmentIdString(saleData.appointmentId);
+      if (mongoose.Types.ObjectId.isValid(aptNorm)) {
+        saleData.appointmentId = new mongoose.Types.ObjectId(aptNorm);
+      } else {
+        delete saleData.appointmentId;
+      }
+    }
+
     const { getItemPreTaxTotal } = require('./lib/sale-item-pretax');
     if (saleData.items && Array.isArray(saleData.items)) {
       saleData.items = saleData.items.map(item => {
@@ -11222,10 +11358,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
 
         return item;
       });
-      if (
-        saleData.appointmentId &&
-        mongoose.Types.ObjectId.isValid(String(saleData.appointmentId))
-      ) {
+      if (saleData.appointmentId && mongoose.Types.ObjectId.isValid(String(saleData.appointmentId))) {
         saleData.items = await annotateAppointmentLinkedSaleItemsLineSource(
           Appointment,
           saleData.appointmentId,
@@ -11311,7 +11444,11 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       delete saleData.planToAssignId;
       delete saleData.membershipPlanPrice;
     }
-    
+
+    const { normalizeSaleTipPayload } = require('./lib/sale-tip-normalize');
+    const { Staff: StaffForTipCreate } = req.businessModels;
+    await normalizeSaleTipPayload(saleData, StaffForTipCreate || null);
+
     const sale = new Sale(saleData);
     await sale.save();
     
@@ -12204,11 +12341,12 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       });
     }
 
-    if (existingSale.appointmentId && mongooseSales.Types.ObjectId.isValid(String(existingSale.appointmentId))) {
+    const existingAptIdNorm = normalizeClientAppointmentIdString(existingSale.appointmentId);
+    if (existingAptIdNorm && mongooseSales.Types.ObjectId.isValid(existingAptIdNorm)) {
       const { Appointment: AppointmentPut } = req.businessModels;
       updatedItems = await annotateAppointmentLinkedSaleItemsLineSource(
         AppointmentPut,
-        existingSale.appointmentId,
+        existingAptIdNorm,
         updatedItems,
       );
     } else if (Array.isArray(updatedItems)) {
@@ -12320,6 +12458,39 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       });
     }
 
+    const tipKeysTouched =
+      'tip' in updateData ||
+      'tipLines' in updateData ||
+      'tipStaffId' in updateData ||
+      'tipStaffName' in updateData;
+
+    if (tipKeysTouched) {
+      const { normalizeSaleTipPayload } = require('./lib/sale-tip-normalize');
+      const { Staff: StaffForTipPut } = req.businessModels;
+      const existingLines =
+        Array.isArray(existingSale.tipLines) && existingSale.tipLines.length > 0
+          ? existingSale.tipLines.map((l) => ({
+              staffId: l.staffId,
+              staffName: l.staffName,
+              amount: l.amount,
+            }))
+          : [];
+      const tipPayload = {
+        tip: updateData.tip !== undefined ? updateData.tip : existingSale.tip,
+        tipStaffId:
+          updateData.tipStaffId !== undefined ? updateData.tipStaffId : existingSale.tipStaffId,
+        tipStaffName:
+          updateData.tipStaffName !== undefined ? updateData.tipStaffName : existingSale.tipStaffName,
+        tipLines: updateData.tipLines !== undefined ? updateData.tipLines : existingLines,
+      };
+      await normalizeSaleTipPayload(tipPayload, StaffForTipPut || null);
+      existingSale.tip = tipPayload.tip;
+      existingSale.tipStaffId = tipPayload.tipStaffId;
+      existingSale.tipStaffName = tipPayload.tipStaffName;
+      existingSale.tipLines = tipPayload.tipLines;
+      existingSale.markModified('tipLines');
+    }
+
     // Update editable fields on the sale
     const editableRootFields = [
       'items',
@@ -12334,9 +12505,6 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'payments',
       'paymentMode',
       'status', // Allow updating status when payments change
-      'tip',
-      'tipStaffId',
-      'tipStaffName',
       'staffName', // Header staff on bill; keeps sale in sync when invoice staff changes
       'loyaltyPointsRedeemed',
       'loyaltyDiscountAmount',
@@ -12375,14 +12543,6 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           logger.debug('💳 Updating paymentMode:', updateData.paymentMode);
           existingSale.paymentMode = updateData.paymentMode || '';
           logger.debug('💳 Updated paymentMode on sale:', existingSale.paymentMode);
-        } else if (field === 'tip') {
-          existingSale.tip = Number(updateData.tip) || 0;
-          existingSale.tipStaffId = existingSale.tip > 0 ? (updateData.tipStaffId || null) : null;
-          existingSale.tipStaffName = existingSale.tip > 0 ? (updateData.tipStaffName || '') : '';
-        } else if (field === 'tipStaffId') {
-          existingSale.tipStaffId = updateData.tipStaffId ?? null;
-        } else if (field === 'tipStaffName') {
-          existingSale.tipStaffName = updateData.tipStaffName ?? '';
         } else {
           existingSale[field] = updateData[field];
         }
@@ -13224,10 +13384,11 @@ app.post(
     let updatedItems = Array.isArray(payload.items) ? payload.items : [...(existingSale.items || [])];
 
     const { Appointment: AppointmentExchange } = req.businessModels;
-    if (existingSale.appointmentId && mongoose.Types.ObjectId.isValid(String(existingSale.appointmentId))) {
+    const exchangeAptIdNorm = normalizeClientAppointmentIdString(existingSale.appointmentId);
+    if (exchangeAptIdNorm && mongoose.Types.ObjectId.isValid(exchangeAptIdNorm)) {
       updatedItems = await annotateAppointmentLinkedSaleItemsLineSource(
         AppointmentExchange,
-        existingSale.appointmentId,
+        exchangeAptIdNorm,
         updatedItems,
       );
     } else {

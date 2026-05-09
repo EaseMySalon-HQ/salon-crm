@@ -90,7 +90,7 @@ export function LoginForm() {
         } else {
           toast({
             title: "Login failed",
-            description: "Invalid credentials. Please try again.",
+            description: result.message || "Invalid credentials. Please try again.",
             variant: "destructive",
           })
         }

@@ -8,6 +8,7 @@ import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
+import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 
 interface ReceiptGeneratorProps {
   receipt: Receipt
@@ -300,12 +301,16 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
           }
           ${
             receipt.tip > 0
-              ? `
+              ? receiptTipDisplayLines(receipt)
+                  .map(
+                    (line) => `
             <div class="total-line">
-              <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-              <span>${formatCurrency(receipt.tip, businessSettings)}</span>
+              <span>${line.staffName ? `Tip (${line.staffName}):` : "Tip:"}</span>
+              <span>${formatCurrency(line.amount, businessSettings)}</span>
             </div>
-          `
+          `,
+                  )
+                  .join("")
               : ""
           }
           ${

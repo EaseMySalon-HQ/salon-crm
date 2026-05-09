@@ -1,6 +1,17 @@
 import type { Receipt } from "@/lib/data"
 import { buildReceiptPaymentsFromSale } from "@/lib/sale-payment-lines"
 
+function mapSaleTipLinesForReceipt(raw: unknown): Array<{ staffName: string; amount: number }> | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const lines = raw
+    .map((l: any) => ({
+      staffName: l?.staffName != null ? String(l.staffName).trim() : "",
+      amount: Math.max(0, Number(l?.amount) || 0),
+    }))
+    .filter((l) => l.amount > 0.005 && l.staffName)
+  return lines.length > 0 ? lines : undefined
+}
+
 /**
  * Maps a sale from SalesAPI.getByBillNo to the Receipt shape used by ReceiptPreview.
  * Kept in sync with the API fallback branch in app/receipt/[billNo]/page.tsx.
@@ -77,6 +88,7 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
     subtotalExcludingTax,
     tip: saleData.tip || 0,
     tipStaffName: saleData.tipStaffName,
+    tipLines: mapSaleTipLinesForReceipt(saleData.tipLines),
     discount: 0,
     tax: saleData.taxAmount,
     total: saleData.grossTotal + (saleData.tip || 0),

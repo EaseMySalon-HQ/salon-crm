@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { randomUUID } = require('crypto');
 const { syncUtcFromLegacy } = require('../services/scheduling/scheduling-utils');
 
 const appointmentSchema = new mongoose.Schema({
@@ -141,6 +142,14 @@ const appointmentSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  /**
+   * Set by POST /appointments when allowParallelBooking is true. slotKey gets a unique suffix so two
+   * active rows may share the same staff + wall-clock window (double booking).
+   */
+  allowStaffOverlap: {
+    type: Boolean,
+    default: false,
+  },
   /** Timestamp when WhatsApp reminder was sent — used to prevent duplicate sends */
   reminderSentAt: {
     type: Date,
@@ -156,7 +165,32 @@ const appointmentSchema = new mongoose.Schema({
     type: String,
     enum: ['sequential', 'custom'],
     default: 'sequential'
-  }
+  },
+  /**
+   * Optional repeat rule (UI + storage; scheduler integration can use later).
+   * frequency: repeat = generic repeat (weekly-style); custom uses customInterval + customUnit.
+   */
+  recurrence: {
+    frequency: {
+      type: String,
+      enum: ['doesnt', 'repeat', 'daily', 'weekly', 'monthly', 'custom'],
+      default: 'doesnt',
+    },
+    customInterval: { type: Number, default: 1, min: 1 },
+    customUnit: {
+      type: String,
+      enum: ['day', 'week', 'month'],
+      default: 'week',
+    },
+    endType: {
+      type: String,
+      enum: ['never', 'count', 'date'],
+      default: 'never',
+    },
+    endAfterCount: { type: Number, default: null, min: 1 },
+    /** yyyy-MM-dd when endType === 'date' */
+    endOnDate: { type: String, default: null },
+  },
 }, {
   timestamps: true
 });
@@ -177,7 +211,8 @@ appointmentSchema.pre('save', function(next) {
   if (this.startAt && this.endAt && ACTIVE_FOR_SLOT.includes(this.status)) {
     const primary = typeof this.getPrimaryStaff === 'function' ? this.getPrimaryStaff() : this.staffId;
     if (primary) {
-      this.slotKey = `${String(this.branchId)}:${String(primary)}:${this.startAt.toISOString()}:${this.endAt.toISOString()}`;
+      const base = `${String(this.branchId)}:${String(primary)}:${this.startAt.toISOString()}:${this.endAt.toISOString()}`;
+      this.slotKey = this.allowStaffOverlap === true ? `${base}:${randomUUID()}` : base;
     } else {
       this.set('slotKey', undefined);
     }

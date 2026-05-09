@@ -15,6 +15,7 @@ import { ThermalReceiptGenerator } from "./thermal-receipt-generator"
 import { useToast } from "@/hooks/use-toast"
 import { SettingsAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
+import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 
 interface ReceiptDialogProps {
   receipt: Receipt | null
@@ -301,10 +302,13 @@ ${publicUrl}`
                         <span>Tax:</span>
                         <span>{formatAmount(editedReceipt.tax)}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span>{editedReceipt.tipStaffName ? `Tip (${editedReceipt.tipStaffName}):` : 'Tip:'}</span>
-                        <span>{formatAmount(editedReceipt.tip)}</span>
-                      </div>
+                      {editedReceipt.tip > 0 &&
+                        receiptTipDisplayLines(editedReceipt).map((line, i) => (
+                          <div key={i} className="flex justify-between">
+                            <span>{line.staffName ? `Tip (${line.staffName}):` : "Tip:"}</span>
+                            <span>{formatAmount(line.amount)}</span>
+                          </div>
+                        ))}
                       <div className="flex justify-between font-semibold border-t pt-1">
                         <span>Total:</span>
                         <span>

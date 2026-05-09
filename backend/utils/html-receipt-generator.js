@@ -34,6 +34,35 @@ function formatCurrency(amount, businessSettings) {
   }
 }
 
+function receiptTipDisplayLines(receipt) {
+  const tip = Math.max(0, Number(receipt.tip) || 0);
+  if (tip <= 0.005) return [];
+  const raw = receipt.tipLines;
+  if (Array.isArray(raw) && raw.length > 0) {
+    const lines = raw
+      .map((l) => ({
+        staffName: l.staffName != null ? String(l.staffName).trim() : '',
+        amount: Math.max(0, Number(l.amount) || 0),
+      }))
+      .filter((l) => l.amount > 0.005);
+    if (lines.length > 0) return lines;
+  }
+  const name = receipt.tipStaffName != null ? String(receipt.tipStaffName).trim() : '';
+  return [{ staffName: name, amount: tip }];
+}
+
+function renderReceiptTipRowsHtml(receipt, businessSettings) {
+  return receiptTipDisplayLines(receipt)
+    .map(
+      (line) => `
+          <div class="total-line">
+            <span>${line.staffName ? `Tip (${line.staffName}):` : 'Tip:'}</span>
+            <span>${formatCurrency(line.amount, businessSettings)}</span>
+          </div>`,
+    )
+    .join('');
+}
+
 /** Match frontend `formatPaymentRecordedDateLabel` (dd MMM yyyy) for payment lines. */
 function formatPaymentRecordedLabel(iso) {
   if (!iso) return '';
@@ -319,12 +348,7 @@ function generateReceiptHTML(receipt, businessSettings) {
             `;
           })()}
         ` : ""}
-        ${(receipt.tip || 0) > 0 ? `
-          <div class="total-line">
-            <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-            <span>${formatCurrency(receipt.tip, businessSettings)}</span>
-          </div>
-        ` : ""}
+        ${(receipt.tip || 0) > 0 ? renderReceiptTipRowsHtml(receipt, businessSettings) : ''}
         ${receipt.roundOff && Math.abs(receipt.roundOff) > 0.01 ? `
           <div class="total-line">
             <span>Round Off:</span>

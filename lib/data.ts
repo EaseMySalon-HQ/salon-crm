@@ -81,6 +81,8 @@ export interface Receipt {
   subtotalExcludingTax?: number
   tip: number
   tipStaffName?: string
+  /** Split tip allocations for receipt display (from Sale.tipLines). */
+  tipLines?: Array<{ staffName?: string; amount: number }>
   discount: number
   tax: number
   roundOff?: number

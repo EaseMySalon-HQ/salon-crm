@@ -6,6 +6,7 @@ import {
   calendarYmdLocal,
   raiseSaleLinkageSnapshotFromCheckoutState,
   areRaiseSaleLinkageSnapshotsEqual,
+  billNotesForCustomerDisplay,
 } from "./quick-sale-helpers"
 
 describe("decodeQuickSaleAppointmentParam", () => {
@@ -130,5 +131,19 @@ describe("raiseSaleLinkageSnapshot / drift detection", () => {
       serviceLines: [{ serviceId: "s1", staffId: "st1", quantity: 2 }],
     })
     expect(areRaiseSaleLinkageSnapshotsEqual(a, b)).toBe(false)
+  })
+})
+
+describe("billNotesForCustomerDisplay", () => {
+  it("passes through appointment and sale remarks", () => {
+    expect(billNotesForCustomerDisplay("Color touch-up\n\nUse gentle shampoo")).toBe(
+      "Color touch-up\n\nUse gentle shampoo"
+    )
+  })
+
+  it("strips checkout tip summary suffix", () => {
+    const raw =
+      "Appt note\n\nSale note\n\nTip: Alex ₹100.00, Bee ₹50.00"
+    expect(billNotesForCustomerDisplay(raw)).toBe("Appt note\n\nSale note")
   })
 })

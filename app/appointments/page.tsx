@@ -9,6 +9,7 @@ import { AppointmentsCalendar } from "@/components/appointments/appointments-cal
 import { AppointmentsCalendarGrid } from "@/components/appointments/appointments-calendar-grid"
 import { AppointmentFormDrawer } from "@/components/appointments/appointment-form-drawer"
 import { MultiDayBookingDialog } from "@/components/appointments/multi-day-booking-dialog"
+import { ServiceCheckoutDraftFloatChip } from "@/components/appointments/service-checkout-draft-float-chip"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 
@@ -28,10 +29,21 @@ function AppointmentsContent() {
     time?: string
     staffId?: string
     appointmentId?: string
+    initialClientId?: string
+    resumeServiceCheckoutDraft?: boolean
+    resumeSavedDraftToken?: string
   }>({})
 
   const openAppointmentForm = useCallback(
-    (params?: { date?: string; time?: string; staffId?: string; appointmentId?: string }) => {
+    (params?: {
+      date?: string
+      time?: string
+      staffId?: string
+      appointmentId?: string
+      initialClientId?: string
+      resumeServiceCheckoutDraft?: boolean
+      resumeSavedDraftToken?: string
+    }) => {
       setFormDrawerParams(params ?? {})
       setFormDrawerOpen(true)
     },
@@ -156,13 +168,38 @@ function AppointmentsContent() {
         }}
       />
 
+      <ServiceCheckoutDraftFloatChip
+        hidden={formDrawerOpen}
+        onResumeDraft={(meta) => {
+          openAppointmentForm({
+            appointmentId: meta.appointmentId ?? undefined,
+            initialClientId: meta.clientId,
+            resumeServiceCheckoutDraft: true,
+            resumeSavedDraftToken: meta.draftRef,
+          })
+        }}
+      />
+
       <AppointmentFormDrawer
         open={formDrawerOpen}
-        onOpenChange={setFormDrawerOpen}
+        onOpenChange={(open) => {
+          setFormDrawerOpen(open)
+          if (!open) {
+            setFormDrawerParams((p) => ({
+              ...p,
+              resumeServiceCheckoutDraft: false,
+              initialClientId: undefined,
+              resumeSavedDraftToken: undefined,
+            }))
+          }
+        }}
         initialDate={formDrawerParams.date}
         initialTime={formDrawerParams.time}
         initialStaffId={formDrawerParams.staffId}
         appointmentId={formDrawerParams.appointmentId}
+        initialClientId={formDrawerParams.initialClientId}
+        resumeServiceCheckoutDraft={formDrawerParams.resumeServiceCheckoutDraft}
+        resumeSavedDraftToken={formDrawerParams.resumeSavedDraftToken}
         onSuccess={() => {
           setFormDrawerOpen(false)
           window.dispatchEvent(new CustomEvent("appointments-refresh"))
