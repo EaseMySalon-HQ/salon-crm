@@ -88,9 +88,9 @@ function restoreUserFromStorage(storedUser: string): User | null {
   }
 }
 
-/** Shown when login succeeds but HttpOnly cookies do not round-trip (common on cross-origin + strict mobile Safari). */
+/** Shown when login succeeds but HttpOnly cookies do not round-trip (different frontend vs API host on mobile). */
 const SESSION_VERIFY_FAIL_MESSAGE =
-  "Your browser did not keep the secure session. Use the exact site URL your salon was given, try another browser, or turn off cross-site tracking prevention for this site."
+  "Your browser did not keep the secure session. If this site uses a separate API host, deploy the app with same-origin /api (set NEXT_PUBLIC_API_URL=/api and API_PROXY_TARGET to your API origin), use your production domain setup, or try another browser."
 
 async function fetchVerifiedUserAfterCredentialLogin(): Promise<User | null> {
   try {
