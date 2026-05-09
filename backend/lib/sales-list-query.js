@@ -3,6 +3,7 @@
  */
 
 const { getStartOfDayIST, getEndOfDayIST } = require('../utils/date-utils');
+const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 10000;
@@ -396,6 +397,7 @@ function accumulateSaleSummary(sale, acc) {
         : 0;
     isAllCash = cashAmt > 0;
   }
+  cashAmt += billChangeCreditedToWalletCashAddition(sale);
   const tip = sale.tip || 0;
   acc.cashCollected += cashAmt - (isAllCash ? tip : 0);
 
@@ -423,6 +425,7 @@ async function computeSalesSummaryTotals(Sale, match) {
     status: 1,
     paymentStatus: 1,
     netTotal: 1,
+    billChangeCreditedToWallet: 1,
   };
   const acc = {
     totalRevenue: 0,
@@ -453,6 +456,7 @@ async function computeSalesSummaryTotalsSplit(Sale, matchInvoice, matchPaymentOn
     status: 1,
     paymentStatus: 1,
     netTotal: 1,
+    billChangeCreditedToWallet: 1,
   };
   const acc = {
     totalRevenue: 0,

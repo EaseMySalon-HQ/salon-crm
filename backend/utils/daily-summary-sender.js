@@ -2,6 +2,7 @@ const databaseManager = require('../config/database-manager');
 const { logger } = require('./logger');
 const modelFactory = require('../models/model-factory');
 const emailService = require('../services/email-service');
+const { billChangeCreditedToWalletCashAddition } = require('./bill-change-wallet-cash');
 
 /**
  * Send daily summary email for a specific date (used when cash registry is verified).
@@ -89,6 +90,9 @@ async function sendDailySummaryForDate(businessId, branchId, targetDate) {
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+      totalSalesCash += walletCashAdd;
+      cashAmt += walletCashAdd;
       if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;

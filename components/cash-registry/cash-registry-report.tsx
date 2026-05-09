@@ -17,6 +17,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { CashRegistryAPI, ExpensesAPI, SalesAPI } from "@/lib/api"
+import { billChangeCreditedToWalletCashAddition } from "@/lib/bill-change-wallet-cash"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
@@ -678,6 +679,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
           isAllCash = cashAmt > 0
         }
+        cashAmt += billChangeCreditedToWalletCashAddition(sale)
         const tip = sale.tip || 0
         total += cashAmt - (isAllCash ? tip : 0)
       }
@@ -801,6 +803,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
           isAllCash = cashAmt > 0
         }
+        cashAmt += billChangeCreditedToWalletCashAddition(sale)
         const tip = sale.tip || 0
         fromNewBills += cashAmt - (isAllCash ? tip : 0)
       }
@@ -876,6 +879,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
           cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
           isAllCash = cashAmt > 0
         }
+        cashAmt += billChangeCreditedToWalletCashAddition(sale)
         const tip = sale.tip || 0
         total += cashAmt - (isAllCash ? tip : 0)
       }

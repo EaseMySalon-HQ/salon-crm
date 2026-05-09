@@ -121,6 +121,7 @@ import {
   walletExpiryEndMs,
   filterWalletsForQuickSaleDisplay,
   billNotesForCustomerDisplay,
+  pickWalletIdForChangeCredit,
 } from "@/lib/quick-sale-helpers"
 import type { ClientWalletLedgerRow } from "@/lib/client-wallet-ledger"
 import { flattenClientWalletLedger, walletActivityStatusDisplay } from "@/lib/client-wallet-ledger"
@@ -412,16 +413,6 @@ function getAvailableStaffIds(
   }
 
   return allStaffIds.filter((id) => !busyStaffIds.has(String(id)))
-}
-
-function pickWalletIdForChangeCredit(usableWallets: any[], selectedWalletId: string): string | null {
-  if (!usableWallets?.length) return null
-  if (selectedWalletId) {
-    const hit = usableWallets.find((w) => String(w._id) === String(selectedWalletId))
-    if (hit) return String(hit._id)
-  }
-  const sorted = [...usableWallets].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
-  return sorted[0] ? String(sorted[0]._id) : null
 }
 
 /** When customer overpays and change is credited to wallet, trim recorded payments to sale due total (cash → card → online). */

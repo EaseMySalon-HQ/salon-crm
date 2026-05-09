@@ -1,6 +1,7 @@
 const XLSX = require('xlsx');
 const PDFDocument = require('pdfkit');
 const { logger } = require('./logger');
+const { billChangeCreditedToWalletCashAddition } = require('./bill-change-wallet-cash');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { toDateStringIST } = require('./date-utils');
@@ -1087,6 +1088,7 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
                 !(s.paymentMode || '').toLowerCase().includes('card') &&
                 !(s.paymentMode || '').toLowerCase().includes('online');
             }
+            cashAmt += billChangeCreditedToWalletCashAddition(s);
             const tip = s.tip || 0;
             cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
           });
@@ -1414,6 +1416,9 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+      totalSalesCash += walletCashAdd;
+      cashAmt += walletCashAdd;
       if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;

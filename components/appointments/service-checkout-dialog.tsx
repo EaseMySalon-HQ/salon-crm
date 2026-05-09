@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  Package,
   Pencil,
   Percent,
   Coins,
@@ -99,6 +100,7 @@ import {
 import {
   filterWalletsForQuickSaleDisplay,
   isLikelyMongoObjectId,
+  pickWalletIdForChangeCredit,
   buildCombinedQuickSaleWalletRow,
 } from "@/lib/quick-sale-helpers"
 import { previewRedemptionLive } from "@/lib/reward-points-preview"
@@ -240,6 +242,27 @@ function lineNetAfterLineDiscount(
     return Math.max(0, base * (1 - pct / 100))
   }
   return Math.max(0, base - d)
+}
+
+function catalogProductStockUnits(product: any | undefined): number {
+  if (!product) return 0
+  return Math.max(0, Math.floor(Number(product.stock ?? product.quantity ?? 0) || 0))
+}
+
+/** Upper bound for this line’s quantity given catalog stock and qty on other cart lines (same productId). */
+function maxProductLineQtyFromStock(
+  line: ServiceCheckoutProductLine,
+  allLines: ServiceCheckoutProductLine[],
+  catalogProducts: any[]
+): number {
+  const pid = String(line.productId)
+  const p = catalogProducts.find((x: any) => String(x._id || x.id) === pid)
+  if (!p) return Number.MAX_SAFE_INTEGER
+  const stock = catalogProductStockUnits(p)
+  const elsewhere = allLines
+    .filter((l) => l.id !== line.id && String(l.productId) === pid)
+    .reduce((sum, l) => sum + Math.max(1, Math.floor(Number(l.quantity) || 1)), 0)
+  return Math.max(0, stock - elsewhere)
 }
 
 /** Quick Sale payload uses a single 0–100 percent per line; fixed ₹ is converted. */
@@ -554,6 +577,43 @@ const CATEGORY_TILES: Array<{
   { id: "giftVoucher", label: "Gift Voucher", Icon: Gift, comingSoon: true },
 ]
 
+/** Served from `public/images/product-placeholder.png` — default retail product artwork when no upload / broken URL. */
+const CHECKOUT_PRODUCT_PLACEHOLDER_IMAGE = "/images/product-placeholder.png"
+
+function CheckoutProductThumb({ imageUrl }: { imageUrl?: string | null }) {
+  const [userImageBroken, setUserImageBroken] = useState(false)
+  const [placeholderBroken, setPlaceholderBroken] = useState(false)
+  const trimmed = typeof imageUrl === "string" ? imageUrl.trim() : ""
+  const userSrc = trimmed && !userImageBroken ? trimmed : null
+  const src = userSrc ?? CHECKOUT_PRODUCT_PLACEHOLDER_IMAGE
+
+  if (placeholderBroken) {
+    return (
+      <div
+        className="flex aspect-square w-full items-center justify-center rounded-lg bg-muted ring-1 ring-border/50"
+        aria-hidden
+      >
+        <Package className="h-10 w-10 text-muted-foreground" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-muted ring-1 ring-border/50">
+      {/* eslint-disable-next-line @next/next/no-img-element -- product.imageUrl may be data URLs from inventory */}
+      <img
+        src={src}
+        alt=""
+        className="absolute inset-0 h-full w-full object-cover"
+        onError={() => {
+          if (userSrc) setUserImageBroken(true)
+          else setPlaceholderBroken(true)
+        }}
+      />
+    </div>
+  )
+}
+
 export interface ServiceCheckoutDialogProps {
   /** `dialog` = centered modal (standalone page). `drawer` = full-panel overlay inside the appointment side sheet. */
   variant?: "dialog" | "drawer"
@@ -689,6 +749,8 @@ export function ServiceCheckoutDialog({
   const [paymentDialogWalletBalanceText, setPaymentDialogWalletBalanceText] = useState("")
   const [paymentDialogRewardBalanceText, setPaymentDialogRewardBalanceText] = useState("")
   const [paymentDialogWalletsRaw, setPaymentDialogWalletsRaw] = useState<any[]>([])
+  /** Uncombined usable wallets (for change-to-wallet target pick); UI may show combined row. */
+  const [paymentDialogWalletsUncombined, setPaymentDialogWalletsUncombined] = useState<any[]>([])
   const [paymentDialogRewardSettings, setPaymentDialogRewardSettings] = useState<any>(null)
   const [paymentDialogLoyaltyBalance, setPaymentDialogLoyaltyBalance] = useState(0)
   const [payCash, setPayCash] = useState(0)
@@ -700,6 +762,7 @@ export function ServiceCheckoutDialog({
   /** Quick Sale–style confirmation when amount collected is below amount due (partial bill). */
   const [checkoutPartialPaymentConfirmOpen, setCheckoutPartialPaymentConfirmOpen] = useState(false)
   const [checkoutPartialPaymentConfirmAck, setCheckoutPartialPaymentConfirmAck] = useState(false)
+  const [showCreditChangeConfirm, setShowCreditChangeConfirm] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -1603,6 +1666,12 @@ export function ServiceCheckoutDialog({
   function addCatalogProduct(p: any) {
     const pid = String(p._id || p.id || "")
     if (!pid) return
+    const stockQty = catalogProductStockUnits(p)
+    if (stockQty <= 0) return
+    const unitsInCart = productLines
+      .filter((l) => String(l.productId) === pid)
+      .reduce((sum, l) => sum + Math.max(1, Math.floor(Number(l.quantity) || 1)), 0)
+    if (unitsInCart >= stockQty) return
     const defaultStaffId = defaultStaffAcrossCart()
     const unit = Number(p.price) || 0
     setProductLines((prev) => [
@@ -1625,9 +1694,14 @@ export function ServiceCheckoutDialog({
   }
 
   function setProductQuantity(lineId: string, quantity: number) {
-    const q = Math.max(1, Math.floor(quantity) || 1)
+    const qRaw = Math.max(1, Math.floor(quantity) || 1)
     setProductLines((prev) =>
-      prev.map((l) => (l.id === lineId ? { ...l, quantity: q } : l))
+      prev.map((l) => {
+        if (l.id !== lineId) return l
+        const cap = maxProductLineQtyFromStock(l, prev, catalogProducts)
+        const q = Math.min(qRaw, Math.max(1, cap))
+        return { ...l, quantity: q }
+      })
     )
   }
 
@@ -1838,6 +1912,7 @@ export function ServiceCheckoutDialog({
     const payCfg = mergePaymentConfiguration(checkoutPaymentConfiguration as any)
     let cancelled = false
     setPaymentMethodLoading(true)
+    setShowCreditChangeConfirm(false)
     setPayCash(0)
     setPayCard(0)
     setPayOnline(0)
@@ -1906,6 +1981,7 @@ export function ServiceCheckoutDialog({
       const walletSum = wallets.reduce((s, w) => s + (Number(w.remainingBalance) || 0), 0)
       if (cancelled) return
       setPaymentDialogWalletsRaw(walletsForUi)
+      setPaymentDialogWalletsUncombined(wallets)
       setPaymentDialogRewardSettings(rewardSettings)
       setPaymentDialogLoyaltyBalance(loyalty)
       setPaySelectedWalletId(walletsForUi.length ? String(walletsForUi[0]._id) : "")
@@ -1932,7 +2008,10 @@ export function ServiceCheckoutDialog({
     setPaymentMethodDialogOpen(true)
   }
 
-  async function confirmPaymentMethodAndContinue(opts?: { skipPartialConfirm?: boolean }) {
+  async function confirmPaymentMethodAndContinue(opts?: {
+    skipPartialConfirm?: boolean
+    creditBillChangeToWallet?: boolean
+  }) {
     const due = paymentDueAfterLoyalty
     const cash = Math.max(0, Number(payCash) || 0)
     const card = Math.max(0, Number(payCard) || 0)
@@ -2026,20 +2105,50 @@ export function ServiceCheckoutDialog({
         })
         return
       }
-      if (totalPaid > due + 0.05) {
-        toast({
-          title: "Overpaid",
-          description: "Total paid is more than the amount due. Adjust tender amounts.",
-          variant: "destructive",
-        })
-        return
-      }
     }
 
     const isPartialPayment = due > 0.01 && totalPaid + 0.02 < due
     if (isPartialPayment && opts?.skipPartialConfirm !== true) {
       setCheckoutPartialPaymentConfirmAck(false)
       setCheckoutPartialPaymentConfirmOpen(true)
+      return
+    }
+
+    if (due > 0.01 && totalPaid > due + 0.05 && opts?.creditBillChangeToWallet !== true) {
+      const PAY_EPS = 0.01
+      const isCashOnly =
+        cash >= PAY_EPS && card < PAY_EPS && online < PAY_EPS && wallet < PAY_EPS
+      const cid = String(customer?._id || customer?.id || "")
+      if (!isCashOnly) {
+        toast({
+          title: "Overpaid",
+          description:
+            "Change can be credited to prepaid only when the bill is paid entirely in cash. Remove card, online, or wallet payment, or reduce tender amounts to match the bill total.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (!isLikelyMongoObjectId(cid)) {
+        toast({
+          title: "Customer required",
+          description:
+            "Select a saved customer from search to credit change to the prepaid wallet. Reduce cash to the bill total or adjust payment.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (paymentDialogWalletsUncombined.length > 0) {
+        const widPick = pickWalletIdForChangeCredit(paymentDialogWalletsUncombined, paySelectedWalletId)
+        if (!widPick) {
+          toast({
+            title: "Wallet error",
+            description: "Could not pick a wallet for the credit. Refresh and try again.",
+            variant: "destructive",
+          })
+          return
+        }
+      }
+      setShowCreditChangeConfirm(true)
       return
     }
 
@@ -2248,6 +2357,7 @@ export function ServiceCheckoutDialog({
         catalogPrepaidPlans,
         checkoutTaxSettings,
         checkoutPaymentConfiguration,
+        creditBillChangeToWallet: opts?.creditBillChangeToWallet === true,
       })
 
       if (inlineResult.ok) {
@@ -2755,23 +2865,59 @@ export function ServiceCheckoutDialog({
                           filteredProducts.map((p: any) => {
                             const pid = String(p._id || p.id)
                             const price = Number(p.price) || 0
+                            const stockQty = catalogProductStockUnits(p)
+                            const unitsInCart = productLines
+                              .filter((l) => String(l.productId) === pid)
+                              .reduce((sum, l) => sum + Math.max(1, Math.floor(Number(l.quantity) || 1)), 0)
+                            const outOfStock = stockQty <= 0
+                            const cartAtStockCap = stockQty > 0 && unitsInCart >= stockQty
+                            const cannotAddProduct = outOfStock || cartAtStockCap
                             return (
                               <button
                                 key={pid}
                                 type="button"
+                                disabled={cannotAddProduct}
                                 onClick={() => addCatalogProduct(p)}
+                                aria-label={
+                                  outOfStock
+                                    ? `${p.name || "Product"}, out of stock`
+                                    : cartAtStockCap
+                                      ? `${p.name || "Product"}, all available stock is already in the cart`
+                                      : `${p.name || "Product"}, ₹${price}, Stock ${stockQty}`
+                                }
                                 className={cn(
-                                  "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
-                                  "hover:border-amber-300/90 hover:bg-amber-50/50 transition-colors"
+                                  "flex w-full flex-col gap-2 rounded-xl border border-border/80 p-3 text-left transition-colors",
+                                  cannotAddProduct
+                                    ? "cursor-not-allowed border-border/50 bg-muted/30 text-muted-foreground opacity-70"
+                                    : "bg-background hover:border-amber-300/90 hover:bg-amber-50/50"
                                 )}
                               >
-                                <span
-                                  className="w-1 self-stretch rounded-full bg-amber-500/90 shrink-0"
-                                  aria-hidden
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <div className="font-medium text-foreground truncate">{p.name || "Product"}</div>
-                                  <div className="text-sm text-muted-foreground">₹{price}</div>
+                                <CheckoutProductThumb imageUrl={p.imageUrl} />
+                                <div className="flex min-w-0 items-start justify-between gap-2">
+                                  <span
+                                    className={cn(
+                                      "min-w-0 flex-1 font-medium leading-snug line-clamp-2",
+                                      cannotAddProduct ? "text-muted-foreground" : "text-foreground"
+                                    )}
+                                  >
+                                    {p.name || "Product"}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      "shrink-0 text-sm font-semibold tabular-nums",
+                                      cannotAddProduct ? "text-muted-foreground" : "text-foreground"
+                                    )}
+                                  >
+                                    ₹{price}
+                                  </span>
+                                </div>
+                                <div
+                                  className={cn(
+                                    "text-xs tabular-nums",
+                                    outOfStock ? "text-destructive font-medium" : "text-muted-foreground"
+                                  )}
+                                >
+                                  Stock: {stockQty}
                                 </div>
                               </button>
                             )
@@ -3236,6 +3382,9 @@ export function ServiceCheckoutDialog({
                   const staffName =
                     staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
                   const qty = Math.max(1, Math.floor(Number(line.quantity) || 1))
+                  const stockCap = maxProductLineQtyFromStock(line, productLines, catalogProducts)
+                  const hasStockCap = stockCap < Number.MAX_SAFE_INTEGER
+                  const atStockCap = hasStockCap && qty >= stockCap
                   const unit = Number(line.price) || 0
                   const discVal = Number(line.discountValue) || 0
                   const discIsPct = line.discountIsPercent !== false
@@ -3333,7 +3482,8 @@ export function ServiceCheckoutDialog({
                                 size="sm"
                                 className="h-8 w-8 shrink-0 rounded-md p-0"
                                 onClick={() => setProductQuantity(line.id, qty + 1)}
-                                aria-label="Increase quantity"
+                                disabled={atStockCap}
+                                aria-label={atStockCap ? "Maximum stock reached for this product" : "Increase quantity"}
                               >
                                 <Plus className="h-3.5 w-3.5" />
                               </Button>
@@ -4237,6 +4387,7 @@ export function ServiceCheckoutDialog({
       open={paymentMethodDialogOpen}
       onOpenChange={(next) => {
         if (navigating) return
+        if (!next) setShowCreditChangeConfirm(false)
         setPaymentMethodDialogOpen(next)
       }}
     >
@@ -4671,6 +4822,59 @@ export function ServiceCheckoutDialog({
     </Dialog>
   )
 
+  const checkoutCreditChangeConfirmDialog = (
+    <Dialog
+      open={showCreditChangeConfirm}
+      onOpenChange={(next) => {
+        if (navigating) return
+        setShowCreditChangeConfirm(next)
+      }}
+    >
+      <DialogContent
+        className="z-[245] gap-4 sm:max-w-md"
+        overlayClassName="z-[235]"
+        aria-describedby={undefined}
+      >
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+            <Wallet className="h-5 w-5 shrink-0 text-cyan-700" aria-hidden />
+            Credit change to wallet?
+          </DialogTitle>
+          <DialogDescription className="text-left text-sm text-muted-foreground">
+            The customer paid ₹{formatCheckoutInr(paymentTotalTenderEntered)} in cash and the bill total is ₹
+            {formatCheckoutInr(paymentDueAfterLoyalty)}.
+            <span className="mt-2 block font-medium text-foreground">
+              ₹
+              {formatCheckoutInr(Math.max(0, paymentTotalTenderEntered - paymentDueAfterLoyalty))} will be
+              added to their prepaid wallet as non-expiring balance — no cash change.
+            </span>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setShowCreditChangeConfirm(false)}
+            disabled={navigating}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            className="bg-cyan-700 text-white hover:bg-cyan-800"
+            disabled={navigating}
+            onClick={() => {
+              setShowCreditChangeConfirm(false)
+              void confirmPaymentMethodAndContinue({ creditBillChangeToWallet: true })
+            }}
+          >
+            Confirm & collect
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
   const checkoutExtrasDialogs = (
     <>
       <Dialog open={tipDialogOpen} onOpenChange={setTipDialogOpen}>
@@ -4952,6 +5156,7 @@ export function ServiceCheckoutDialog({
         {cancelDraftConfirmDialog}
         {paymentMethodDialog}
         {checkoutPartialPaymentConfirmDialog}
+        {checkoutCreditChangeConfirmDialog}
         {checkoutExtrasDialogs}
         <ClientDetailsDrawer
           open={clientDetailsDrawerOpen}
@@ -4986,6 +5191,7 @@ export function ServiceCheckoutDialog({
       {cancelDraftConfirmDialog}
       {paymentMethodDialog}
       {checkoutPartialPaymentConfirmDialog}
+      {checkoutCreditChangeConfirmDialog}
       {checkoutExtrasDialogs}
       <ClientDetailsDrawer
         open={clientDetailsDrawerOpen}

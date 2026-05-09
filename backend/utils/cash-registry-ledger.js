@@ -1,4 +1,5 @@
 const { getStartOfDayIST, getEndOfDayIST } = require('./date-utils');
+const { billChangeCreditedToWalletCashAddition } = require('./bill-change-wallet-cash');
 
 /**
  * Closing rows are often saved with openingBalance: 0 from the client modal; the real opening
@@ -88,6 +89,7 @@ async function computeDayCashLedger({ Sale, Expense, branchId, registryDate }) {
         isAllCash = true;
       }
     }
+    cashAmt += billChangeCreditedToWalletCashAddition(sale);
     const tip = sale.tip || 0;
     cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
   });
