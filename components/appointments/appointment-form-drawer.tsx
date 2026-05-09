@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { AppointmentForm } from "@/components/appointments/appointment-form"
 import { ClientDetailPanel } from "@/components/appointments/client-detail-panel"
 import { getAppointmentStatusSheetHeaderClass } from "@/lib/appointment-calendar-helpers"
+import { useToast } from "@/hooks/use-toast"
 import { useState, useCallback, useEffect, type ReactNode } from "react"
 import type { Client } from "@/lib/client-store"
 
@@ -38,6 +39,7 @@ export function AppointmentFormDrawer({
   resumeSavedDraftToken,
   onSuccess,
 }: AppointmentFormDrawerProps) {
+  const { toast } = useToast()
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [panelVisible, setPanelVisible] = useState(false)
   const [formOpenKey, setFormOpenKey] = useState(0)
@@ -45,6 +47,7 @@ export function AppointmentFormDrawer({
   const [drawerHeaderEnd, setDrawerHeaderEnd] = useState<ReactNode>(null)
   const [drawerHeaderStatusTone, setDrawerHeaderStatusTone] = useState<string | null>(null)
   const [drawerSelectedServiceCount, setDrawerSelectedServiceCount] = useState(1)
+  const [editAppointmentDirty, setEditAppointmentDirty] = useState(false)
 
   const showClientDetailPanel = !!(selectedClient && !serviceCheckoutOpen)
   const drawerMultiServices = drawerSelectedServiceCount > 1
@@ -54,6 +57,7 @@ export function AppointmentFormDrawer({
       setServiceCheckoutOpen(false)
       setDrawerHeaderStatusTone(null)
       setDrawerSelectedServiceCount(1)
+      setEditAppointmentDirty(false)
     }
   }, [open])
 
@@ -104,12 +108,27 @@ export function AppointmentFormDrawer({
     onOpenChange(false)
   }, [onOpenChange])
 
+  const handleSheetOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next && appointmentId && editAppointmentDirty) {
+        toast({
+          title: "Unsaved changes",
+          description: "Use Cancel to discard your edits, or Update Appointment to save.",
+        })
+        return
+      }
+      onOpenChange(next)
+    },
+    [appointmentId, editAppointmentDirty, onOpenChange, toast]
+  )
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleSheetOpenChange}>
       <SheetContent
         side="right"
         className={cn(
-          "w-full overflow-hidden p-0 flex flex-col transition-[max-width] duration-200",
+          // Smooth width when client panel / checkout / multi-service changes max-w-* (see ui/sheet base).
+          "w-full overflow-hidden p-0 flex flex-col motion-reduce:transition-none sm:transition-[max-width] sm:duration-500 sm:ease-[cubic-bezier(0.32,0.72,0,1)]",
           serviceCheckoutOpen
             ? drawerMultiServices
               ? "sm:max-w-6xl"
@@ -189,6 +208,7 @@ export function AppointmentFormDrawer({
                 onDrawerHeaderEndChange={setDrawerHeaderEnd}
                 onDrawerHeaderStatusToneChange={setDrawerHeaderStatusTone}
                 onDrawerSelectedServiceCountChange={setDrawerSelectedServiceCount}
+                onEditAppointmentDirtyChange={setEditAppointmentDirty}
               />
             </div>
           </div>

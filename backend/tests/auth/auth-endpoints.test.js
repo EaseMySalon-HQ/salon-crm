@@ -5,9 +5,9 @@
  * refresh-session modules against mongodb-memory-server.
  *
  * Verifies:
- *  - Login response contains NO token in body (cookie-only)
+ *  - Login response contains NO access token in body (cookie-only for tenant JWT)
  *  - Login sets HttpOnly access + refresh cookies
- *  - Refresh rotates tokens via cookies (no token in body)
+ *  - Refresh rotates tokens via cookies (csrfToken in JSON; no access token in body)
  *  - Logout clears cookies and revokes refresh family in DB
  *  - Cookie-authenticated requests work (no Bearer required)
  *  - CSRF is enforced for cookie-only mutating requests
@@ -202,7 +202,7 @@ function cookieHeader(cookies) {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/auth/login', () => {
-  it('returns user + csrfToken but NOT a token field in JSON body', async () => {
+  it('returns user + csrfToken but NOT access token in JSON body', async () => {
     const app = buildApp();
     const res = await request(app)
       .post('/api/auth/login')
@@ -212,6 +212,7 @@ describe('POST /api/auth/login', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.user).toBeDefined();
     expect(res.body.data.csrfToken).toBeDefined();
+    expect(res.body.data.accessToken).toBeUndefined();
     expect(res.body.data.token).toBeUndefined();
   });
 
@@ -256,7 +257,7 @@ describe('POST /api/auth/login', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/auth/refresh', () => {
-  it('rotates tokens via cookies; does NOT return token in JSON', async () => {
+  it('rotates tokens via cookies; refresh JSON has no data wrapper', async () => {
     const app = buildApp();
 
     const loginRes = await request(app)

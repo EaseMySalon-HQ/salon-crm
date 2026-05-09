@@ -16,7 +16,6 @@ import {
   CalendarDays,
   FileText,
   Loader2,
-  Receipt,
   Calendar as CalendarIcon,
   Heart,
   MoreVertical,
@@ -34,6 +33,8 @@ import {
   Play,
   CircleCheck,
   Ban,
+  Banknote,
+  Eye,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { format, isBefore, startOfDay } from "date-fns"
@@ -61,10 +62,14 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
-import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI } from "@/lib/api"
+import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI, SettingsAPI } from "@/lib/api"
+import type { Receipt as InvoiceReceipt } from "@/lib/data"
 import { isHiddenAppointment, getAppointmentStatusPillClass, getAppointmentEditAppearanceStatus } from "@/lib/appointment-calendar-helpers"
 import { readServiceCheckoutDraftByRef } from "@/lib/service-checkout-draft-storage"
-import { ServiceCheckoutDialog, type ServiceCheckoutLine } from "@/components/appointments/service-checkout-dialog"
+import { ServiceCheckoutDialog, type ServiceCheckoutLine, type EnsureAppointmentBookingResult } from "@/components/appointments/service-checkout-dialog"
+import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
+import { ReceiptPreview } from "@/components/receipts/receipt-preview"
+import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
 
 /** Convert 24h time (e.g. "09:00") to 12h for API storage ("9:00 AM") for backward compatibility */
 function formatTimeForApi(time: string): string {
@@ -274,6 +279,17 @@ function serializeAppointmentEditState(
 
 type SchedulingMode = "sequential" | "custom"
 
+type EditBaselineSnapshot = {
+  values: {
+    date?: Date
+    time: string
+    notes: string
+    leadSource: string
+    leadSourceDetail: string
+  }
+  services: SelectedService[]
+}
+
 function normalizedDrawerStatus(s: string | null): string {
   if (!s) return "scheduled"
   if (s === "cancelled_at_billing") return "cancelled"
@@ -442,6 +458,8 @@ export interface AppointmentFormProps {
   onDrawerHeaderStatusToneChange?: (status: string | null) => void
   /** Drawer: number of service lines (for wider sheet when user adds more than one). */
   onDrawerSelectedServiceCountChange?: (count: number) => void
+  /** Drawer edit: unsaved field/service changes (for blocking dismiss while editing). */
+  onEditAppointmentDirtyChange?: (dirty: boolean) => void
 }
 
 export function AppointmentForm({
@@ -461,6 +479,7 @@ export function AppointmentForm({
   onDrawerHeaderEndChange,
   onDrawerHeaderStatusToneChange,
   onDrawerSelectedServiceCountChange,
+  onEditAppointmentDirtyChange,
 }: AppointmentFormProps = {}) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -550,6 +569,14 @@ export function AppointmentForm({
   const [noShowDialogOpen, setNoShowDialogOpen] = useState(false)
   const [statusActionLoading, setStatusActionLoading] = useState(false)
   const [linkedSaleForStatus, setLinkedSaleForStatus] = useState<unknown | null>(null)
+  const [payRemainingSheetOpen, setPayRemainingSheetOpen] = useState(false)
+  const [payRemainingSaleForCollection, setPayRemainingSaleForCollection] = useState<any>(null)
+  const payRemainingSucceededRef = useRef(false)
+  const [openingPayRemaining, setOpeningPayRemaining] = useState(false)
+  const [invoicePreviewOpen, setInvoicePreviewOpen] = useState(false)
+  const [invoicePreviewLoading, setInvoicePreviewLoading] = useState(false)
+  const [invoicePreviewReceipt, setInvoicePreviewReceipt] = useState<InvoiceReceipt | null>(null)
+  const [invoicePreviewSettings, setInvoicePreviewSettings] = useState<any>(null)
 
   const [addNoteDialogOpen, setAddNoteDialogOpen] = useState(false)
   const [serviceCheckoutOpenInternal, setServiceCheckoutOpenInternal] = useState(false)
@@ -613,9 +640,11 @@ export function AppointmentForm({
   const [recurrenceEndDatePickerOpen, setRecurrenceEndDatePickerOpen] = useState(false)
 
   const [editBaselineSerialized, setEditBaselineSerialized] = useState<string | null>(null)
+  const editBaselineSnapshotRef = useRef<EditBaselineSnapshot | null>(null)
 
   useEffect(() => {
     setEditBaselineSerialized(null)
+    editBaselineSnapshotRef.current = null
   }, [appointmentId])
 
   const lastLoadedRecurrenceRef = useRef<Record<string, unknown> | null>(null)
@@ -631,10 +660,63 @@ export function AppointmentForm({
     return [String(appointmentId)]
   }, [appointmentId, existingGroupAppointmentIds])
 
+  const handleCheckoutCustomerChange = useCallback(
+    async (client: Client) => {
+      const prev = selectedCustomer
+      setSelectedCustomer(client)
+      setCustomerSearch(client.name)
+      onClientSelect?.(client)
+      if (!isEditMode || !appointmentId) {
+        toast({
+          title: "Client updated",
+          description: `${client.name} will be used for this checkout and appointment.`,
+        })
+        return
+      }
+      try {
+        const newClientId = client._id || client.id
+        for (const id of appointmentIdsForGroupActions) {
+          const res = await AppointmentsAPI.update(id, { clientId: newClientId })
+          if (!res?.success) {
+            const err =
+              typeof (res as { error?: string })?.error === "string"
+                ? (res as { error: string }).error
+                : "Update failed"
+            throw new Error(err)
+          }
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("appointments-refresh"))
+        }
+        toast({
+          title: "Client updated",
+          description: "This booking is now linked to the selected client.",
+        })
+      } catch (e) {
+        setSelectedCustomer(prev)
+        setCustomerSearch(prev?.name ?? "")
+        if (prev) onClientSelect?.(prev)
+        else onClientSelect?.(null)
+        toast({
+          title: "Could not update client",
+          description: e instanceof Error ? e.message : "Please try again.",
+          variant: "destructive",
+        })
+        throw e
+      }
+    },
+    [selectedCustomer, onClientSelect, isEditMode, appointmentId, appointmentIdsForGroupActions, toast]
+  )
+
   const isTerminalAppointmentStatus = useMemo(() => {
     const s = editedAppointmentStatus || ""
     return s === "cancelled" || s === "cancelled_at_billing" || s === "completed" || s === "missed"
   }, [editedAppointmentStatus])
+
+  const isCompletedAppointmentEditReadOnly = useMemo(
+    () => isEditMode && editedAppointmentStatus === "completed",
+    [isEditMode, editedAppointmentStatus]
+  )
 
   const refreshLinkedSaleForStatus = useCallback(async () => {
     if (!appointmentId || !isEditMode) {
@@ -649,19 +731,171 @@ export function AppointmentForm({
     }
   }, [appointmentId, isEditMode])
 
+  const syncAppointmentStatusFromServer = useCallback(async () => {
+    if (!appointmentId || !isEditMode) return
+    try {
+      const res = await AppointmentsAPI.getById(appointmentId)
+      if (!res?.success || !res?.data) return
+      const a = res.data as { status?: string }
+      if (typeof a.status === "string") setEditedAppointmentStatus(a.status)
+    } catch {
+      /* ignore */
+    }
+  }, [appointmentId, isEditMode])
+
   useEffect(() => {
     void refreshLinkedSaleForStatus()
   }, [refreshLinkedSaleForStatus])
 
   useEffect(() => {
-    const onRefresh = () => void refreshLinkedSaleForStatus()
+    const onRefresh = () => {
+      void refreshLinkedSaleForStatus()
+      void syncAppointmentStatusFromServer()
+    }
     window.addEventListener("appointments-refresh", onRefresh)
     return () => window.removeEventListener("appointments-refresh", onRefresh)
-  }, [refreshLinkedSaleForStatus])
+  }, [refreshLinkedSaleForStatus, syncAppointmentStatusFromServer])
+
+  const openLinkedInvoicePreview = useCallback(async () => {
+    const link = linkedSaleForStatus as { billNo?: string; receiptNumber?: string; _id?: unknown } | null | undefined
+    let billNo = String(link?.billNo ?? link?.receiptNumber ?? "").trim()
+    if (!billNo && link?._id != null && String(link._id).trim() !== "") {
+      try {
+        const sid = await SalesAPI.getById(String(link._id))
+        if (
+          sid?.success &&
+          sid?.data &&
+          sid.data.billNo != null &&
+          String(sid.data.billNo).trim() !== ""
+        ) {
+          billNo = String(sid.data.billNo).trim()
+        }
+      } catch {
+        /* noop */
+      }
+    }
+    if (!billNo) {
+      toast({
+        title: "No invoice",
+        description: "No bill number is linked to this appointment yet.",
+        variant: "destructive",
+      })
+      return
+    }
+    setInvoicePreviewOpen(true)
+    setInvoicePreviewLoading(true)
+    setInvoicePreviewReceipt(null)
+    setInvoicePreviewSettings(null)
+    try {
+      const saleRes = await SalesAPI.getByBillNo(billNo)
+      if (!saleRes.success || !saleRes.data) {
+        toast({
+          title: "Invoice not found",
+          description: `No sale found for bill #${billNo}.`,
+          variant: "destructive",
+        })
+        setInvoicePreviewOpen(false)
+        return
+      }
+      const settingsRes = await SettingsAPI.getBusinessSettings()
+      setInvoicePreviewReceipt(receiptPreviewReceiptFromSaleApi(saleRes.data))
+      setInvoicePreviewSettings(settingsRes.success ? settingsRes.data : null)
+    } catch (e) {
+      console.error(e)
+      toast({
+        title: "Failed to load invoice",
+        variant: "destructive",
+      })
+      setInvoicePreviewOpen(false)
+    } finally {
+      setInvoicePreviewLoading(false)
+    }
+  }, [linkedSaleForStatus, toast])
+
+  const openPayRemainingFromLinkedSale = useCallback(async () => {
+    const cid = selectedCustomer ? String(selectedCustomer._id || selectedCustomer.id || "").trim() : ""
+    if (!cid) return
+    const link = linkedSaleForStatus as { _id?: unknown } | null | undefined
+    const sid =
+      link != null && link._id != null && link._id !== "" ? String(link._id).trim() : ""
+    if (!sid) {
+      toast({
+        title: "No invoice",
+        description: "Could not find a linked bill to pay. Refresh the appointment or use Quick Sale.",
+        variant: "destructive",
+      })
+      return
+    }
+    setOpeningPayRemaining(true)
+    try {
+      const res = await SalesAPI.getById(sid)
+      if (!res?.success || !res?.data) {
+        toast({
+          title: "Invoice not found",
+          description: "Could not load the bill for payment.",
+          variant: "destructive",
+        })
+        return
+      }
+      const saleDoc = res.data as { paymentStatus?: { remainingAmount?: number } }
+      const remaining = Number(saleDoc?.paymentStatus?.remainingAmount ?? 0) || 0
+      if (remaining <= 0.02) {
+        toast({
+          title: "Nothing to collect",
+          description: "This invoice has no remaining balance.",
+        })
+        await refreshLinkedSaleForStatus()
+        return
+      }
+      payRemainingSucceededRef.current = false
+      setPayRemainingSaleForCollection(res.data)
+      setPayRemainingSheetOpen(true)
+    } catch {
+      toast({
+        title: "Error",
+        description: "Could not open payment. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setOpeningPayRemaining(false)
+    }
+  }, [linkedSaleForStatus, selectedCustomer, toast, refreshLinkedSaleForStatus])
+
+  const handlePayRemainingCollected = useCallback(async () => {
+    payRemainingSucceededRef.current = true
+    const saleId = payRemainingSaleForCollection?._id as string | undefined
+    await refreshLinkedSaleForStatus()
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("appointments-refresh"))
+    }
+    if (!saleId) return
+    const res = await SalesAPI.getById(saleId)
+    if (res?.success && res?.data) {
+      setPayRemainingSaleForCollection(res.data)
+    }
+  }, [refreshLinkedSaleForStatus, payRemainingSaleForCollection])
+
+  const closePayRemainingSheet = useCallback(() => {
+    const succeeded = payRemainingSucceededRef.current
+    payRemainingSucceededRef.current = false
+    setPayRemainingSheetOpen(false)
+    setPayRemainingSaleForCollection(null)
+    if (succeeded && variant === "drawer") {
+      onSuccess?.()
+    }
+  }, [variant, onSuccess])
 
   const editAppearanceStatus = useMemo(
     () => getAppointmentEditAppearanceStatus(editedAppointmentStatus, linkedSaleForStatus),
     [editedAppointmentStatus, linkedSaleForStatus]
+  )
+  const isPartialPaymentEditReadOnly = useMemo(
+    () => isEditMode && editAppearanceStatus === "partial_payment",
+    [isEditMode, editAppearanceStatus]
+  )
+  const isAppointmentFormReadOnly = useMemo(
+    () => isCompletedAppointmentEditReadOnly || isPartialPaymentEditReadOnly,
+    [isCompletedAppointmentEditReadOnly, isPartialPaymentEditReadOnly]
   )
   const hasLinkedInvoice = Boolean(linkedSaleForStatus)
 
@@ -675,6 +909,45 @@ export function AppointmentForm({
       notes: "",
     },
   })
+
+  const commitEditBaseline = useCallback(
+    (
+      values: {
+        date?: Date
+        time?: string
+        notes?: string
+        leadSource?: string
+        leadSourceDetail?: string
+      },
+      services: SelectedService[]
+    ) => {
+      editBaselineSnapshotRef.current = {
+        values: {
+          date: values.date ? new Date(values.date.getTime()) : undefined,
+          time: values.time || "",
+          notes: values.notes || "",
+          leadSource: values.leadSource || "",
+          leadSourceDetail: values.leadSourceDetail || "",
+        },
+        services: services.map((s) => ({ ...s })),
+      }
+      setEditBaselineSerialized(serializeAppointmentEditState(values, services))
+    },
+    []
+  )
+
+  const revertEditAppointmentToBaseline = useCallback(() => {
+    const snap = editBaselineSnapshotRef.current
+    if (!snap) return
+    form.reset({
+      date: snap.values.date,
+      time: snap.values.time,
+      notes: snap.values.notes,
+      leadSource: snap.values.leadSource,
+      leadSourceDetail: snap.values.leadSourceDetail,
+    })
+    setSelectedServices(snap.services.map((s) => ({ ...s })))
+  }, [form])
 
   // Sync URL params into form when they appear (e.g. client nav from calendar)
   useEffect(() => {
@@ -723,6 +996,15 @@ export function AppointmentForm({
     selectedServices,
   ])
 
+  useEffect(() => {
+    onEditAppointmentDirtyChange?.(isEditAppointmentDirty)
+  }, [isEditAppointmentDirty, onEditAppointmentDirtyChange])
+
+  useEffect(() => {
+    if (!isEditMode || !isEditAppointmentDirty) return
+    if (serviceCheckoutOpen) setServiceCheckoutOpen(false)
+  }, [isEditMode, isEditAppointmentDirty, serviceCheckoutOpen, setServiceCheckoutOpen])
+
   // Fetch appointments when date is set (for staff availability / overlap filtering)
   useEffect(() => {
     if (!formDate) {
@@ -763,6 +1045,195 @@ export function AppointmentForm({
     }
     return cursorM
   }, [selectedServices, formTime])
+
+  const ensureAppointmentBookingBeforeCheckout = useCallback(
+    async (ctx: {
+      lines: ServiceCheckoutLine[]
+      customer: Client
+      appointmentDate: Date | undefined
+      appointmentTime: string
+      notes: string
+    }): Promise<EnsureAppointmentBookingResult | null> => {
+      if (isEditMode) return null
+      if (!selectedCustomer) {
+        toast({
+          title: "Error",
+          description: "Please select a client.",
+          variant: "destructive",
+        })
+        return null
+      }
+      const values = form.getValues()
+      const dateStr = ctx.appointmentDate
+        ? format(ctx.appointmentDate, "yyyy-MM-dd")
+        : values.date
+          ? format(values.date, "yyyy-MM-dd")
+          : ""
+      if (!dateStr) {
+        toast({
+          title: "Error",
+          description: "Please select a date.",
+          variant: "destructive",
+        })
+        return null
+      }
+      const baseTimeStr = (ctx.appointmentTime || values.time || "").trim()
+      if (!baseTimeStr) {
+        toast({
+          title: "Error",
+          description: "Please select a time.",
+          variant: "destructive",
+        })
+        return null
+      }
+      const leadSourceValue = values.leadSource
+        ? values.leadSource === "Referral" || values.leadSource === "Other"
+          ? `${values.leadSource}${values.leadSourceDetail ? `: ${values.leadSourceDetail}` : ""}`
+          : values.leadSource
+        : ""
+
+      const parallelPayload = { allowParallelBooking: true as const }
+
+      const minutesBeforeLineIndex = (targetIdx: number): number => {
+        let c = parseTimeToMinutes(baseTimeStr)
+        for (let i = 0; i < targetIdx; i++) {
+          const L = ctx.lines[i]
+          const q = Math.max(1, Math.floor(Number(L.quantity) || 1))
+          const dur = L.duration || 60
+          c += q * dur
+        }
+        return c
+      }
+
+      type ServiceRow = {
+        serviceId: string
+        staffId: string
+        name: string
+        duration: number
+        price: number
+        staffLocked: boolean
+        startTime?: string
+      }
+
+      const servicesPayload: ServiceRow[] = []
+      for (let lineIdx = 0; lineIdx < ctx.lines.length; lineIdx++) {
+        const line = ctx.lines[lineIdx]
+        const idxInSelected = selectedServices.findIndex((s) => s.id === line.id)
+        const sel = idxInSelected >= 0 ? selectedServices[idxInSelected] : undefined
+        const dur = line.duration || sel?.duration || 0
+        if (dur < 1) {
+          toast({
+            title: "Error",
+            description: "Each service needs a valid duration. Check the service catalog.",
+            variant: "destructive",
+          })
+          return null
+        }
+        const displayName = sel?.name || line.name || "Service"
+        const q = Math.max(1, Math.floor(Number(line.quantity) || 1))
+        const baseCustomM =
+          schedulingMode === "custom"
+            ? idxInSelected >= 0
+              ? getServiceStartMinutes(idxInSelected)
+              : minutesBeforeLineIndex(lineIdx)
+            : 0
+        for (let copy = 0; copy < q; copy++) {
+          const unitPrice = Number(line.price) || Number(sel?.price) || 0
+          servicesPayload.push({
+            serviceId: line.serviceId,
+            staffId: line.staffId,
+            name: displayName,
+            duration: dur,
+            price: unitPrice,
+            staffLocked: !!sel?.staffLocked,
+            ...(schedulingMode === "custom"
+              ? {
+                  startTime: formatTimeForApi(
+                    minutesToTimeString(baseCustomM + copy * dur)
+                  ),
+                }
+              : {}),
+          })
+        }
+      }
+
+      const invalid = servicesPayload.some((s) => !s.serviceId || !s.staffId)
+      if (invalid) {
+        toast({
+          title: "Error",
+          description: "Every service needs a staff member and a selected service.",
+          variant: "destructive",
+        })
+        return null
+      }
+
+      const totalDuration = servicesPayload.reduce((sum, s) => sum + (s.duration || 0), 0)
+      const totalRevenue = servicesPayload.reduce((sum, s) => sum + (Number(s.price) || 0), 0)
+
+      try {
+        const response = await AppointmentsAPI.create({
+          clientId: selectedCustomer._id || selectedCustomer.id,
+          clientName: selectedCustomer.name,
+          date: dateStr,
+          time: formatTimeForApi(baseTimeStr),
+          leadSource: leadSourceValue,
+          schedulingMode,
+          services: servicesPayload,
+          totalDuration,
+          totalAmount: totalRevenue,
+          notes: ctx.notes || values.notes || "",
+          status: "scheduled",
+          ...parallelPayload,
+        })
+        if (!response.success) {
+          toast({
+            title: /\balready booked\b/i.test(response.error || "")
+              ? "Scheduling conflict"
+              : "Error",
+            description: response.error || "Failed to create appointments before checkout.",
+            variant: "destructive",
+          })
+          return null
+        }
+        const data = response.data
+        if (!Array.isArray(data) || data.length === 0) {
+          toast({
+            title: "Error",
+            description: "No appointments returned from server.",
+            variant: "destructive",
+          })
+          return null
+        }
+        const linkedAppointmentIds = data.map((a: { _id?: string }) => String(a._id))
+        const appointmentId = linkedAppointmentIds[0]
+        const bookingGroupId =
+          data[0]?.bookingGroupId != null ? String(data[0].bookingGroupId) : null
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("appointments-refresh"))
+        }
+        return { appointmentId, linkedAppointmentIds, bookingGroupId }
+      } catch (error: unknown) {
+        const serverMsg =
+          (error as { responseData?: { error?: string } })?.responseData?.error ||
+          (error as { response?: { data?: { error?: string } } })?.response?.data?.error
+        toast({
+          title: "Error",
+          description: serverMsg || "Failed to create appointments before checkout.",
+          variant: "destructive",
+        })
+        return null
+      }
+    },
+    [
+      form,
+      getServiceStartMinutes,
+      isEditMode,
+      schedulingMode,
+      selectedCustomer,
+      selectedServices,
+      toast,
+    ]
+  )
 
   /**
    * Get staff available for a specific service's time block only.
@@ -1020,9 +1491,7 @@ export function AppointmentForm({
         }
         queueMicrotask(() => {
           if (cancelled) return
-          setEditBaselineSerialized(
-            serializeAppointmentEditState(form.getValues(), servicesToShow as SelectedService[])
-          )
+          commitEditBaseline(form.getValues(), servicesToShow as SelectedService[])
         })
       })
       .catch(() => {
@@ -1375,6 +1844,8 @@ export function AppointmentForm({
   }, [selectedServices])
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    if (isAppointmentFormReadOnly) return
+
     if (!selectedCustomer) {
       toast({
         title: "Error",
@@ -1605,7 +2076,7 @@ export function AppointmentForm({
         }
 
         toast({ title: "Appointment Updated", description: newServices.length > 0 ? "Changes saved and new services added." : "Changes have been saved." })
-        setEditBaselineSerialized(serializeAppointmentEditState(values, selectedServices))
+        commitEditBaseline(values, selectedServices)
         if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("appointments-refresh"))
         onSuccess ? onSuccess() : router.push("/appointments")
       } else {
@@ -1766,9 +2237,7 @@ export function AppointmentForm({
           setAddNoteDialogOpen(false)
           setAddNoteDraft("")
           toast({ title: "Note saved" })
-          setEditBaselineSerialized(
-            serializeAppointmentEditState(form.getValues(), selectedServices)
-          )
+          commitEditBaseline(form.getValues(), selectedServices)
           window.dispatchEvent(new Event("appointments-refresh"))
         } else {
           toast({ title: "Could not save note", description: "Please try again.", variant: "destructive" })
@@ -1786,9 +2255,7 @@ export function AppointmentForm({
         setAddNoteDialogOpen(false)
         setAddNoteDraft("")
         toast({ title: "Note updated" })
-        setEditBaselineSerialized(
-          serializeAppointmentEditState(form.getValues(), selectedServices)
-        )
+        commitEditBaseline(form.getValues(), selectedServices)
         window.dispatchEvent(new Event("appointments-refresh"))
       } else {
         toast({ title: "Could not update note", description: "Please try again.", variant: "destructive" })
@@ -1806,9 +2273,7 @@ export function AppointmentForm({
         setAddNoteDialogOpen(false)
         setAddNoteDraft("")
         toast({ title: "Notes removed" })
-        setEditBaselineSerialized(
-          serializeAppointmentEditState(form.getValues(), selectedServices)
-        )
+        commitEditBaseline(form.getValues(), selectedServices)
         window.dispatchEvent(new Event("appointments-refresh"))
       } else {
         toast({ title: "Could not remove notes", description: "Please try again.", variant: "destructive" })
@@ -1973,7 +2438,7 @@ export function AppointmentForm({
         appointmentStatus={editedAppointmentStatus}
         appearanceStatus={editAppearanceStatus}
         hasLinkedInvoice={hasLinkedInvoice}
-        terminal={isTerminalAppointmentStatus}
+        terminal={isTerminalAppointmentStatus || isPartialPaymentEditReadOnly}
         busy={statusActionLoading}
         onApplyStatus={applyWorkflowStatus}
         onRequestNoShow={() => setNoShowDialogOpen(true)}
@@ -1991,6 +2456,7 @@ export function AppointmentForm({
     editAppearanceStatus,
     hasLinkedInvoice,
     isTerminalAppointmentStatus,
+    isPartialPaymentEditReadOnly,
     statusActionLoading,
     applyWorkflowStatus,
   ])
@@ -2154,12 +2620,17 @@ export function AppointmentForm({
                   return (
                     <FormItem className="flex flex-col space-y-2">
                       <FormLabel className="text-sm font-semibold text-slate-700">Date *</FormLabel>
-                      <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen} modal>
+                      <Popover
+                        open={isAppointmentFormReadOnly ? false : datePickerOpen}
+                        onOpenChange={setDatePickerOpen}
+                        modal
+                      >
                         <PopoverTrigger asChild>
                           <FormControl>
                             <Button
                               variant="outline"
                               type="button"
+                              disabled={isAppointmentFormReadOnly}
                               className={cn(
                                 "h-12 w-full justify-start px-4 border-slate-200 hover:border-slate-400 focus-visible:ring-indigo-500 rounded-xl font-medium text-slate-700 bg-white shadow-sm transition-all duration-200",
                                 !field.value && "text-slate-500"
@@ -2217,7 +2688,7 @@ export function AppointmentForm({
                 render={({ field }) => (
                   <FormItem className="flex flex-col space-y-2">
                     <FormLabel className="text-sm font-semibold text-slate-700">Time *</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value || undefined}>
+                    <Select onValueChange={field.onChange} value={field.value || undefined} disabled={isAppointmentFormReadOnly}>
                       <FormControl>
                         <SelectTrigger className="h-12 px-4 border-slate-200 hover:border-slate-400 focus:border-slate-500 focus:ring-slate-500 rounded-xl font-medium text-slate-700 bg-white shadow-sm transition-all duration-200">
                           <SelectValue placeholder="Select a time" />
@@ -2241,22 +2712,11 @@ export function AppointmentForm({
             {/* Services Section */}
             <div id="appointment-services-section" className={cn("space-y-4", isDrawer ? "mt-6" : "mt-12")}>
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
+                <div>
                   <h3 className={cn("font-semibold text-slate-800 flex items-center gap-2", isDrawer ? "text-base" : "text-lg")}>
                     <FileText className={cn("text-slate-600", isDrawer ? "h-4 w-4" : "h-5 w-5")} />
                     Services *
                   </h3>
-                  <Button
-                    type="button"
-                    onClick={addService}
-                    className={cn(
-                      "text-white",
-                      isDrawer ? "bg-violet-600 hover:bg-violet-700 rounded-lg px-3 py-1.5" : "bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl px-4 py-2"
-                    )}
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Service
-                  </Button>
                 </div>
                 {!isDrawer && <p className="text-sm text-slate-500">Add services and assign staff members for this appointment</p>}
               </div>
@@ -2282,6 +2742,7 @@ export function AppointmentForm({
                           {service.serviceId && service.name ? (
                             <div className="flex items-center justify-between h-9 px-2.5 py-1.5 bg-white rounded-md text-sm border border-slate-200 min-w-0">
                               <span className="truncate">{service.name}</span>
+                              {!isAppointmentFormReadOnly ? (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -2293,6 +2754,7 @@ export function AppointmentForm({
                               >
                                 <X className="h-3.5 w-3.5" />
                               </button>
+                              ) : null}
                             </div>
                           ) : (
                             <div className="relative">
@@ -2300,11 +2762,12 @@ export function AppointmentForm({
                               <Input
                                 placeholder="Search service..."
                                 value={getDropdownState(service.id).search}
+                                disabled={isAppointmentFormReadOnly}
                                 onChange={(e) => updateDropdownState(service.id, { search: e.target.value, isOpen: true })}
                                 onFocus={() => updateDropdownState(service.id, { isOpen: true })}
                                 className="h-9 pl-8 pr-8 text-sm border-slate-200 rounded-md"
                               />
-                              {getDropdownState(service.id).search && (
+                              {getDropdownState(service.id).search && !isAppointmentFormReadOnly && (
                                 <button
                                   type="button"
                                   onClick={() => updateDropdownState(service.id, { search: '', isOpen: false })}
@@ -2315,7 +2778,7 @@ export function AppointmentForm({
                               )}
                             </div>
                           )}
-                          {getDropdownState(service.id).isOpen && !service.serviceId && (
+                          {getDropdownState(service.id).isOpen && !service.serviceId && !isAppointmentFormReadOnly && (
                             <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-md shadow-lg max-h-48 overflow-auto">
                               {loadingServices ? (
                                 <div className="p-2 text-center text-xs text-slate-500">Loading...</div>
@@ -2342,6 +2805,7 @@ export function AppointmentForm({
                         <Select
                           value={service.staffId}
                           onValueChange={(value) => updateService(service.id, "staffId", value)}
+                          disabled={isAppointmentFormReadOnly}
                         >
                           <SelectTrigger className="h-9 w-[130px] shrink-0 border-slate-200 rounded-md text-sm">
                             <SelectValue placeholder="Staff" />
@@ -2394,7 +2858,7 @@ export function AppointmentForm({
                               ? "text-red-600 bg-red-50 border-red-200 hover:bg-red-100"
                               : "text-slate-400 hover:text-red-500 hover:bg-red-50/80 border-slate-200"
                           )}
-                          disabled={!service.staffId}
+                          disabled={isAppointmentFormReadOnly || !service.staffId}
                           title={
                             service.staffLocked
                               ? "Client requested this stylist — staff locked"
@@ -2404,6 +2868,7 @@ export function AppointmentForm({
                           }
                           aria-pressed={!!service.staffLocked}
                           onClick={() =>
+                            !isAppointmentFormReadOnly &&
                             service.staffId &&
                             updateService(service.id, "staffLocked", !service.staffLocked)
                           }
@@ -2429,6 +2894,7 @@ export function AppointmentForm({
                           return (
                             <Select
                               value={displayValue}
+                              disabled={isAppointmentFormReadOnly}
                               onValueChange={(value) => updateService(service.id, "startTime", value)}
                             >
                               <SelectTrigger
@@ -2453,6 +2919,7 @@ export function AppointmentForm({
                             </Select>
                           )
                         })()}
+                        {!isAppointmentFormReadOnly ? (
                         <Button
                           type="button"
                           variant="ghost"
@@ -2462,14 +2929,47 @@ export function AppointmentForm({
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
+                        ) : (
+                          <span className="h-9 w-9 shrink-0" aria-hidden />
+                        )}
                       </div>
                     </div>
                   )})}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addService}
+                    disabled={isAppointmentFormReadOnly}
+                    className={cn(
+                      "w-full rounded-full border-2 border-dashed font-medium text-slate-600 transition-colors",
+                      "border-slate-200 bg-white/90 hover:bg-violet-50 hover:text-violet-800 hover:border-violet-300/80",
+                      isDrawer ? "h-9 text-sm px-4 mt-1" : "h-11 text-sm px-5 mt-1"
+                    )}
+                  >
+                    <Plus className={cn("mr-2 shrink-0", isDrawer ? "h-3.5 w-3.5" : "h-4 w-4")} />
+                    Add Service
+                  </Button>
                 </div>
               ) : (
+                <div className="space-y-3">
                 <div className={cn("text-center border-2 border-dashed border-slate-200 rounded-lg bg-slate-50/50", isDrawer ? "p-4" : "p-8")}>
                   <FileText className={cn("text-slate-300 mx-auto", isDrawer ? "h-8 w-8 mb-2" : "h-12 w-12 mb-4")} />
                   <p className="text-slate-500 text-sm">No services added yet</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addService}
+                  disabled={isAppointmentFormReadOnly}
+                  className={cn(
+                    "w-full rounded-full border-2 border-dashed font-medium text-slate-600 transition-colors",
+                    "border-slate-200 bg-white/90 hover:bg-violet-50 hover:text-violet-800 hover:border-violet-300/80",
+                    isDrawer ? "h-9 text-sm px-4" : "h-11 text-sm px-5"
+                  )}
+                >
+                  <Plus className={cn("mr-2 shrink-0", isDrawer ? "h-3.5 w-3.5" : "h-4 w-4")} />
+                  Add Service
+                </Button>
                 </div>
               )}
 
@@ -2521,22 +3021,35 @@ export function AppointmentForm({
               )}
               {(formNotes || "").trim() ? (
                 <div
-                  role="button"
-                  tabIndex={0}
-                  className="mt-3 rounded-lg border border-amber-200/90 bg-amber-50/60 px-3 py-2.5 sm:px-4 sm:py-3 cursor-pointer hover:bg-amber-50/95 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
-                  onClick={() => {
-                    setNoteDialogMode("edit")
-                    setAddNoteDraft((formNotes || "").trim())
-                    setAddNoteDialogOpen(true)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault()
-                      setNoteDialogMode("edit")
-                      setAddNoteDraft((formNotes || "").trim())
-                      setAddNoteDialogOpen(true)
-                    }
-                  }}
+                  role={isAppointmentFormReadOnly ? undefined : "button"}
+                  tabIndex={isAppointmentFormReadOnly ? undefined : 0}
+                  className={cn(
+                    "mt-3 rounded-lg border border-amber-200/90 bg-amber-50/60 px-3 py-2.5 sm:px-4 sm:py-3",
+                    isAppointmentFormReadOnly
+                      ? "cursor-default"
+                      : "cursor-pointer hover:bg-amber-50/95 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
+                  )}
+                  onClick={
+                    isAppointmentFormReadOnly
+                      ? undefined
+                      : () => {
+                          setNoteDialogMode("edit")
+                          setAddNoteDraft((formNotes || "").trim())
+                          setAddNoteDialogOpen(true)
+                        }
+                  }
+                  onKeyDown={
+                    isAppointmentFormReadOnly
+                      ? undefined
+                      : (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            setNoteDialogMode("edit")
+                            setAddNoteDraft((formNotes || "").trim())
+                            setAddNoteDialogOpen(true)
+                          }
+                        }
+                  }
                 >
                   <p className="text-sm text-slate-800 whitespace-pre-wrap break-words leading-relaxed">
                     {(formNotes || "").trim()}
@@ -2553,167 +3066,43 @@ export function AppointmentForm({
     </>
   )
 
-  const footerButtons = (
-    <div
-      className={cn(
-        "flex justify-end items-center gap-3 w-full flex-nowrap",
-        isDrawer ? "pt-4 border-t border-border/60" : ""
-      )}
-    >
-      {isEditMode ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label="More appointment actions"
-              title="More options"
-              disabled={loadingAppointment || isTerminalAppointmentStatus}
-              className="shrink-0 h-10 w-10 rounded-full border-slate-200 bg-white text-slate-800 hover:bg-slate-50 disabled:opacity-50"
-            >
-              <MoreVertical className="h-4 w-4" aria-hidden />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="start"
-            sideOffset={8}
-            className="w-[min(20rem,calc(100vw-2rem))] z-[200] rounded-lg border-slate-200 p-1 shadow-lg"
-          >
-            <DropdownMenuItem
-              disabled={loadingAppointment}
-              className="gap-2 cursor-pointer"
-              onSelect={() => {
-                setNoteDialogMode("add")
-                setAddNoteDraft("")
-                setAddNoteDialogOpen(true)
-              }}
-            >
-              <CalendarPlus className="h-4 w-4 shrink-0" aria-hidden />
-              Add a note
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="gap-2 cursor-pointer"
-              onSelect={() =>
-                toast({
-                  title: "Add a form",
-                  description: "Client intake forms will be available in a future update.",
-                })
-              }
-            >
-              <FilePlus className="h-4 w-4 shrink-0" aria-hidden />
-              Add a form
-            </DropdownMenuItem>
-            <DropdownMenuSeparator className="my-1" />
-            <DropdownMenuItem
-              disabled={loadingAppointment}
-              className="gap-2 cursor-pointer"
-              onSelect={() => void openActivityDialog()}
-            >
-              <History className="h-4 w-4 shrink-0" aria-hidden />
-              View appointment activity
-            </DropdownMenuItem>
-            <DropdownMenuItem className="gap-2 cursor-pointer" onSelect={openRepeatingDialog}>
-              <Repeat className="h-4 w-4 shrink-0" aria-hidden />
-              Set as repeating
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={loadingAppointment || isTerminalAppointmentStatus}
-              className="gap-2 cursor-pointer"
-              onSelect={openRebookDialog}
-            >
-              <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
-              Rebook
-            </DropdownMenuItem>
-            <DropdownMenuSeparator className="my-1" />
-            <DropdownMenuItem
-              disabled={loadingAppointment || isTerminalAppointmentStatus}
-              className="gap-2 cursor-pointer"
-              onSelect={() => scrollToFormSection("appointment-schedule-section")}
-            >
-              <CalendarClock className="h-4 w-4 shrink-0" aria-hidden />
-              Reschedule
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={loadingAppointment || isTerminalAppointmentStatus}
-              className="gap-2 cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50"
-              onSelect={() => setNoShowDialogOpen(true)}
-            >
-              <UserX className="h-4 w-4 shrink-0" aria-hidden />
-              No-show
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={loadingAppointment || isTerminalAppointmentStatus}
-              className="gap-2 cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50"
-              onSelect={() => setCancelApptDialogOpen(true)}
-            >
-              <X className="h-4 w-4 shrink-0" aria-hidden />
-              Cancel
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
+  const checkoutServiceFooterButton =
+    isEditMode && editAppearanceStatus === "partial_payment" ? (
       <Button
         variant="outline"
         type="button"
-        onClick={() => (onCancel ? onCancel() : router.push("/appointments"))}
+        disabled={isSubmitting || loadingAppointment || !selectedCustomer || openingPayRemaining}
+        onClick={() => void openPayRemainingFromLinkedSale()}
         className={cn(
-          "font-medium min-w-[100px]",
-          isDrawer ? "rounded-lg" : "px-8 py-3 border-slate-300 text-slate-700 hover:bg-slate-100 rounded-xl"
+          "font-medium min-w-[140px]",
+          isDrawer ? "rounded-lg border-amber-300 text-amber-800 hover:bg-amber-50" : "px-8 py-3 border-amber-300 text-amber-800 hover:bg-amber-50 rounded-xl"
         )}
       >
-        Cancel
+        <Banknote className="h-4 w-4 mr-2" />
+        Pay Now
       </Button>
+    ) : isEditMode && editAppearanceStatus === "completed" ? (
       <Button
         variant="outline"
         type="button"
-        disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
-        onClick={() => {
-          const values = form.getValues()
-          if (!selectedCustomer || selectedServices.length === 0) return
-          const saleData: Record<string, unknown> = {
-            clientId: selectedCustomer._id || selectedCustomer.id,
-            clientName: selectedCustomer.name,
-            clientPhone: selectedCustomer.phone || "",
-            clientEmail: selectedCustomer.email || "",
-            date: values.date ? format(values.date, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
-            time: values.time || "",
-            notes: values.notes || "",
-            services: selectedServices.map(s => {
-              const staffMember = staff.find((st: any) => (st._id || st.id) === s.staffId)
-              return {
-                serviceId: s.serviceId,
-                staffId: s.staffId,
-                staffName: staffMember?.name || "",
-                name: s.name,
-                price: s.price,
-                duration: s.duration,
-              }
-            }),
-          }
-          if (isEditMode && appointmentId) {
-            saleData.appointmentId = appointmentId
-            // Multi-doc booking groups: forward every sibling id so the quick-sale
-            // page bulk-completes them on successful payment (matches the calendar
-            // entry points). Without this, only the anchor card would be marked
-            // completed and other linked cards would be stuck in 'scheduled'.
-            if (existingGroupAppointmentIds && existingGroupAppointmentIds.length > 0) {
-              saleData.linkedAppointmentIds = existingGroupAppointmentIds
-            }
-            if (existingBookingGroupId) {
-              saleData.bookingGroupId = existingBookingGroupId
-            }
-          }
-          router.push(`/quick-sale?appointment=${btoa(JSON.stringify(saleData))}`)
-        }}
+        disabled={loadingAppointment || invoicePreviewLoading || !hasLinkedInvoice}
+        title={!hasLinkedInvoice ? "Invoice is not available for this appointment yet." : undefined}
+        onClick={() => void openLinkedInvoicePreview()}
         className={cn(
-          "font-medium min-w-[120px]",
-          isDrawer ? "rounded-lg border-emerald-300 text-emerald-700 hover:bg-emerald-50" : "px-8 py-3 border-emerald-300 text-emerald-700 hover:bg-emerald-50 rounded-xl"
+          "font-medium min-w-[140px]",
+          isDrawer
+            ? "rounded-lg border-emerald-300 text-emerald-800 hover:bg-emerald-50"
+            : "px-8 py-3 border-emerald-300 text-emerald-800 hover:bg-emerald-50 rounded-xl"
         )}
       >
-        <Receipt className="h-4 w-4 mr-2" />
-        Raise Sale
+        {invoicePreviewLoading ? (
+          <Loader2 className="h-4 w-4 mr-2 shrink-0 animate-spin" aria-hidden />
+        ) : (
+          <Eye className="h-4 w-4 mr-2 shrink-0" aria-hidden />
+        )}
+        View Invoice
       </Button>
+    ) : (
       <Button
         variant="outline"
         type="button"
@@ -2727,29 +3116,176 @@ export function AppointmentForm({
         <ShoppingCart className="h-4 w-4 mr-2" />
         Checkout Service
       </Button>
-      {(!isEditMode || isEditAppointmentDirty) ? (
+    )
+
+  const scheduleOrUpdateFooterButton = (
+    <Button
+      type="submit"
+      form="appointmentForm"
+      disabled={
+        isSubmitting ||
+        loadingAppointment ||
+        selectedServices.length === 0 ||
+        !selectedCustomer ||
+        isAppointmentFormReadOnly
+      }
+      className={cn(
+        "font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]",
+        isDrawer ? "rounded-lg bg-violet-600 hover:bg-violet-700 text-white" : "px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl"
+      )}
+    >
+      {isSubmitting ? (
+        <>
+          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          {isEditMode ? "Updating..." : "Scheduling..."}
+        </>
+      ) : (
+        <>
+          <CalendarDays className="h-4 w-4 mr-2" />
+          {isEditMode ? "Update Appointment" : "Schedule Appointment"}
+        </>
+      )}
+    </Button>
+  )
+
+  const footerButtons = (
+    <div
+      className={cn(
+        "flex justify-end items-center gap-3 w-full flex-nowrap",
+        isDrawer ? "pt-4 border-t border-border/60" : ""
+      )}
+    >
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="More appointment actions"
+            title="More options"
+            disabled={loadingAppointment || (isEditMode && (isTerminalAppointmentStatus || isPartialPaymentEditReadOnly))}
+            className="shrink-0 h-10 w-10 rounded-full border-slate-200 bg-white text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <MoreVertical className="h-4 w-4" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          sideOffset={8}
+          className="w-[min(20rem,calc(100vw-2rem))] z-[200] rounded-lg border-slate-200 p-1 shadow-lg"
+        >
+          <DropdownMenuItem
+            disabled={loadingAppointment || isAppointmentFormReadOnly}
+            className="gap-2 cursor-pointer"
+            onSelect={() => {
+              setNoteDialogMode("add")
+              setAddNoteDraft("")
+              setAddNoteDialogOpen(true)
+            }}
+          >
+            <CalendarPlus className="h-4 w-4 shrink-0" aria-hidden />
+            Add a note
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="gap-2 cursor-pointer"
+            onSelect={() =>
+              toast({
+                title: "Add a form",
+                description: "Client intake forms will be available in a future update.",
+              })
+            }
+          >
+            <FilePlus className="h-4 w-4 shrink-0" aria-hidden />
+            Add a form
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="my-1" />
+          {isEditMode ? (
+            <>
+              <DropdownMenuItem
+                disabled={loadingAppointment}
+                className="gap-2 cursor-pointer"
+                onSelect={() => void openActivityDialog()}
+              >
+                <History className="h-4 w-4 shrink-0" aria-hidden />
+                View appointment activity
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={loadingAppointment || isAppointmentFormReadOnly}
+                className="gap-2 cursor-pointer"
+                onSelect={openRepeatingDialog}
+              >
+                <Repeat className="h-4 w-4 shrink-0" aria-hidden />
+                Set as repeating
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="my-1" />
+            </>
+          ) : null}
+          <DropdownMenuItem
+            disabled={loadingAppointment || isTerminalAppointmentStatus || isPartialPaymentEditReadOnly}
+            className="gap-2 cursor-pointer"
+            onSelect={openRebookDialog}
+          >
+            <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+            Rebook
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="my-1" />
+          <DropdownMenuItem
+            disabled={loadingAppointment || isTerminalAppointmentStatus || isPartialPaymentEditReadOnly}
+            className="gap-2 cursor-pointer"
+            onSelect={() => scrollToFormSection("appointment-schedule-section")}
+          >
+            <CalendarClock className="h-4 w-4 shrink-0" aria-hidden />
+            Reschedule
+          </DropdownMenuItem>
+          {isEditMode ? (
+            <>
+              <DropdownMenuItem
+                disabled={loadingAppointment || isTerminalAppointmentStatus || isPartialPaymentEditReadOnly}
+                className="gap-2 cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50"
+                onSelect={() => setNoShowDialogOpen(true)}
+              >
+                <UserX className="h-4 w-4 shrink-0" aria-hidden />
+                No-show
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={loadingAppointment || isTerminalAppointmentStatus || isPartialPaymentEditReadOnly}
+                className="gap-2 cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50"
+                onSelect={() => setCancelApptDialogOpen(true)}
+              >
+                <X className="h-4 w-4 shrink-0" aria-hidden />
+                Cancel
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {isEditMode && isEditAppointmentDirty ? (
         <Button
-          type="submit"
-          form="appointmentForm"
-          disabled={isSubmitting || loadingAppointment || selectedServices.length === 0 || !selectedCustomer}
+          variant="outline"
+          type="button"
+          onClick={() => {
+            revertEditAppointmentToBaseline()
+          }}
           className={cn(
-            "font-semibold disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]",
-            isDrawer ? "rounded-lg bg-violet-600 hover:bg-violet-700 text-white" : "px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl"
+            "font-medium min-w-[100px]",
+            isDrawer ? "rounded-lg" : "px-8 py-3 border-slate-300 text-slate-700 hover:bg-slate-100 rounded-xl"
           )}
         >
-          {isSubmitting ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              {isEditMode ? "Updating..." : "Scheduling..."}
-            </>
-          ) : (
-            <>
-              <CalendarDays className="h-4 w-4 mr-2" />
-              {isEditMode ? "Update Appointment" : "Schedule Appointment"}
-            </>
-          )}
+          Cancel
         </Button>
       ) : null}
+      {isEditMode ? (
+        isEditAppointmentDirty ? (
+          scheduleOrUpdateFooterButton
+        ) : (
+          checkoutServiceFooterButton
+        )
+      ) : (
+        <>
+          {checkoutServiceFooterButton}
+          {scheduleOrUpdateFooterButton}
+        </>
+      )}
     </div>
   )
 
@@ -2786,6 +3322,11 @@ export function AppointmentForm({
             existingBookingGroupId={existingBookingGroupId}
             consumeResumeDraftIntent={consumeResumeDraftIntent}
             resumeSavedDraftToken={resumeSavedDraftToken ?? null}
+            onCustomerChange={handleCheckoutCustomerChange}
+            ensureAppointmentBookingBeforeCheckout={
+              isEditMode ? undefined : ensureAppointmentBookingBeforeCheckout
+            }
+            onSuccessfulCheckout={onSuccess}
           />
         </div>
       ) : (
@@ -2881,6 +3422,48 @@ export function AppointmentForm({
         </DialogContent>
       </Dialog>
 
+      <PaymentCollectionModal
+        isOpen={payRemainingSheetOpen}
+        presentation="sheet"
+        onClose={closePayRemainingSheet}
+        sale={payRemainingSaleForCollection}
+        onPaymentCollected={handlePayRemainingCollected}
+        exitAfterPaymentSuccess={variant === "drawer"}
+      />
+
+      <Dialog
+        open={invoicePreviewOpen}
+        onOpenChange={(next) => {
+          if (!next) {
+            setInvoicePreviewOpen(false)
+            setInvoicePreviewReceipt(null)
+            setInvoicePreviewSettings(null)
+          }
+        }}
+      >
+        <DialogContent
+          overlayClassName="z-[120]"
+          className="z-[120] flex max-h-[90vh] w-[calc(100vw-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
+        >
+          <DialogHeader className="shrink-0 px-6 pt-6 pb-2">
+            <DialogTitle>
+              {invoicePreviewReceipt ? `Invoice #${invoicePreviewReceipt.receiptNumber}` : "Invoice preview"}
+            </DialogTitle>
+            <DialogDescription className="sr-only">Preview of the invoice linked to this appointment</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 sm:px-6">
+            {invoicePreviewLoading ? (
+              <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin shrink-0" aria-hidden />
+                Loading invoice…
+              </div>
+            ) : invoicePreviewReceipt ? (
+              <ReceiptPreview receipt={invoicePreviewReceipt} businessSettings={invoicePreviewSettings} />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {isDrawer ? null : (
         <ServiceCheckoutDialog
           variant="dialog"
@@ -2899,6 +3482,10 @@ export function AppointmentForm({
           existingBookingGroupId={existingBookingGroupId}
           consumeResumeDraftIntent={consumeResumeDraftIntent}
           resumeSavedDraftToken={resumeSavedDraftToken ?? null}
+          onCustomerChange={handleCheckoutCustomerChange}
+          ensureAppointmentBookingBeforeCheckout={
+            isEditMode ? undefined : ensureAppointmentBookingBeforeCheckout
+          }
         />
       )}
 

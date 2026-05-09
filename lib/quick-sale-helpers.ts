@@ -127,3 +127,64 @@ export function areRaiseSaleLinkageSnapshotsEqual(
     a.extraPrepaid === b.extraPrepaid
   )
 }
+
+export function isLikelyMongoObjectId(id: string | null | undefined): boolean {
+  return !!id && /^[a-f\d]{24}$/i.test(String(id))
+}
+
+export function walletExpiryEndMs(w: { effectiveExpiryDate?: unknown; expiryDate?: unknown }): number {
+  const raw = w?.effectiveExpiryDate ?? w?.expiryDate
+  if (!raw) return 0
+  const t = new Date(raw as string).getTime()
+  return Number.isFinite(t) ? t : 0
+}
+
+/**
+ * Active prepaid wallets with usable balance (Quick Sale + service checkout payment picker).
+ */
+export function filterWalletsForQuickSaleDisplay(wallets: any[] | undefined, nowMs: number = Date.now()): any[] {
+  if (!wallets?.length) return []
+  const GRACE_MS = 120_000
+  return wallets.filter((w) => {
+    if (String(w.status || "").toLowerCase() !== "active") return false
+    if (Number(w.remainingBalance) <= 0) return false
+    const end = walletExpiryEndMs(w)
+    if (!end) return false
+    return end >= nowMs - GRACE_MS
+  })
+}
+
+/** Prefer soonest-expiring wallet (Quick Sale + service checkout). */
+export function pickDefaultClientWalletId(wallets: any[]): string {
+  if (!wallets?.length) return ""
+  const sorted = [...wallets].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
+  return String(sorted[0]._id)
+}
+
+/** Single display row for combined-wallet mode; redeem still uses primary _id + server FIFO. */
+export function buildCombinedQuickSaleWalletRow(usable: any[]) {
+  const sorted = [...usable].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
+  const sum = sorted.reduce((s, w) => s + (Number(w.remainingBalance) || 0), 0)
+  const primary = sorted[0]
+  return {
+    ...primary,
+    _id: primary._id,
+    remainingBalance: sum,
+    effectiveExpiryDate: primary.effectiveExpiryDate,
+    planSnapshot: {
+      ...(primary.planSnapshot || {}),
+      planName: "Combined prepaid balance",
+    },
+    _combinedSources: sorted,
+  }
+}
+
+/**
+ * Bill `notes` may include a multi-staff tip summary appended by checkout (see historical
+ * `Tip: …` blocks). Customer note UIs should only show appointment + sale remarks.
+ */
+export function billNotesForCustomerDisplay(raw: unknown): string {
+  const t = String(raw ?? "").trim()
+  if (!t) return ""
+  return t.replace(/(\r?\n){2}Tip:[\s\S]*$/i, "").trim()
+}

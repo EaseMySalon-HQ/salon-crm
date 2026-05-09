@@ -1,4 +1,5 @@
 import type {
+  CheckoutTipLine,
   ServiceCheckoutLine,
   ServiceCheckoutMembershipLine,
   ServiceCheckoutPackageLine,
@@ -24,6 +25,13 @@ export type ServiceCheckoutDraftPayload = {
   membershipLines: ServiceCheckoutMembershipLine[]
   packageLines: ServiceCheckoutPackageLine[]
   prepaidLines: ServiceCheckoutPrepaidLine[]
+  /** Optional checkout extras (appointment add-to-cart). */
+  checkoutTipLines?: CheckoutTipLine[]
+  checkoutCartDiscountType?: "fixed" | "percentage"
+  checkoutCartDiscountValue?: number
+  /** @deprecated Prefer checkoutCartDiscountType + checkoutCartDiscountValue */
+  checkoutCartDiscount?: number
+  checkoutSaleNote?: string
   savedAt: string
 }
 
@@ -84,6 +92,11 @@ function parseDraftFile(raw: string): ServiceCheckoutDraftPayload | null {
       membershipLines: parsed.membershipLines,
       packageLines: parsed.packageLines,
       prepaidLines: parsed.prepaidLines,
+      checkoutTipLines: parsed.checkoutTipLines,
+      checkoutCartDiscountType: parsed.checkoutCartDiscountType,
+      checkoutCartDiscountValue: parsed.checkoutCartDiscountValue,
+      checkoutCartDiscount: parsed.checkoutCartDiscount,
+      checkoutSaleNote: parsed.checkoutSaleNote,
       savedAt: parsed.savedAt,
     }
   } catch {

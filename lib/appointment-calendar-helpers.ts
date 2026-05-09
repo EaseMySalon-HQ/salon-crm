@@ -52,13 +52,135 @@ export function getAppointmentStatusPillClass(status: string | null | undefined)
   }
 }
 
-/** True when a sale record has both paid and remaining balance (matches calendar partial tint). */
+/** True when a sale is partially paid (matches grid calendar tint + payment arrays). */
 export function saleRecordIsPartialPayment(s: unknown): boolean {
-  const ps = (s as { paymentStatus?: { paidAmount?: number; remainingAmount?: number } })?.paymentStatus
-  if (!ps) return false
-  const paid = Number(ps.paidAmount) || 0
-  const rem = Number(ps.remainingAmount) || 0
-  return paid > 0 && rem > 0.005
+  const rec = s as {
+    status?: string
+    paymentStatus?: { paidAmount?: number; remainingAmount?: number; totalAmount?: number }
+    payments?: Array<{ amount?: number }>
+    tip?: number
+    grossTotal?: number
+    netTotal?: number
+  }
+  const st = String(rec?.status ?? "").toLowerCase()
+  const ps = rec?.paymentStatus
+  const paidFromPayments = Array.isArray(rec?.payments)
+    ? rec.payments.reduce((sum, p) => sum + (Number(p?.amount) || 0), 0)
+    : 0
+  const paidRaw = ps != null ? Number(ps.paidAmount) : NaN
+  const paid = Number.isFinite(paidRaw) && paidRaw > 0 ? paidRaw : paidFromPayments
+
+  const tip = Number(rec?.tip) || 0
+  const total =
+    (ps != null && Number.isFinite(Number(ps.totalAmount)) && Number(ps.totalAmount) > 0
+      ? Number(ps.totalAmount)
+      : NaN) ||
+    (Number(rec?.grossTotal) || 0) + tip ||
+    Number(rec?.netTotal) ||
+    0
+
+  let rem = ps != null ? Number(ps.remainingAmount) : NaN
+  if (!Number.isFinite(rem)) rem = Math.max(0, total - paid)
+
+  const collected = paid > 0.05
+  const owes = rem > 0.05
+  if (st === "partial" && collected && total > 0.05 && paid < total - 0.05) return true
+  return collected && owes
+}
+
+/** Appointment ids linked to a sale with partial payment (`SalesAPI` rows for a given day). */
+export function collectPartialPaymentAppointmentIdsFromSales(sales: unknown[]): Set<string> {
+  const ids = new Set<string>()
+  const add = (raw: unknown) => {
+    if (raw == null) return
+    const id =
+      typeof raw === "object" && (raw as { _id?: unknown })?._id != null
+        ? String((raw as { _id: unknown })._id)
+        : String(raw)
+    if (id) ids.add(id)
+  }
+  for (const s of sales) {
+    if (!saleRecordIsPartialPayment(s)) continue
+    const sale = s as { appointmentId?: unknown; linkedAppointmentIds?: unknown[] }
+    add(sale.appointmentId)
+    const linked = sale.linkedAppointmentIds
+    if (Array.isArray(linked)) linked.forEach(add)
+  }
+  return ids
+}
+
+/**
+ * Card / list tone: base `apt.status`, or derived `partial_payment` / `missed`
+ * when a same-day sale marks this appointment as partially paid.
+ */
+export function getCalendarCardVisualStatus(
+  apt: { _id?: unknown; status?: string },
+  partialPaymentIds: Set<string>
+): string {
+  const st = apt.status || "scheduled"
+  if (st === "missed") return "missed"
+  const rawId = apt._id
+  const aptId =
+    rawId != null
+      ? typeof rawId === "object" && (rawId as { _id?: unknown })?._id != null
+        ? String((rawId as { _id: unknown })._id)
+        : String(rawId)
+      : ""
+  if (
+    aptId &&
+    partialPaymentIds.has(aptId) &&
+    st !== "cancelled" &&
+    st !== "cancelled_at_billing" &&
+    st !== "missed"
+  ) {
+    return "partial_payment"
+  }
+  return st
+}
+
+/** DB statuses that open the appointment edit drawer from calendar / list. */
+export const APPOINTMENT_EDITABLE_STATUSES: ReadonlySet<string> = new Set([
+  "scheduled",
+  "confirmed",
+  "arrived",
+  "service_started",
+])
+
+export type AppointmentCalendarOpenIntent =
+  | { type: "details" }
+  | { type: "edit_form"; appointmentId: string }
+
+export function getAppointmentCalendarOpenIntent(
+  apt: { _id: string; status: string; clientId?: { _id?: string } | string | null },
+  partialPaymentIds: Set<string>
+): AppointmentCalendarOpenIntent {
+  const visual = getCalendarCardVisualStatus(apt, partialPaymentIds)
+  if (visual === "partial_payment") {
+    const rawId = apt._id
+    const appointmentId =
+      rawId != null
+        ? typeof rawId === "object" && rawId !== null && "_id" in rawId && (rawId as { _id?: unknown })._id != null
+          ? String((rawId as { _id: unknown })._id)
+          : String(rawId)
+        : ""
+    if (appointmentId) return { type: "edit_form", appointmentId }
+    return { type: "details" }
+  }
+  if (apt.status === "completed") {
+    const rawId = apt._id
+    const appointmentId =
+      rawId != null
+        ? typeof rawId === "object" && rawId !== null && "_id" in rawId && (rawId as { _id?: unknown })._id != null
+          ? String((rawId as { _id: unknown })._id)
+          : String(rawId)
+        : ""
+    if (appointmentId) return { type: "edit_form", appointmentId }
+    return { type: "details" }
+  }
+  if (APPOINTMENT_EDITABLE_STATUSES.has(apt.status)) {
+    return { type: "edit_form", appointmentId: apt._id }
+  }
+  return { type: "details" }
 }
 
 /**

@@ -1,7 +1,16 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
+import Lottie from "lottie-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -9,46 +18,105 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { SalesAPI } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
-import { Receipt, CreditCard, DollarSign, Clock, AlertCircle } from "lucide-react"
+import { Receipt, CreditCard, DollarSign, Clock, AlertCircle, Loader2 } from "lucide-react"
 
 interface PaymentCollectionModalProps {
   isOpen: boolean
   onClose: () => void
   sale: any
   onPaymentCollected: () => void
+  /** Use a side sheet instead of a centered dialog (e.g. Pay Now from appointment). */
+  presentation?: "dialog" | "sheet"
+  /**
+   * When true, dismiss the modal after the success step (including partial payments).
+   * Default false keeps the modal open so another partial can be collected (reports / Quick Sale).
+   */
+  exitAfterPaymentSuccess?: boolean
+  /** Overlay + sheet z-index when parent UI stacks above default z-[100] (e.g. client panel in another sheet). */
+  nestedChromeZClassName?: string
 }
 
-export function PaymentCollectionModal({ isOpen, onClose, sale, onPaymentCollected }: PaymentCollectionModalProps) {
+export function PaymentCollectionModal({
+  isOpen,
+  onClose,
+  sale,
+  onPaymentCollected,
+  presentation = "dialog",
+  exitAfterPaymentSuccess = false,
+  nestedChromeZClassName,
+}: PaymentCollectionModalProps) {
   const { toast } = useToast()
   const [paymentAmount, setPaymentAmount] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("")
   const [notes, setNotes] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [paymentSummary, setPaymentSummary] = useState<any>(null)
+  const [paymentSuccessLottie, setPaymentSuccessLottie] = useState<Record<string, unknown> | null>(null)
+  const [paymentJustSucceeded, setPaymentJustSucceeded] = useState(false)
+  const [successClosesSheet, setSuccessClosesSheet] = useState(false)
+  const finishSuccessOnceRef = useRef(false)
+  const closeAfterSuccessLottieRef = useRef(false)
 
-  useEffect(() => {
-    if (sale && isOpen) {
-      loadPaymentSummary()
-      // Set default payment amount to remaining balance
-      if (sale.paymentStatus?.remainingAmount) {
-        setPaymentAmount(sale.paymentStatus.remainingAmount.toString())
-      }
-    }
-  }, [sale, isOpen])
-
-  const loadPaymentSummary = async () => {
+  const loadPaymentSummary = useCallback(async () => {
     if (!sale?._id) return
-    
+
     try {
       const response = await SalesAPI.getPaymentSummary(sale._id)
       if (response.success) {
         setPaymentSummary(response.data)
       }
     } catch (error) {
-      console.error('Error loading payment summary:', error)
+      console.error("Error loading payment summary:", error)
     }
-  }
+  }, [sale])
+
+  useEffect(() => {
+    if (!isOpen) {
+      setPaymentJustSucceeded(false)
+      setSuccessClosesSheet(false)
+      finishSuccessOnceRef.current = false
+      closeAfterSuccessLottieRef.current = false
+    }
+  }, [isOpen])
+
+  useEffect(() => {
+    if (!isOpen) return
+    let cancelled = false
+    fetch("/lottie/payment-success.json")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setPaymentSuccessLottie(data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen])
+
+  useEffect(() => {
+    if (sale && isOpen && !paymentJustSucceeded) {
+      void loadPaymentSummary()
+      // Set default payment amount to remaining balance
+      if (sale.paymentStatus?.remainingAmount) {
+        setPaymentAmount(sale.paymentStatus.remainingAmount.toString())
+      }
+    }
+  }, [sale, isOpen, paymentJustSucceeded, loadPaymentSummary])
+
+  const finishSuccessLottie = useCallback(() => {
+    if (finishSuccessOnceRef.current) return
+    finishSuccessOnceRef.current = true
+    const shouldClose = closeAfterSuccessLottieRef.current
+    closeAfterSuccessLottieRef.current = false
+    setPaymentJustSucceeded(false)
+    setSuccessClosesSheet(false)
+    if (shouldClose || exitAfterPaymentSuccess) onClose()
+    queueMicrotask(() => {
+      finishSuccessOnceRef.current = false
+    })
+  }, [onClose, exitAfterPaymentSuccess])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -95,23 +163,23 @@ export function PaymentCollectionModal({ isOpen, onClose, sale, onPaymentCollect
           title: "Payment Collected",
           description: response.message || `Payment of ₹${amount} collected successfully`,
         })
-        
-        // Reset form
+
         setPaymentAmount("")
         setPaymentMethod("")
         setNotes("")
-        
-        // Refresh payment summary
+
         await loadPaymentSummary()
-        
-        // Notify parent component
         onPaymentCollected()
-        
-        // Close modal if payment is complete (full payment or no remaining amount)
-        const paymentSummary = (response as any).paymentSummary;
-        if (paymentSummary?.remainingAmount === 0 || amount >= sale.paymentStatus?.remainingAmount) {
-          onClose()
-        }
+
+        const ps = (response as any).paymentSummary
+        const priorRemaining = Number(sale.paymentStatus?.remainingAmount ?? sale.grossTotal ?? 0) || 0
+        const hadFullPayment =
+          (ps?.remainingAmount !== undefined && Number(ps.remainingAmount) === 0) ||
+          amount >= priorRemaining
+
+        closeAfterSuccessLottieRef.current = hadFullPayment
+        setSuccessClosesSheet(hadFullPayment)
+        setPaymentJustSucceeded(true)
       } else {
         toast({
           title: "Error",
@@ -161,20 +229,41 @@ export function PaymentCollectionModal({ isOpen, onClose, sale, onPaymentCollect
 
   if (!sale) return null
 
-  return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Receipt className="h-5 w-5 text-blue-600" />
-            Collect Payment - {sale.billNo}
-          </DialogTitle>
-          <DialogDescription>
-            Collect payment for {sale.customerName}'s bill
-          </DialogDescription>
-        </DialogHeader>
+  const handleOpenChange = (next: boolean) => {
+    if (!next) onClose()
+  }
 
-        <div className="space-y-6">
+  const titleClass = "flex items-center gap-2"
+  const titleInner = (
+    <>
+      <Receipt className="h-5 w-5 text-blue-600" />
+      Collect Payment - {sale.billNo}
+    </>
+  )
+  const descriptionText = `Collect payment for ${sale.customerName}'s bill`
+
+  const successSections = (
+    <div className="flex shrink-0 flex-col items-center justify-center gap-4 py-2">
+      {paymentSuccessLottie ? (
+        <div className="relative w-full max-w-[280px] shrink-0">
+          <Lottie
+            animationData={paymentSuccessLottie}
+            loop={false}
+            className="w-full"
+            onComplete={() => {
+              if (closeAfterSuccessLottieRef.current) finishSuccessLottie()
+            }}
+          />
+        </div>
+      ) : (
+        <Loader2 className="h-10 w-10 shrink-0 animate-spin text-blue-600" aria-hidden />
+      )}
+      <p className="text-center text-sm font-semibold text-slate-800">Payment successful</p>
+    </div>
+  )
+
+  const mainSections = (
+    <div className="space-y-6">
           {/* Bill Summary */}
           <div className="bg-slate-50 rounded-lg p-4">
             <h3 className="font-semibold text-slate-800 mb-3">Bill Summary</h3>
@@ -257,11 +346,11 @@ export function PaymentCollectionModal({ isOpen, onClose, sale, onPaymentCollect
               
               <div className="space-y-2">
                 <Label htmlFor="paymentMethod">Payment Method *</Label>
-                <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                <Select value={paymentMethod} onValueChange={setPaymentMethod} modal={false}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select method" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-[210]">
                     <SelectItem value="Cash">
                       <div className="flex items-center gap-2">
                         <DollarSign className="h-4 w-4" />
@@ -326,18 +415,96 @@ export function PaymentCollectionModal({ isOpen, onClose, sale, onPaymentCollect
             </div>
           )}
         </div>
+  )
 
-        <DialogFooter className="flex gap-2">
-          <Button variant="outline" onClick={onClose} disabled={isLoading}>
-            Cancel
-          </Button>
-          <Button 
-            onClick={handleSubmit} 
-            disabled={isLoading || !paymentAmount || !paymentMethod}
-            className="bg-blue-600 hover:bg-blue-700"
+  const scrollSections = paymentJustSucceeded ? successSections : mainSections
+
+  const actionFooter = (
+    <>
+      <Button variant="outline" onClick={onClose} disabled={isLoading || paymentJustSucceeded}>
+        Cancel
+      </Button>
+      <Button
+        onClick={handleSubmit}
+        disabled={isLoading || !paymentAmount || !paymentMethod || paymentJustSucceeded}
+        className="bg-blue-600 hover:bg-blue-700"
+      >
+        {isLoading ? "Collecting..." : "Collect Payment"}
+      </Button>
+    </>
+  )
+
+  const successFooter = (
+    <>
+      {successClosesSheet ? (
+        <Button type="button" variant="outline" className="sm:ml-auto" onClick={() => finishSuccessLottie()}>
+          Close
+        </Button>
+      ) : (
+        <Button type="button" className="bg-blue-600 hover:bg-blue-700 sm:ml-auto" onClick={() => finishSuccessLottie()}>
+          Continue
+        </Button>
+      )}
+    </>
+  )
+
+  const footerSection = paymentJustSucceeded ? successFooter : actionFooter
+
+  if (presentation === "sheet") {
+    const sheetZ = nestedChromeZClassName ?? "z-[100]"
+    return (
+      <Sheet open={isOpen} onOpenChange={handleOpenChange}>
+        <SheetContent
+          side="right"
+          overlayClassName={sheetZ}
+          className={cn(
+            sheetZ,
+            "flex h-full w-full max-h-[100vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg",
+          )}
+        >
+          <div className="shrink-0 border-b px-6 pb-4 pt-6">
+            <SheetHeader className="space-y-1 text-left">
+              <SheetTitle className={titleClass}>{titleInner}</SheetTitle>
+              <SheetDescription>{descriptionText}</SheetDescription>
+            </SheetHeader>
+          </div>
+          <div
+            className={cn(
+              "min-h-0 flex-1 px-6 py-4",
+              paymentJustSucceeded ? "flex flex-col justify-center overflow-y-auto" : "overflow-y-auto",
+            )}
           >
-            {isLoading ? "Collecting..." : "Collect Payment"}
-          </Button>
+            {scrollSections}
+          </div>
+          <SheetFooter className="shrink-0 gap-2 border-t px-6 py-4 sm:justify-end">{footerSection}</SheetFooter>
+        </SheetContent>
+      </Sheet>
+    )
+  }
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className={cn(
+          "max-h-[90vh] max-w-2xl",
+          paymentJustSucceeded ? "flex flex-col gap-4 overflow-hidden" : "overflow-y-auto",
+        )}
+      >
+        <DialogHeader className={paymentJustSucceeded ? "shrink-0" : undefined}>
+          <DialogTitle className={titleClass}>{titleInner}</DialogTitle>
+          <DialogDescription>{descriptionText}</DialogDescription>
+        </DialogHeader>
+
+        {paymentJustSucceeded ? (
+          <div className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto">
+            {scrollSections}
+          </div>
+        ) : (
+          scrollSections
+        )}
+
+        <DialogFooter className={cn("flex gap-2", paymentJustSucceeded && "shrink-0")}>
+          {footerSection}
         </DialogFooter>
       </DialogContent>
     </Dialog>

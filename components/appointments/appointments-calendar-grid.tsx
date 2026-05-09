@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, Eye, Trash2, List, Calendar, AlertCircle, Heart, Users, Ban, X } from "lucide-react"
+import { ChevronDown, Clock, Square, Pencil, Eye, Trash2, List, Calendar, AlertCircle, Heart, Ban, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -36,6 +36,9 @@ import {
   collectSaleLinesFromAppointmentCard,
   buildRaiseSaleAppointmentPayload,
   isHiddenAppointment,
+  collectPartialPaymentAppointmentIdsFromSales,
+  getCalendarCardVisualStatus,
+  getAppointmentCalendarOpenIntent,
 } from "@/lib/appointment-calendar-helpers"
 import {
   RaiseSaleConfirmationModal,
@@ -312,6 +315,13 @@ function parseTimeToMinutes(time: string): number {
   return hour * 60 + m
 }
 
+/** Slot-aligned start for drag/resize — must match visual grid position (prefers startAt window over legacy `time`). */
+function getAppointmentDragBaselineStartMinutes(apt: Appointment): number {
+  const win = getAppointmentGridWindowMinutes(apt as any)
+  const rawM = win != null ? win.startM : parseTimeToMinutes(typeof (apt as any).time === "string" ? (apt as any).time : "")
+  return Math.floor(rawM / SLOT_MINUTES) * SLOT_MINUTES
+}
+
 /**
  * Fill (+ optional intra-row guides for coarse slot heights only). Each row is one `SLOT_MINUTES`
  * block; guides are omitted for 5‑minute rows so divisions come only from row borders.
@@ -387,47 +397,6 @@ function formatDurationHuman(totalMinutes: number): string {
   const m = Math.round(totalMinutes % 60)
   if (m === 0) return `${h}h`
   return `${h}h ${m}min`
-}
-
-function saleRecordIsPartialPayment(s: any): boolean {
-  const ps = s?.paymentStatus
-  if (!ps) return false
-  const paid = Number(ps.paidAmount) || 0
-  const rem = Number(ps.remainingAmount) || 0
-  return paid > 0 && rem > 0.005
-}
-
-/** Appointment ids linked to a sale with a partial payment (same day as loaded sales). */
-function collectPartialPaymentAppointmentIdsFromSales(sales: any[]): Set<string> {
-  const ids = new Set<string>()
-  const add = (raw: unknown) => {
-    if (raw == null) return
-    const id = typeof raw === "object" && (raw as any)?._id != null ? String((raw as any)._id) : String(raw)
-    if (id) ids.add(id)
-  }
-  for (const s of sales) {
-    if (!saleRecordIsPartialPayment(s)) continue
-    add(s.appointmentId)
-    const linked = s.linkedAppointmentIds
-    if (Array.isArray(linked)) linked.forEach(add)
-  }
-  return ids
-}
-
-/** Card / legend tone: base status, or derived partial_payment / missed. */
-function calendarCardVisualStatus(apt: Appointment, partialPaymentIds: Set<string>): string {
-  const st = apt.status
-  if (st === "missed") return "missed"
-  if (
-    partialPaymentIds.has(apt._id) &&
-    st !== "completed" &&
-    st !== "cancelled" &&
-    st !== "cancelled_at_billing" &&
-    st !== "missed"
-  ) {
-    return "partial_payment"
-  }
-  return st
 }
 
 function getStatusColor(status: string): string {
@@ -630,13 +599,15 @@ export const AppointmentsCalendarGrid = forwardRef<
     setSlotHoverTip((prev) => (prev ? { ...prev, clientX: e.clientX, clientY: e.clientY } : null))
   }, [])
   const hideSlotHoverTip = useCallback(() => setSlotHoverTip(null), [])
-  const [dragHoverSlot, setDragHoverSlot] = useState<{ colIndex: number; slotMinutes: number } | null>(null)
+  const [dragHoverSlot, setDragHoverSlot] = useState<{
+    colIndex: number
+    slotMinutes: number
+    valid: boolean
+  } | null>(null)
   const blocksContainerRef = useRef<HTMLDivElement | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
-  const userHasScrolledRef = useRef(false)
-  const isProgrammaticScrollRef = useRef(false)
   const justDraggedRef = useRef(false)
-  const dragHoverSlotRef = useRef<{ colIndex: number; slotMinutes: number } | null>(null)
+  const dragHoverSlotRef = useRef<{ colIndex: number; slotMinutes: number; valid: boolean } | null>(null)
   const [showTimeChangeConfirm, setShowTimeChangeConfirm] = useState(false)
   const [currentTime, setCurrentTime] = useState(() => new Date())
   const [scrollToNowRequested, setScrollToNowRequested] = useState(false)
@@ -738,11 +709,6 @@ export const AppointmentsCalendarGrid = forwardRef<
     return () => clearInterval(interval)
   }, [])
 
-  // Reset "user has scrolled" when date changes so we auto-scroll again when returning to today
-  useEffect(() => {
-    userHasScrolledRef.current = false
-  }, [selectedDate])
-
   useEffect(() => {
     if (!selectedAppointment?._id) {
       setLinkedSale(null)
@@ -813,28 +779,70 @@ export const AppointmentsCalendarGrid = forwardRef<
     }
   }, [calendarRetryKey])
 
+  const reloadDaySalesForCalendar = useCallback(async () => {
+    if (!selectedDate) return
+    try {
+      const sales = await SalesAPI.getAllMergePages({
+        dateFrom: selectedDate,
+        dateTo: selectedDate,
+        batchSize: 400,
+      })
+      if (Array.isArray(sales)) {
+        setPartialPaymentAppointmentIds(collectPartialPaymentAppointmentIdsFromSales(sales))
+        const dateNorm = selectedDate?.slice(0, 10) || ""
+        let walkIns = sales.filter((s: any) => {
+          if (!s.items?.some((i: any) => i.type === "service")) return false
+          if (s.appointmentId) return false
+          const saleDate = s.date ? format(new Date(s.date), "yyyy-MM-dd") : ""
+          return !dateNorm || saleDate === dateNorm
+        })
+        if (staffFilter) {
+          walkIns = walkIns.filter((s: any) => {
+            const firstItem = (s.items || []).find((i: any) => i.type === "service")
+            const raw = firstItem?.staffId || firstItem?.staffContributions?.[0]?.staffId || s.staffId
+            const sid = typeof raw === "object" && raw?._id ? raw._id : String(raw || "")
+            return sid === staffFilter
+          })
+        }
+        setWalkInSales(walkIns)
+      } else {
+        setWalkInSales([])
+        setPartialPaymentAppointmentIds(new Set())
+      }
+    } catch {
+      setWalkInSales([])
+      setPartialPaymentAppointmentIds(new Set())
+    }
+  }, [selectedDate, staffFilter])
+
   useEffect(() => {
     fetchAppointments()
   }, [fetchAppointments])
 
   useEffect(() => {
-    const handler = () => fetchAppointments()
+    const handler = () => {
+      void fetchAppointments()
+      void reloadDaySalesForCalendar()
+    }
     window.addEventListener("appointments-refresh", handler)
     return () => window.removeEventListener("appointments-refresh", handler)
-  }, [fetchAppointments])
+  }, [fetchAppointments, reloadDaySalesForCalendar])
 
   const openAppointmentFromCalendarCard = useCallback(
     (apt: Appointment) => {
       setSelectedAppointment(apt)
-      if (apt.status === "completed") {
-        setShowDetails(true)
-      } else if (onOpenAppointmentForm) {
-        onOpenAppointmentForm({ appointmentId: apt._id })
-      } else {
-        setShowDetails(true)
+      const intent = getAppointmentCalendarOpenIntent(apt, partialPaymentAppointmentIds)
+      if (intent.type === "edit_form") {
+        if (onOpenAppointmentForm) {
+          onOpenAppointmentForm({ appointmentId: intent.appointmentId })
+        } else {
+          setShowDetails(true)
+        }
+        return
       }
+      setShowDetails(true)
     },
-    [onOpenAppointmentForm]
+    [onOpenAppointmentForm, partialPaymentAppointmentIds]
   )
 
   useEffect(() => {
@@ -846,15 +854,18 @@ export const AppointmentsCalendarGrid = forwardRef<
       const d = new Date(match.date)
       setSelectedDate(format(d, "yyyy-MM-dd"))
     }
-    if (match.status === "completed") {
-      setShowDetails(true)
-    } else if (onOpenAppointmentForm) {
-      onOpenAppointmentForm({ appointmentId: match._id })
+    const intent = getAppointmentCalendarOpenIntent(match, partialPaymentAppointmentIds)
+    if (intent.type === "edit_form") {
+      if (onOpenAppointmentForm) {
+        onOpenAppointmentForm({ appointmentId: intent.appointmentId })
+      } else {
+        setShowDetails(true)
+      }
     } else {
       setShowDetails(true)
     }
     setPendingAppointmentId(null)
-  }, [pendingAppointmentId, appointments, onOpenAppointmentForm])
+  }, [pendingAppointmentId, appointments, onOpenAppointmentForm, partialPaymentAppointmentIds])
 
   useEffect(() => {
     let cancelled = false
@@ -880,50 +891,8 @@ export const AppointmentsCalendarGrid = forwardRef<
   }, [selectedDate, staffFilter, blockTimesRefreshKey])
 
   useEffect(() => {
-    let cancelled = false
-    if (!selectedDate) return
-    const load = async () => {
-      try {
-        const sales = await SalesAPI.getAllMergePages({
-          dateFrom: selectedDate,
-          dateTo: selectedDate,
-          batchSize: 400,
-        })
-        if (cancelled) return
-        if (Array.isArray(sales)) {
-          setPartialPaymentAppointmentIds(collectPartialPaymentAppointmentIdsFromSales(sales))
-          const dateNorm = selectedDate?.slice(0, 10) || ""
-          let walkIns = sales.filter((s: any) => {
-            if (!s.items?.some((i: any) => i.type === "service")) return false
-            if (s.appointmentId) return false // Sale from appointment – appointment card shows it, no walk-in card
-            const saleDate = s.date ? format(new Date(s.date), "yyyy-MM-dd") : ""
-            return !dateNorm || saleDate === dateNorm
-          })
-          if (staffFilter) {
-            walkIns = walkIns.filter((s: any) => {
-              const firstItem = (s.items || []).find((i: any) => i.type === "service")
-              const raw = firstItem?.staffId || firstItem?.staffContributions?.[0]?.staffId || s.staffId
-              const sid = typeof raw === "object" && raw?._id ? raw._id : String(raw || "")
-              return sid === staffFilter
-            })
-          }
-          setWalkInSales(walkIns)
-        } else {
-          setWalkInSales([])
-          setPartialPaymentAppointmentIds(new Set())
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setWalkInSales([])
-          setPartialPaymentAppointmentIds(new Set())
-        }
-      }
-    }
-    load()
-    return () => {
-      cancelled = true
-    }
-  }, [selectedDate, staffFilter])
+    void reloadDaySalesForCalendar()
+  }, [reloadDaySalesForCalendar])
 
   const dateNorm = (d: string) =>
     d && d.length >= 10 ? d.slice(0, 10) : d
@@ -1027,6 +996,23 @@ export const AppointmentsCalendarGrid = forwardRef<
     return staffWithScheduling
   }, [staffWithScheduling, staffFilter])
 
+  /** Same rules as calendar drag-drop: every slot row in the span must fall in the staff work window. */
+  const isValidDropTargetForDrag = useCallback(
+    (colIndex: number, slotMinutes: number, duration: number): boolean => {
+      const col = columns[colIndex]
+      if (!col) return false
+      const windowForStaff = staffWindowsById[col._id]
+      for (let m = slotMinutes; m < slotMinutes + duration; m += SLOT_MINUTES) {
+        const inWindow =
+          !windowForStaff ||
+          (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
+        if (!inWindow) return false
+      }
+      return true
+    },
+    [columns, staffWindowsById]
+  )
+
   /** Union of enabled work windows for visible columns — used so 5‑min guides span every open hour. */
   const visibleStaffWorkBand = useMemo(() => {
     if (!columns.length) {
@@ -1104,10 +1090,10 @@ export const AppointmentsCalendarGrid = forwardRef<
     return slots
   }, [extendedStartMinutes, extendedEndMinutes])
 
-  // Auto-scroll to center the red "now" line when viewing today, until user manually scrolls
+  // Auto-scroll to center the red "now" line whenever today's grid is shown or layout/data updates
   useEffect(() => {
     const todayStr = format(new Date(), "yyyy-MM-dd")
-    if (selectedDate !== todayStr || userHasScrolledRef.current) return
+    if (selectedDate !== todayStr || loading) return
     const el = scrollContainerRef.current
     if (!el) return
     const currentMinutes =
@@ -1126,7 +1112,6 @@ export const AppointmentsCalendarGrid = forwardRef<
       if (containerHeight === 0) return false // Layout not ready
       const topPx = 56 + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
       const scrollTop = Math.max(0, topPx - containerHeight / 2)
-      isProgrammaticScrollRef.current = true
       container.scrollTop = scrollTop
       return true
     }
@@ -1144,7 +1129,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       cancelAnimationFrame(raf)
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [selectedDate, currentTime, extendedStartMinutes, extendedEndMinutes, slotHeight])
+  }, [selectedDate, currentTime, extendedStartMinutes, extendedEndMinutes, slotHeight, loading])
 
   // Scroll to red "now" line when TIME header is clicked
   useEffect(() => {
@@ -1159,7 +1144,6 @@ export const AppointmentsCalendarGrid = forwardRef<
     if (currentMinutes < extendedStartMinutes || currentMinutes >= extendedEndMinutes) return
     const topPx = 56 + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
     const containerHeight = el.clientHeight
-    isProgrammaticScrollRef.current = true
     el.scrollTop = Math.max(0, topPx - containerHeight / 2)
     setScrollToNowRequested(false)
   }, [scrollToNowRequested, selectedDate, extendedStartMinutes, extendedEndMinutes, slotHeight])
@@ -1487,7 +1471,13 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   const handleTimeDragStart = (e: React.MouseEvent, apt: Appointment) => {
-    if (isHiddenAppointment(apt) || apt.status === "completed" || apt.status === "missed") return
+    if (
+      isHiddenAppointment(apt) ||
+      apt.status === "completed" ||
+      apt.status === "missed" ||
+      getCalendarCardVisualStatus(apt, partialPaymentAppointmentIds) === "partial_payment"
+    )
+      return
     e.preventDefault()
     e.stopPropagation()
     setHoverShrinkAptId(null)
@@ -1500,7 +1490,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       id: apt._id,
       startX: e.clientX,
       startY: e.clientY,
-      startTimeMinutes: parseTimeToMinutes(apt.time),
+      startTimeMinutes: getAppointmentDragBaselineStartMinutes(apt),
       duration: getTotalDuration(apt as any),
       mode: "move",
       sourceStaffId,
@@ -1509,7 +1499,13 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   const handleResizeStart = (e: React.MouseEvent, apt: Appointment, mode: "resize-top" | "resize-bottom") => {
-    if (isHiddenAppointment(apt) || apt.status === "completed" || apt.status === "missed") return
+    if (
+      isHiddenAppointment(apt) ||
+      apt.status === "completed" ||
+      apt.status === "missed" ||
+      getCalendarCardVisualStatus(apt, partialPaymentAppointmentIds) === "partial_payment"
+    )
+      return
     e.preventDefault()
     e.stopPropagation()
     setHoverShrinkAptId(null)
@@ -1522,7 +1518,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       id: apt._id,
       startX: e.clientX,
       startY: e.clientY,
-      startTimeMinutes: parseTimeToMinutes(apt.time),
+      startTimeMinutes: getAppointmentDragBaselineStartMinutes(apt),
       duration: getTotalDuration(apt as any),
       mode,
       sourceStaffId,
@@ -1548,6 +1544,10 @@ export const AppointmentsCalendarGrid = forwardRef<
   useEffect(() => {
     if (!draggingApt) return
     dragHoverSlotRef.current = null
+    const drag = draggingApt
+    const prevUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = "none"
+
     const isValidDropTarget = (colIndex: number, slotMinutes: number, duration: number): boolean => {
       const col = columns[colIndex]
       if (!col) return false
@@ -1559,58 +1559,132 @@ export const AppointmentsCalendarGrid = forwardRef<
       return true
     }
 
+    const resolveHoverSlot = (
+      clientX: number,
+      clientY: number
+    ): { colIndex: number; slotMinutes: number; valid: boolean } | null => {
+      if (drag.mode !== "move" && drag.mode !== "resize-top") return null
+      const el = blocksContainerRef.current
+      if (!el || columns.length === 0) return null
+      const rect = el.getBoundingClientRect()
+      const relX = clientX - rect.left
+      const relY = clientY - rect.top
+      const colIndexRaw = Math.floor(relX / (rect.width / columns.length))
+      const slotIndex = Math.floor(relY / slotHeight)
+      const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
+      const dur = drag.duration ?? 60
+      const inBoundsVert = slotMinutes >= extendedStartMinutes && slotMinutes < extendedEndMinutes
+      if (drag.staffLocked) {
+        const sourceIx = columns.findIndex((c) => c._id === drag.sourceStaffId)
+        if (sourceIx < 0 || !inBoundsVert) return null
+        const valid = isValidDropTarget(sourceIx, slotMinutes, dur)
+        return { colIndex: sourceIx, slotMinutes, valid }
+      }
+      if (colIndexRaw < 0 || colIndexRaw >= columns.length || !inBoundsVert) return null
+      const valid = isValidDropTarget(colIndexRaw, slotMinutes, dur)
+      return { colIndex: colIndexRaw, slotMinutes, valid }
+    }
+
+    const clearAppointmentDragUi = () => {
+      setDraggingApt(null)
+      setDragOffsetY(0)
+      setDragOffsetX(0)
+      setDragStartRect(null)
+      setDragHoverSlot(null)
+      dragHoverSlotRef.current = null
+      setTimeout(() => {
+        justDraggedRef.current = false
+      }, 0)
+    }
+
+    let lastHoverKey = ""
+    /** Clicks (press + release) must not commit a move/resize; only intentional drags beyond this distance. */
+    const dragCommitThresholdPx = Math.max(10, Math.floor(slotHeight * 0.28))
     const onMouseMove = (e: MouseEvent) => {
       if (showTimeChangeConfirm) return
-      justDraggedRef.current = true
-      setDragOffsetY(e.clientY - draggingApt.startY)
-      if (draggingApt.mode === "move" || draggingApt.mode === "resize-top") {
-        if (draggingApt.staffLocked) setDragOffsetX(0)
-        else setDragOffsetX(e.clientX - draggingApt.startX)
-        const el = blocksContainerRef.current
-        if (el && columns.length > 0) {
-          const rect = el.getBoundingClientRect()
-          const relX = e.clientX - rect.left
-          const relY = e.clientY - rect.top
-          const colIndex = Math.floor(relX / (rect.width / columns.length))
-          const slotIndex = Math.floor(relY / slotHeight)
-          const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
-          const dur = draggingApt.duration ?? 60
-          const inBoundsVert =
-            slotMinutes >= extendedStartMinutes && slotMinutes < extendedEndMinutes
-          let valid = false
-          let slotCol = colIndex
-          if (draggingApt.staffLocked) {
-            const sourceIx = columns.findIndex((c) => c._id === draggingApt.sourceStaffId)
-            if (sourceIx >= 0 && inBoundsVert) {
-              valid = isValidDropTarget(sourceIx, slotMinutes, dur)
-              slotCol = sourceIx
-            }
-          } else {
-            const inBounds =
-              colIndex >= 0 && colIndex < columns.length && inBoundsVert
-            valid = inBounds && isValidDropTarget(colIndex, slotMinutes, dur)
-          }
-          if (valid && slotCol >= 0 && slotCol < columns.length) {
-            const slot = { colIndex: slotCol, slotMinutes }
-            setDragHoverSlot(slot)
-            dragHoverSlotRef.current = slot
-          } else {
-            setDragHoverSlot(null)
-            dragHoverSlotRef.current = null
-          }
+      const moved = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) >= dragCommitThresholdPx
+      if (moved) justDraggedRef.current = true
+      setDragOffsetY(e.clientY - drag.startY)
+      if (drag.mode === "move" || drag.mode === "resize-top") {
+        if (drag.staffLocked) setDragOffsetX(0)
+        else setDragOffsetX(e.clientX - drag.startX)
+        const slot = resolveHoverSlot(e.clientX, e.clientY)
+        dragHoverSlotRef.current = slot
+        const key = slot ? `${slot.colIndex}:${slot.slotMinutes}:${slot.valid}` : ""
+        if (key !== lastHoverKey) {
+          lastHoverKey = key
+          setDragHoverSlot(slot)
         }
       }
     }
     const onMouseUp = async (e: MouseEvent) => {
-      const current = draggingApt
-      if (!current) return
+      const current = drag
+      const pointerMoved = Math.hypot(e.clientX - current.startX, e.clientY - current.startY) >= dragCommitThresholdPx
+      if (!pointerMoved) {
+        justDraggedRef.current = false
+        clearAppointmentDragUi()
+        return
+      }
+
       const deltaY = e.clientY - current.startY
       const slotDelta = Math.round(deltaY / slotHeight)
       const minutesDelta = slotDelta * SLOT_MINUTES
-      const hoverSlot = dragHoverSlotRef.current
+
+      let hoverSlot: { colIndex: number; slotMinutes: number; valid: boolean } | null = null
+      if (current.mode === "move" || current.mode === "resize-top") {
+        hoverSlot = resolveHoverSlot(e.clientX, e.clientY)
+        dragHoverSlotRef.current = hoverSlot
+        setDragHoverSlot(hoverSlot)
+      } else {
+        hoverSlot = dragHoverSlotRef.current
+      }
 
       const applyDrop = async (payload: { mode: "staff" | "move" | "resize-top" | "resize-bottom"; newStaffId?: string; newTime?: string; newDuration?: number }) => {
-        setUpdatingTimeForId(current.id)
+        let snapshot: Appointment | null = null
+        setAppointments((prev) => {
+          const idx = prev.findIndex((a) => a._id === current.id)
+          if (idx < 0) return prev
+          snapshot = JSON.parse(JSON.stringify(prev[idx])) as Appointment
+          const a = prev[idx]
+          const aAny = a as any
+          let next: Appointment
+          if (payload.mode === "staff" && payload.newStaffId) {
+            const newStaff = columns.find((c) => c._id === payload.newStaffId)
+            next = {
+              ...a,
+              staffId: newStaff ? { _id: newStaff._id, name: newStaff.name, role: newStaff.role } : aAny.staffId,
+              staffAssignments: [
+                { staffId: { _id: payload.newStaffId!, name: newStaff?.name ?? "Staff" }, role: "primary" },
+              ],
+              ...(payload.newTime ? { time: payload.newTime, startAt: undefined, endAt: undefined } : {}),
+            } as Appointment
+          } else if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
+            next = {
+              ...a,
+              time: payload.newTime,
+              startAt: undefined,
+              endAt: undefined,
+            } as Appointment
+          } else if (payload.mode === "resize-bottom" && payload.newDuration != null) {
+            next = {
+              ...a,
+              duration: payload.newDuration,
+              startAt: undefined,
+              endAt: undefined,
+            } as Appointment
+          } else {
+            return prev
+          }
+          return prev.map((x, i) => (i === idx ? next : x))
+        })
+
+        if (!snapshot) {
+          clearAppointmentDragUi()
+          return
+        }
+
+        clearAppointmentDragUi()
+
         try {
           let res: { success?: boolean } | null = null
           if (payload.mode === "staff" && payload.newStaffId) {
@@ -1620,79 +1694,41 @@ export const AppointmentsCalendarGrid = forwardRef<
             }
             if (payload.newTime) updatePayload.time = payload.newTime
             res = await AppointmentsAPI.update(current.id, updatePayload)
-            if (res?.success) {
-              const newStaff = columns.find((c) => c._id === payload.newStaffId)
-              setAppointments((prev) =>
-                prev.map((a) => {
-                  if (a._id !== current.id) return a
-                  const aAny = a as any
-                  return { ...a, staffId: newStaff ? { _id: newStaff._id, name: newStaff.name, role: newStaff.role } : aAny.staffId, staffAssignments: [{ staffId: { _id: payload.newStaffId!, name: newStaff?.name ?? "Staff" }, role: "primary" }], ...(payload.newTime && { time: payload.newTime }) }
-                })
-              )
-            }
           } else if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
             res = await AppointmentsAPI.update(current.id, { time: payload.newTime })
-            if (res?.success) {
-              setAppointments((prev) => prev.map((a) => (a._id === current.id ? { ...a, time: payload.newTime! } : a)))
-            }
           } else if (payload.mode === "resize-bottom" && payload.newDuration != null) {
             res = await AppointmentsAPI.update(current.id, { duration: payload.newDuration })
-            if (res?.success) {
-              setAppointments((prev) => prev.map((a) => (a._id === current.id ? { ...a, duration: payload.newDuration! } : a)))
-            }
           }
-          if (!res?.success) alert("Failed to update appointment.")
+          if (!res?.success) {
+            setAppointments((prev) => prev.map((x) => (x._id === current.id ? snapshot! : x)))
+            alert("Failed to update appointment.")
+          }
         } catch (err) {
           console.error(err)
+          setAppointments((prev) => prev.map((x) => (x._id === current.id ? snapshot! : x)))
           alert("Failed to update appointment.")
         } finally {
           setUpdatingTimeForId(null)
-          setDraggingApt(null)
-          setDragOffsetY(0)
-          setDragOffsetX(0)
-          setDragStartRect(null)
-          setDragHoverSlot(null)
-          dragHoverSlotRef.current = null
-          setTimeout(() => { justDraggedRef.current = false }, 0)
         }
       }
 
       if (current.mode === "move") {
-        if (!hoverSlot) {
-          setDraggingApt(null)
-          setDragOffsetY(0)
-          setDragOffsetX(0)
-          setDragStartRect(null)
-          setDragHoverSlot(null)
-          dragHoverSlotRef.current = null
-          setTimeout(() => { justDraggedRef.current = false }, 0)
-          return
-        }
-        if (!isValidDropTarget(hoverSlot.colIndex, hoverSlot.slotMinutes, current.duration ?? 60)) {
-          setDraggingApt(null)
-          setDragOffsetY(0)
-          setDragOffsetX(0)
-          setDragStartRect(null)
-          setDragHoverSlot(null)
-          dragHoverSlotRef.current = null
-          setTimeout(() => { justDraggedRef.current = false }, 0)
+        if (!hoverSlot || !hoverSlot.valid) {
+          clearAppointmentDragUi()
           return
         }
         const targetStaffId = columns[hoverSlot.colIndex]?._id ?? null
-        const newTime = slotMinutesToTimeString(hoverSlot.slotMinutes)
         const endMinutesBound = endMinutes - current.duration
         const newMinutes = Math.max(startMinutes, Math.min(endMinutesBound, hoverSlot.slotMinutes))
         const clamped = Math.floor(newMinutes / SLOT_MINUTES) * SLOT_MINUTES
+        if (!isValidDropTarget(hoverSlot.colIndex, clamped, current.duration ?? 60)) {
+          clearAppointmentDragUi()
+          return
+        }
         const clampedTime = slotMinutesToTimeString(clamped)
         const isStaffChange = columns.length > 1 && targetStaffId && targetStaffId !== current.sourceStaffId
         if (clamped === current.startTimeMinutes && !isStaffChange) {
-          setDraggingApt(null)
-          setDragOffsetY(0)
-          setDragOffsetX(0)
-          setDragStartRect(null)
-          setDragHoverSlot(null)
-          dragHoverSlotRef.current = null
-          setTimeout(() => { justDraggedRef.current = false }, 0)
+          clearAppointmentDragUi()
           return
         }
         if (isStaffChange && current.staffLocked) {
@@ -1703,40 +1739,22 @@ export const AppointmentsCalendarGrid = forwardRef<
           await applyDrop({ mode: "move", newTime: clampedTime })
         }
       } else if (current.mode === "resize-top") {
-        if (!hoverSlot) {
-          setDraggingApt(null)
-          setDragOffsetY(0)
-          setDragOffsetX(0)
-          setDragStartRect(null)
-          setDragHoverSlot(null)
-          dragHoverSlotRef.current = null
-          setTimeout(() => { justDraggedRef.current = false }, 0)
-          return
-        }
-        if (!isValidDropTarget(hoverSlot.colIndex, hoverSlot.slotMinutes, current.duration ?? 60)) {
-          setDraggingApt(null)
-          setDragOffsetY(0)
-          setDragOffsetX(0)
-          setDragStartRect(null)
-          setDragHoverSlot(null)
-          dragHoverSlotRef.current = null
-          setTimeout(() => { justDraggedRef.current = false }, 0)
+        if (!hoverSlot || !hoverSlot.valid) {
+          clearAppointmentDragUi()
           return
         }
         const targetStaffId = columns[hoverSlot.colIndex]?._id ?? null
         const endMinutesBound = endMinutes - current.duration
         const newMinutes = Math.max(startMinutes, Math.min(endMinutesBound, hoverSlot.slotMinutes))
         const clamped = Math.floor(newMinutes / SLOT_MINUTES) * SLOT_MINUTES
+        if (!isValidDropTarget(hoverSlot.colIndex, clamped, current.duration ?? 60)) {
+          clearAppointmentDragUi()
+          return
+        }
         const clampedTime = slotMinutesToTimeString(clamped)
         const isStaffChange = columns.length > 1 && targetStaffId && targetStaffId !== current.sourceStaffId
         if (clamped === current.startTimeMinutes && !isStaffChange) {
-          setDraggingApt(null)
-          setDragOffsetY(0)
-          setDragOffsetX(0)
-          setDragStartRect(null)
-          setDragHoverSlot(null)
-          dragHoverSlotRef.current = null
-          setTimeout(() => { justDraggedRef.current = false }, 0)
+          clearAppointmentDragUi()
           return
         }
         if (isStaffChange && current.staffLocked) {
@@ -1753,13 +1771,7 @@ export const AppointmentsCalendarGrid = forwardRef<
         newDuration = Math.max(minDuration, Math.min(maxEndMinutes, newDuration))
         newDuration = Math.floor(newDuration / SLOT_MINUTES) * SLOT_MINUTES
         if (newDuration === current.duration) {
-          setDraggingApt(null)
-          setDragOffsetY(0)
-          setDragOffsetX(0)
-          setDragStartRect(null)
-          setDragHoverSlot(null)
-          dragHoverSlotRef.current = null
-          setTimeout(() => { justDraggedRef.current = false }, 0)
+          clearAppointmentDragUi()
           return
         }
         await applyDrop({ mode: "resize-bottom", newDuration })
@@ -2180,10 +2192,6 @@ export const AppointmentsCalendarGrid = forwardRef<
         <div
           ref={scrollContainerRef}
           className="overflow-auto max-h-[calc(100vh-320px)] min-h-[400px] bg-white/50"
-          onScroll={() => {
-            if (!isProgrammaticScrollRef.current) userHasScrolledRef.current = true
-            isProgrammaticScrollRef.current = false
-          }}
         >
           <div
             className="grid w-full min-w-[600px] relative calendar-fade-transition"
@@ -2309,45 +2317,63 @@ export const AppointmentsCalendarGrid = forwardRef<
                   ) : (
                     columns.map((col, colIndex) => {
                       const windowForStaff = staffWindowsById[col._id]
-                      const inWorkWindow =
-                        !windowForStaff ||
-                        (windowForStaff.enabled &&
-                          slot.minutes >= windowForStaff.start &&
-                          slot.minutes < windowForStaff.end)
                       const inWindow =
                         !windowForStaff ||
                         (windowForStaff.enabled &&
                           slot.minutes >= windowForStaff.start &&
                           slot.minutes < windowForStaff.end)
-                      const duration = draggingApt?.duration ?? 60
-                      const isInDragHighlight =
-                        draggingApt &&
-                        (draggingApt.mode === "move" || draggingApt.mode === "resize-top") &&
-                        dragHoverSlot &&
-                        colIndex === dragHoverSlot.colIndex &&
-                        slot.minutes >= dragHoverSlot.slotMinutes &&
-                        slot.minutes < dragHoverSlot.slotMinutes + duration
-                      const isDragHighlightValid =
-                        isInDragHighlight &&
-                        (() => {
-                          for (let m = dragHoverSlot!.slotMinutes; m < dragHoverSlot!.slotMinutes + duration; m += SLOT_MINUTES) {
-                            const w = !windowForStaff || (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
-                            if (!w) return false
+                      let isInDragHighlight = false
+                      let isDragHighlightValid = false
+                      if (draggingApt) {
+                        const d = draggingApt.duration ?? 60
+                        if (draggingApt.mode === "move" || draggingApt.mode === "resize-top") {
+                          if (dragHoverSlot) {
+                            const endBound = endMinutes - d
+                            const newM = Math.max(startMinutes, Math.min(endBound, dragHoverSlot.slotMinutes))
+                            const clampedStart = Math.floor(newM / SLOT_MINUTES) * SLOT_MINUTES
+                            if (
+                              colIndex === dragHoverSlot.colIndex &&
+                              slot.minutes >= clampedStart &&
+                              slot.minutes < clampedStart + d
+                            ) {
+                              isInDragHighlight = true
+                              isDragHighlightValid = dragHoverSlot.valid
+                            }
                           }
-                          return true
-                        })()
+                        } else if (draggingApt.mode === "resize-bottom") {
+                          const sourceIx = columns.findIndex((c) => c._id === draggingApt.sourceStaffId)
+                          if (sourceIx >= 0) {
+                            const slotDelta = Math.round(dragOffsetY / slotHeight)
+                            const minutesDelta = slotDelta * SLOT_MINUTES
+                            const minDuration = SLOT_MINUTES
+                            const maxEndMinutes = endMinutes - draggingApt.startTimeMinutes
+                            let previewDuration = draggingApt.duration + minutesDelta
+                            previewDuration = Math.max(minDuration, Math.min(maxEndMinutes, previewDuration))
+                            previewDuration = Math.floor(previewDuration / SLOT_MINUTES) * SLOT_MINUTES
+                            const startM = draggingApt.startTimeMinutes
+                            if (
+                              colIndex === sourceIx &&
+                              slot.minutes >= startM &&
+                              slot.minutes < startM + previewDuration
+                            ) {
+                              isInDragHighlight = true
+                              isDragHighlightValid = isValidDropTargetForDrag(sourceIx, startM, previewDuration)
+                            }
+                          }
+                        }
+                      }
                       const slotMenuOpen =
                         slotActionDialog &&
                         slotActionDialog.date === selectedDate &&
                         parseTimeToMinutes(slotActionDialog.time) === slot.minutes &&
                         slotActionDialog.staffId === col._id
                       let staffFill = "rgb(255 255 255)"
-                      if (!inWindow) {
-                        staffFill = slotInVisibleStaffWorkHours ? "rgb(226 232 240)" : "rgb(248 250 252)"
-                      } else if (isDragHighlightValid) {
-                        staffFill = "rgba(221, 214, 254, 0.65)"
+                      if (isDragHighlightValid) {
+                        staffFill = "rgba(91, 33, 182, 0.5)"
                       } else if (isInDragHighlight && !isDragHighlightValid) {
-                        staffFill = "rgba(254, 242, 242, 0.8)"
+                        staffFill = "rgba(153, 27, 27, 0.48)"
+                      } else if (!inWindow) {
+                        staffFill = slotInVisibleStaffWorkHours ? "rgb(226 232 240)" : "rgb(248 250 252)"
                       } else if (slotMenuOpen) {
                         staffFill = "rgba(245, 243, 255, 0.5)"
                       } else if (isCurrentHourRow) {
@@ -2377,11 +2403,15 @@ export const AppointmentsCalendarGrid = forwardRef<
                         onMouseEnter={(e) => showSlotHoverTip(staffSlotTip, e)}
                         onMouseMove={moveSlotHoverTip}
                         onMouseLeave={hideSlotHoverTip}
-                        className={`w-full border-r border-slate-200/80 last:border-r-0 ${rowBorderClass} transition-colors duration-150 bg-transparent ${
+                        className={`w-full border-r border-slate-200/80 last:border-r-0 ${rowBorderClass} ${
+                          draggingApt && (draggingApt.mode === "move" || draggingApt.mode === "resize-top")
+                            ? ""
+                            : "transition-colors duration-150 hover:transition-colors"
+                        } bg-transparent pointer-events-none ${
                           isDragHighlightValid
-                            ? "ring-1 ring-violet-300 ring-inset"
+                            ? "ring-2 ring-violet-700/80 ring-inset"
                             : isInDragHighlight && !isDragHighlightValid
-                            ? "ring-1 ring-red-200 ring-inset"
+                            ? "ring-2 ring-red-600/85 ring-inset"
                             : inWindow
                             ? "hover:shadow-[inset_0_0_0_9999px_rgba(237,233,254,0.55)] hover:ring-1 hover:ring-violet-200/60 hover:ring-inset cursor-default"
                             : "calendar-outside-hours cursor-not-allowed"
@@ -2397,52 +2427,64 @@ export const AppointmentsCalendarGrid = forwardRef<
                 </Fragment>
               )
             })}
-            {/* Drag overlay - shows available/invalid slots on top when dragging */}
-            {draggingApt && (draggingApt.mode === "move" || draggingApt.mode === "resize-top") && dragHoverSlot && columns.length > 0 && (() => {
-              const duration = draggingApt.duration ?? 60
-              const col = columns[dragHoverSlot.colIndex]
-              if (!col) return null
-              const windowForStaff = staffWindowsById[col._id]
-              let isValid = true
-              for (let m = dragHoverSlot.slotMinutes; m < dragHoverSlot.slotMinutes + duration; m += SLOT_MINUTES) {
-                const w = !windowForStaff || (windowForStaff.enabled && m >= windowForStaff.start && m < windowForStaff.end)
-                if (!w) { isValid = false; break }
-              }
-              const slotCount = Math.ceil(duration / SLOT_MINUTES)
-              const topPx = ((dragHoverSlot.slotMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
-              const heightPx = slotCount * slotHeight
-              const colWidth = 100 / columns.length
-              const leftPct = dragHoverSlot.colIndex * colWidth
-              const widthPct = colWidth
-              return (
-                <div
-                  className="absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] pointer-events-none z-[100]"
-                  style={{ height: totalSlotsWithSales * slotHeight }}
-                >
-                  <div
-                    className={`absolute border-2 transition-all duration-150 ${
-                      isValid ? "bg-violet-200/60 border-violet-400" : "bg-red-200/50 border-red-300"
-                    }`}
-                    style={{
-                      left: `${leftPct}%`,
-                      width: `${widthPct}%`,
-                      top: topPx,
-                      height: heightPx,
-                    }}
-                  />
-                </div>
-              )
-            })()}
-
             {columns.length > 0 && (
               <div
                 ref={blocksContainerRef}
-                className="absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] z-[5] pointer-events-none"
+                className="absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] z-[25] pointer-events-auto"
                 style={{ height: totalSlotsWithSales * slotHeight }}
+                onMouseMove={(e) => {
+                  if (draggingApt || slotActionDialog) return
+                  const el = e.target as HTMLElement
+                  if (
+                    el.closest("[data-calendar-appt-slot]") ||
+                    el.closest("[data-appointment-card]") ||
+                    el.closest("[data-sale-card]") ||
+                    el.closest("[data-block-time]")
+                  ) {
+                    hideSlotHoverTip()
+                    return
+                  }
+                  const rect = blocksContainerRef.current?.getBoundingClientRect()
+                  if (!rect) return
+                  const relX = e.clientX - rect.left
+                  const relY = e.clientY - rect.top
+                  if (relY < 0 || relX < 0 || relX > rect.width || relY > rect.height) {
+                    hideSlotHoverTip()
+                    return
+                  }
+                  const slotIndex = Math.floor(relY / slotHeight)
+                  const slotM = extendedStartMinutes + slotIndex * SLOT_MINUTES
+                  if (slotM < extendedStartMinutes || slotM >= extendedEndMinutes) {
+                    hideSlotHoverTip()
+                    return
+                  }
+                  const colIx = Math.floor(relX / (rect.width / Math.max(1, columns.length)))
+                  const col = columns[colIx]
+                  if (!col) {
+                    hideSlotHoverTip()
+                    return
+                  }
+                  const windowForStaff = staffWindowsById[col._id]
+                  const inWin =
+                    !windowForStaff ||
+                    (windowForStaff.enabled && slotM >= windowForStaff.start && slotM < windowForStaff.end)
+                  const tip = inWin
+                    ? `New appointment with ${col.name} at ${slotMinutesToTimeString(slotM)}`
+                    : `Unavailable at ${slotMinutesToTimeString(slotM)} (outside working hours)`
+                  setSlotHoverTip({ text: tip, clientX: e.clientX, clientY: e.clientY })
+                }}
+                onMouseLeave={hideSlotHoverTip}
                 onClick={(e) => {
                   if (justDraggedRef.current) return
                   const target = e.target as HTMLElement
-                  if (target.closest("[data-appointment-card]") || target.closest("[data-sale-card]") || target.closest("[data-block-time]")) return
+                  if (
+                    target.closest("[data-calendar-appt-slot]") ||
+                    target.closest("[data-appointment-card]") ||
+                    target.closest("[data-sale-card]") ||
+                    target.closest("[data-block-time]")
+                  )
+                    return
+                  e.stopPropagation()
                   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
                   const relY = e.clientY - rect.top
                   const slotIndex = Math.floor(relY / slotHeight)
@@ -2454,19 +2496,21 @@ export const AppointmentsCalendarGrid = forwardRef<
                   const windowForStaff = staffWindowsById[col._id]
                   const inWorkWindow = !windowForStaff || (windowForStaff.enabled && slotMinutes >= windowForStaff.start && slotMinutes < windowForStaff.end)
                   if (!inWorkWindow) return
-                  if (onOpenAppointmentForm) {
-                    onOpenAppointmentForm({ date: selectedDate, time: slotMinutesToTimeString(slotMinutes), staffId: col._id })
-                  } else {
-                    const params = new URLSearchParams({ date: selectedDate, time: slotMinutesToTimeString(slotMinutes), staffId: col._id })
-                    router.push(`/appointments/new?form=1&${params.toString()}`)
-                  }
+                  setSlotActionDialog({
+                    date: selectedDate,
+                    time: slotMinutesToTimeString(slotMinutes),
+                    staffId: col._id,
+                    staffName: col.name,
+                    clientX: e.clientX,
+                    clientY: e.clientY,
+                  })
                 }}
               >
               {columns.map((col, colIndex) => {
                 return (
                 <div
                   key={`blocks-${col._id}`}
-                  className="absolute top-0 bottom-0 w-full"
+                  className="absolute top-0 bottom-0 w-full pointer-events-none"
                   style={{
                     left: `${colIndex * (100 / columns.length)}%`,
                     width: `${100 / columns.length}%`,
@@ -2481,11 +2525,12 @@ export const AppointmentsCalendarGrid = forwardRef<
                     const isDragging = draggingApt?.id === apt._id
                     const isUpdating = updatingTimeForId === apt._id
                     const staffLockedCard = a.staffLocked === true
+                    const cardVisualStatus = getCalendarCardVisualStatus(apt, partialPaymentAppointmentIds)
                     const canDrag =
                       !isHiddenAppointment(apt) &&
                       apt.status !== "completed" &&
-                      apt.status !== "missed"
-                    const cardVisualStatus = calendarCardVisualStatus(apt, partialPaymentAppointmentIds)
+                      apt.status !== "missed" &&
+                      cardVisualStatus !== "partial_payment"
                     const baseHeight = Math.max(slotHeight * 0.6, height)
                     const resizeBottomHeight =
                       isDragging && draggingApt?.mode === "resize-bottom"
@@ -2569,6 +2614,7 @@ export const AppointmentsCalendarGrid = forwardRef<
 
                     return (
                       <div
+                        data-calendar-appt-slot
                         key={apt._id}
                         className={`absolute pointer-events-auto select-none rounded-md ${
                           showLinkedHoverOutline && !isDragging
@@ -2595,31 +2641,15 @@ export const AppointmentsCalendarGrid = forwardRef<
                         }}
                         onClick={(e) => {
                           if (justDraggedRef.current) return
-                          // Clicks on the inner card open details / drag; the ~10% strip (or wrapper margin) books a new slot.
-                          if ((e.target as HTMLElement).closest("[data-appointment-card]")) return
+                          if ((e.target as HTMLElement).closest("[data-appointment-card]")) {
+                            e.stopPropagation()
+                            return
+                          }
+                          if ((e.target as HTMLElement).closest("[data-appt-side-strip]")) {
+                            return
+                          }
                           e.stopPropagation()
-                          const container = blocksContainerRef.current
-                          if (!container) return
-                          const rect = container.getBoundingClientRect()
-                          const relY = e.clientY - rect.top
-                          const slotIndex = Math.floor(relY / slotHeight)
-                          const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
-                          if (slotMinutes < extendedStartMinutes || slotMinutes >= extendedEndMinutes) return
-                          const windowForStaff = staffWindowsById[col._id]
-                          const inWorkWindow =
-                            !windowForStaff ||
-                            (windowForStaff.enabled &&
-                              slotMinutes >= windowForStaff.start &&
-                              slotMinutes < windowForStaff.end)
-                          if (!inWorkWindow) return
-                          setSlotActionDialog({
-                            date: selectedDate,
-                            time: slotMinutesToTimeString(slotMinutes),
-                            staffId: col._id,
-                            staffName: col.name,
-                            clientX: e.clientX,
-                            clientY: e.clientY,
-                          })
+                          openAppointmentFromCalendarCard(apt)
                         }}
                       >
                         <div
@@ -2627,13 +2657,15 @@ export const AppointmentsCalendarGrid = forwardRef<
                             shrinkHover ? "w-[90%]" : "w-full"
                           }`}
                         >
-                        <HoverCard openDelay={0} closeDelay={0}>
+                        <HoverCard openDelay={50} closeDelay={0}>
                           <HoverCardTrigger asChild>
                         <div
                           data-appointment-card
                           className={`group relative flex h-full min-h-0 w-full max-w-full flex-1 flex-col overflow-hidden rounded-md text-left animate-appointment-card-enter ${
-                            isDragging
-                              ? "ring-2 ring-violet-400/80 transition-none opacity-40"
+                            isDragging && (draggingApt?.mode === "move" || draggingApt?.mode === "resize-top")
+                              ? "transition-none opacity-0"
+                              : isDragging
+                                ? "transition-none opacity-90"
                               : staffLockedCard
                                 ? `shadow-[0_0_0_3px_rgb(217,119,6)] duration-[180ms] ease-out ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ""}`
                                 : `duration-[180ms] ease-out ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ""}`
@@ -2648,6 +2680,16 @@ export const AppointmentsCalendarGrid = forwardRef<
                           }}
                           onMouseLeave={(e) => {
                             if (!isDragging) e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)"
+                          }}
+                          onClick={(e) => {
+                            if (
+                              isDragging &&
+                              draggingApt?.id === apt._id &&
+                              (draggingApt.mode === "move" || draggingApt.mode === "resize-top")
+                            ) {
+                              e.preventDefault()
+                              e.stopPropagation()
+                            }
                           }}
                         >
                         {/* Drag handle - top */}
@@ -2677,7 +2719,8 @@ export const AppointmentsCalendarGrid = forwardRef<
                           onMouseDown={(e) => {
                             if (canDrag) handleTimeDragStart(e, apt)
                           }}
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation()
                             if (justDraggedRef.current) {
                               justDraggedRef.current = false
                               return
@@ -2776,7 +2819,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                         </div>
                           </HoverCardTrigger>
                           <HoverCardContent
-                            side="right"
+                            side={colIndex === 0 ? "right" : "left"}
                             align="start"
                             sideOffset={10}
                             className="w-[min(20rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-slate-200/90 bg-white p-0 text-slate-900 shadow-lg shadow-slate-200/40"
@@ -2848,6 +2891,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                             return (
                               <div
                                 key={`${apt._id}-add-row-${slotM}`}
+                                data-appt-side-strip
                                 className="absolute z-[25] cursor-pointer border-l border-slate-200/50 rounded-sm transition-colors duration-150 hover:bg-violet-100/85 hover:shadow-[inset_0_0_0_9999px_rgba(237,233,254,0.45)] hover:ring-1 hover:ring-inset hover:ring-violet-200/60"
                                 style={{ left: "90%", width: "10%", top: relTop, height }}
                                 onMouseEnter={(e) => showSlotHoverTip(label, e)}
@@ -3039,6 +3083,30 @@ export const AppointmentsCalendarGrid = forwardRef<
               const endTimeStr = slotMinutesToTimeString(parseTimeToMinutes(apt.time) + getTotalDuration(a))
               return `${formatAppointmentTime(apt.time)} – ${formatAppointmentTime(endTimeStr)}`
             })()
+        const gridEl = blocksContainerRef.current
+        const rawPreviewLeft =
+          dragStartRect.left + (draggingApt.staffLocked === true ? 0 : dragOffsetX)
+        let previewLeft = rawPreviewLeft
+        if (gridEl && columns.length > 0) {
+          const gridRect = gridEl.getBoundingClientRect()
+          const colW = gridRect.width / columns.length
+          let colIndex: number
+          if (draggingApt.staffLocked === true) {
+            colIndex = Math.max(0, columns.findIndex((c) => c._id === draggingApt.sourceStaffId))
+          } else if (dragHoverSlot) {
+            colIndex = dragHoverSlot.colIndex
+          } else {
+            const pointerX = draggingApt.startX + dragOffsetX
+            const relX = pointerX - gridRect.left
+            colIndex = Math.floor(relX / colW)
+            colIndex = Math.max(0, Math.min(columns.length - 1, colIndex))
+          }
+          const colLeft = gridRect.left + colIndex * colW
+          const colRight = colLeft + colW
+          const w = dragStartRect.width
+          previewLeft = Math.min(Math.max(rawPreviewLeft, colLeft), Math.max(colLeft, colRight - w))
+        }
+
         return createPortal(
           <div
             className={`fixed z-[9999] overflow-hidden rounded-md shadow-xl bg-white pointer-events-none cursor-grabbing ${
@@ -3047,7 +3115,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                 : "border border-slate-200/80"
             }`}
             style={{
-              left: dragStartRect.left + dragOffsetX,
+              left: previewLeft,
               top: dragStartRect.top + dragOffsetY,
               width: dragStartRect.width,
               height: dragStartRect.height,
@@ -3204,31 +3272,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                   type="button"
                   className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-violet-50/90 transition-colors"
                   onClick={() => {
-                    if (onOpenAppointmentForm) {
-                      onOpenAppointmentForm({
-                        date: slotActionDialog.date,
-                        time: slotActionDialog.time,
-                        staffId: slotActionDialog.staffId ?? undefined,
-                      })
-                    } else {
-                      const params = new URLSearchParams({
-                        date: slotActionDialog.date,
-                        time: slotActionDialog.time,
-                      })
-                      if (slotActionDialog.staffId) params.set("staffId", slotActionDialog.staffId)
-                      router.push(`/appointments/new?${params.toString()}`)
-                    }
-                    setSlotActionDialog(null)
-                  }}
-                >
-                  <Users className="h-4 w-4 shrink-0 text-violet-600" aria-hidden />
-                  Add group appointment
-                  <span className="sr-only">Opens new appointment with multiple services</span>
-                </button>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left text-sm text-slate-700 hover:bg-violet-50/90 transition-colors"
-                  onClick={() => {
                     setBlockTimeModalData({
                       date: slotActionDialog.date,
                       time: slotActionDialog.time,
@@ -3243,15 +3286,6 @@ export const AppointmentsCalendarGrid = forwardRef<
                   Add blocked time
                 </button>
               </nav>
-              <div className="border-t border-slate-100 px-3 py-2 bg-slate-50/50">
-                <Link
-                  href="/settings"
-                  className="text-xs font-medium text-violet-600 hover:text-violet-700 hover:underline"
-                  onClick={() => setSlotActionDialog(null)}
-                >
-                  Quick actions settings
-                </Link>
-              </div>
             </div>
           </div>,
           document.body
@@ -3470,12 +3504,26 @@ export const AppointmentsCalendarGrid = forwardRef<
                     <div className="flex items-center gap-2 shrink-0">
                       <Button
                         variant="outline"
+                        disabled={
+                          !selectedAppointment ||
+                          getAppointmentCalendarOpenIntent(
+                            selectedAppointment,
+                            partialPaymentAppointmentIds
+                          ).type === "details"
+                        }
                         onClick={() => {
-                          if (selectedAppointment) {
-                            setShowDetails(false)
-                            onOpenAppointmentForm
-                              ? onOpenAppointmentForm({ appointmentId: selectedAppointment._id })
-                              : router.push(`/appointments/new?edit=${selectedAppointment._id}`)
+                          if (!selectedAppointment) return
+                          setShowDetails(false)
+                          const intent = getAppointmentCalendarOpenIntent(
+                            selectedAppointment,
+                            partialPaymentAppointmentIds
+                          )
+                          if (intent.type === "edit_form") {
+                            if (onOpenAppointmentForm) {
+                              onOpenAppointmentForm({ appointmentId: intent.appointmentId })
+                            } else {
+                              router.push(`/appointments/new?edit=${intent.appointmentId}`)
+                            }
                           }
                         }}
                       >

@@ -30,6 +30,9 @@ import {
   collectSaleLinesFromAppointmentCard,
   buildRaiseSaleAppointmentPayload,
   isHiddenAppointment,
+  collectPartialPaymentAppointmentIdsFromSales,
+  getCalendarCardVisualStatus,
+  getAppointmentCalendarOpenIntent,
 } from "@/lib/appointment-calendar-helpers"
 import {
   RaiseSaleConfirmationModal,
@@ -205,6 +208,8 @@ export const AppointmentsCalendar = forwardRef<
     return `${year}-${month}-${date}`
   })
   const [linkedSale, setLinkedSale] = useState<any | null>(null)
+  /** Same-day partial-payment sale linkage (list cards + open intent). */
+  const [partialPaymentAppointmentIds, setPartialPaymentAppointmentIds] = useState<Set<string>>(() => new Set())
 
   useEffect(() => {
     if (!selectedAppointment?._id) {
@@ -243,15 +248,18 @@ export const AppointmentsCalendar = forwardRef<
   const openAppointmentFromListCard = useCallback(
     (apt: Appointment) => {
       setSelectedAppointment(apt)
-      if (apt.status === "completed") {
-        setShowDetails(true)
-      } else if (onOpenAppointmentForm) {
-        onOpenAppointmentForm({ appointmentId: apt._id })
-      } else {
-        setShowDetails(true)
+      const intent = getAppointmentCalendarOpenIntent(apt, partialPaymentAppointmentIds)
+      if (intent.type === "edit_form") {
+        if (onOpenAppointmentForm) {
+          onOpenAppointmentForm({ appointmentId: intent.appointmentId })
+        } else {
+          setShowDetails(true)
+        }
+        return
       }
+      setShowDetails(true)
     },
-    [onOpenAppointmentForm]
+    [onOpenAppointmentForm, partialPaymentAppointmentIds]
   )
 
   useImperativeHandle(ref, () => ({
@@ -325,10 +333,32 @@ export const AppointmentsCalendar = forwardRef<
     }
   }
 
+  const reloadPartialSalesForSelectedDay = useCallback(async () => {
+    if (!selectedDate) return
+    try {
+      const sales = await SalesAPI.getAllMergePages({
+        dateFrom: selectedDate,
+        dateTo: selectedDate,
+        batchSize: 400,
+      })
+      if (Array.isArray(sales)) {
+        setPartialPaymentAppointmentIds(collectPartialPaymentAppointmentIdsFromSales(sales))
+      } else {
+        setPartialPaymentAppointmentIds(new Set())
+      }
+    } catch {
+      setPartialPaymentAppointmentIds(new Set())
+    }
+  }, [selectedDate])
+
   // Fetch appointments when component mounts or date changes
   useEffect(() => {
     fetchAppointments()
   }, [currentDate])
+
+  useEffect(() => {
+    void reloadPartialSalesForSelectedDay()
+  }, [reloadPartialSalesForSelectedDay])
 
   // Fetch staff list for filter
   useEffect(() => {
@@ -343,10 +373,13 @@ export const AppointmentsCalendar = forwardRef<
   const fetchRef = useRef(fetchAppointments)
   fetchRef.current = fetchAppointments
   useEffect(() => {
-    const handler = () => fetchRef.current()
+    const handler = () => {
+      fetchRef.current()
+      void reloadPartialSalesForSelectedDay()
+    }
     window.addEventListener("appointments-refresh", handler)
     return () => window.removeEventListener("appointments-refresh", handler)
-  }, [])
+  }, [reloadPartialSalesForSelectedDay])
 
   const getAppointmentsForDate = (date: Date) => {
     const dateString = format(date, "yyyy-MM-dd")
@@ -508,16 +541,19 @@ export const AppointmentsCalendar = forwardRef<
       setCurrentDate(matchDate)
     }
 
-    if (match.status === "completed") {
-      setShowDetails(true)
-    } else if (onOpenAppointmentForm) {
-      onOpenAppointmentForm({ appointmentId: match._id })
+    const intent = getAppointmentCalendarOpenIntent(match, partialPaymentAppointmentIds)
+    if (intent.type === "edit_form") {
+      if (onOpenAppointmentForm) {
+        onOpenAppointmentForm({ appointmentId: intent.appointmentId })
+      } else {
+        setShowDetails(true)
+      }
     } else {
       setShowDetails(true)
     }
 
     setPendingAppointmentId(null)
-  }, [pendingAppointmentId, appointments, onOpenAppointmentForm])
+  }, [pendingAppointmentId, appointments, onOpenAppointmentForm, partialPaymentAppointmentIds])
 
   const isAppointmentOnSelectedDate = (apt: Appointment) => {
     const aptNorm = apt.date?.length >= 10 ? apt.date.slice(0, 10) : apt.date
@@ -724,7 +760,12 @@ export const AppointmentsCalendar = forwardRef<
     | "cancelled"
 
   const handleCardDragStart = (e: React.DragEvent, appointment: Appointment) => {
-    if (appointment.status === "completed" || appointment.status === "missed") return
+    if (
+      appointment.status === "completed" ||
+      appointment.status === "missed" ||
+      getCalendarCardVisualStatus(appointment, partialPaymentAppointmentIds) === "partial_payment"
+    )
+      return
     setDraggingAppointmentId(appointment._id)
     e.dataTransfer.setData('application/json', JSON.stringify({ id: appointment._id, status: appointment.status }))
     e.dataTransfer.effectAllowed = 'move'
@@ -1074,13 +1115,17 @@ export const AppointmentsCalendar = forwardRef<
                 {col.list.length > 0 ? (
                   col.list.map((appointment) => {
                     const anyAppt: any = appointment as any
+                    const cardVisualStatus = getCalendarCardVisualStatus(appointment, partialPaymentAppointmentIds)
                     const serviceNames = getServiceDisplayNames(anyAppt)
                     const clientName = anyAppt?.clientId?.name || 'Client'
                     const clientInitial = clientName?.charAt?.(0) || '?'
                     const staffName = anyAppt?.staffId?.name || 'Unassigned Staff'
                     const price = anyAppt?.price ?? 0
                     const duration = getTotalDuration(anyAppt)
-                    const isDraggable = appointment.status !== 'completed' && appointment.status !== 'missed'
+                    const isDraggable =
+                      appointment.status !== "completed" &&
+                      appointment.status !== "missed" &&
+                      cardVisualStatus !== "partial_payment"
                     const isDragging = draggingAppointmentId === appointment._id
                     const groupAccentRing = anyAppt?.bookingGroupId ? groupAccents.get(anyAppt.bookingGroupId) : undefined
                     const bookingGroupIdStr = anyAppt?.bookingGroupId as string | undefined
@@ -1099,7 +1144,7 @@ export const AppointmentsCalendar = forwardRef<
                           setHoveredBookingGroupId(bookingGroupIdStr ?? null)
                         }}
                         onMouseLeave={() => scheduleClearBookingGroupHover()}
-                        className={`relative ${getStatusCardFill(appointment.status)} border rounded-lg transition-colors duration-200 overflow-hidden flex flex-col ${
+                        className={`relative ${getStatusCardFill(cardVisualStatus)} border rounded-lg transition-colors duration-200 overflow-hidden flex flex-col ${
                           isDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
                         } ${anyAppt.staffLocked === true ? '!border-[3px] !border-amber-600' : ''} ${isDragging ? 'opacity-50' : ''} ${groupAccentRing ? `ring-2 ${groupAccentRing}` : ''}${
                           showLinkedHoverOutline && !isDragging ? ' ring-2 ring-violet-500 ring-offset-0' : ''
@@ -1118,12 +1163,12 @@ export const AppointmentsCalendar = forwardRef<
                             <Heart className="h-3.5 w-3.5 fill-rose-500 text-rose-600 drop-shadow-sm" aria-hidden />
                           </div>
                         )}
-                        <div className={`h-1.5 shrink-0 rounded-t-lg ${getStatusColor(appointment.status)}`} aria-hidden />
+                        <div className={`h-1.5 shrink-0 rounded-t-lg ${getStatusColor(cardVisualStatus)}`} aria-hidden />
                         <CardContent className="p-2.5 flex-1">
                           <div className="flex items-center justify-between mb-1.5 gap-1 flex-wrap">
                             <div className="flex items-center gap-1 min-w-0">
-                              <Badge className={`text-[10px] font-semibold ${getStatusBadgeClass(appointment.status)} border-0`}>
-                                {getStatusText(appointment.status)}
+                              <Badge className={`text-[10px] font-semibold ${getStatusBadgeClass(cardVisualStatus)} border-0`}>
+                                {getStatusText(cardVisualStatus)}
                               </Badge>
                               {(anyAppt as { prepaidAtBooking?: boolean }).prepaidAtBooking &&
                                 appointment.status !== 'completed' &&
@@ -1398,12 +1443,26 @@ export const AppointmentsCalendar = forwardRef<
                     <div className="flex items-center gap-2 shrink-0">
                       <Button
                         variant="outline"
+                        disabled={
+                          !selectedAppointment ||
+                          getAppointmentCalendarOpenIntent(
+                            selectedAppointment,
+                            partialPaymentAppointmentIds
+                          ).type === 'details'
+                        }
                         onClick={() => {
-                          if (selectedAppointment) {
-                            setShowDetails(false)
-                            onOpenAppointmentForm
-                              ? onOpenAppointmentForm({ appointmentId: selectedAppointment._id })
-                              : router.push(`/appointments/new?edit=${selectedAppointment._id}`)
+                          if (!selectedAppointment) return
+                          setShowDetails(false)
+                          const intent = getAppointmentCalendarOpenIntent(
+                            selectedAppointment,
+                            partialPaymentAppointmentIds
+                          )
+                          if (intent.type === 'edit_form') {
+                            if (onOpenAppointmentForm) {
+                              onOpenAppointmentForm({ appointmentId: intent.appointmentId })
+                            } else {
+                              router.push(`/appointments/new?edit=${intent.appointmentId}`)
+                            }
                           }
                         }}
                       >

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Calendar } from "lucide-react"
-import { format, parse, parseISO } from "date-fns"
+import { format, isValid, parse, parseISO } from "date-fns"
 import { useDashboardInit } from "@/lib/queries/dashboard"
 
 interface RecentItem {
@@ -17,6 +17,36 @@ interface RecentItem {
   dateTime: Date | null
 }
 
+/** Build local Date from appointment date + time; supports 24h (e.g. 19:15) and 12h with AM/PM. */
+function parseAppointmentWallDateTime(dateRaw: unknown, timeRaw: unknown, startAtRaw?: unknown): Date | null {
+  if (startAtRaw != null && startAtRaw !== "") {
+    const fromStart = typeof startAtRaw === "string" ? parseISO(startAtRaw) : new Date(startAtRaw as Date)
+    if (isValid(fromStart)) return fromStart
+  }
+  if (!dateRaw) return null
+  const dateStr = String(dateRaw).trim()
+  const datePart = dateStr.length >= 10 ? dateStr.slice(0, 10) : dateStr
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    const iso = parseISO(dateStr)
+    return isValid(iso) ? iso : null
+  }
+  if (timeRaw == null || String(timeRaw).trim() === "") {
+    const midnight = parseISO(`${datePart}T00:00:00`)
+    return isValid(midnight) ? midnight : null
+  }
+  const timeStr = String(timeRaw).trim()
+  const ref = new Date()
+  const attempts = [
+    parse(`${datePart} ${timeStr}`, "yyyy-MM-dd HH:mm", ref),
+    parse(`${datePart} ${timeStr}`, "yyyy-MM-dd H:mm", ref),
+    parse(`${datePart} ${timeStr}`, "yyyy-MM-dd h:mm a", ref),
+  ]
+  for (const d of attempts) {
+    if (isValid(d)) return d
+  }
+  return null
+}
+
 export function RecentAppointments() {
   const router = useRouter()
   const { data, isPending, isError } = useDashboardInit()
@@ -24,22 +54,17 @@ export function RecentAppointments() {
   const raw = data?.appointments?.recentUpcoming ?? []
 
   const items: RecentItem[] = (Array.isArray(raw) ? raw : []).map((a: any) => {
-    let appointmentDateTime: Date | null = null
-    try {
-      if (a?.date && a?.time) {
-        appointmentDateTime = parse(`${a.date} ${a.time}`, "yyyy-MM-dd h:mm a", new Date())
-      } else if (a?.date) {
-        appointmentDateTime = parseISO(a.date)
-      }
-    } catch {
-      appointmentDateTime = null
-    }
+    const appointmentDateTime = parseAppointmentWallDateTime(a?.date, a?.time, a?.startAt)
+    const timeLabel =
+      appointmentDateTime && isValid(appointmentDateTime)
+        ? format(appointmentDateTime, "MMM dd, h:mm a")
+        : [a?.date, a?.time].filter(Boolean).join(" ") || String(a?.time || "")
     return {
       id: String(a._id),
       name: a?.clientId?.name || "Client",
       avatar: "/placeholder.svg",
       service: a?.serviceId?.name || "Service",
-      timeLabel: appointmentDateTime ? format(appointmentDateTime, "MMM dd, h:mm a") : a?.time || "",
+      timeLabel,
       price: Number(a?.price || a?.serviceId?.price || 0),
       status: a?.status || "scheduled",
       dateTime: appointmentDateTime,

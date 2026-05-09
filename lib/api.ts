@@ -17,8 +17,8 @@ import type { PaymentConfiguration } from "./payment-redemption-eligibility"
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
 /**
- * Refresh auth session using HttpOnly cookie. New tokens are set as cookies
- * by the server — no token is returned in the JSON body.
+ * Refresh auth session using HttpOnly cookies (credentialed POST). Uses standalone axios so
+ * this can run before apiClient response interceptors complete.
  */
 let refreshInFlight: Promise<boolean> | null = null
 

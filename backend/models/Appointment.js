@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { randomUUID } = require('crypto');
 const { syncUtcFromLegacy } = require('../services/scheduling/scheduling-utils');
 
 const appointmentSchema = new mongoose.Schema({
@@ -141,6 +142,14 @@ const appointmentSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  /**
+   * Set by POST /appointments when allowParallelBooking is true. slotKey gets a unique suffix so two
+   * active rows may share the same staff + wall-clock window (double booking).
+   */
+  allowStaffOverlap: {
+    type: Boolean,
+    default: false,
+  },
   /** Timestamp when WhatsApp reminder was sent — used to prevent duplicate sends */
   reminderSentAt: {
     type: Date,
@@ -202,7 +211,8 @@ appointmentSchema.pre('save', function(next) {
   if (this.startAt && this.endAt && ACTIVE_FOR_SLOT.includes(this.status)) {
     const primary = typeof this.getPrimaryStaff === 'function' ? this.getPrimaryStaff() : this.staffId;
     if (primary) {
-      this.slotKey = `${String(this.branchId)}:${String(primary)}:${this.startAt.toISOString()}:${this.endAt.toISOString()}`;
+      const base = `${String(this.branchId)}:${String(primary)}:${this.startAt.toISOString()}:${this.endAt.toISOString()}`;
+      this.slotKey = this.allowStaffOverlap === true ? `${base}:${randomUUID()}` : base;
     } else {
       this.set('slotKey', undefined);
     }

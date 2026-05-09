@@ -42,6 +42,7 @@ interface ReceiptData {
   subtotalExcludingTax?: number
   tip: number
   tipStaffName?: string
+  tipLines?: Array<{ staffName?: string; amount: number }>
   paymentMode: string
   payments: Array<{
     type: string
@@ -144,6 +145,7 @@ export default function ReceiptPage() {
               subtotalExcludingTax: frontendData.subtotalExcludingTax,
               tip: frontendData.tip || 0,
               tipStaffName: frontendData.tipStaffName,
+              tipLines: frontendData.tipLines,
               paymentMode: frontendData.payments?.[0]?.type || 'Cash',
               payments:
                 buildReceiptPaymentsFromSale({
@@ -228,6 +230,14 @@ export default function ReceiptPage() {
               }, 0) || (saleData.grossTotal - saleData.taxAmount),
               tip: saleData.tip || 0,
               tipStaffName: saleData.tipStaffName,
+              tipLines: Array.isArray(saleData.tipLines)
+                ? saleData.tipLines
+                    .map((tl: any) => ({
+                      staffName: tl.staffName != null ? String(tl.staffName).trim() : undefined,
+                      amount: Math.max(0, Number(tl.amount) || 0),
+                    }))
+                    .filter((tl: { amount: number }) => tl.amount > 0.005)
+                : undefined,
               paymentMode: saleData.paymentMode,
               payments:
                 saleData.payments?.length > 0
@@ -387,6 +397,7 @@ ${publicUrl}`
       subtotal: receipt.netTotal,
       tip: receipt.tip || 0,
       tipStaffName: receipt.tipStaffName,
+      tipLines: receipt.tipLines,
       status: receipt.status,
       invoiceDeleted: receipt.invoiceDeleted,
       discount: 0,
@@ -514,6 +525,7 @@ ${publicUrl}`
               subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
               tip: receipt.tip || 0,
               tipStaffName: receipt.tipStaffName,
+              tipLines: receipt.tipLines,
               discount: 0,
               tax: receipt.taxAmount,
               total: receipt.grossTotal + (receipt.tip || 0),

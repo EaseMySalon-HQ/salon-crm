@@ -138,7 +138,12 @@ function buildSalesListDuePaymentSplitMatches(branchId, q) {
       ? new mongoose.Types.ObjectId(tipStaffId)
       : tipStaffId;
     tail.push({
-      $and: [{ tip: { $gt: 0 } }, { tipStaffId: tid }],
+      $and: [
+        { tip: { $gt: 0 } },
+        {
+          $or: [{ tipStaffId: tid }, { tipLines: { $elemMatch: { staffId: tid } } }],
+        },
+      ],
     });
   }
 
@@ -297,7 +302,12 @@ function buildSalesListMatch(branchId, q) {
       ? new mongoose.Types.ObjectId(tipStaffId)
       : tipStaffId;
     parts.push({
-      $and: [{ tip: { $gt: 0 } }, { tipStaffId: tid }],
+      $and: [
+        { tip: { $gt: 0 } },
+        {
+          $or: [{ tipStaffId: tid }, { tipLines: { $elemMatch: { staffId: tid } } }],
+        },
+      ],
     });
   }
 

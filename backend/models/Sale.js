@@ -48,6 +48,12 @@ const paymentHistorySchema = new mongoose.Schema({
   collectedBy: { type: String, default: '' }
 }, { _id: false });
 
+const saleTipLineSchema = new mongoose.Schema({
+  staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff', required: true },
+  staffName: { type: String, default: '' },
+  amount: { type: Number, required: true, min: 0 },
+}, { _id: false });
+
 const saleSchema = new mongoose.Schema({
   billNo: { type: String, required: true, unique: true },
   customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' },
@@ -93,6 +99,8 @@ const saleSchema = new mongoose.Schema({
   tip: { type: Number, default: 0, min: 0 },
   tipStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff', default: null },
   tipStaffName: { type: String, default: '' },
+  /** Split tips: receipt + staff-tip report use each row; tip / tipStaffId remain totals + first recipient for legacy. */
+  tipLines: { type: [saleTipLineSchema], default: [] },
 
   staffName: { type: String, required: true },
   items: [itemSchema],

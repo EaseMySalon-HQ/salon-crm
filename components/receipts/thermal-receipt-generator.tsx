@@ -6,6 +6,21 @@ import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
+import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
+
+/** Thermal HTML rows for split tips (one line per staff). */
+function thermalTipRowsHtml(receipt: Receipt): string {
+  if ((receipt.tip || 0) <= 0) return ""
+  return receiptTipDisplayLines(receipt)
+    .map(
+      (line) => `
+            <div class="total-line">
+              <span>${line.staffName ? `Tip (${line.staffName}):` : "Tip:"}</span>
+              <span>₹${line.amount.toFixed(2)}</span>
+            </div>`,
+    )
+    .join("")
+}
 
 /** Shared thermal HTML block: TOTAL … Total Paid (Bill). */
 function buildThermalSettlementTotals(receipt: Receipt): string {
@@ -284,12 +299,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
                 `
               })()}
             ` : ''}
-            ${receipt.tip > 0 ? `
-              <div class="total-line">
-                <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-                <span>₹${receipt.tip.toFixed(2)}</span>
-              </div>
-            ` : ''}
+            ${thermalTipRowsHtml(receipt)}
             ${receipt.roundOff && Math.abs(receipt.roundOff) > 0.01 ? `
               <div class="total-line round-off">
                 <span>Round Off:</span>
@@ -580,12 +590,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               `
             })()}
           ` : ''}
-          ${receipt.tip > 0 ? `
-            <div class="total-line">
-              <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-              <span>₹${receipt.tip.toFixed(2)}</span>
-            </div>
-          ` : ''}
+          ${thermalTipRowsHtml(receipt)}
           ${receipt.roundOff && Math.abs(receipt.roundOff) > 0.01 ? `
             <div class="total-line round-off">
               <span>Round Off:</span>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react"
 import { useRouter } from "next/navigation"
 import {
   Search,
@@ -14,24 +14,36 @@ import {
   Minus,
   Trash2,
   ChevronDown,
+  ChevronRight,
   Loader2,
   Pencil,
   Percent,
   Coins,
   MoreVertical,
+  AlertTriangle,
 } from "lucide-react"
 import { format } from "date-fns"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Sheet,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -45,6 +57,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -57,16 +70,52 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
-import type { Client } from "@/lib/client-store"
-import { ClientWalletAPI, MembershipAPI, PackagesAPI, ProductsAPI, StaffDirectoryAPI } from "@/lib/api"
+import { clientStore, type Client } from "@/lib/client-store"
+import { ClientDetailsDrawer } from "@/components/clients/client-details-drawer"
+import {
+  ClientWalletAPI,
+  ClientsAPI,
+  MembershipAPI,
+  PackagesAPI,
+  ProductsAPI,
+  RewardPointsAPI,
+  SettingsAPI,
+  StaffDirectoryAPI,
+} from "@/lib/api"
 import {
   clearServiceCheckoutDraftByRef,
   createServiceCheckoutDraft,
   dispatchServiceCheckoutDraftChanged,
   readServiceCheckoutDraftByRef,
 } from "@/lib/service-checkout-draft-storage"
+import {
+  eligibleRedemptionSubtotal,
+  mergePaymentConfiguration,
+  type PaymentRedemptionLine,
+} from "@/lib/payment-redemption-eligibility"
+import {
+  filterWalletsForQuickSaleDisplay,
+  isLikelyMongoObjectId,
+  buildCombinedQuickSaleWalletRow,
+} from "@/lib/quick-sale-helpers"
+import { previewRedemptionLive } from "@/lib/reward-points-preview"
+import {
+  completeServiceCheckoutInline,
+  type CheckoutPaymentMethodChoice,
+  type ServiceCheckoutTenderSplit,
+} from "@/lib/complete-service-checkout-inline"
+
+export type CheckoutTipLine = {
+  id: string
+  staffId: string
+  /** Tip amount in ₹ for this staff member. */
+  amount: number
+}
+
+export type CheckoutCartDiscountMode = "fixed" | "percentage"
 
 export type ServiceCheckoutLine = {
   id: string
@@ -83,6 +132,23 @@ export type ServiceCheckoutLine = {
   discountIsPercent?: boolean
   /** From appointment booking: compact row + price; edits open the sheet (still editable before payment). */
   locked?: boolean
+  /** Discount was applied from the client’s active membership; cleared when membership is removed. */
+  membershipAutoDiscount?: boolean
+}
+
+/** Create scheduled appointment docs before Quick Sale when checking out from a new (calendar) booking. */
+export type EnsureAppointmentBookingContext = {
+  lines: ServiceCheckoutLine[]
+  customer: Client
+  appointmentDate: Date | undefined
+  appointmentTime: string
+  notes: string
+}
+
+export type EnsureAppointmentBookingResult = {
+  appointmentId: string
+  linkedAppointmentIds: string[]
+  bookingGroupId: string | null
 }
 
 export type ServiceCheckoutProductLine = {
@@ -188,6 +254,169 @@ function lineDiscountAsPayloadPercent(
   if (d <= 0 || base <= 0) return 0
   if (discountIsPercent !== false) return Math.min(100, d)
   return Math.min(100, (d / base) * 100)
+}
+
+function cloneCheckoutTipLines(lines: CheckoutTipLine[]): CheckoutTipLine[] {
+  return lines.map((l) => ({ ...l }))
+}
+
+type ServiceCheckoutMembershipSnapshot = { plan?: any; usageSummary?: any[] } | null
+
+/** Align with Quick Sale membership pricing: included-service balances + plan % off remaining. */
+function applyMembershipToCheckoutServiceLines(
+  lines: ServiceCheckoutLine[],
+  membershipData: ServiceCheckoutMembershipSnapshot,
+  catalogServices: any[]
+): ServiceCheckoutLine[] {
+  if (!membershipData?.plan) {
+    return lines.map((l) => {
+      if (!l.serviceId || !l.membershipAutoDiscount) return l
+      return {
+        ...l,
+        discountValue: 0,
+        discountIsPercent: true,
+        membershipAutoDiscount: false,
+      }
+    })
+  }
+
+  const usageMap = new Map(
+    (membershipData.usageSummary || []).map((u: any) => [
+      String(u.serviceId || u.serviceId?._id),
+      u,
+    ])
+  )
+  const discountPct = Number(membershipData.plan?.discountPercentage) || 0
+  const remaining: Record<string, number> = {}
+  usageMap.forEach((u: any, sid: string) => {
+    remaining[sid] = typeof u.remaining === "number" ? u.remaining : 0
+  })
+
+  return lines.map((line) => {
+    if (!line.serviceId || line.membershipAutoDiscount === false) return line
+
+    const sid = String(line.serviceId)
+    const u = usageMap.get(sid)
+    const svc = catalogServices.find((s: any) => String(s._id || s.id) === sid)
+    const basePrice = Number(svc?.price ?? line.price) || 0
+    const q = serviceLineQuantity(line)
+
+    if (!u) {
+      if (discountPct > 0) {
+        return {
+          ...line,
+          price: basePrice || line.price,
+          discountValue: discountPct,
+          discountIsPercent: true,
+          membershipAutoDiscount: true,
+        }
+      }
+      return {
+        ...line,
+        price: basePrice || line.price,
+        discountValue: 0,
+        discountIsPercent: true,
+        membershipAutoDiscount: true,
+      }
+    }
+
+    if (remaining[sid] <= 0) {
+      if (discountPct > 0) {
+        return {
+          ...line,
+          price: basePrice || line.price,
+          discountValue: discountPct,
+          discountIsPercent: true,
+          membershipAutoDiscount: true,
+        }
+      }
+      return {
+        ...line,
+        price: basePrice || line.price,
+        discountValue: 0,
+        discountIsPercent: true,
+        membershipAutoDiscount: true,
+      }
+    }
+
+    const freeUnits = Math.min(q, remaining[sid])
+    remaining[sid] -= freeUnits
+    const paidUnits = q - freeUnits
+
+    if (paidUnits === 0) {
+      return {
+        ...line,
+        price: basePrice || line.price,
+        discountValue: 100,
+        discountIsPercent: true,
+        membershipAutoDiscount: true,
+      }
+    }
+
+    const avgDiscount = (freeUnits * 100 + paidUnits * discountPct) / q
+    return {
+      ...line,
+      price: basePrice || line.price,
+      discountValue: Math.round(avgDiscount * 100) / 100,
+      discountIsPercent: true,
+      membershipAutoDiscount: true,
+    }
+  })
+}
+
+type CheckoutPaymentTaxSettings = {
+  enableTax: boolean
+  priceInclusiveOfTax: boolean
+  serviceTaxRate: number
+  membershipTaxRate: number
+  packageTaxRate: number
+  prepaidWalletTaxRate: number
+  essentialProductRate: number
+  intermediateProductRate: number
+  standardProductRate: number
+  luxuryProductRate: number
+  exemptProductRate: number
+}
+
+function deriveCheckoutPreferredPaymentMethod(opts: {
+  cash: number
+  card: number
+  online: number
+  wallet: number
+  loyaltyPoints: number
+}): CheckoutPaymentMethodChoice {
+  const { cash, card, online, wallet, loyaltyPoints } = opts
+  const tiers: Array<{ k: CheckoutPaymentMethodChoice; v: number }> = [
+    { k: "cash", v: cash },
+    { k: "card", v: card },
+    { k: "online", v: online },
+    { k: "wallet", v: wallet },
+  ]
+  let best: CheckoutPaymentMethodChoice = "cash"
+  let bestV = -1
+  for (const t of tiers) {
+    if (t.v > bestV + 1e-9) {
+      bestV = t.v
+      best = t.k
+    }
+  }
+  if (bestV < 0.01 && loyaltyPoints > 0) return "reward"
+  if (bestV < 0.01) return "cash"
+  return best
+}
+
+function lineGrossPayableForCheckout(
+  net: number,
+  rate: number,
+  taxable: boolean,
+  ts: CheckoutPaymentTaxSettings | null
+): number {
+  if (!ts) return net
+  const enableTax = ts.enableTax !== false
+  const inclusive = ts.priceInclusiveOfTax !== false
+  if (!enableTax || !taxable || rate <= 0) return net
+  if (inclusive) return net
+  return net + (net * rate) / 100
 }
 
 function CheckoutLineDiscountRow({
@@ -345,6 +574,17 @@ export interface ServiceCheckoutDialogProps {
   consumeResumeDraftIntent?: () => boolean
   /** Storage token from a calendar pill (`draftRef`) — required when resuming a saved draft. */
   resumeSavedDraftToken?: string | null
+  /** Re-link checkout (and optionally persisted appointment docs) to another client. */
+  onCustomerChange?: (client: Client) => void | Promise<void>
+  /**
+   * New appointment flow only: persist calendar booking before opening Quick Sale so the bill links to
+   * scheduled appointment cards (avoids standalone walk-in rows). Return null if creation failed (toast).
+   */
+  ensureAppointmentBookingBeforeCheckout?: (
+    ctx: EnsureAppointmentBookingContext
+  ) => Promise<EnsureAppointmentBookingResult | null>
+  /** Called after bill is saved inline (e.g. close parent appointment drawer and return to calendar). */
+  onSuccessfulCheckout?: () => void
 }
 
 export function ServiceCheckoutDialog({
@@ -364,6 +604,9 @@ export function ServiceCheckoutDialog({
   existingBookingGroupId,
   consumeResumeDraftIntent,
   resumeSavedDraftToken = null,
+  onCustomerChange,
+  ensureAppointmentBookingBeforeCheckout,
+  onSuccessfulCheckout,
 }: ServiceCheckoutDialogProps) {
   const router = useRouter()
   const { toast } = useToast()
@@ -411,6 +654,168 @@ export function ServiceCheckoutDialog({
   const [cancelDraftDialogOpen, setCancelDraftDialogOpen] = useState(false)
   const [hasPersistedDraft, setHasPersistedDraft] = useState(false)
 
+  const changeClientSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [changeClientOpen, setChangeClientOpen] = useState(false)
+  const [changeClientQuery, setChangeClientQuery] = useState("")
+  const [changeClientResults, setChangeClientResults] = useState<Client[]>([])
+  const [changeClientSearching, setChangeClientSearching] = useState(false)
+  const [changingClient, setChangingClient] = useState(false)
+  const [clientDetailsDrawerOpen, setClientDetailsDrawerOpen] = useState(false)
+  const [checkoutTaxSettings, setCheckoutTaxSettings] = useState<CheckoutPaymentTaxSettings | null>(null)
+  const [checkoutMembershipData, setCheckoutMembershipData] =
+    useState<ServiceCheckoutMembershipSnapshot>(null)
+  /** Payment breakdown (Subtotal / Tax / Total); To pay stays visible when collapsed. */
+  const [cartBreakdownOpen, setCartBreakdownOpen] = useState(true)
+  const [checkoutTipLines, setCheckoutTipLines] = useState<CheckoutTipLine[]>([])
+  const [checkoutCartDiscountType, setCheckoutCartDiscountType] =
+    useState<CheckoutCartDiscountMode>("fixed")
+  const [checkoutCartDiscountValue, setCheckoutCartDiscountValue] = useState(0)
+  const [checkoutSaleNote, setCheckoutSaleNote] = useState("")
+  const [tipDialogOpen, setTipDialogOpen] = useState(false)
+  const [tipDraftLines, setTipDraftLines] = useState<CheckoutTipLine[]>([])
+  const [cartDiscountDialogOpen, setCartDiscountDialogOpen] = useState(false)
+  const [cartDiscountDraftType, setCartDiscountDraftType] =
+    useState<CheckoutCartDiscountMode>("fixed")
+  const [cartDiscountDraft, setCartDiscountDraft] = useState("")
+  const [saleNoteDialogOpen, setSaleNoteDialogOpen] = useState(false)
+  const [saleNoteDraft, setSaleNoteDraft] = useState("")
+  const [cancelSaleDialogOpen, setCancelSaleDialogOpen] = useState(false)
+  /** Mirrors Settings paymentConfiguration for wallet/reward eligibility in the payment-method dialog. */
+  const [checkoutPaymentConfiguration, setCheckoutPaymentConfiguration] = useState<unknown>(null)
+  const [paymentMethodDialogOpen, setPaymentMethodDialogOpen] = useState(false)
+  const [paymentMethodLoading, setPaymentMethodLoading] = useState(false)
+  const [paymentDialogShowWallet, setPaymentDialogShowWallet] = useState(false)
+  const [paymentDialogShowReward, setPaymentDialogShowReward] = useState(false)
+  const [paymentDialogWalletBalanceText, setPaymentDialogWalletBalanceText] = useState("")
+  const [paymentDialogRewardBalanceText, setPaymentDialogRewardBalanceText] = useState("")
+  const [paymentDialogWalletsRaw, setPaymentDialogWalletsRaw] = useState<any[]>([])
+  const [paymentDialogRewardSettings, setPaymentDialogRewardSettings] = useState<any>(null)
+  const [paymentDialogLoyaltyBalance, setPaymentDialogLoyaltyBalance] = useState(0)
+  const [payCash, setPayCash] = useState(0)
+  const [payCard, setPayCard] = useState(0)
+  const [payOnline, setPayOnline] = useState(0)
+  const [payWallet, setPayWallet] = useState(0)
+  const [payLoyaltyPoints, setPayLoyaltyPoints] = useState(0)
+  const [paySelectedWalletId, setPaySelectedWalletId] = useState("")
+  /** Quick Sale–style confirmation when amount collected is below amount due (partial bill). */
+  const [checkoutPartialPaymentConfirmOpen, setCheckoutPartialPaymentConfirmOpen] = useState(false)
+  const [checkoutPartialPaymentConfirmAck, setCheckoutPartialPaymentConfirmAck] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void SettingsAPI.getPaymentSettings()
+      .then((res) => {
+        if (cancelled || !res.success || !res.data) return
+        const d = res.data as Record<string, unknown>
+        setCheckoutTaxSettings({
+          enableTax: d.enableTax !== false,
+          priceInclusiveOfTax: d.priceInclusiveOfTax !== false,
+          serviceTaxRate: Number(d.serviceTaxRate) || 5,
+          membershipTaxRate: Number(d.membershipTaxRate ?? d.serviceTaxRate) || 5,
+          packageTaxRate: Number(d.packageTaxRate ?? d.serviceTaxRate) || 5,
+          prepaidWalletTaxRate: Number(d.prepaidWalletTaxRate ?? d.serviceTaxRate) || 5,
+          essentialProductRate: Number(d.essentialProductRate) || 5,
+          intermediateProductRate: Number(d.intermediateProductRate) || 12,
+          standardProductRate: Number(d.standardProductRate) || 18,
+          luxuryProductRate: Number(d.luxuryProductRate) || 28,
+          exemptProductRate: Number(d.exemptProductRate) || 0,
+        })
+        setCheckoutPaymentConfiguration(
+          d.paymentConfiguration !== undefined ? d.paymentConfiguration : null
+        )
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCheckoutTaxSettings(null)
+          setCheckoutPaymentConfiguration(null)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open || !customer) {
+      setCheckoutMembershipData(null)
+      return
+    }
+    const cid = String(customer._id || customer.id || "")
+    if (!cid) {
+      setCheckoutMembershipData(null)
+      return
+    }
+    const asOf = appointmentDate
+      ? format(appointmentDate, "yyyy-MM-dd")
+      : format(new Date(), "yyyy-MM-dd")
+    let cancelled = false
+    void MembershipAPI.getByCustomer(cid, { asOfDate: asOf })
+      .then((res) => {
+        if (cancelled) return
+        if (res.success && res.data) setCheckoutMembershipData(res.data as ServiceCheckoutMembershipSnapshot)
+        else setCheckoutMembershipData(null)
+      })
+      .catch(() => {
+        if (!cancelled) setCheckoutMembershipData(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, customer, appointmentDate])
+
+  const serviceLinesMembershipSignature = useMemo(
+    () =>
+      lines
+        .map((l) => {
+          const manual = l.membershipAutoDiscount === false ? "0" : "1"
+          return `${l.id}:${l.serviceId}:${serviceLineQuantity(l)}:${manual}`
+        })
+        .join("|"),
+    [lines]
+  )
+
+  useEffect(() => {
+    if (!open) return
+    setLines((prev) =>
+      applyMembershipToCheckoutServiceLines(prev, checkoutMembershipData, catalogServices)
+    )
+  }, [open, checkoutMembershipData, catalogServices, serviceLinesMembershipSignature])
+
+  useEffect(() => {
+    if (!open) setCartBreakdownOpen(true)
+  }, [open])
+
+  useEffect(() => {
+    if (!changeClientOpen) return
+    const trimmed = changeClientQuery.trim()
+    if (trimmed.length < 2) {
+      setChangeClientResults([])
+      setChangeClientSearching(false)
+      return
+    }
+    if (changeClientSearchTimerRef.current) clearTimeout(changeClientSearchTimerRef.current)
+    changeClientSearchTimerRef.current = setTimeout(() => {
+      void (async () => {
+        setChangeClientSearching(true)
+        try {
+          const results = await clientStore.searchClients(trimmed)
+          setChangeClientResults(results || [])
+        } catch {
+          setChangeClientResults([])
+        } finally {
+          setChangeClientSearching(false)
+        }
+      })()
+    }, 300)
+    return () => {
+      if (changeClientSearchTimerRef.current) clearTimeout(changeClientSearchTimerRef.current)
+    }
+  }, [changeClientQuery, changeClientOpen])
+
+  useEffect(() => {
+    if (!open) setClientDetailsDrawerOpen(false)
+  }, [open])
+
   useEffect(() => {
     if (open && !wasOpenRef.current) {
       const clientId = customer ? String(customer._id || customer.id || "") : ""
@@ -429,6 +834,29 @@ export function ServiceCheckoutDialog({
           setMembershipLines(cloneMembershipLines(draft.membershipLines))
           setPackageLines(clonePackageLines(draft.packageLines))
           setPrepaidLines(clonePrepaidLines(draft.prepaidLines))
+          if (Array.isArray(draft.checkoutTipLines) && draft.checkoutTipLines.length > 0) {
+            setCheckoutTipLines(cloneCheckoutTipLines(draft.checkoutTipLines as CheckoutTipLine[]))
+          } else {
+            setCheckoutTipLines([])
+          }
+          if (
+            draft.checkoutCartDiscountType === "percentage" ||
+            draft.checkoutCartDiscountType === "fixed"
+          ) {
+            setCheckoutCartDiscountType(draft.checkoutCartDiscountType)
+            setCheckoutCartDiscountValue(
+              typeof draft.checkoutCartDiscountValue === "number"
+                ? Math.max(0, draft.checkoutCartDiscountValue)
+                : 0
+            )
+          } else if (typeof draft.checkoutCartDiscount === "number" && draft.checkoutCartDiscount > 0) {
+            setCheckoutCartDiscountType("fixed")
+            setCheckoutCartDiscountValue(Math.max(0, draft.checkoutCartDiscount))
+          } else {
+            setCheckoutCartDiscountType("fixed")
+            setCheckoutCartDiscountValue(0)
+          }
+          setCheckoutSaleNote(typeof draft.checkoutSaleNote === "string" ? draft.checkoutSaleNote : "")
           setSearch("")
           setCategory("services")
           setProductSearch("")
@@ -463,6 +891,7 @@ export function ServiceCheckoutDialog({
       prepaidSnapshotRef.current = []
       setPrepaidLines([])
       setPrepaidSearch("")
+      clearCheckoutExtras()
       setHasPersistedDraft(false)
     }
     wasOpenRef.current = open
@@ -649,64 +1078,379 @@ export function ServiceCheckoutDialog({
     })
   }, [catalogPrepaidPlans, prepaidSearch])
 
-  const subtotal = useMemo(() => {
-    const servicesSum = lines.reduce(
-      (sum, l) =>
-        sum +
-        lineNetAfterLineDiscount(
-          Number(l.price) || 0,
-          serviceLineQuantity(l),
-          l.discountValue,
-          l.discountIsPercent
-        ),
-      0
+  const cartPricing = useMemo(() => {
+    const ts = checkoutTaxSettings
+    const enableTax = ts?.enableTax !== false
+    const inclusive = ts?.priceInclusiveOfTax !== false
+    const sRate = ts?.serviceTaxRate ?? 5
+    const mRate = ts?.membershipTaxRate ?? sRate
+    const pRate = ts?.packageTaxRate ?? sRate
+    const prRate = ts?.prepaidWalletTaxRate ?? sRate
+
+    let lineNetSum = 0
+    let taxSum = 0
+    let toPay = 0
+    /** Same cart with membership benefit removed on auto-discount service lines (list × qty, tax recomputed). */
+    let lineNetSumExclMembership = 0
+    let taxSumExclMembership = 0
+    /** Pre-tax value of lines: excl. membership benefit on services, vs current (for display / membership savings). */
+    let subtotalPreTaxExclMembership = 0
+    let subtotalPreTaxCurrent = 0
+
+    const netToPreTaxLine = (net: number, rate: number, taxable: boolean) => {
+      if (!enableTax || !taxable || rate <= 0) return net
+      if (inclusive) return net / (1 + rate / 100)
+      return net
+    }
+
+    const addLine = (
+      netCurrent: number,
+      netExclMembership: number,
+      rate: number,
+      taxable: boolean
+    ) => {
+      lineNetSum += netCurrent
+      lineNetSumExclMembership += netExclMembership
+      subtotalPreTaxCurrent += netToPreTaxLine(netCurrent, rate, taxable)
+      subtotalPreTaxExclMembership += netToPreTaxLine(netExclMembership, rate, taxable)
+      const apply = enableTax && taxable && rate > 0
+      if (!apply) {
+        toPay += netCurrent
+        return
+      }
+      if (inclusive) {
+        taxSum += netCurrent - netCurrent / (1 + rate / 100)
+        taxSumExclMembership += netExclMembership - netExclMembership / (1 + rate / 100)
+        toPay += netCurrent
+      } else {
+        const tCur = (netCurrent * rate) / 100
+        const tEx = (netExclMembership * rate) / 100
+        taxSum += tCur
+        taxSumExclMembership += tEx
+        toPay += netCurrent + tCur
+      }
+    }
+
+    lines.forEach((l) => {
+      const qty = serviceLineQuantity(l)
+      const price = Number(l.price) || 0
+      const netCurrent = lineNetAfterLineDiscount(
+        price,
+        qty,
+        l.discountValue,
+        l.discountIsPercent
+      )
+      const netExclMembership = l.membershipAutoDiscount ? price * qty : netCurrent
+      const svc = catalogServices.find((s: any) => String(s._id || s.id) === String(l.serviceId))
+      const rate = sRate
+      const taxable = !!(svc?.taxApplicable === true)
+      addLine(netCurrent, netExclMembership, rate, taxable)
+    })
+
+    productLines.forEach((l) => {
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const p = catalogProducts.find((x: any) => String(x._id || x.id) === String(l.productId))
+      let rate = ts?.standardProductRate ?? 18
+      if (p?.taxCategory && ts) {
+        switch (p.taxCategory) {
+          case "essential":
+            rate = ts.essentialProductRate
+            break
+          case "intermediate":
+            rate = ts.intermediateProductRate
+            break
+          case "standard":
+            rate = ts.standardProductRate
+            break
+          case "luxury":
+            rate = ts.luxuryProductRate
+            break
+          case "exempt":
+            rate = ts.exemptProductRate
+            break
+          default:
+            rate = ts.standardProductRate
+        }
+      }
+      addLine(net, net, rate, true)
+    })
+
+    membershipLines.forEach((l) => {
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      addLine(net, net, mRate, true)
+    })
+
+    packageLines.forEach((l) => {
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      addLine(net, net, pRate, true)
+    })
+
+    prepaidLines.forEach((l) => {
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      addLine(net, net, prRate, true)
+    })
+
+    return {
+      lineNetSum,
+      taxSum,
+      toPay,
+      lineNetSumExclMembership,
+      taxSumExclMembership,
+      subtotalPreTaxExclMembership,
+      subtotalPreTaxCurrent,
+    }
+  }, [
+    lines,
+    productLines,
+    membershipLines,
+    packageLines,
+    prepaidLines,
+    checkoutTaxSettings,
+    catalogServices,
+    catalogProducts,
+  ])
+
+  const inclusivePricing = checkoutTaxSettings?.priceInclusiveOfTax !== false
+  const taxEnabled = checkoutTaxSettings?.enableTax !== false
+  const cartToPay = cartPricing.toPay
+  const membershipDiscountPreTaxRupees = Math.max(
+    0,
+    cartPricing.subtotalPreTaxExclMembership - cartPricing.subtotalPreTaxCurrent
+  )
+
+  const cartDiscountApplied = useMemo(() => {
+    const toPay = Math.max(0, cartPricing.toPay)
+    if (toPay <= 0) return 0
+    if (checkoutCartDiscountType === "percentage") {
+      const pct = Math.min(100, Math.max(0, checkoutCartDiscountValue))
+      if (pct <= 0) return 0
+      return Math.min((toPay * pct) / 100, toPay)
+    }
+    return Math.min(Math.max(0, checkoutCartDiscountValue), toPay)
+  }, [checkoutCartDiscountType, checkoutCartDiscountValue, cartPricing.toPay])
+  const cartToPayAfterDiscount = Math.max(0, cartPricing.toPay - cartDiscountApplied)
+
+  const checkoutTipTotal = useMemo(
+    () =>
+      checkoutTipLines
+        .filter((t) => t.staffId && t.amount > 0)
+        .reduce((s, t) => s + Math.max(0, Number(t.amount) || 0), 0),
+    [checkoutTipLines]
+  )
+
+  /** Scale tax & pre-tax base by cart discount so GST matches amount payable (same proportion as total). */
+  const cartPostDiscountFactor =
+    cartPricing.toPay > 1e-9
+      ? Math.min(1, Math.max(0, cartToPayAfterDiscount / cartPricing.toPay))
+      : 0
+  const cartTaxAfterCartDiscount = taxEnabled ? cartPricing.taxSum * cartPostDiscountFactor : 0
+  const cartPreTaxBaseAfterCartDiscount = inclusivePricing
+    ? (cartPricing.lineNetSum - cartPricing.taxSum) * cartPostDiscountFactor
+    : cartPricing.lineNetSum * cartPostDiscountFactor
+
+  const serviceCheckoutRedemptionLines = useMemo((): PaymentRedemptionLine[] => {
+    const ts = checkoutTaxSettings
+    const out: PaymentRedemptionLine[] = []
+    if (!ts) return out
+    const toPay = cartPricing.toPay
+    const disc =
+      toPay <= 0
+        ? 0
+        : checkoutCartDiscountType === "percentage"
+          ? Math.min((toPay * Math.min(100, Math.max(0, checkoutCartDiscountValue))) / 100, toPay)
+          : Math.min(Math.max(0, checkoutCartDiscountValue), toPay)
+    const afterPay = Math.max(0, toPay - disc)
+    const factor = toPay > 1e-9 ? afterPay / toPay : 0
+    const sRate = ts.serviceTaxRate ?? 5
+    const mRate = ts.membershipTaxRate ?? sRate
+    const pRate = ts.packageTaxRate ?? sRate
+    const prRate = ts.prepaidWalletTaxRate ?? sRate
+
+    for (const l of lines) {
+      if (!l.serviceId) continue
+      const qty = serviceLineQuantity(l)
+      const net = lineNetAfterLineDiscount(
+        Number(l.price) || 0,
+        qty,
+        l.discountValue,
+        l.discountIsPercent
+      )
+      const svc = catalogServices.find((s: any) => String(s._id || s.id) === String(l.serviceId))
+      const taxable = !!(svc?.taxApplicable === true)
+      const gross = lineGrossPayableForCheckout(net, sRate, taxable, ts)
+      out.push({ type: "service", total: gross * factor })
+    }
+    for (const l of productLines) {
+      if (!l.productId) continue
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const p = catalogProducts.find((x: any) => String(x._id || x.id) === String(l.productId))
+      let rate = ts.standardProductRate ?? 18
+      if (p?.taxCategory) {
+        switch (p.taxCategory) {
+          case "essential":
+            rate = ts.essentialProductRate
+            break
+          case "intermediate":
+            rate = ts.intermediateProductRate
+            break
+          case "standard":
+            rate = ts.standardProductRate
+            break
+          case "luxury":
+            rate = ts.luxuryProductRate
+            break
+          case "exempt":
+            rate = ts.exemptProductRate
+            break
+          default:
+            rate = ts.standardProductRate
+        }
+      }
+      const gross = lineGrossPayableForCheckout(net, rate, true, ts)
+      out.push({ type: "product", total: gross * factor })
+    }
+    for (const l of membershipLines) {
+      if (!l.planId) continue
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const gross = lineGrossPayableForCheckout(net, mRate, true, ts)
+      out.push({ type: "membership", total: gross * factor })
+    }
+    for (const l of packageLines) {
+      if (!l.packageId) continue
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const gross = lineGrossPayableForCheckout(net, pRate, true, ts)
+      out.push({ type: "package", total: gross * factor })
+    }
+    for (const l of prepaidLines) {
+      if (!l.planId) continue
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const gross = lineGrossPayableForCheckout(net, prRate, true, ts)
+      out.push({ type: "prepaid_wallet", total: gross * factor })
+    }
+    return out
+  }, [
+    checkoutTaxSettings,
+    cartPricing.toPay,
+    checkoutCartDiscountType,
+    checkoutCartDiscountValue,
+    lines,
+    productLines,
+    membershipLines,
+    packageLines,
+    prepaidLines,
+    catalogServices,
+    catalogProducts,
+  ])
+
+  const paymentDialogPayCfg = useMemo(
+    () => mergePaymentConfiguration(checkoutPaymentConfiguration as any),
+    [checkoutPaymentConfiguration]
+  )
+
+  const paymentEligibleWalletSub = useMemo(() => {
+    if (paymentDialogPayCfg.billingRedemption.allowRedemptionInBilling === false) return 0
+    if (paymentDialogPayCfg.walletRedemption.enabled === false) return 0
+    return eligibleRedemptionSubtotal(serviceCheckoutRedemptionLines, paymentDialogPayCfg, "wallet")
+  }, [paymentDialogPayCfg, serviceCheckoutRedemptionLines])
+
+  const paymentEligibleRewardRounded = useMemo(() => {
+    if (paymentDialogPayCfg.billingRedemption.allowRedemptionInBilling === false) return 0
+    if (paymentDialogPayCfg.rewardPointRedemption.enabled === false) return 0
+    return Math.round(eligibleRedemptionSubtotal(serviceCheckoutRedemptionLines, paymentDialogPayCfg, "reward"))
+  }, [paymentDialogPayCfg, serviceCheckoutRedemptionLines])
+
+  const paymentBaseRounded = useMemo(() => Math.round(cartToPayAfterDiscount), [cartToPayAfterDiscount])
+  /** Cart subtotal (rounded) + tips; matches amount due before loyalty in payment sheet when points = 0. */
+  const cartToPayIncludingTips = paymentBaseRounded + checkoutTipTotal
+
+  const paymentLoyaltyPreview = useMemo(() => {
+    if (!paymentDialogRewardSettings?.enabled) {
+      return { ok: true as const, pointsToRedeem: 0, discountRupees: 0, error: undefined as string | undefined }
+    }
+    const cid = customer ? String(customer._id || customer.id || "") : ""
+    if (!cid || !isLikelyMongoObjectId(cid)) {
+      return { ok: true as const, pointsToRedeem: 0, discountRupees: 0, error: undefined as string | undefined }
+    }
+    const allowBill = paymentDialogPayCfg.billingRedemption.allowRedemptionInBilling !== false
+    const cap = allowBill ? paymentEligibleRewardRounded : paymentBaseRounded
+    return previewRedemptionLive(
+      paymentDialogRewardSettings,
+      cap,
+      payLoyaltyPoints,
+      paymentDialogLoyaltyBalance
     )
-    const productsSum = productLines.reduce(
-      (sum, l) =>
-        sum +
-        lineNetAfterLineDiscount(
-          Number(l.price) || 0,
-          Math.max(1, Math.floor(Number(l.quantity) || 1)),
-          l.discountValue,
-          l.discountIsPercent
-        ),
-      0
+  }, [
+    paymentDialogRewardSettings,
+    paymentDialogPayCfg,
+    paymentEligibleRewardRounded,
+    paymentBaseRounded,
+    payLoyaltyPoints,
+    paymentDialogLoyaltyBalance,
+    customer,
+  ])
+
+  const paymentDueAfterLoyalty = useMemo(() => {
+    const disc =
+      paymentLoyaltyPreview.ok && paymentLoyaltyPreview.discountRupees > 0
+        ? paymentLoyaltyPreview.discountRupees
+        : 0
+    return Math.max(0, paymentBaseRounded - disc) + checkoutTipTotal
+  }, [paymentBaseRounded, paymentLoyaltyPreview, checkoutTipTotal])
+
+  const paymentPayableAfterWallet = useMemo(
+    () => Math.max(0, paymentDueAfterLoyalty - payWallet),
+    [paymentDueAfterLoyalty, payWallet]
+  )
+
+  const paymentDialogStackWalletAndReward = useMemo(
+    () => paymentDialogPayCfg.billingRedemption.allowWalletAndPointsTogether !== false,
+    [paymentDialogPayCfg]
+  )
+
+  const paymentSelectedWalletRow = useMemo(() => {
+    if (!paySelectedWalletId || !paymentDialogWalletsRaw.length) return null
+    return (
+      paymentDialogWalletsRaw.find((w: any) => String(w._id) === String(paySelectedWalletId)) ?? null
     )
-    const membershipsSum = membershipLines.reduce(
-      (sum, l) =>
-        sum +
-        lineNetAfterLineDiscount(
-          Number(l.price) || 0,
-          Math.max(1, Math.floor(Number(l.quantity) || 1)),
-          l.discountValue,
-          l.discountIsPercent
-        ),
-      0
-    )
-    const packagesSum = packageLines.reduce(
-      (sum, l) =>
-        sum +
-        lineNetAfterLineDiscount(
-          Number(l.price) || 0,
-          Math.max(1, Math.floor(Number(l.quantity) || 1)),
-          l.discountValue,
-          l.discountIsPercent
-        ),
-      0
-    )
-    const prepaidSum = prepaidLines.reduce(
-      (sum, l) =>
-        sum +
-        lineNetAfterLineDiscount(
-          Number(l.price) || 0,
-          Math.max(1, Math.floor(Number(l.quantity) || 1)),
-          l.discountValue,
-          l.discountIsPercent
-        ),
-      0
-    )
-    return servicesSum + productsSum + membershipsSum + packagesSum + prepaidSum
-  }, [lines, productLines, membershipLines, packageLines, prepaidLines])
+  }, [paySelectedWalletId, paymentDialogWalletsRaw])
+
+  const paymentWalletRedemptionTileDisabled = useMemo(
+    () => !paymentDialogShowWallet || paymentDialogPayCfg.walletRedemption.enabled === false,
+    [paymentDialogShowWallet, paymentDialogPayCfg]
+  )
+
+  const paymentTotalTenderEntered = useMemo(
+    () => payCash + payCard + payOnline + payWallet,
+    [payCash, payCard, payOnline, payWallet]
+  )
+
+  const formatCheckoutInr = (amount: number) =>
+    amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })
+
+  /** True when a cart discount is already configured (amount or % on file, or non-zero applied). */
+  const hasCheckoutCartDiscount =
+    cartDiscountApplied > 0 || checkoutCartDiscountValue > 0
+
+  function openCartDiscountDialog() {
+    setCartDiscountDraftType(checkoutCartDiscountType)
+    const v = checkoutCartDiscountValue
+    if (v > 0) {
+      setCartDiscountDraft(String(v))
+    } else if (cartDiscountApplied > 0) {
+      setCartDiscountDraft(String(cartDiscountApplied))
+    } else {
+      setCartDiscountDraft("")
+    }
+    setCartDiscountDialogOpen(true)
+  }
 
   const cartHasAnyItem =
     lines.length > 0 ||
@@ -742,6 +1486,37 @@ export function ServiceCheckoutDialog({
       staffOptions[0]?.id ||
       ""
     )
+  }
+
+  function clearCheckoutExtras() {
+    setCheckoutTipLines([])
+    setCheckoutCartDiscountType("fixed")
+    setCheckoutCartDiscountValue(0)
+    setCheckoutSaleNote("")
+  }
+
+  function openTipDialog() {
+    const def = defaultStaffAcrossCart()
+    if (checkoutTipLines.length > 0) {
+      setTipDraftLines(cloneCheckoutTipLines(checkoutTipLines))
+    } else {
+      setTipDraftLines([
+        { id: `tip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, staffId: def, amount: 0 },
+      ])
+    }
+    setTipDialogOpen(true)
+  }
+
+  function commitTipDialog() {
+    const next = tipDraftLines
+      .map((l) => ({
+        id: l.id,
+        staffId: String(l.staffId || "").trim(),
+        amount: Math.max(0, Number(l.amount) || 0),
+      }))
+      .filter((l) => l.staffId && l.amount > 0)
+    setCheckoutTipLines(next)
+    setTipDialogOpen(false)
   }
 
   function addCatalogService(svc: any) {
@@ -992,10 +1767,10 @@ export function ServiceCheckoutDialog({
     )
   }
 
-  async function continueToPayment() {
+  function validateCheckoutBeforePayment(): boolean {
     if (!customer) {
       toast({ title: "Select a client", description: "Choose a client before checkout.", variant: "destructive" })
-      return
+      return false
     }
     const hasExtras =
       productLines.length > 0 ||
@@ -1008,18 +1783,18 @@ export function ServiceCheckoutDialog({
         description: "Add at least one service, product, or other item.",
         variant: "destructive",
       })
-      return
+      return false
     }
     if (lines.length > 0) {
       const missingStaff = lines.some((l) => l.serviceId && !l.staffId)
       if (missingStaff) {
         toast({ title: "Assign staff", description: "Every service needs a staff member.", variant: "destructive" })
-        return
+        return false
       }
       const missingService = lines.some((l) => !l.serviceId)
       if (missingService) {
         toast({ title: "Invalid line", description: "Remove empty service rows.", variant: "destructive" })
-        return
+        return false
       }
     }
     if (membershipLines.length > 0 && membershipLines.some((l) => l.planId && !l.staffId)) {
@@ -1028,7 +1803,7 @@ export function ServiceCheckoutDialog({
         description: "Every membership line needs a staff member.",
         variant: "destructive",
       })
-      return
+      return false
     }
     if (packageLines.length > 0 && packageLines.some((l) => l.packageId && !l.staffId)) {
       toast({
@@ -1036,7 +1811,7 @@ export function ServiceCheckoutDialog({
         description: "Every package line needs a staff member.",
         variant: "destructive",
       })
-      return
+      return false
     }
     if (prepaidLines.length > 0 && prepaidLines.some((l) => l.planId && !l.staffId)) {
       toast({
@@ -1044,8 +1819,246 @@ export function ServiceCheckoutDialog({
         description: "Every prepaid plan line needs a staff member.",
         variant: "destructive",
       })
+      return false
+    }
+    if (productLines.length > 0 && productLines.some((l) => l.productId && !l.staffId)) {
+      toast({
+        title: "Assign staff",
+        description: "Every product line needs a staff member.",
+        variant: "destructive",
+      })
+      return false
+    }
+    return true
+  }
+
+  useEffect(() => {
+    if (!paymentMethodDialogOpen || !customer) return
+    const cid = String(customer._id || customer.id || "")
+    const payCfg = mergePaymentConfiguration(checkoutPaymentConfiguration as any)
+    let cancelled = false
+    setPaymentMethodLoading(true)
+    setPayCash(0)
+    setPayCard(0)
+    setPayOnline(0)
+    setPayWallet(0)
+    setPayLoyaltyPoints(0)
+
+    void (async () => {
+      const allowBill = payCfg.billingRedemption.allowRedemptionInBilling !== false
+      const eligibleW =
+        allowBill && payCfg.walletRedemption.enabled !== false
+          ? eligibleRedemptionSubtotal(serviceCheckoutRedemptionLines, payCfg, "wallet")
+          : 0
+      const eligibleR =
+        allowBill && payCfg.rewardPointRedemption.enabled !== false
+          ? Math.round(eligibleRedemptionSubtotal(serviceCheckoutRedemptionLines, payCfg, "reward"))
+          : 0
+
+      let wallets: any[] = []
+      let walletBranchSettings: any = null
+      try {
+        const ws = await ClientWalletAPI.getSettings()
+        if (ws.success && ws.data) walletBranchSettings = ws.data
+      } catch {
+        walletBranchSettings = null
+      }
+      if (cid && isLikelyMongoObjectId(cid)) {
+        try {
+          const wres = await ClientWalletAPI.getClientWallets(cid)
+          if (wres.success && wres.data?.wallets) {
+            wallets = filterWalletsForQuickSaleDisplay(wres.data.wallets as any[])
+          }
+        } catch {
+          wallets = []
+        }
+      }
+      let walletsForUi = wallets
+      if (walletBranchSettings?.combineMultipleWallets && wallets.length > 1) {
+        walletsForUi = [buildCombinedQuickSaleWalletRow(wallets)]
+      }
+
+      let loyalty = 0
+      let rewardSettings: any = null
+      try {
+        const rs = await RewardPointsAPI.getSettings()
+        if (rs.success && rs.data) rewardSettings = rs.data
+      } catch {
+        rewardSettings = null
+      }
+      if (cid && isLikelyMongoObjectId(cid)) {
+        try {
+          const cres = await ClientsAPI.getById(cid)
+          if (cres.success && cres.data) loyalty = Number((cres.data as any).rewardPointsBalance) || 0
+        } catch {
+          loyalty = 0
+        }
+      }
+
+      const showWallet = walletsForUi.length > 0 && eligibleW > 0
+      const showReward =
+        !!rewardSettings?.enabled &&
+        loyalty > 0 &&
+        !!cid &&
+        isLikelyMongoObjectId(cid) &&
+        eligibleR > 0
+
+      const walletSum = wallets.reduce((s, w) => s + (Number(w.remainingBalance) || 0), 0)
+      if (cancelled) return
+      setPaymentDialogWalletsRaw(walletsForUi)
+      setPaymentDialogRewardSettings(rewardSettings)
+      setPaymentDialogLoyaltyBalance(loyalty)
+      setPaySelectedWalletId(walletsForUi.length ? String(walletsForUi[0]._id) : "")
+      setPaymentDialogShowWallet(showWallet)
+      setPaymentDialogShowReward(showReward)
+      setPaymentDialogWalletBalanceText(
+        showWallet
+          ? `Balance ≈ ₹${walletSum.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`
+          : ""
+      )
+      setPaymentDialogRewardBalanceText(
+        showReward ? `${loyalty.toLocaleString("en-IN")} pts available` : ""
+      )
+      setPaymentMethodLoading(false)
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [paymentMethodDialogOpen, customer, serviceCheckoutRedemptionLines, checkoutPaymentConfiguration])
+
+  function continueToPayment() {
+    if (!validateCheckoutBeforePayment()) return
+    setPaymentMethodDialogOpen(true)
+  }
+
+  async function confirmPaymentMethodAndContinue(opts?: { skipPartialConfirm?: boolean }) {
+    const due = paymentDueAfterLoyalty
+    const cash = Math.max(0, Number(payCash) || 0)
+    const card = Math.max(0, Number(payCard) || 0)
+    const online = Math.max(0, Number(payOnline) || 0)
+    const wallet = Math.max(0, Number(payWallet) || 0)
+    const pts = Math.max(0, Math.floor(Number(payLoyaltyPoints) || 0))
+
+    if (!paymentDialogStackWalletAndReward && wallet > 1e-6 && pts > 0) {
+      toast({
+        title: "Wallet and points",
+        description: "This location does not allow combining wallet redemption with reward points on one bill.",
+        variant: "destructive",
+      })
       return
     }
+
+    if (pts > 0 && paymentDialogShowReward) {
+      if (!paymentLoyaltyPreview.ok) {
+        toast({
+          title: "Invalid reward points",
+          description: paymentLoyaltyPreview.error || "Adjust points or remove them to continue.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
+    if (wallet > 0) {
+      if (!paymentDialogShowWallet) {
+        toast({
+          title: "Wallet not available",
+          description: "Wallet payment isn't offered for this cart.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (!paySelectedWalletId) {
+        toast({
+          title: "Select a wallet",
+          description: "Choose which prepaid wallet to debit.",
+          variant: "destructive",
+        })
+        return
+      }
+      const wSel = paymentDialogWalletsRaw.find((x: any) => String(x._id) === String(paySelectedWalletId))
+      if (!wSel) {
+        toast({
+          title: "Wallet unavailable",
+          description: "The selected wallet is no longer available.",
+          variant: "destructive",
+        })
+        return
+      }
+      const bal = Number(wSel.remainingBalance) || 0
+      if (wallet > bal + 1e-6) {
+        toast({
+          title: "Wallet over balance",
+          description: `This wallet has ₹${formatCheckoutInr(bal)} left.`,
+          variant: "destructive",
+        })
+        return
+      }
+      const maxWalletForBill = Math.min(due, paymentEligibleWalletSub)
+      if (wallet > maxWalletForBill + 1e-6) {
+        toast({
+          title: "Wallet limit",
+          description: `Up to ₹${formatCheckoutInr(maxWalletForBill)} from wallet applies to this bill.`,
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
+    const totalPaid = cash + card + online + wallet
+
+    if (due <= 0.01) {
+      if (totalPaid > 0.05) {
+        toast({
+          title: "Nothing to collect",
+          description: "Reward discount covers this amount due. Clear cash, card, online, and wallet fields.",
+          variant: "destructive",
+        })
+        return
+      }
+    } else {
+      if (totalPaid < 0.005) {
+        toast({
+          title: "No payment entered",
+          description: "Enter at least one tender amount for this bill, or reduce reward points if the client pays nothing now.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (totalPaid > due + 0.05) {
+        toast({
+          title: "Overpaid",
+          description: "Total paid is more than the amount due. Adjust tender amounts.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
+    const isPartialPayment = due > 0.01 && totalPaid + 0.02 < due
+    if (isPartialPayment && opts?.skipPartialConfirm !== true) {
+      setCheckoutPartialPaymentConfirmAck(false)
+      setCheckoutPartialPaymentConfirmOpen(true)
+      return
+    }
+
+    const preferred = deriveCheckoutPreferredPaymentMethod({
+      cash,
+      card,
+      online,
+      wallet,
+      loyaltyPoints: pts,
+    })
+    const tenderSplit: ServiceCheckoutTenderSplit = {
+      cashAmount: cash,
+      cardAmount: card,
+      onlineAmount: online,
+      walletPayAmount: wallet,
+      loyaltyPointsInput: pts,
+      selectedWalletId: String(paySelectedWalletId || "").trim(),
+    }
+
     setNavigating(true)
     try {
       if (persistedDraftRef.current) {
@@ -1054,14 +2067,38 @@ export function ServiceCheckoutDialog({
       }
       setHasPersistedDraft(false)
       dispatchServiceCheckoutDraftChanged()
+
+      let ensuredBooking: EnsureAppointmentBookingResult | null = null
+      if (
+        !isEditMode &&
+        lines.length > 0 &&
+        typeof ensureAppointmentBookingBeforeCheckout === "function"
+      ) {
+        const linkResult = await ensureAppointmentBookingBeforeCheckout({
+          lines,
+          customer: customer!,
+          appointmentDate,
+          appointmentTime,
+          notes,
+        })
+        if (!linkResult) {
+          setNavigating(false)
+          return
+        }
+        ensuredBooking = linkResult
+      }
+
       const saleData: Record<string, unknown> = {
-        clientId: customer._id || customer.id,
-        clientName: customer.name,
-        clientPhone: customer.phone || "",
-        clientEmail: customer.email || "",
+        clientId: customer!._id || customer!.id,
+        clientName: customer!.name,
+        clientPhone: customer!.phone || "",
+        clientEmail: customer!.email || "",
         date: appointmentDate ? format(appointmentDate, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
         time: appointmentTime || "",
-        notes: notes || "",
+        /** Quick Sale opens in payment-only mode; cart/discounts/tips are final from checkout. */
+        appointmentPricingFinalized: true,
+        checkoutPreferredPaymentMethod: preferred,
+        notes: [notes?.trim(), checkoutSaleNote.trim()].filter(Boolean).join("\n\n") || "",
         services: lines.map((s) => {
           const sid = String(s.staffId || "")
           const q = serviceLineQuantity(s)
@@ -1143,8 +2180,29 @@ export function ServiceCheckoutDialog({
               }),
             }
           : {}),
+        ...(checkoutTipLines.filter((t) => t.staffId && t.amount > 0).length > 0
+          ? {
+              checkoutTips: checkoutTipLines
+                .filter((t) => t.staffId && t.amount > 0)
+                .map((t) => ({ staffId: t.staffId, amount: Math.max(0, Number(t.amount) || 0) })),
+            }
+          : {}),
+        ...(checkoutCartDiscountType === "fixed" && cartDiscountApplied > 0
+          ? { cartDiscountFixed: cartDiscountApplied }
+          : {}),
+        ...(checkoutCartDiscountType === "percentage" && checkoutCartDiscountValue > 0
+          ? {
+              cartDiscountPercent: Math.min(100, Math.max(0, checkoutCartDiscountValue)),
+            }
+          : {}),
       }
-      if (isEditMode && appointmentId) {
+      if (ensuredBooking) {
+        saleData.appointmentId = ensuredBooking.appointmentId
+        saleData.linkedAppointmentIds = ensuredBooking.linkedAppointmentIds
+        if (ensuredBooking.bookingGroupId) {
+          saleData.bookingGroupId = ensuredBooking.bookingGroupId
+        }
+      } else if (isEditMode && appointmentId) {
         saleData.appointmentId = appointmentId
         if (existingGroupAppointmentIds?.length > 0) {
           saleData.linkedAppointmentIds = existingGroupAppointmentIds
@@ -1153,6 +2211,67 @@ export function ServiceCheckoutDialog({
           saleData.bookingGroupId = existingBookingGroupId
         }
       }
+      setPaymentMethodDialogOpen(false)
+
+      if (!checkoutTaxSettings) {
+        toast({
+          title: "Settings still loading",
+          description: "Wait a moment, then try payment again.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      const staffMerged: any[] = (() => {
+        const m = new Map<string, any>()
+        for (const s of staff || []) {
+          const id = String(s._id || s.id)
+          if (id) m.set(id, s)
+        }
+        for (const s of saleStaffCatalog || []) {
+          const id = String(s._id || s.id)
+          if (id) m.set(id, s)
+        }
+        return Array.from(m.values())
+      })()
+
+      const inlineResult = await completeServiceCheckoutInline({
+        saleData,
+        paymentMethod: preferred,
+        tenderSplit,
+        customer: customer!,
+        staff: staffMerged,
+        catalogServices,
+        catalogProducts,
+        catalogMembershipPlans,
+        catalogPackages,
+        catalogPrepaidPlans,
+        checkoutTaxSettings,
+        checkoutPaymentConfiguration,
+      })
+
+      if (inlineResult.ok) {
+        const remaining = Math.max(0, due - totalPaid)
+        toast(
+          isPartialPayment
+            ? {
+                title: "Partial payment recorded",
+                description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} balance remains on this bill.`,
+              }
+            : {
+                title: "Bill created",
+                description: `${inlineResult.billNo} was saved successfully.`,
+              }
+        )
+        onOpenChange(false)
+        onSuccessfulCheckout?.()
+        return
+      }
+
+      toast({
+        title: "Finishing in Quick Sale",
+        description: inlineResult.error || "Opening Quick Sale to complete the bill.",
+      })
       router.push(`/quick-sale?appointment=${btoa(JSON.stringify(saleData))}`)
       onOpenChange(false)
     } finally {
@@ -1181,6 +2300,10 @@ export function ServiceCheckoutDialog({
       membershipLines: cloneMembershipLines(membershipLines),
       packageLines: clonePackageLines(packageLines),
       prepaidLines: clonePrepaidLines(prepaidLines),
+      checkoutTipLines: cloneCheckoutTipLines(checkoutTipLines),
+      checkoutCartDiscountType,
+      checkoutCartDiscountValue,
+      checkoutSaleNote,
       savedAt: new Date().toISOString(),
     })
     persistedDraftRef.current = draftRef
@@ -1208,10 +2331,32 @@ export function ServiceCheckoutDialog({
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
     setPackageLines(clonePackageLines(packageSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
+    clearCheckoutExtras()
     setCancelDraftDialogOpen(false)
     toast({
       title: "Draft canceled",
       description: "Add-on items were removed from the cart. Booked services are unchanged.",
+    })
+  }
+
+  function applyCancelSale() {
+    if (persistedDraftRef.current) {
+      clearServiceCheckoutDraftByRef(persistedDraftRef.current)
+      persistedDraftRef.current = null
+    }
+    dispatchServiceCheckoutDraftChanged()
+    setHasPersistedDraft(false)
+    setLines(cloneLines(snapshotRef.current))
+    setProductLines(cloneProductLines(productSnapshotRef.current))
+    setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
+    setPackageLines(clonePackageLines(packageSnapshotRef.current))
+    setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
+    clearCheckoutExtras()
+    setCancelSaleDialogOpen(false)
+    onOpenChange(false)
+    toast({
+      title: "Sale cancelled",
+      description: "The checkout was closed and your cart was reset to the booking.",
     })
   }
 
@@ -1229,6 +2374,29 @@ export function ServiceCheckoutDialog({
   }, [customer?.totalSpent, customer?.totalVisits])
 
   const clientProfileId = customer?._id || customer?.id
+  const showClientActionsMenu = Boolean(clientProfileId) || Boolean(onCustomerChange)
+
+  const pickCheckoutClient = useCallback(
+    async (c: Client) => {
+      if (!onCustomerChange) return
+      const nextId = String(c._id || c.id || "")
+      const curId = String(customer?._id || customer?.id || "")
+      if (nextId && curId && nextId === curId) {
+        setChangeClientOpen(false)
+        return
+      }
+      setChangingClient(true)
+      try {
+        await onCustomerChange(c)
+        setChangeClientOpen(false)
+        setChangeClientQuery("")
+        setChangeClientResults([])
+      } finally {
+        setChangingClient(false)
+      }
+    },
+    [onCustomerChange, customer]
+  )
 
   const editingServiceLine = editingServiceLineId
     ? lines.find((l) => l.id === editingServiceLineId)
@@ -1398,6 +2566,10 @@ export function ServiceCheckoutDialog({
     variant === "drawer" && "z-[110]"
   )
   const draftDropdownContentClass = cn(variant === "drawer" && "z-[110]")
+  /** Payment sheet (z-220) — poppers must clear the sheet panel and overlay (z-210). */
+  const paymentSheetSelectContentClass = "z-[225]"
+  /** Dialogs in checkout extras (tip, etc.) use z-[200]; Radix Select popper copies inner computed z-index onto its wrapper — must exceed dialog. */
+  const checkoutModalSelectContentClass = "!z-[9999]"
 
   const mainColumns = (
         <div
@@ -1823,13 +2995,6 @@ export function ServiceCheckoutDialog({
                 : "w-full min-h-[280px] md:min-h-0 md:w-[420px]"
             )}
           >
-            {variant === "drawer" ? (
-              <div className="shrink-0 px-3 py-2 border-b border-border/50 bg-white/70">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Cart & client
-                </p>
-              </div>
-            ) : null}
             <div className="p-4 border-b border-border/60 space-y-3 shrink-0">
               <div className="flex gap-3">
                 <div className="min-w-0 flex-1 space-y-0.5">
@@ -1857,18 +3022,39 @@ export function ServiceCheckoutDialog({
                   ))}
                 </div>
               ) : null}
-              {clientProfileId ? (
+              {showClientActionsMenu ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="w-full justify-between rounded-lg text-xs">
+                    <Button
+                      variant="outline"
+                      className="h-7 rounded-full px-3 text-[11px] font-medium gap-1 w-fit shrink-0 border-border/70 shadow-none hover:bg-muted/60"
+                    >
                       Actions
-                      <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                      <ChevronDown className="h-3 w-3 opacity-60 shrink-0" aria-hidden />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuItem onSelect={() => router.push(`/clients/${clientProfileId}`)}>
-                      View client profile
-                    </DropdownMenuItem>
+                  <DropdownMenuContent align="end" className="w-52">
+                    {clientProfileId ? (
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          setClientDetailsDrawerOpen(true)
+                        }}
+                      >
+                        View client profile
+                      </DropdownMenuItem>
+                    ) : null}
+                    {clientProfileId && onCustomerChange ? <DropdownMenuSeparator /> : null}
+                    {onCustomerChange ? (
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          setChangeClientQuery("")
+                          setChangeClientResults([])
+                          setChangeClientOpen(true)
+                        }}
+                      >
+                        Change client profile
+                      </DropdownMenuItem>
+                    ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : null}
@@ -1998,18 +3184,23 @@ export function ServiceCheckoutDialog({
                               discountValue={discVal}
                               discountIsPercent={discIsPct}
                               onDiscountValueChange={(v) =>
-                                patchServiceLine(line.id, { discountValue: v })
+                                patchServiceLine(line.id, {
+                                  discountValue: v,
+                                  membershipAutoDiscount: false,
+                                })
                               }
                               onSetPercentMode={() =>
                                 patchServiceLine(line.id, {
                                   discountIsPercent: true,
                                   discountValue: 0,
+                                  membershipAutoDiscount: false,
                                 })
                               }
                               onSetFixedMode={() =>
                                 patchServiceLine(line.id, {
                                   discountIsPercent: false,
                                   discountValue: 0,
+                                  membershipAutoDiscount: false,
                                 })
                               }
                             />
@@ -2663,15 +3854,173 @@ export function ServiceCheckoutDialog({
               </div>
             </ScrollArea>
 
-            <div className="p-4 border-t border-border/60 space-y-3 shrink-0 bg-muted/10">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Total</span>
-                <span className="font-semibold text-foreground">₹{subtotal}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">To pay</span>
-                <span className="font-bold text-foreground text-base">₹{subtotal}</span>
-              </div>
+            <div className="space-y-3 shrink-0 bg-muted/10 p-4 pt-2">
+              <Collapsible open={cartBreakdownOpen} onOpenChange={setCartBreakdownOpen}>
+                <div className="space-y-2">
+                  {cartBreakdownOpen ? (
+                    <div className="relative flex items-center justify-center pb-2 pt-1">
+                      <div
+                        className="pointer-events-none absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-border/60"
+                        aria-hidden
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="relative z-10 h-7 w-7 shrink-0 rounded-full border-border/80 bg-background shadow-sm"
+                        aria-expanded={cartBreakdownOpen}
+                        aria-label="Hide payment breakdown"
+                        onClick={() => setCartBreakdownOpen(false)}
+                      >
+                        <ChevronDown
+                          className="h-3.5 w-3.5 text-muted-foreground"
+                          aria-hidden
+                        />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="border-t border-border/60 pt-3" aria-hidden />
+                  )}
+
+                  {!cartBreakdownOpen ? (
+                    <>
+                      {membershipDiscountPreTaxRupees > 0.01 ? (
+                        <>
+                          <div className="flex items-center justify-between text-sm">
+                            <span
+                              className="text-muted-foreground"
+                              title="Sum of line amounts before GST; membership benefit not applied on services where applicable."
+                            >
+                              Total amount (Excl. GST)
+                            </span>
+                            <span className="tabular-nums text-muted-foreground">
+                              ₹{formatCheckoutInr(cartPricing.subtotalPreTaxExclMembership)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">Membership Discount</span>
+                            <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                              −₹{formatCheckoutInr(membershipDiscountPreTaxRupees)}
+                            </span>
+                          </div>
+                        </>
+                      ) : null}
+                      <div className="flex items-center justify-between text-sm">
+                        <span
+                          className="text-muted-foreground"
+                          title="Inclusive of GST. Before cart discount only."
+                        >
+                          {cartDiscountApplied > 0 ? "Due (incl. GST, before cart)" : "Total (incl. GST)"}
+                        </span>
+                        <span className="tabular-nums text-muted-foreground">
+                          ₹{formatCheckoutInr(cartToPay)}
+                        </span>
+                      </div>
+                      {cartDiscountApplied > 0 ? (
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Cart Discount</span>
+                          <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                            −₹{formatCheckoutInr(cartDiscountApplied)}
+                          </span>
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 rounded-md text-left text-base font-bold text-foreground outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-expanded={false}
+                        aria-label="Show payment breakdown"
+                        onClick={() => setCartBreakdownOpen(true)}
+                      >
+                        <span className="inline-flex items-center gap-0.5">
+                          To pay
+                          <ChevronRight
+                            className="h-4 w-4 shrink-0 font-normal text-muted-foreground"
+                            aria-hidden
+                          />
+                        </span>
+                        <span className="tabular-nums">₹{formatCheckoutInr(cartToPayIncludingTips)}</span>
+                      </button>
+                    </>
+                  ) : null}
+
+                  <CollapsibleContent className="space-y-2 data-[state=closed]:animate-none">
+                    <div className="flex items-center justify-between text-sm">
+                      <span
+                        className="text-muted-foreground"
+                        title="Sum of line amounts before GST; membership benefit not applied on services where applicable."
+                      >
+                        Total amount (Excl. GST)
+                      </span>
+                      <span className="tabular-nums text-muted-foreground">
+                        ₹{formatCheckoutInr(cartPricing.subtotalPreTaxExclMembership)}
+                      </span>
+                    </div>
+                    {membershipDiscountPreTaxRupees > 0.01 ? (
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">Membership Discount</span>
+                        <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                          −₹{formatCheckoutInr(membershipDiscountPreTaxRupees)}
+                        </span>
+                      </div>
+                    ) : null}
+                    {cartDiscountApplied > 0 ? (
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">
+                          Cart Discount
+                          {checkoutCartDiscountType === "percentage" && checkoutCartDiscountValue > 0
+                            ? ` (${Math.min(100, checkoutCartDiscountValue)}%)`
+                            : null}
+                        </span>
+                        <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                          −₹{formatCheckoutInr(cartDiscountApplied)}
+                        </span>
+                      </div>
+                    ) : null}
+                    <div className="flex items-center justify-between text-sm">
+                      <span
+                        className="text-muted-foreground"
+                        title="After membership, cart, and line discounts. Excludes GST — see Tax below."
+                      >
+                        Subtotal
+                      </span>
+                      <span className="tabular-nums text-muted-foreground">
+                        ₹{formatCheckoutInr(cartPreTaxBaseAfterCartDiscount)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Tax</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        ₹{formatCheckoutInr(cartTaxAfterCartDiscount)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm font-semibold text-foreground">
+                      <span>Total</span>
+                      <span className="tabular-nums">₹{formatCheckoutInr(cartToPayAfterDiscount)}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openTipDialog()}
+                      className="flex w-full items-center justify-between gap-2 rounded-md py-0.5 text-left text-sm outline-none ring-offset-background transition-colors hover:bg-violet-50 focus-visible:ring-2 focus-visible:ring-violet-300/80 dark:hover:bg-violet-950/40"
+                      aria-label="Edit tips"
+                      title="Edit tips"
+                    >
+                      <span className="font-medium text-violet-700 dark:text-violet-300">Tips</span>
+                      <span className="tabular-nums font-medium text-violet-800 dark:text-violet-200">
+                        ₹{formatCheckoutInr(checkoutTipTotal)}
+                      </span>
+                    </button>
+                  </CollapsibleContent>
+
+                  {cartBreakdownOpen ? (
+                    <div className="border-t border-border/60 pt-2">
+                      <div className="flex items-center justify-between text-base font-bold text-foreground">
+                        <span>To pay</span>
+                        <span className="tabular-nums">₹{formatCheckoutInr(cartToPayIncludingTips)}</span>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </Collapsible>
               <div className="flex items-center gap-2">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -2686,13 +4035,43 @@ export function ServiceCheckoutDialog({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" side="top" className={draftDropdownContentClass}>
+                    {checkoutTipTotal < 0.01 ? (
+                      <DropdownMenuItem
+                        onSelect={(e) => {
+                          e.preventDefault()
+                          openTipDialog()
+                        }}
+                      >
+                        <Coins className="mr-2 h-4 w-4 shrink-0" aria-hidden />
+                        Add tip
+                      </DropdownMenuItem>
+                    ) : null}
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault()
+                        openCartDiscountDialog()
+                      }}
+                    >
+                      <Percent className="mr-2 h-4 w-4 shrink-0" aria-hidden />
+                      {hasCheckoutCartDiscount ? "Edit cart discount" : "Add cart discount"}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault()
+                        setSaleNoteDraft(checkoutSaleNote)
+                        setSaleNoteDialogOpen(true)
+                      }}
+                    >
+                      Add sale note
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onSelect={(e) => {
                         e.preventDefault()
                         saveCheckoutDraft()
                       }}
                     >
-                      Save Draft
+                      Save draft
                     </DropdownMenuItem>
                     {hasPersistedDraft ? (
                       <DropdownMenuItem
@@ -2702,9 +4081,18 @@ export function ServiceCheckoutDialog({
                           setCancelDraftDialogOpen(true)
                         }}
                       >
-                        Cancel Draft
+                        Cancel draft
                       </DropdownMenuItem>
                     ) : null}
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onSelect={(e) => {
+                        e.preventDefault()
+                        setCancelSaleDialogOpen(true)
+                      }}
+                    >
+                      Cancel sale
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <Button
@@ -2762,6 +4150,788 @@ export function ServiceCheckoutDialog({
     </AlertDialog>
   )
 
+  const changeClientDialog = (
+    <Dialog
+      open={changeClientOpen}
+      onOpenChange={(next) => {
+        setChangeClientOpen(next)
+        if (!next) {
+          setChangeClientQuery("")
+          setChangeClientResults([])
+        }
+      }}
+    >
+      <DialogContent
+        className="z-[200] gap-4 sm:max-w-md max-h-[min(90vh,520px)] flex flex-col"
+        overlayClassName="z-[190]"
+        aria-describedby={undefined}
+      >
+        <DialogHeader>
+          <DialogTitle className="text-base font-semibold tracking-tight">Change client profile</DialogTitle>
+          <DialogDescription>
+            Search by name, phone, or email, then select the client this checkout should use.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex min-h-0 flex-1 flex-col space-y-3">
+          <div className="relative shrink-0">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <Input
+              className="rounded-lg pl-9"
+              placeholder="Search clients…"
+              value={changeClientQuery}
+              onChange={(e) => setChangeClientQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <ScrollArea className="max-h-[280px] min-h-0 rounded-lg border border-border/70">
+            <div className="p-1">
+              {changeClientSearching ? (
+                <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden />
+                  Searching…
+                </div>
+              ) : changeClientQuery.trim().length < 2 ? (
+                <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  Type at least 2 characters to search.
+                </p>
+              ) : changeClientResults.length === 0 ? (
+                <p className="px-3 py-6 text-center text-sm text-muted-foreground">No clients found.</p>
+              ) : (
+                changeClientResults.map((c) => {
+                  const id = String(c._id || c.id || "")
+                  return (
+                    <button
+                      key={id || c.name}
+                      type="button"
+                      disabled={changingClient}
+                      className="w-full rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/80 disabled:pointer-events-none disabled:opacity-50"
+                      onClick={() => void pickCheckoutClient(c)}
+                    >
+                      <span className="block truncate font-medium text-foreground">{c.name || "Client"}</span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {c.phone || c.email || "—"}
+                      </span>
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          </ScrollArea>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setChangeClientOpen(false)}
+            disabled={changingClient}
+          >
+            Cancel
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
+  const paymentMethodDialog = (
+    <Sheet
+      open={paymentMethodDialogOpen}
+      onOpenChange={(next) => {
+        if (navigating) return
+        setPaymentMethodDialogOpen(next)
+      }}
+    >
+      <SheetContent
+        side="right"
+        overlayClassName="z-[210]"
+        className={cn(
+          "flex h-full w-full max-h-[100dvh] flex-col gap-0 border-l border-border/70 p-0 shadow-xl",
+          "z-[220] overflow-hidden sm:max-w-lg",
+          variant === "drawer" && "rounded-none"
+        )}
+        aria-describedby={undefined}
+      >
+        <SheetHeader className="shrink-0 space-y-0 border-b border-border/60 px-6 py-4 pr-14 text-left">
+          <SheetTitle className="text-base font-semibold tracking-tight">Payment Method</SheetTitle>
+        </SheetHeader>
+        {paymentMethodLoading ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-sm text-muted-foreground">
+            <Loader2 className="h-8 w-8 animate-spin shrink-0" aria-hidden />
+            Loading payment options…
+          </div>
+        ) : (
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="space-y-4 px-6 py-4">
+            {paymentDialogShowWallet && paymentDialogWalletsRaw.length > 1 ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Wallet</Label>
+                <Select
+                  value={paySelectedWalletId || undefined}
+                  onValueChange={(v) => {
+                    setPaySelectedWalletId(v)
+                    setPayWallet(0)
+                  }}
+                >
+                  <SelectTrigger className="h-9 rounded-lg">
+                    <SelectValue placeholder="Select wallet" />
+                  </SelectTrigger>
+                  <SelectContent position="popper" className={paymentSheetSelectContentClass}>
+                    {paymentDialogWalletsRaw.map((w: any) => (
+                      <SelectItem key={String(w._id)} value={String(w._id)}>
+                        {(w.planSnapshot && w.planSnapshot.planName) || "Wallet"} — ₹
+                        {Number(w.remainingBalance || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}{" "}
+                        left
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+
+            {paymentDialogShowWallet || paymentDialogShowReward ? (
+              <div className="flex flex-row flex-nowrap items-stretch gap-3">
+                {paymentDialogShowWallet && paySelectedWalletId ? (
+                  <div
+                    role="button"
+                    tabIndex={paymentWalletRedemptionTileDisabled ? -1 : 0}
+                    onClick={() => {
+                      if (paymentWalletRedemptionTileDisabled) return
+                      const w = paymentSelectedWalletRow
+                      if (!w) return
+                      setPayWallet(
+                        Math.min(
+                          Number(w.remainingBalance) || 0,
+                          Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
+                        )
+                      )
+                    }}
+                    onKeyDown={(e) => {
+                      if (paymentWalletRedemptionTileDisabled) return
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        const w = paymentSelectedWalletRow
+                        if (!w) return
+                        setPayWallet(
+                          Math.min(
+                            Number(w.remainingBalance) || 0,
+                            Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
+                          )
+                        )
+                      }
+                    }}
+                    className={cn(
+                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
+                      paymentWalletRedemptionTileDisabled
+                        ? "cursor-not-allowed border-cyan-200/55 bg-cyan-50/15 opacity-50"
+                        : cn(
+                            "cursor-pointer",
+                            payWallet > 0
+                              ? "border-cyan-300/70 bg-cyan-50/35 hover:bg-cyan-50/50"
+                              : "border-cyan-200/65 bg-cyan-50/20 hover:bg-cyan-50/35"
+                          )
+                    )}
+                  >
+                    <span className="text-sm font-semibold text-cyan-800">Wallet (₹)</span>
+                    {paymentDialogWalletBalanceText ? (
+                      <span className="text-[11px] text-cyan-900/80">{paymentDialogWalletBalanceText}</span>
+                    ) : null}
+                    <Input
+                      type="number"
+                      value={payWallet || ""}
+                      onChange={(e) => setPayWallet(Math.max(0, Number(e.target.value) || 0))}
+                      onFocus={(e) => e.target.select()}
+                      onClick={(e) => e.stopPropagation()}
+                      min={0}
+                      disabled={paymentWalletRedemptionTileDisabled}
+                      className="h-8 w-full rounded-lg border-cyan-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-cyan-400/85 focus:ring-cyan-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      style={{ textAlign: "center" }}
+                      placeholder="0"
+                    />
+                  </div>
+                ) : null}
+                {paymentDialogShowReward && paymentDialogRewardSettings ? (
+                  <div
+                    className={cn(
+                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
+                      paymentDialogPayCfg.rewardPointRedemption.enabled === false
+                        ? "border-rose-200/55 bg-rose-50/15 opacity-50"
+                        : payLoyaltyPoints > 0
+                          ? "border-rose-300/70 bg-rose-50/35 hover:bg-rose-50/45"
+                          : "border-rose-200/65 bg-rose-50/20 hover:bg-rose-50/32"
+                    )}
+                  >
+                    <span className="text-sm font-semibold text-slate-900">Points</span>
+                    {paymentDialogLoyaltyBalance >= (paymentDialogRewardSettings.minRedeemPoints || 0) ? (
+                      <Input
+                        type="number"
+                        min={0}
+                        step={paymentDialogRewardSettings.redeemPointsStep || 1}
+                        value={payLoyaltyPoints || ""}
+                        onChange={(e) =>
+                          setPayLoyaltyPoints(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                        }
+                        onFocus={(e) => e.target.select()}
+                        className="h-8 w-full rounded-lg border-rose-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-rose-400/85 focus:ring-rose-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        style={{ textAlign: "center" }}
+                        placeholder="0"
+                        title={`Balance ${paymentDialogLoyaltyBalance}, step ${paymentDialogRewardSettings.redeemPointsStep || 1}`}
+                        aria-label={`Reward points to redeem. Balance ${paymentDialogLoyaltyBalance}`}
+                        disabled={paymentDialogPayCfg.rewardPointRedemption.enabled === false}
+                      />
+                    ) : (
+                      <p className="px-1 text-center text-xs leading-snug text-muted-foreground">
+                        Need {paymentDialogRewardSettings.minRedeemPoints || 0}+ pts (have{" "}
+                        {paymentDialogLoyaltyBalance})
+                      </p>
+                    )}
+                    {paymentDialogRewardBalanceText ? (
+                      <span className="text-[11px] text-rose-900/80">{paymentDialogRewardBalanceText}</span>
+                    ) : null}
+                    {!paymentLoyaltyPreview.ok && payLoyaltyPoints > 0 && paymentLoyaltyPreview.error ? (
+                      <p className="text-center text-xs text-red-600">{paymentLoyaltyPreview.error}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-3 gap-3">
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayCash(paymentPayableAfterWallet)
+                  setPayCard(0)
+                  setPayOnline(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayCash(paymentPayableAfterWallet)
+                    setPayCard(0)
+                    setPayOnline(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payCash > 0
+                    ? "border-green-400 bg-green-200 hover:bg-green-300"
+                    : "border-green-200 bg-green-50/50 hover:bg-green-50"
+                )}
+              >
+                <span className="text-sm font-medium text-green-700">Cash</span>
+                <Input
+                  type="number"
+                  value={payCash || ""}
+                  onChange={(e) => setPayCash(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-green-300 text-center text-sm [appearance:textfield] focus:border-green-400 focus:ring-green-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayCard(paymentPayableAfterWallet)
+                  setPayCash(0)
+                  setPayOnline(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayCard(paymentPayableAfterWallet)
+                    setPayCash(0)
+                    setPayOnline(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payCard > 0
+                    ? "border-blue-400 bg-blue-200 hover:bg-blue-300"
+                    : "border-blue-200 bg-blue-50/50 hover:bg-blue-50"
+                )}
+              >
+                <span className="text-sm font-medium text-blue-700">Card</span>
+                <Input
+                  type="number"
+                  value={payCard || ""}
+                  onChange={(e) => setPayCard(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-blue-300 text-center text-sm [appearance:textfield] focus:border-blue-400 focus:ring-blue-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayOnline(paymentPayableAfterWallet)
+                  setPayCash(0)
+                  setPayCard(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayOnline(paymentPayableAfterWallet)
+                    setPayCash(0)
+                    setPayCard(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payOnline > 0
+                    ? "border-purple-400 bg-purple-200 hover:bg-purple-300"
+                    : "border-purple-200 bg-purple-50/50 hover:bg-purple-50"
+                )}
+              >
+                <span className="text-sm font-medium text-purple-700">Online</span>
+                <Input
+                  type="number"
+                  value={payOnline || ""}
+                  onChange={(e) => setPayOnline(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-purple-300 text-center text-sm [appearance:textfield] focus:border-purple-400 focus:ring-purple-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-emerald-800">Total paid</span>
+                <span className="font-bold tabular-nums text-emerald-700">
+                  ₹{formatCheckoutInr(paymentTotalTenderEntered)}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-800/90">
+                <span>vs amount due</span>
+                <span className="tabular-nums">₹{formatCheckoutInr(paymentDueAfterLoyalty)}</span>
+              </div>
+              {paymentDueAfterLoyalty > 0.01 ? (
+                <p className="mt-1.5 text-xs text-emerald-900/80">
+                  {paymentTotalTenderEntered > paymentDueAfterLoyalty + 0.05
+                    ? `Over by ₹${formatCheckoutInr(paymentTotalTenderEntered - paymentDueAfterLoyalty)}`
+                    : paymentTotalTenderEntered + 0.02 < paymentDueAfterLoyalty
+                      ? `Partial payment: ₹${formatCheckoutInr(
+                          paymentDueAfterLoyalty - paymentTotalTenderEntered
+                        )} will stay due on the bill.`
+                      : "Full amount collected for this bill."}
+                </p>
+              ) : (
+                <p className="mt-1.5 text-xs text-emerald-900/80">
+                  No cash tender needed if reward covers the full amount due.
+                </p>
+              )}
+            </div>
+            </div>
+          </ScrollArea>
+        )}
+        <SheetFooter className="shrink-0 gap-2 border-t border-border/60 px-6 py-4 sm:flex-row sm:justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setPaymentMethodDialogOpen(false)}
+            disabled={navigating}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            className="bg-violet-600 hover:bg-violet-700 text-white"
+            disabled={navigating || paymentMethodLoading}
+            onClick={() => void confirmPaymentMethodAndContinue()}
+          >
+            {navigating ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" aria-hidden />
+                Saving…
+              </>
+            ) : (
+              "Complete billing"
+            )}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+
+  const checkoutPartialPaymentConfirmDialog = (
+    <Dialog
+      open={checkoutPartialPaymentConfirmOpen}
+      onOpenChange={(next) => {
+        if (navigating) return
+        setCheckoutPartialPaymentConfirmOpen(next)
+        if (!next) setCheckoutPartialPaymentConfirmAck(false)
+      }}
+    >
+      <DialogContent
+        className="z-[240] gap-4 sm:max-w-md"
+        overlayClassName="z-[230]"
+        aria-describedby={undefined}
+      >
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-orange-600" aria-hidden />
+            Payment confirmation required
+          </DialogTitle>
+          <DialogDescription>
+            Please review the payment details before proceeding with checkout.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <h4 className="mb-3 font-medium text-slate-800">Payment summary</h4>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between gap-4">
+                <span>Bill total</span>
+                <span className="font-medium tabular-nums">₹{formatCheckoutInr(paymentDueAfterLoyalty)}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span>Amount paid</span>
+                <span className="font-medium tabular-nums text-green-600">
+                  ₹{formatCheckoutInr(paymentTotalTenderEntered)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-4 border-t border-slate-200 pt-2">
+                <span className="font-semibold">Remaining</span>
+                <span className="font-bold tabular-nums text-red-600">
+                  ₹
+                  {formatCheckoutInr(
+                    Math.max(0, paymentDueAfterLoyalty - paymentTotalTenderEntered)
+                  )}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-orange-600" aria-hidden />
+              <span className="font-medium text-orange-800">Important notice</span>
+            </div>
+            <p className="text-sm text-orange-700">
+              This will create a partially paid bill. Customer owes ₹
+              {formatCheckoutInr(Math.max(0, paymentDueAfterLoyalty - paymentTotalTenderEntered))} more.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="svc-checkout-partial-confirm"
+              checked={checkoutPartialPaymentConfirmAck}
+              onCheckedChange={(v) => setCheckoutPartialPaymentConfirmAck(v === true)}
+              className="border-orange-400 data-[state=checked]:border-orange-600 data-[state=checked]:bg-orange-600"
+            />
+            <Label
+              htmlFor="svc-checkout-partial-confirm"
+              className="cursor-pointer text-sm font-normal text-orange-700 leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+            >
+              I confirm this partially paid bill
+            </Label>
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setCheckoutPartialPaymentConfirmOpen(false)}
+            disabled={navigating}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={!checkoutPartialPaymentConfirmAck || navigating || paymentMethodLoading}
+            className="bg-orange-600 text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => {
+              if (!checkoutPartialPaymentConfirmAck) {
+                toast({
+                  title: "Confirmation required",
+                  description: "Please confirm the partially paid bill before continuing.",
+                  variant: "destructive",
+                })
+                return
+              }
+              setCheckoutPartialPaymentConfirmOpen(false)
+              setCheckoutPartialPaymentConfirmAck(false)
+              void confirmPaymentMethodAndContinue({ skipPartialConfirm: true })
+            }}
+          >
+            Confirm & Collect
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
+  const checkoutExtrasDialogs = (
+    <>
+      <Dialog open={tipDialogOpen} onOpenChange={setTipDialogOpen}>
+        <DialogContent
+          className="z-[200] gap-4 w-[calc(100vw-2rem)] sm:max-w-[36rem]"
+          overlayClassName="z-[190]"
+          aria-describedby={undefined}
+        >
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold tracking-tight">Add tip</DialogTitle>
+            <DialogDescription>
+              Choose staff and enter tip amounts. Totals carry through to Quick Sale payment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[min(60vh,360px)] space-y-3 overflow-y-auto pr-1">
+            {staffOptions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No staff available for tipping.</p>
+            ) : null}
+            {tipDraftLines.map((row) => (
+              <div key={row.id} className="flex flex-wrap items-end gap-2">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Staff</Label>
+                  <Select
+                    value={row.staffId || undefined}
+                    onValueChange={(v) =>
+                      setTipDraftLines((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, staffId: v } : r))
+                      )
+                    }
+                    disabled={staffOptions.length === 0}
+                  >
+                    <SelectTrigger className="h-9 rounded-lg">
+                      <SelectValue placeholder="Select staff" />
+                    </SelectTrigger>
+                    <SelectContent
+                      position="popper"
+                      className={cn(checkoutModalSelectContentClass, "max-h-[min(24rem,70vh)]")}
+                      style={{ zIndex: 9999 }}
+                    >
+                      {staffOptions.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[7.5rem] space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Amount (₹)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    className="h-9 rounded-lg"
+                    value={row.amount > 0 ? row.amount : ""}
+                    placeholder="0"
+                    onChange={(e) => {
+                      const n = Math.max(0, parseFloat(e.target.value) || 0)
+                      setTipDraftLines((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, amount: n } : r))
+                      )
+                    }}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 text-destructive hover:text-destructive"
+                  aria-label="Remove tip row"
+                  disabled={tipDraftLines.length <= 1}
+                  onClick={() =>
+                    setTipDraftLines((prev) =>
+                      prev.length <= 1 ? prev : prev.filter((r) => r.id !== row.id)
+                    )
+                  }
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full rounded-lg"
+            disabled={staffOptions.length === 0}
+            onClick={() =>
+              setTipDraftLines((prev) => [
+                ...prev,
+                {
+                  id: `tip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                  staffId: defaultStaffAcrossCart(),
+                  amount: 0,
+                },
+              ])
+            }
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            Add staff
+          </Button>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setTipDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={commitTipDialog}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cartDiscountDialogOpen} onOpenChange={setCartDiscountDialogOpen}>
+        <DialogContent
+          className="z-[200] gap-4 sm:max-w-sm"
+          overlayClassName="z-[190]"
+          aria-describedby={undefined}
+        >
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold tracking-tight">
+              {hasCheckoutCartDiscount ? "Edit cart discount" : "Add cart discount"}
+            </DialogTitle>
+            <DialogDescription>
+              {hasCheckoutCartDiscount
+                ? "Update the fixed amount or percent off the total. Quick Sale will recalculate tax on checkout."
+                : "Apply a fixed amount off the total, or a percent off the pre-payment total. Quick Sale will recalculate tax on checkout."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex gap-1 rounded-lg border border-border/80 bg-muted/30 p-0.5">
+              <Button
+                type="button"
+                variant={cartDiscountDraftType === "fixed" ? "default" : "ghost"}
+                size="sm"
+                className="flex-1 rounded-md"
+                onClick={() => setCartDiscountDraftType("fixed")}
+              >
+                Amount
+              </Button>
+              <Button
+                type="button"
+                variant={cartDiscountDraftType === "percentage" ? "default" : "ghost"}
+                size="sm"
+                className="flex-1 rounded-md"
+                onClick={() => setCartDiscountDraftType("percentage")}
+              >
+                Percent
+              </Button>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="checkout-cart-discount">
+                {cartDiscountDraftType === "fixed" ? "Amount (₹)" : "Percent (%)"}
+              </Label>
+              <Input
+                id="checkout-cart-discount"
+                type="number"
+                min={0}
+                max={cartDiscountDraftType === "percentage" ? 100 : undefined}
+                step={cartDiscountDraftType === "percentage" ? 0.1 : 0.01}
+                value={cartDiscountDraft}
+                onChange={(e) => setCartDiscountDraft(e.target.value)}
+                className="rounded-lg"
+                placeholder="0"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setCartDiscountDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const raw = Math.max(0, parseFloat(cartDiscountDraft) || 0)
+                const toPay = Math.max(0, cartPricing.toPay)
+                if (cartDiscountDraftType === "percentage") {
+                  const pct = Math.min(100, raw)
+                  setCheckoutCartDiscountType("percentage")
+                  setCheckoutCartDiscountValue(pct)
+                  setCartDiscountDialogOpen(false)
+                } else {
+                  const capped = Math.min(raw, toPay)
+                  setCheckoutCartDiscountType("fixed")
+                  setCheckoutCartDiscountValue(capped)
+                  setCartDiscountDialogOpen(false)
+                }
+              }}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={saleNoteDialogOpen} onOpenChange={setSaleNoteDialogOpen}>
+        <DialogContent
+          className="z-[200] gap-4 sm:max-w-md"
+          overlayClassName="z-[190]"
+          aria-describedby={undefined}
+        >
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold tracking-tight">Sale note</DialogTitle>
+            <DialogDescription>
+              Appears with appointment notes on the bill in Quick Sale.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={saleNoteDraft}
+            onChange={(e) => setSaleNoteDraft(e.target.value)}
+            rows={4}
+            className="min-h-[100px] resize-none rounded-lg"
+            placeholder="Optional note for this sale…"
+          />
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setSaleNoteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setCheckoutSaleNote(saleNoteDraft.trim())
+                setSaleNoteDialogOpen(false)
+                toast({
+                  title: "Note saved",
+                  description: saleNoteDraft.trim()
+                    ? "Included when you continue to payment."
+                    : "Sale note cleared.",
+                })
+              }}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={cancelSaleDialogOpen} onOpenChange={setCancelSaleDialogOpen}>
+        <AlertDialogContent className="z-[200]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel sale?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This closes checkout, resets the cart to the booking, clears tip, cart discount, and sale note, and
+              removes any saved draft for this session.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:gap-0">
+            <AlertDialogCancel>Go back</AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => applyCancelSale()}
+            >
+              Cancel sale
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  )
+
   if (variant === "drawer") {
     if (!open) return null
     return (
@@ -2778,7 +4948,17 @@ export function ServiceCheckoutDialog({
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">{mainColumns}</div>
         </div>
         {serviceLineEditDialog}
+        {changeClientDialog}
         {cancelDraftConfirmDialog}
+        {paymentMethodDialog}
+        {checkoutPartialPaymentConfirmDialog}
+        {checkoutExtrasDialogs}
+        <ClientDetailsDrawer
+          open={clientDetailsDrawerOpen}
+          onOpenChange={setClientDetailsDrawerOpen}
+          client={customer}
+          stackAboveAncestorChrome
+        />
       </>
     )
   }
@@ -2802,7 +4982,17 @@ export function ServiceCheckoutDialog({
         </DialogContent>
       </Dialog>
       {serviceLineEditDialog}
+      {changeClientDialog}
       {cancelDraftConfirmDialog}
+      {paymentMethodDialog}
+      {checkoutPartialPaymentConfirmDialog}
+      {checkoutExtrasDialogs}
+      <ClientDetailsDrawer
+        open={clientDetailsDrawerOpen}
+        onOpenChange={setClientDetailsDrawerOpen}
+        client={customer}
+        stackAboveAncestorChrome
+      />
     </>
   )
 }

@@ -7,6 +7,7 @@ import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
+import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 import { Card, CardContent } from "@/components/ui/card"
 import { useCurrency } from "@/hooks/use-currency"
 
@@ -234,12 +235,13 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
               })()}
             </>
           )}
-          {receipt.tip > 0 && (
-            <div className="flex justify-between">
-              <span>{receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-              <span>{formatAmount(receipt.tip)}</span>
-            </div>
-          )}
+          {receipt.tip > 0 &&
+            receiptTipDisplayLines(receipt).map((line, i) => (
+              <div key={i} className="flex justify-between">
+                <span>{line.staffName ? `Tip (${line.staffName}):` : "Tip:"}</span>
+                <span>{formatAmount(line.amount)}</span>
+              </div>
+            ))}
           {receipt.roundOff && Math.abs(receipt.roundOff) > 0.01 && (
             <div className="flex justify-between">
               <span>Round Off:</span>
