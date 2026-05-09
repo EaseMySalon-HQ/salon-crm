@@ -12,6 +12,7 @@ const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
 const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString, parseSupplierPaymentDateInput } = require('./utils/date-utils');
+const { billChangeCreditedToWalletCashAddition } = require('./utils/bill-change-wallet-cash');
 const { supplierPayableReferenceLabel: formatSupplierPayableBillRef } = require('./utils/supplier-payable-reference-label');
 const {
   buildSalesListMatch,
@@ -4714,7 +4715,7 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
 app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Product, InventoryTransaction } = req.businessModels;
-    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
+    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit, imageUrl } = req.body;
 
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
@@ -4728,6 +4729,8 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
           : 'Name, category, price, and stock are required'
       });
     }
+
+    const imageUrlTrimmed = typeof imageUrl === 'string' ? imageUrl.trim() : '';
 
     const costVal = cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined;
     const newProduct = new Product({
@@ -4748,7 +4751,8 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
       taxCategory: taxCategory || 'standard',
       productType: productType || 'retail',
       isActive: true,
-      branchId: req.user.branchId
+      branchId: req.user.branchId,
+      ...(imageUrlTrimmed ? { imageUrl: imageUrlTrimmed } : {})
     });
 
     const savedProduct = await newProduct.save();
@@ -4793,7 +4797,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
   try {
     
     const { Product, InventoryTransaction } = req.businessModels;
-    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, isActive, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
+    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, isActive, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit, imageUrl } = req.body;
 
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
@@ -4807,6 +4811,8 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
           : 'Name, category, price, and stock are required'
       });
     }
+
+    const imageUrlTrimmed = typeof imageUrl === 'string' ? imageUrl.trim() : undefined;
 
     // Get current product to compare stock levels
     const currentProduct = await Product.findById(req.params.id);
@@ -4841,6 +4847,10 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
       productType: productType || 'retail',
       isActive: isActive !== undefined ? isActive : true,
     };
+
+    if (imageUrlTrimmed !== undefined) {
+      updateData.imageUrl = imageUrlTrimmed;
+    }
     
     // Add minimumStock if provided (handle empty string, null, and undefined)
     if (minimumStock !== undefined && minimumStock !== null && minimumStock !== '') {
@@ -8643,7 +8653,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
-    let query = {};
+    let query = { branchId: req.user.branchId };
 
     if (date) {
       query.date = date;
@@ -10064,7 +10074,7 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
   try {
     const { id } = req.params;
     const { Appointment } = req.businessModels;
-    const raw = await Appointment.findById(id).lean();
+    const raw = await Appointment.findOne({ _id: id, branchId: req.user.branchId }).lean();
     if (!raw) {
       return res.status(404).json({ success: false, error: 'Appointment not found' });
     }
@@ -10083,6 +10093,7 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     if (raw.bookingGroupId) {
       relatedRaw = await Appointment.find({
         bookingGroupId: raw.bookingGroupId,
+        branchId: req.user.branchId,
         _id: { $ne: id },
         status: { $ne: 'cancelled' }
       }).lean();
@@ -11094,6 +11105,9 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+      totalSalesCash += walletCashAdd;
+      cashAmt += walletCashAdd;
       if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;
@@ -15073,6 +15087,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
             isAllCash = true;
           }
         }
+        cashAmt += billChangeCreditedToWalletCashAddition(sale);
         const tip = sale.tip || 0;
         cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
       });

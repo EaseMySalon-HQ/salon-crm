@@ -6,6 +6,7 @@ const Sale = require('../models/Sale');
 const Expense = require('../models/Expense');
 const { authenticateToken: auth } = require('../middleware/auth');
 const { parseDateIST, getStartOfDayIST, getEndOfDayIST } = require('../utils/date-utils');
+const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
 
 // Test endpoint to verify connection (no auth for testing) - MUST BE FIRST
 router.get('/test', (req, res) => {
@@ -212,6 +213,7 @@ router.post('/', auth, async (req, res) => {
             isAllCash = true;
           }
         }
+        cashAmt += billChangeCreditedToWalletCashAddition(sale);
         const tip = sale.tip || 0;
         cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
       });

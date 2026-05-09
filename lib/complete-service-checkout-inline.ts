@@ -32,8 +32,8 @@ import {
   isLikelyMongoObjectId,
   filterWalletsForQuickSaleDisplay,
   pickDefaultClientWalletId,
+  pickWalletIdForChangeCredit,
   buildCombinedQuickSaleWalletRow,
-  walletExpiryEndMs,
 } from "@/lib/quick-sale-helpers"
 
 export type ServiceCheckoutTaxSettings = {
@@ -61,16 +61,6 @@ function addonLineTaxableBase(unitPrice: number, quantity: number, discountPerce
   const q = Math.max(1, Math.floor(Number(quantity) || 1))
   const disc = Math.min(100, Math.max(0, Number(discountPercent) || 0))
   return unitPrice * q * (1 - disc / 100)
-}
-
-function pickWalletIdForChangeCredit(usableWallets: any[], selectedWalletId: string): string | null {
-  if (!usableWallets?.length) return null
-  if (selectedWalletId) {
-    const hit = usableWallets.find((w) => String(w._id) === String(selectedWalletId))
-    if (hit) return String(hit._id)
-  }
-  const sorted = [...usableWallets].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
-  return sorted[0] ? String(sorted[0]._id) : null
 }
 
 function computeLineTotalAndTax(
@@ -675,6 +665,8 @@ export async function completeServiceCheckoutInline(opts: {
   catalogPrepaidPlans: any[]
   checkoutTaxSettings: ServiceCheckoutTaxSettings
   checkoutPaymentConfiguration: unknown
+  /** After staff confirms in UI: credit cash overpayment to prepaid (cash-only tenders; server enforces). */
+  creditBillChangeToWallet?: boolean
 }): Promise<CompleteServiceCheckoutInlineResult> {
   const {
     saleData: appointmentData,
@@ -689,6 +681,7 @@ export async function completeServiceCheckoutInline(opts: {
     catalogPrepaidPlans,
     checkoutTaxSettings: ts,
     checkoutPaymentConfiguration: payRaw,
+    creditBillChangeToWallet: creditBillChangeOpt,
   } = opts
 
   const paymentMethod: CheckoutPaymentMethodChoice = paymentMethodOpt ?? "cash"
@@ -988,7 +981,14 @@ export async function completeServiceCheckoutInline(opts: {
     }
 
     const totalPaid = cashAmount + cardAmount + onlineAmount + walletPayAmount
-    /** Allow partial billing: any positive tender up to the bill total is accepted (overpay still blocked below). */
+    const PAY_EPS = 0.01
+    const isCashOnlyCheckout =
+      cashAmount >= PAY_EPS &&
+      Math.abs(cardAmount) < PAY_EPS &&
+      Math.abs(onlineAmount) < PAY_EPS &&
+      Math.abs(walletPayAmount) < PAY_EPS
+
+    /** Allow partial billing: any positive tender up to the bill total is accepted (overpay handled below). */
     if (roundedTotal > 0.01 && totalPaid < 0.005) {
       return {
         ok: false,
@@ -1033,7 +1033,27 @@ export async function completeServiceCheckoutInline(opts: {
       return { ok: false, error: "Reward redemption is disabled in payment configuration." }
     }
 
-    const creditChangeEffective = false
+    const wantBillChangeCredit = creditBillChangeOpt === true
+    const creditChangeEffective =
+      wantBillChangeCredit && isCashOnlyCheckout && totalPaid > roundedTotal + 1e-6
+
+    if (creditChangeEffective && (!cid || !isLikelyMongoObjectId(cid))) {
+      return {
+        ok: false,
+        error: "Select a saved customer to credit change to the prepaid wallet.",
+      }
+    }
+
+    if (creditChangeEffective && clientWalletsUsable.length > 0) {
+      const widPick = pickWalletIdForChangeCredit(clientWalletsUsable, selectedWalletId)
+      if (!widPick) {
+        return {
+          ok: false,
+          error: "Could not pick a wallet for the credit. Refresh and try again.",
+        }
+      }
+    }
+
     const { payments, changeToCredit, recordedPaidTotal } = buildRecordedPaymentsForCheckout({
       cashAmount,
       cardAmount,
@@ -1043,14 +1063,32 @@ export async function completeServiceCheckoutInline(opts: {
       creditOverpaymentToWallet: creditChangeEffective,
     })
 
-    if (creditChangeEffective && totalPaid > saleDueTotal + 1e-6 && Math.abs(recordedPaidTotal - saleDueTotal) > 0.02) {
-      return { ok: false, error: "Change credit is only supported from Quick Sale for this payment mix." }
+    if (
+      creditChangeEffective &&
+      totalPaid > saleDueTotal + 1e-6 &&
+      Math.abs(recordedPaidTotal - saleDueTotal) > 0.02
+    ) {
+      return {
+        ok: false,
+        error:
+          "The overpayment must be reducible from cash, card, or online — not from prepaid wallet redemption. Lower the wallet amount on the bill or pay the exact total.",
+      }
     }
 
     if (totalPaid > roundedTotal + 0.05) {
-      return {
-        ok: false,
-        error: "Overpayment: adjust tender amounts or complete the bill from Quick Sale to credit change.",
+      if (!creditChangeEffective) {
+        if (!isCashOnlyCheckout) {
+          return {
+            ok: false,
+            error:
+              "Change can be credited to prepaid only when the bill is paid entirely in cash. Remove card, online, or wallet payment, or reduce tender amounts to match the bill total.",
+          }
+        }
+        return {
+          ok: false,
+          error:
+            "Total paid exceeds the amount due. Reduce cash to the bill total, or confirm crediting the change to the prepaid wallet.",
+        }
       }
     }
 

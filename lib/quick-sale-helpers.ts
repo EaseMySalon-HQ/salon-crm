@@ -161,6 +161,17 @@ export function pickDefaultClientWalletId(wallets: any[]): string {
   return String(sorted[0]._id)
 }
 
+/** Credit bill change / overpayment to prepaid: prefer selected wallet when usable, else soonest-expiring. */
+export function pickWalletIdForChangeCredit(usableWallets: any[], selectedWalletId: string): string | null {
+  if (!usableWallets?.length) return null
+  if (selectedWalletId) {
+    const hit = usableWallets.find((w) => String(w._id) === String(selectedWalletId))
+    if (hit) return String(hit._id)
+  }
+  const sorted = [...usableWallets].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
+  return sorted[0] ? String(sorted[0]._id) : null
+}
+
 /** Single display row for combined-wallet mode; redeem still uses primary _id + server FIFO. */
 export function buildCombinedQuickSaleWalletRow(usable: any[]) {
   const sorted = [...usable].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))

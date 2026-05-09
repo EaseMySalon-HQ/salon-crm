@@ -3,6 +3,7 @@ const emailService = require('../services/email-service');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
+const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
 
 /**
  * Send daily summary emails to all businesses
@@ -114,6 +115,9 @@ async function sendDailySummaries() {
             else if (s.paymentMode === 'Online') totalSalesOnline += amt;
             else if (s.paymentMode === 'Card') totalSalesCard += amt;
           }
+          const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+          totalSalesCash += walletCashAdd;
+          cashAmt += walletCashAdd;
           if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
         });
         // 7. Dues collected (payments recorded today via paymentHistory)
