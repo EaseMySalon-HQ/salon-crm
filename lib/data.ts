@@ -20,6 +20,12 @@ export interface Service {
   price: number
   description?: string
   isActive: boolean
+  serviceKind?: "simple" | "bundle"
+  bundleItems?: Array<{ serviceId: string; sortOrder?: number }>
+  bundleScheduleType?: "sequence" | "parallel"
+  bundlePricingType?: "full_price" | "custom" | "percent_discount" | "free"
+  bundlePercentOff?: number
+  bundleRetailPrice?: number
 }
 
 export interface Product {
