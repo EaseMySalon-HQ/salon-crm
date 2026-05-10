@@ -123,6 +123,7 @@ import {
   billNotesForCustomerDisplay,
   pickWalletIdForChangeCredit,
 } from "@/lib/quick-sale-helpers"
+import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import type { ClientWalletLedgerRow } from "@/lib/client-wallet-ledger"
 import { flattenClientWalletLedger, walletActivityStatusDisplay } from "@/lib/client-wallet-ledger"
 
@@ -239,6 +240,8 @@ interface ServiceItem {
   isPackageRedemption?: boolean
   /** Prefilled from appointment (Raise Sale / Continue to payment) — only qty, price, discount editable */
   appointmentLineLocked?: boolean
+  /** Expanded from a catalog bundle — membership free / plan % off does not apply */
+  fromBundle?: boolean
 }
 
 interface ProductItem {
@@ -728,46 +731,105 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
 
     if (type === "service") {
-      const basePrice = item.price || 0
-      let discount = 0
-      let total = basePrice
-      let isMembershipFree = false
-      let membershipDiscountPercent = 0
+      const expanded = isBundleService(item) ? expandBundleToLines(item, services) : null
+      if (isBundleService(item) && (!expanded || expanded.length === 0)) {
+        toast({
+          title: "Bundle error",
+          description: "Could not expand bundle services. Refresh and try again.",
+          variant: "destructive",
+        })
+        setServiceDropdownSearch("")
+        return
+      }
 
-      if (membershipData?.plan && membershipData?.usageSummary) {
-        const svcId = String(item._id || item.id)
-        const usage = membershipData.usageSummary.find((u: any) => String(u.serviceId || u.serviceId?._id) === svcId)
-        const plan = membershipData.plan
-        if (usage && usage.remaining > 0) {
-          discount = 100
-          total = 0
-          isMembershipFree = true
-          membershipDiscountPercent = 100
-        } else if (plan?.discountPercentage > 0) {
-          discount = plan.discountPercentage
-          membershipDiscountPercent = plan.discountPercentage
-          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-          const applyTax = item.taxApplicable && taxSettings?.enableTax !== false
-          total = computeLineTotalAndTaxForAdd(basePrice, discount, serviceTaxRate, applyTax)
+      const lines =
+        expanded && expanded.length > 0
+          ? expanded.map((line) => {
+              const child = services.find((s) => String(s._id || s.id) === line.serviceId)
+              return {
+                serviceId: line.serviceId,
+                name: line.name,
+                duration: line.duration,
+                price: line.price,
+                taxApplicable: child?.taxApplicable,
+              }
+            })
+          : [
+              {
+                serviceId: String(item._id || item.id),
+                name: item.name || "Service",
+                duration: Number(item.duration) || 0,
+                price: item.price || 0,
+                taxApplicable: item.taxApplicable,
+              },
+            ]
+
+      setServiceItems((prev) => {
+        const priceInclusiveOfTaxInner = paymentSettings?.priceInclusiveOfTax !== false
+        const computeLineTotalAndTaxForAddInner = (
+          baseAmount: number,
+          discountPct: number,
+          taxRate: number,
+          applyTax: boolean
+        ): number => {
+          const discountedAmount = baseAmount * (1 - (discountPct || 0) / 100)
+          if (!applyTax) return discountedAmount
+          if (priceInclusiveOfTaxInner) return discountedAmount
+          return discountedAmount + (discountedAmount * taxRate) / 100
         }
-      } else {
-        const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const applyTax = item.taxApplicable && taxSettings?.enableTax !== false
-        total = computeLineTotalAndTaxForAdd(basePrice, 0, serviceTaxRate, applyTax)
-      }
 
-      const newItem: ServiceItem = {
-        id: Date.now().toString(),
-        serviceId: item._id || item.id,
-        staffId: "",
-        quantity: 1,
-        price: basePrice,
-        discount,
-        total,
-        isMembershipFree,
-        membershipDiscountPercent,
-      }
-      setServiceItems([...serviceItems, newItem])
+        const ts = Date.now()
+        const next = [...prev]
+        const skipMembership = !!(expanded && expanded.length > 0)
+        for (let i = 0; i < lines.length; i++) {
+          const row = lines[i]
+          const basePrice = row.price || 0
+          let discount = 0
+          let isMembershipFree = false
+          let membershipDiscountPercent = 0
+          let total: number
+          const applyTaxRow = row.taxApplicable && taxSettings?.enableTax !== false
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+
+          if (skipMembership) {
+            total = computeLineTotalAndTaxForAddInner(basePrice, 0, serviceTaxRate, applyTaxRow)
+          } else if (membershipData?.plan && membershipData?.usageSummary) {
+            const svcId = String(row.serviceId)
+            const usage = membershipData.usageSummary.find(
+              (u: any) => String(u.serviceId || u.serviceId?._id) === svcId
+            )
+            const plan = membershipData.plan
+            if (usage && usage.remaining > 0) {
+              discount = 100
+              total = 0
+              isMembershipFree = true
+              membershipDiscountPercent = 100
+            } else if (plan?.discountPercentage > 0) {
+              discount = plan.discountPercentage
+              membershipDiscountPercent = plan.discountPercentage
+              total = computeLineTotalAndTaxForAddInner(basePrice, discount, serviceTaxRate, applyTaxRow)
+            } else {
+              total = computeLineTotalAndTaxForAddInner(basePrice, 0, serviceTaxRate, applyTaxRow)
+            }
+          } else {
+            total = computeLineTotalAndTaxForAddInner(basePrice, 0, serviceTaxRate, applyTaxRow)
+          }
+
+          next.push({
+            id: `${ts}-${i}-${Math.random().toString(36).slice(2, 9)}`,
+            serviceId: row.serviceId,
+            staffId: "",
+            quantity: 1,
+            price: basePrice,
+            discount,
+            total,
+            isMembershipFree,
+            membershipDiscountPercent,
+            ...(skipMembership ? { fromBundle: true as const } : {}),
+          })
+        }
+        return next
+      })
     } else if (type === "product") {
       const basePrice = item.price || 0
       const productForTax = products.find((p) => (p._id || p.id) === (item._id || item.id)) || item
@@ -2520,6 +2582,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               membershipDiscountPercent: 0,
             }
           }
+          if (item.fromBundle) {
+            const baseAmount = item.price * item.quantity
+            const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+            const applyTax = isServiceTaxable(item)
+            const { total } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, serviceTaxRate, applyTax)
+            return {
+              ...item,
+              total,
+              isMembershipFree: false,
+              membershipDiscountPercent: 0,
+            }
+          }
           if (!item.serviceId || (!item.isMembershipFree && (item.membershipDiscountPercent ?? 0) === 0)) return item
           const service = services.find((s) => (s._id || s.id) === item.serviceId)
           const basePrice = service?.price ?? item.price
@@ -3342,6 +3416,111 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     console.log('Service ID:', id)
     console.log('Field:', field)
     console.log('Value:', value)
+
+    // Bundle expansion (same as appointment form + addToCart): one row becomes N child service lines.
+    if (field === "serviceId" && value) {
+      const chosenCatalog = services.find((s) => String(s._id || s.id) === String(value))
+      if (chosenCatalog && isBundleService(chosenCatalog)) {
+        setServiceItems((items) => {
+          const idx = items.findIndex((i) => i.id === id)
+          if (idx < 0) return items
+          const template = items[idx]
+          if (template.appointmentLineLocked) {
+            if (appointmentPricingFinalized) return items
+            return items
+          }
+          const expanded = expandBundleToLines(chosenCatalog, services)
+          if (expanded.length === 0) {
+            toast({
+              title: "Bundle error",
+              description: "Could not expand bundle services. Refresh and try again.",
+              variant: "destructive",
+            })
+            return items
+          }
+          const rowData = expanded.map((line) => {
+            const child = services.find((s) => String(s._id || s.id) === line.serviceId)
+            return {
+              serviceId: line.serviceId,
+              price: line.price,
+              taxApplicable: child?.taxApplicable,
+            }
+          })
+          const priceInclusiveInner = paymentSettings?.priceInclusiveOfTax !== false
+          const computeLineTotalForExpand = (
+            baseAmount: number,
+            discountPct: number,
+            taxRate: number,
+            applyTax: boolean
+          ): number => {
+            const discountedAmount = baseAmount * (1 - (discountPct || 0) / 100)
+            if (!applyTax) return discountedAmount
+            if (priceInclusiveInner) return discountedAmount
+            return discountedAmount + (discountedAmount * taxRate) / 100
+          }
+          const ts = Date.now()
+          const newRows: ServiceItem[] = rowData.map((row, i) => {
+            const basePrice = row.price || 0
+
+            if (template.isPackageRedemption) {
+              const catalogPrice =
+                services.find((s) => String(s._id || s.id) === row.serviceId)?.price ?? basePrice
+              const baseAmount = catalogPrice * 1
+              const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+              const draft: ServiceItem = {
+                id: `${ts}-${i}-${Math.random().toString(36).slice(2, 9)}`,
+                serviceId: row.serviceId,
+                staffId: template.staffId,
+                staffContributions: template.staffContributions
+                  ? template.staffContributions.map((c) => ({ ...c }))
+                  : [],
+                quantity: 1,
+                price: catalogPrice,
+                discount: 100,
+                total: 0,
+                isMembershipFree: false,
+                membershipDiscountPercent: 0,
+                appointmentLineLocked: template.appointmentLineLocked,
+                isPackageRedemption: true,
+                fromBundle: true,
+              }
+              const applyTax = isServiceTaxable(draft)
+              const { total: t } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
+              draft.total = t
+              return draft
+            }
+
+            const applyTaxRow = row.taxApplicable && taxSettings?.enableTax !== false
+            const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+            const total = computeLineTotalForExpand(basePrice * 1, 0, serviceTaxRate, applyTaxRow)
+
+            return {
+              id: `${ts}-${i}-${Math.random().toString(36).slice(2, 9)}`,
+              serviceId: row.serviceId,
+              staffId: template.staffId,
+              staffContributions: template.staffContributions
+                ? template.staffContributions.map((c) => ({ ...c }))
+                : [],
+              quantity: 1,
+              price: basePrice,
+              discount: 0,
+              total,
+              isMembershipFree: false,
+              membershipDiscountPercent: 0,
+              appointmentLineLocked: template.appointmentLineLocked,
+              isPackageRedemption: false,
+              fromBundle: true,
+            }
+          })
+          return [...items.slice(0, idx), ...newRows, ...items.slice(idx + 1)]
+        })
+        setServiceDropdownSearch("")
+        setActiveServiceDropdown(null)
+        setTimeout(() => recalculateDiscounts(), 0)
+        return
+      }
+    }
+
     setServiceItems((items) =>
       items.map((item) => {
         if (item.id === id) {
@@ -3352,6 +3531,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             }
           }
           const updatedItem = { ...item, [field]: value }
+          if (field === "serviceId") {
+            updatedItem.fromBundle = false
+          }
 
           // Auto-fill price when service is selected (Price = base cost, Disc = membership discount %, Total = after discount)
           if (field === "serviceId" && value) {
@@ -3651,6 +3833,25 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
     return items.map((item) => {
       if (!item.serviceId) return item
+      if (item.fromBundle) {
+        const basePrice = item.price
+        const qty = Number(item.quantity)
+        const q = Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 1
+        const baseAmount = basePrice * q
+        const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+        const applyTax = isServiceTaxable(item)
+        const disc = item.discount ?? 0
+        const { total } = computeLineTotalAndTax(baseAmount, disc, serviceTaxRate, applyTax)
+        return {
+          ...item,
+          quantity: q,
+          price: basePrice,
+          discount: disc,
+          total,
+          isMembershipFree: false,
+          membershipDiscountPercent: 0,
+        }
+      }
       if (item.isPackageRedemption) {
         const service = services.find((s) => (s._id || s.id) === item.serviceId)
         const basePrice = service?.price ?? item.price
@@ -5446,13 +5647,19 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           changeToCredit > 0.005 && {
             billChangeCreditedToWallet: changeToCredit,
           }),
-          ...(mode === "create" && raiseSaleLinkageVoided
+          ...(mode === "create"
             ? {
+                // Quick Sale bills are walk-ins only: never create synthetic walk-in calendar rows
+                // (multi-staff standalone sale). Real bookings still complete via appointmentId above.
                 suppressStandaloneWalkInCalendarCards: true,
-                voidBookingAppointmentIds: resolveAppointmentIdsToComplete(
-                  linkedAppointmentIds,
-                  linkedAppointmentId
-                ),
+                ...(raiseSaleLinkageVoided
+                  ? {
+                      voidBookingAppointmentIds: resolveAppointmentIdsToComplete(
+                        linkedAppointmentIds,
+                        linkedAppointmentId
+                      ),
+                    }
+                  : {}),
               }
             : {}),
         }

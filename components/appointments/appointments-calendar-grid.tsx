@@ -5,7 +5,21 @@ import { createPortal } from "react-dom"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { ChevronDown, Clock, Square, Pencil, Eye, Trash2, List, Calendar, AlertCircle, Heart, Ban, X } from "lucide-react"
+import {
+  AlertCircle,
+  Ban,
+  Calendar,
+  ChevronDown,
+  Clock,
+  Eye,
+  Heart,
+  List,
+  Loader2,
+  Pencil,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
@@ -22,12 +36,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI } from "@/lib/api"
+import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI, SettingsAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { resolveCreatedByDisplay } from "@/lib/utils"
 import { formatAmountWithSymbol } from "@/lib/currency"
 import { BlockTimeModal, getBlockReasonIcon } from "@/components/appointments/block-time-modal"
 import { useToast } from "@/hooks/use-toast"
+import { ReceiptPreview } from "@/components/receipts/receipt-preview"
+import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
+import type { Receipt } from "@/lib/data"
 import {
   getServiceDisplayNames,
   getAppointmentTotalDurationGrid as getTotalDuration,
@@ -138,6 +155,10 @@ function blockAppliesOnDate(block: BlockTime, dateStr: string): boolean {
 const SLOT_MINUTES = 5
 const slotHeight_COMPACT = 14
 const slotHeight_COMFORTABLE = 26
+/** Sticky time/staff headers must stack above the appointment overlay (`z-20`) while scrolling. */
+const CALENDAR_STICKY_HEADER_Z_CLASS = "z-40"
+const CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS = "z-20"
+const CALENDAR_NOW_LINE_Z_CLASS = "z-[35]"
 const SLOTS_PER_HOUR = 12
 const DEFAULT_START_HOUR = 9
 const DEFAULT_END_HOUR = 21
@@ -589,6 +610,10 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [walkInSales, setWalkInSales] = useState<any[]>([])
   /** Appointment ids with a linked sale that has partial payment (same calendar day as `selectedDate`). */
   const [partialPaymentAppointmentIds, setPartialPaymentAppointmentIds] = useState<Set<string>>(() => new Set())
+  const [saleInvoicePreviewOpen, setSaleInvoicePreviewOpen] = useState(false)
+  const [saleInvoicePreviewReceipt, setSaleInvoicePreviewReceipt] = useState<Receipt | null>(null)
+  const [saleInvoicePreviewSettings, setSaleInvoicePreviewSettings] = useState<any>(null)
+  const [saleInvoicePreviewLoading, setSaleInvoicePreviewLoading] = useState(false)
   const [pendingAppointmentId, setPendingAppointmentId] = useState<string | null>(
     initialAppointmentId ?? null
   )
@@ -649,6 +674,46 @@ export const AppointmentsCalendarGrid = forwardRef<
     setSlotHoverTip((prev) => (prev ? { ...prev, clientX: e.clientX, clientY: e.clientY } : null))
   }, [])
   const hideSlotHoverTip = useCallback(() => setSlotHoverTip(null), [])
+  const openSaleInvoicePreview = useCallback(
+    async (billNoRaw: string) => {
+      const billNo = String(billNoRaw || "").trim()
+      if (!billNo) {
+        toast({
+          title: "Missing bill number",
+          description: "Cannot load this invoice.",
+          variant: "destructive",
+        })
+        return
+      }
+      setSaleInvoicePreviewOpen(true)
+      setSaleInvoicePreviewLoading(true)
+      setSaleInvoicePreviewReceipt(null)
+      setSaleInvoicePreviewSettings(null)
+      try {
+        const saleRes = await SalesAPI.getByBillNo(billNo)
+        if (!saleRes.success || !saleRes.data) {
+          toast({
+            title: "Invoice not found",
+            description: `No sale found for bill #${billNo}.`,
+            variant: "destructive",
+          })
+          setSaleInvoicePreviewOpen(false)
+          return
+        }
+        const settingsRes = await SettingsAPI.getBusinessSettings()
+        const settings = settingsRes.success && settingsRes.data ? settingsRes.data : null
+        setSaleInvoicePreviewReceipt(receiptPreviewReceiptFromSaleApi(saleRes.data))
+        setSaleInvoicePreviewSettings(settings)
+      } catch (e) {
+        console.error(e)
+        toast({ title: "Failed to load invoice", variant: "destructive" })
+        setSaleInvoicePreviewOpen(false)
+      } finally {
+        setSaleInvoicePreviewLoading(false)
+      }
+    },
+    [toast]
+  )
   const [dragHoverSlot, setDragHoverSlot] = useState<{
     colIndex: number
     slotMinutes: number
@@ -2280,14 +2345,14 @@ export const AppointmentsCalendarGrid = forwardRef<
             <button
               type="button"
               onClick={handleTimeHeaderClick}
-              className="sticky top-0 z-20 border-b border-r border-slate-200/80 bg-slate-50 px-3 py-3 font-medium text-slate-500 text-xs uppercase tracking-wider text-left w-full hover:bg-slate-100/80 transition-colors cursor-default"
+              className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} border-b border-r border-slate-200/80 bg-slate-50 px-3 py-3 font-medium text-slate-500 text-xs uppercase tracking-wider text-left w-full hover:bg-slate-100/80 transition-colors cursor-default`}
               title="Scroll to current time"
             >
               Time
             </button>
             {/* Section 4: Staff column headers with avatars */}
             {columns.length === 0 ? (
-              <div className="sticky top-0 z-20 border-b border-r border-slate-200/80 bg-slate-50 px-4 py-3 font-medium text-slate-400 text-center">
+              <div className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} border-b border-r border-slate-200/80 bg-slate-50 px-4 py-3 font-medium text-slate-400 text-center`}>
                 No staff
               </div>
             ) : (
@@ -2301,7 +2366,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                 return (
                   <div
                     key={col._id}
-                    className="sticky top-0 z-20 border-b border-r border-slate-200/80 bg-white/95 backdrop-blur-sm px-4 py-3 last:border-r-0 shadow-[0_1px_0_0_rgba(0,0,0,0.05)] flex flex-col items-center justify-center gap-1.5"
+                    className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} border-b border-r border-slate-200/80 bg-white/95 backdrop-blur-sm px-4 py-3 last:border-r-0 shadow-[0_1px_0_0_rgba(0,0,0,0.05)] flex flex-col items-center justify-center gap-1.5`}
                   >
                     <div className="flex items-center gap-2.5">
                       <div className="h-8 w-8 rounded-full bg-violet-100 flex items-center justify-center text-violet-700 font-semibold text-xs shrink-0">
@@ -2506,7 +2571,7 @@ export const AppointmentsCalendarGrid = forwardRef<
             {columns.length > 0 && (
               <div
                 ref={blocksContainerRef}
-                className="absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] z-[25] pointer-events-auto"
+                className={`absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] ${CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS} pointer-events-auto`}
                 style={{ height: totalSlotsWithSales * slotHeight }}
                 onMouseMove={(e) => {
                   if (draggingApt || slotActionDialog) return
@@ -2667,6 +2732,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                       ? groupAccents.get((apt as Appointment).bookingGroupId as string)
                       : undefined
                     const clientEmail = (a?.clientId?.email || "").trim()
+                    const clientPhone = (a?.clientId?.phone || "").trim()
                     const hoverServiceTitle =
                       serviceNames.length === 1
                         ? serviceNames[0]
@@ -2952,6 +3018,17 @@ export const AppointmentsCalendarGrid = forwardRef<
                                 </Avatar>
                                 <div className="min-w-0 flex-1 space-y-1">
                                   <div className="truncate font-semibold leading-tight text-slate-900">{clientName}</div>
+                                  {clientPhone ? (
+                                    <div className="truncate text-xs text-slate-600 tabular-nums">
+                                      <a
+                                        href={`tel:${clientPhone.replace(/\s/g, "")}`}
+                                        className="text-inherit hover:text-violet-700 underline-offset-2 hover:underline"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        {clientPhone}
+                                      </a>
+                                    </div>
+                                  ) : null}
                                   {clientEmail ? (
                                     <div className="truncate text-xs text-slate-500">{clientEmail}</div>
                                   ) : null}
@@ -3042,8 +3119,8 @@ export const AppointmentsCalendarGrid = forwardRef<
                         }}
                         onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 6px 16px rgba(0,0,0,0.08)" }}
                         onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)" }}
-                        onClick={() => router.push(`/billing/${sale.billNo}?mode=edit`)}
-                        title={`Bill #${sale.billNo} • Click to view`}
+                        onClick={() => void openSaleInvoicePreview(sale.billNo)}
+                        title={`Bill #${sale.billNo} • Click to preview invoice`}
                       >
                         <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-400 shrink-0" aria-hidden />
                         <div className="pl-[14px] pr-3 pt-4 pb-3 flex-1 min-h-0 overflow-hidden bg-white border border-slate-200/60">
@@ -3156,7 +3233,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                 ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
               return (
                 <div
-                  className="absolute left-0 right-0 z-30 pointer-events-none flex items-center"
+                  className={`absolute left-0 right-0 ${CALENDAR_NOW_LINE_Z_CLASS} pointer-events-none flex items-center`}
                   style={{ top: topPx }}
                   aria-hidden
                 >
@@ -4099,6 +4176,38 @@ export const AppointmentsCalendarGrid = forwardRef<
                 "Yes, Delete Invoice"
               )}
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={saleInvoicePreviewOpen}
+        onOpenChange={(next) => {
+          if (!next) {
+            setSaleInvoicePreviewOpen(false)
+            setSaleInvoicePreviewReceipt(null)
+            setSaleInvoicePreviewSettings(null)
+          }
+        }}
+      >
+        <DialogContent className="flex max-h-[90vh] w-[calc(100vw-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+          <DialogHeader className="shrink-0 px-6 pt-6 pb-2">
+            <DialogTitle>
+              {saleInvoicePreviewReceipt
+                ? `Invoice #${saleInvoicePreviewReceipt.receiptNumber}`
+                : "Invoice preview"}
+            </DialogTitle>
+            <DialogDescription className="sr-only">Invoice preview for the selected bill</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 sm:px-6">
+            {saleInvoicePreviewLoading ? (
+              <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin shrink-0" />
+                Loading invoice…
+              </div>
+            ) : saleInvoicePreviewReceipt ? (
+              <ReceiptPreview receipt={saleInvoicePreviewReceipt} businessSettings={saleInvoicePreviewSettings} />
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>
