@@ -96,6 +96,9 @@ class ModelFactory {
       // PurchaseOrder model
       PurchaseOrder: this.getModel('PurchaseOrder', require('./PurchaseOrder').schema, connection),
 
+      // PurchaseInvoice model (after PurchaseOrder for refs)
+      PurchaseInvoice: this.getModel('PurchaseInvoice', require('./PurchaseInvoice').schema, connection),
+
       // SupplierPayable model
       SupplierPayable: this.getModel('SupplierPayable', require('./SupplierPayable').schema, connection),
 
@@ -147,6 +150,8 @@ class ModelFactory {
         require('./ClientWalletTransaction').schema,
         connection
       ),
+
+      PointsLedger: this.getModel('PointsLedger', require('./PointsLedger').schema, connection),
 
       // Scheduling (package sessions + holds + availability)
       PackageSession: this.getModel('PackageSession', require('./PackageSession').schema, connection),

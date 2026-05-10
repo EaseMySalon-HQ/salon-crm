@@ -28,6 +28,7 @@ import {
   Search,
   IdCard,
   CircleDollarSign,
+  Gift,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -46,6 +47,7 @@ import { PackagesSettingsPanel } from "@/components/packages/PackagesSettingsPan
 import { ChannelUsageSettings } from "./channel-usage-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
+import { RewardPointsProgramSettings } from "./reward-points-settings"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { ProductsTable } from "@/components/products/products-table"
@@ -74,6 +76,7 @@ const SETTINGS_SECTION_IDS = [
   "channel-usage",
   "recharge",
   "prepaid-wallet",
+  "reward-points",
 ] as const
 
 function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
@@ -194,6 +197,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "Tender types, payment methods, and how you get paid.",
         icon: CreditCard,
         searchTerms: ["upi", "card", "methods"],
+      },
+      {
+        id: "reward-points",
+        title: "Reward points",
+        description: "Loyalty earning and redemption rules for customer bills.",
+        icon: Gift,
+        searchTerms: ["loyalty", "points", "rewards", "earn", "redeem"],
       },
       {
         id: "plan-billing",
@@ -382,9 +392,26 @@ export function SettingsPage() {
             </TabsContent>
           </Tabs>
         )
-      case "products":
+      case "products": {
+        const productsTabRaw = searchParams.get("productsTab")
+        const productsTab =
+          productsTabRaw === "categories" || productsTabRaw === "suppliers" ? productsTabRaw : "products"
+        const setProductsTab = (tab: string) => {
+          const params = new URLSearchParams(searchParams.toString())
+          params.set("section", "products")
+          params.set("productsTab", tab)
+          if (tab !== "suppliers") {
+            params.delete("supplierOrdersTab")
+            params.delete("pi")
+            params.delete("piEdit")
+            params.delete("purchaseOrderId")
+            params.delete("newPurchaseInvoice")
+            params.delete("purchaseInvoiceSupplierId")
+          }
+          router.replace(`/settings?${params.toString()}`)
+        }
         return (
-          <Tabs defaultValue="products" className="w-full">
+          <Tabs value={productsTab} onValueChange={setProductsTab} className="w-full">
             <TabsList className="mb-6 grid grid-cols-3">
               <TabsTrigger value="products" className="gap-2">
                 <Package className="h-4 w-4" />
@@ -417,6 +444,7 @@ export function SettingsPage() {
             </TabsContent>
           </Tabs>
         )
+      }
       case "packages":
         return <PackagesSettingsPanel />
       case "channel-usage":
@@ -425,6 +453,8 @@ export function SettingsPage() {
         return <RechargeSettings />
       case "prepaid-wallet":
         return <PrepaidWalletSettings />
+      case "reward-points":
+        return <RewardPointsProgramSettings />
       default:
         return null
     }

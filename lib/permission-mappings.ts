@@ -22,7 +22,7 @@
  * /leads → lead_management
  * /campaigns → campaigns
  * /services, /services/new → services
- * /products, /products/new → products
+ * /products, /products/new → products; /purchase-invoices/* (redirects into Settings → Products → Suppliers & orders)
  * /cash-registry → cash_registry
  * /analytics → analytics
  * /reports, /reports/unpaid-bills → reports
@@ -56,6 +56,7 @@ export const ROUTE_PERMISSION_MAP: Record<string, string> = {
   "/wallet/sell": "packages",
   "/services": "services",
   "/products": "products",
+  "/purchase-invoices": "products",
   "/cash-registry": "cash_registry",
   "/analytics": "analytics",
   "/reports": "reports",
@@ -74,6 +75,7 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   tax: "tax_settings",
   payments: "payment_settings",
   pos: "pos_settings",
+  "reward-points": "pos_settings",
   notifications: "notification_settings",
   "plan-billing": "plan_billing",
   membership: "membership",

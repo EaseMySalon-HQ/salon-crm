@@ -33,6 +33,12 @@ const clientSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  /** Denormalized cache; updated only with PointsLedger writes */
+  rewardPointsBalance: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   status: {
     type: String,
     enum: ['active', 'inactive'],

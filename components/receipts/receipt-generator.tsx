@@ -2,10 +2,13 @@
 
 import type { Receipt } from "@/lib/data"
 import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
+import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
+import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 
 interface ReceiptGeneratorProps {
   receipt: Receipt
@@ -188,10 +191,14 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
                 .map(
                   (item) => {
                   const staffLabel = formatReceiptItemStaffNames(item)
+                  const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+                  const lineMeta =
+                    (staffLabel || walkInLabel) &&
+                    `${staffLabel ? `<br><span style="font-size: 10px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 10px; color: #92400e;">${walkInLabel}</span>` : ""}`
                   return `
                 <tr style="border-bottom: 1px dashed #999;">
                   <td style="padding: 3px 2px;">${item.hsnSacCode || "-"}</td>
-                  <td style="padding: 3px 2px;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}${staffLabel ? `<br><span style="font-size: 10px; color: #666;">${staffLabel}</span>` : ""}</td>
+                  <td style="padding: 3px 2px;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}${lineMeta || ""}</td>
                   <td style="text-align: right; padding: 3px 2px;">${formatCurrency(item.price, businessSettings)}</td>
                   <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : formatCurrency(item.discount, businessSettings)) : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
@@ -294,12 +301,16 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
           }
           ${
             receipt.tip > 0
-              ? `
+              ? receiptTipDisplayLines(receipt)
+                  .map(
+                    (line) => `
             <div class="total-line">
-              <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-              <span>${formatCurrency(receipt.tip, businessSettings)}</span>
+              <span>${line.staffName ? `Tip (${line.staffName}):` : "Tip:"}</span>
+              <span>${formatCurrency(line.amount, businessSettings)}</span>
             </div>
-          `
+          `,
+                  )
+                  .join("")
               : ""
           }
           ${
@@ -317,19 +328,39 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
             <span>${formatCurrency(correctTotal, businessSettings)}</span>
           </div>
           ${(() => {
-            const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0);
-            const outstanding = correctTotal - totalPaid;
-            const outstandingClass = outstanding > 0 ? ' style="color: #dc2626; font-weight: 500;"' : '';
-            return `
-            <div class="total-line" style="margin-top: 6px;">
-              <span>Total Paid:</span>
-              <span>${formatCurrency(totalPaid, businessSettings)}</span>
+            const s = getReceiptSettlementSummary(receipt)
+            let out = ""
+            if (s.showReceivedAndAdjusted) {
+              out += `
+            <div class="total-line" style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed #999;">
+              <span>Amount Received:</span>
+              <span>${formatCurrency(s.amountReceived, businessSettings)}</span>
             </div>
-            <div class="total-line" style="margin-top: 4px;"${outstandingClass}>
+            <div class="total-line">
+              <span>Adjusted:</span>
+              <span>${formatCurrency(s.paidTowardBill, businessSettings)}</span>
+            </div>`
+              if (s.showWalletCreditLine) {
+                out += `
+            <div class="total-line">
+              <span>Wallet Credit:</span>
+              <span>${formatCurrency(s.walletCredit, businessSettings)}</span>
+            </div>`
+              }
+              if (s.showOutstandingLine) {
+                out += `
+            <div class="total-line" style="color: #dc2626; font-weight: 600;">
               <span>Outstanding:</span>
-              <span>${formatCurrency(outstanding, businessSettings)}</span>
-            </div>
-            `;
+              <span>${formatCurrency(s.outstanding, businessSettings)}</span>
+            </div>`
+              }
+            }
+            out += `
+            <div class="total-line" style="margin-top: ${s.showReceivedAndAdjusted ? "8px" : "10px"}; padding-top: 6px; border-top: ${s.showReceivedAndAdjusted ? "1px solid #bbb" : "1px dashed #bbb"}; font-weight: 600;">
+              <span>Total Paid (Bill):</span>
+              <span>${formatCurrency(s.paidTowardBill, businessSettings)}</span>
+            </div>`
+            return out
           })()}
         </div>
 

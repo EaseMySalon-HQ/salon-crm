@@ -12,6 +12,8 @@ export interface Client {
   status?: "active" | "inactive"
   totalVisits?: number
   totalSpent?: number
+  /** Cached from API; updated when loyalty ledger changes */
+  rewardPointsBalance?: number
   totalDues?: number
   createdAt?: string
   address?: string

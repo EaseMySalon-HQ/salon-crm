@@ -1,6 +1,23 @@
 const PDFDocument = require('pdfkit');
 const { formatReceiptItemStaffNames } = require('./receipt-staff-format');
 
+function receiptTipDisplayLines(receipt) {
+  const tip = Math.max(0, Number(receipt.tip) || 0);
+  if (tip <= 0.005) return [];
+  const raw = receipt.tipLines;
+  if (Array.isArray(raw) && raw.length > 0) {
+    const lines = raw
+      .map((l) => ({
+        staffName: l.staffName != null ? String(l.staffName).trim() : '',
+        amount: Math.max(0, Number(l.amount) || 0),
+      }))
+      .filter((l) => l.amount > 0.005);
+    if (lines.length > 0) return lines;
+  }
+  const name = receipt.tipStaffName != null ? String(receipt.tipStaffName).trim() : '';
+  return [{ staffName: name, amount: tip }];
+}
+
 /**
  * Generate PDF receipt buffer from receipt data
  * @param {Object} receiptData - Receipt data object
@@ -153,9 +170,11 @@ async function generateReceiptPDF(receiptData, businessSettings = {}) {
       }
       
       if (receiptData.tip && receiptData.tip > 0) {
-        const tipLabel = receiptData.tipStaffName ? `Tip (${receiptData.tipStaffName}):` : 'Tip:';
-        doc.text(tipLabel, { align: 'left', continued: true })
-           .text(`₹${receiptData.tip.toFixed(2)}`, { align: 'right' });
+        for (const line of receiptTipDisplayLines(receiptData)) {
+          const tipLabel = line.staffName ? `Tip (${line.staffName}):` : 'Tip:';
+          doc.text(tipLabel, { align: 'left', continued: true })
+             .text(`₹${line.amount.toFixed(2)}`, { align: 'right' });
+        }
       }
 
       doc.moveDown(0.3);

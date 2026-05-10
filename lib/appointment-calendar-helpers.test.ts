@@ -3,10 +3,72 @@ import {
   getServiceDisplayNames,
   getAppointmentTotalDurationList,
   getAppointmentTotalDurationGrid,
+  getAppointmentGridWindowMinutes,
   getBookingGroupSiblings,
   collectSaleLinesFromAppointmentCard,
   buildRaiseSaleAppointmentPayload,
+  getAppointmentStatusPillClass,
+  getAppointmentStatusSheetHeaderClass,
+  saleRecordIsPartialPayment,
+  getAppointmentEditAppearanceStatus,
 } from "./appointment-calendar-helpers"
+
+describe("saleRecordIsPartialPayment", () => {
+  it("is true when paid and remaining are both positive", () => {
+    expect(
+      saleRecordIsPartialPayment({
+        paymentStatus: { paidAmount: 100, remainingAmount: 50 },
+      })
+    ).toBe(true)
+    expect(saleRecordIsPartialPayment({ paymentStatus: { paidAmount: 0, remainingAmount: 100 } })).toBe(false)
+    expect(saleRecordIsPartialPayment({ paymentStatus: { paidAmount: 100, remainingAmount: 0 } })).toBe(false)
+  })
+})
+
+describe("getAppointmentEditAppearanceStatus", () => {
+  it("overlays partial_payment when sale is partial and appointment is active", () => {
+    expect(
+      getAppointmentEditAppearanceStatus("scheduled", {
+        paymentStatus: { paidAmount: 50, remainingAmount: 50 },
+      })
+    ).toBe("partial_payment")
+    expect(
+      getAppointmentEditAppearanceStatus("completed", {
+        paymentStatus: { paidAmount: 50, remainingAmount: 50 },
+      })
+    ).toBe("completed")
+  })
+
+  it("returns base status when there is no linked sale", () => {
+    expect(getAppointmentEditAppearanceStatus("arrived", null)).toBe("arrived")
+  })
+})
+
+describe("getAppointmentStatusSheetHeaderClass", () => {
+  it("uses header bar tone tokens per status", () => {
+    expect(getAppointmentStatusSheetHeaderClass("scheduled")).toContain("slate-100")
+    expect(getAppointmentStatusSheetHeaderClass("confirmed")).toContain("cyan-100")
+    expect(getAppointmentStatusSheetHeaderClass("missed")).toContain("rose-100")
+  })
+})
+
+describe("getAppointmentStatusPillClass", () => {
+  it("uses calendar tone tokens per status", () => {
+    expect(getAppointmentStatusPillClass("scheduled")).toContain("slate-100")
+    expect(getAppointmentStatusPillClass("confirmed")).toContain("cyan-100")
+    expect(getAppointmentStatusPillClass("arrived")).toContain("blue-100")
+    expect(getAppointmentStatusPillClass("service_started")).toContain("indigo-100")
+    expect(getAppointmentStatusPillClass("completed")).toContain("emerald-100")
+    expect(getAppointmentStatusPillClass("missed")).toContain("rose-100")
+    expect(getAppointmentStatusPillClass("cancelled")).toContain("red-100")
+    expect(getAppointmentStatusPillClass("cancelled_at_billing")).toContain("zinc-100")
+  })
+
+  it("defaults empty to scheduled tone", () => {
+    expect(getAppointmentStatusPillClass(null)).toContain("slate-100")
+    expect(getAppointmentStatusPillClass("")).toContain("slate-100")
+  })
+})
 
 describe("getServiceDisplayNames", () => {
   it("returns primary + additional service names", () => {
@@ -56,6 +118,27 @@ describe("getAppointmentTotalDurationGrid", () => {
         additionalServices: [{ duration: 15 }],
       })
     ).toBe(75)
+  })
+})
+
+describe("getAppointmentGridWindowMinutes", () => {
+  it("returns local start/end minutes when startAt/endAt match date", () => {
+    const win = getAppointmentGridWindowMinutes({
+      date: "2026-06-05",
+      startAt: new Date(2026, 5, 5, 2, 20, 0),
+      endAt: new Date(2026, 5, 5, 2, 35, 0),
+    })
+    expect(win).toEqual({ startM: 140, endM: 155 })
+  })
+
+  it("returns null when date mismatches startAt calendar day", () => {
+    expect(
+      getAppointmentGridWindowMinutes({
+        date: "2026-06-06",
+        startAt: new Date(2026, 5, 5, 10, 0, 0),
+        endAt: new Date(2026, 5, 5, 11, 0, 0),
+      })
+    ).toBeNull()
   })
 })
 

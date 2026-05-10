@@ -14,7 +14,17 @@ const whatsappMessageLogSchema = new mongoose.Schema({
   },
   messageType: {
     type: String,
-    enum: ['receipt', 'appointment', 'system', 'campaign', 'client_wallet_transaction', 'client_wallet_expiry'],
+    enum: [
+      'receipt',
+      'appointment',
+      'appointment_reminder',
+      'appointment_reschedule',
+      'appointment_cancellation',
+      'system',
+      'campaign',
+      'client_wallet_transaction',
+      'client_wallet_expiry',
+    ],
     required: true,
     index: true
   },

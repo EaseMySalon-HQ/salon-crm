@@ -250,6 +250,36 @@ const businessSchema = new mongoose.Schema({
     minRechargeAmount: { type: Number, default: 500, min: 0 },
     /** SMS / WhatsApp expiry reminders (30 / 15 / 7 days before wallet expiryDate) */
     expiryAlertsEnabled: { type: Boolean, default: true },
+    /**
+     * When true, checkout redeems FIFO across all active client wallets (soonest expiry first).
+     * When false, each wallet is separate (staff picks one wallet).
+     */
+    combineMultipleWallets: { type: Boolean, default: false },
+  },
+
+  /** Customer reward / loyalty points (tenant bills read from main Business) */
+  rewardPointsSettings: {
+    enabled: { type: Boolean, default: false },
+    /** Every earnRupeeStep rupees of eligible spend => earnPointsStep points */
+    earnRupeeStep: { type: Number, default: 100, min: 1 },
+    earnPointsStep: { type: Number, default: 10, min: 0 },
+    /** redeemPointsStep points => redeemRupeeStep rupee discount */
+    redeemPointsStep: { type: Number, default: 100, min: 1 },
+    redeemRupeeStep: { type: Number, default: 10, min: 0 },
+    minRedeemPoints: { type: Number, default: 100, min: 0 },
+    maxRedeemPercentOfBill: { type: Number, default: 20, min: 0, max: 100 },
+    /** Exclude prepaid_wallet lines from eligible spend for earning (synced with earnPointsOnPrepaidPlan) */
+    earnOnWalletPurchaseLines: { type: Boolean, default: false },
+    /** Eligible spend for earning — per line type (false = no points from that line type) */
+    earnPointsOnServices: { type: Boolean, default: true },
+    earnPointsOnProducts: { type: Boolean, default: true },
+    earnPointsOnMembershipPurchases: { type: Boolean, default: true },
+    earnPointsOnPrepaidPlan: { type: Boolean, default: false },
+    earnPointsOnPackages: { type: Boolean, default: true },
+    firstVisitBonusPoints: { type: Number, default: 0, min: 0 },
+    birthdayBonusPoints: { type: Number, default: 0, min: 0 },
+    /** Match bill date within +/- N days of birthday (month/day) */
+    birthdayBonusWindowDays: { type: Number, default: 0, min: 0, max: 15 },
   },
 
   // Prepaid messaging wallet (balance in paise; 100 paise = 1 rupee)

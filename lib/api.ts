@@ -11,12 +11,14 @@ import type {
   AnalyticsStaffDrillDownData,
   AnalyticsStaffTabData,
 } from "@/lib/types/analytics"
+import type { PaymentConfiguration } from "./payment-redemption-eligibility"
+
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
 /**
- * Refresh auth session using HttpOnly cookie. New tokens are set as cookies
- * by the server — no token is returned in the JSON body.
+ * Refresh auth session using HttpOnly cookies (credentialed POST). Uses standalone axios so
+ * this can run before apiClient response interceptors complete.
  */
 let refreshInFlight: Promise<boolean> | null = null
 
@@ -50,6 +52,62 @@ function normalizeApiErrorMessage(data: unknown): string {
   if (typeof d.error === 'string') return d.error
   if (typeof d.message === 'string') return d.message
   return ''
+}
+
+/**
+ * Parses failed API responses thrown as Axios errors (caller usually uses `axios.isAxiosError`).
+ * Prefer this over reading `catch (e)` ad hoc across the codebase.
+ */
+export function apiErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const rd = error.response?.data as unknown
+    const fromBody = normalizeApiErrorMessage(rd)
+    if (fromBody) return fromBody
+    if (typeof rd === 'string' && rd.trim()) return rd.trim()
+
+    const st = error.response?.status
+    if (!error.response) {
+      const code = error.code
+      if (code === 'ECONNABORTED') return 'Request timed out. Check your connection and try again.'
+      if (code === 'ERR_NETWORK' || error.message === 'Network Error') {
+        return 'Unable to reach the server. Check your connection and API settings.'
+      }
+    }
+    if (typeof st === 'number') {
+      const txt = error.response?.statusText
+      return txt ? `${txt} (${st})` : `Request failed (${st})`
+    }
+    return error.message || 'Request failed'
+  }
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string' && error.trim()) return error.trim()
+  return 'Something went wrong'
+}
+
+/** When Axios rejects with `{ success:false, error? }`, turn it back into `ApiResponse` for uniform handling. */
+function coerceThrownResponseToFailure<T>(
+  caught: unknown
+): ApiResponse<T> | null {
+  if (!axios.isAxiosError(caught)) return null
+  const rd = caught.response?.data as unknown
+  if (rd == null || typeof rd !== 'object') return null
+  const raw = rd as Partial<ApiResponse<T>> & { error?: unknown; message?: unknown; success?: boolean }
+  if (raw.success === false) return rd as ApiResponse<T>
+  if (typeof raw.error === 'string' || typeof raw.message === 'string') {
+    return {
+      success: false,
+      error:
+        normalizeApiErrorMessage(rd) ||
+        (typeof raw.error === 'string'
+          ? raw.error
+          : typeof raw.message === 'string'
+            ? raw.message
+            : apiErrorMessage(caught)),
+      message: typeof raw.message === 'string' ? raw.message : undefined,
+      data: (raw.data ?? null) as unknown as T,
+    }
+  }
+  return null
 }
 
 /** True when 401/403 indicates invalid/expired session (not business-rule or RBAC). */
@@ -628,6 +686,35 @@ export class SuppliersAPI {
     return response.data
   }
 
+  static async getPaymentTimeline(id: string): Promise<
+    ApiResponse<
+      Array<{ _id: string; paymentDate: string; amount: number; paymentMethod: string; payableReferenceNumber?: string }>
+    >
+  > {
+    const response = await apiClient.get(`/suppliers/${id}/payments`)
+    return response.data
+  }
+
+  /** FIFO by due date: one payment splits across oldest bills first */
+  static async recordPaymentAutoAllocate(
+    supplierId: string,
+    body: {
+      amount: number
+      paymentMethod?: string
+      paymentDate?: string
+      reference?: string
+      notes?: string
+    }
+  ): Promise<
+    ApiResponse<{
+      totalApplied?: number
+      allocations?: Array<{ payableId: string; amountApplied: number; balanceAfter: number }>
+    }>
+  > {
+    const response = await apiClient.post(`/suppliers/${supplierId}/payments/auto-allocate`, body)
+    return response.data
+  }
+
   static async create(data: {
     name: string
     contactPerson?: string
@@ -670,7 +757,7 @@ export class SuppliersAPI {
 }
 
 export class PurchaseOrdersAPI {
-  static async getAll(params?: { supplier?: string; status?: string; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any[]>> {
+  static async getAll(params?: { supplier?: string; status?: string; dateFrom?: string; dateTo?: string; search?: string }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/purchase-orders', { params })
     return response.data
   }
@@ -707,6 +794,10 @@ export class PurchaseOrdersAPI {
     receivedItems: { productId: string; receivedQty: number; unitCost?: number }[]
     invoiceUrl?: string
     grnNotes?: string
+    /** Supplier bill / tax invoice ref for this GRN delivery */
+    supplierInvoiceNumber?: string
+    /** Defaults false: PO receipts only; stock applies when posting the linked purchase invoice. */
+    recordInventory?: boolean
   }): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`/purchase-orders/${id}/receive`, data)
     return response.data
@@ -716,10 +807,87 @@ export class PurchaseOrdersAPI {
     const response = await apiClient.post(`/purchase-orders/${id}/cancel`)
     return response.data
   }
+
+  static async updateStatus(id: string, data: { status: 'draft' | 'sent' | 'ordered' }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/purchase-orders/${id}/status`, data)
+    return response.data
+  }
+}
+
+export class PurchaseInvoicesAPI {
+  static async getAll(params?: {
+    supplier?: string
+    status?: string
+    paymentStatus?: string
+    dateFrom?: string
+    dateTo?: string
+    search?: string
+  }): Promise<ApiResponse<any[]>> {
+    try {
+      const response = await apiClient.get('/purchase-invoices', { params })
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any[]>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: [] as any[] }
+    }
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.get(`/purchase-invoices/${id}`)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async create(data: Record<string, unknown>): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.post('/purchase-invoices', data)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async update(id: string, data: Record<string, unknown>): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.put(`/purchase-invoices/${id}`, data)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async post(
+    id: string,
+    data?: { confirmLinkedPoDuplicate?: boolean; applyRetailPrices?: boolean; paidAmount?: number; paymentStatus?: string }
+  ): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.post(`/purchase-invoices/${id}/post`, data || {})
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async cancel(id: string): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.post(`/purchase-invoices/${id}/cancel`)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
 }
 
 export class SupplierPayablesAPI {
-  static async getAll(params?: { supplier?: string; status?: string }): Promise<ApiResponse<any[]>> {
+  static async getAll(params?: { supplier?: string; status?: string; search?: string; dateFrom?: string; dateTo?: string }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/supplier-payables', { params })
     return response.data
   }
@@ -785,6 +953,47 @@ export class InventoryAPI {
   }
 }
 
+/** User-facing fallback when Mongo unique `slotKey` collides or API returns bare 409. */
+const APPOINTMENT_SLOT_TIME_CONFLICT =
+  "This time slot is already booked for the selected staff member. Please choose a different time."
+
+function recoverAppointmentMutationFromAxiosError(e: unknown): ApiResponse<any> | null {
+  const ax = e as AxiosError<{
+    success?: boolean
+    error?: string
+    conflicts?: Array<{ appointmentId: string; reason: string }>
+  }>
+  if (!ax.response) return null
+  const status = ax.response.status
+  const d = ax.response.data
+  if (!d || typeof d !== "object") {
+    if (status === 409) return { success: false, error: APPOINTMENT_SLOT_TIME_CONFLICT }
+    return null
+  }
+  const apiErr =
+    typeof (d as any).error === "string"
+      ? (d as any).error.trim()
+      : typeof (d as any).message === "string"
+        ? String((d as any).message).trim()
+        : ""
+
+  if (status === 409) {
+    const out: ApiResponse<any> & {
+      conflicts?: Array<{ appointmentId: string; reason: string }>
+    } = {
+      success: false,
+      error: apiErr || APPOINTMENT_SLOT_TIME_CONFLICT,
+    }
+    if (Array.isArray((d as any).conflicts))
+      out.conflicts = (d as any).conflicts
+    return out
+  }
+  if (status != null && status >= 400 && status < 500 && apiErr) {
+    return { success: false, error: apiErr }
+  }
+  return null
+}
+
 export class AppointmentsAPI {
   static async getAll(params?: { page?: number; limit?: number; date?: string; status?: string; clientId?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/appointments', { params })
@@ -797,13 +1006,25 @@ export class AppointmentsAPI {
   }
 
   static async create(data: any): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/appointments', data)
-    return response.data
+    try {
+      const response = await apiClient.post("/appointments", data)
+      return response.data
+    } catch (e: unknown) {
+      const recovered = recoverAppointmentMutationFromAxiosError(e)
+      if (recovered) return recovered
+      throw e
+    }
   }
 
   static async update(id: string, data: any): Promise<ApiResponse<any>> {
-    const response = await apiClient.put(`/appointments/${id}`, data)
-    return response.data
+    try {
+      const response = await apiClient.put(`/appointments/${id}`, data)
+      return response.data
+    } catch (e: unknown) {
+      const recovered = recoverAppointmentMutationFromAxiosError(e)
+      if (recovered) return recovered
+      throw e
+    }
   }
 
   static async delete(id: string): Promise<ApiResponse> {
@@ -814,6 +1035,34 @@ export class AppointmentsAPI {
   static async updateStatus(id: string, status: string): Promise<ApiResponse<any>> {
     const response = await apiClient.patch(`/appointments/${id}/status`, { status })
     return response.data
+  }
+
+  /**
+   * Per-service Raise Sale confirmation step. Each decision either marks an
+   * appointment as performed (optionally shifting it earlier when leading
+   * services are cancelled) or as 'cancelled_at_billing'.
+   *
+   * dryRun=true returns conflict info without persisting.
+   */
+  static async finalizeForBilling(
+    payload: {
+      decisions: Array<{
+        appointmentId: string
+        action: "perform" | "cancel"
+        /** Only the new wall-clock time is required; the server derives startAt/endAt. */
+        shift?: { time: string }
+      }>
+      dryRun?: boolean
+    },
+  ): Promise<ApiResponse<any> & { conflicts?: Array<{ appointmentId: string; reason: string }> }> {
+    try {
+      const response = await apiClient.post(`/appointments/finalize-for-billing`, payload)
+      return response.data
+    } catch (err: unknown) {
+      const recovered = recoverAppointmentMutationFromAxiosError(err)
+      if (recovered) return recovered as ApiResponse<any> & { conflicts?: any[] }
+      throw err
+    }
   }
 }
 
@@ -1657,12 +1906,14 @@ export class SettingsAPI {
     return response.data
   }
 
-  static async getPaymentSettings(): Promise<ApiResponse<any>> {
+  static async getPaymentSettings(): Promise<ApiResponse<PaymentSettingsData>> {
     const response = await apiClient.get('/settings/payment')
     return response.data
   }
 
-  static async updatePaymentSettings(data: any): Promise<ApiResponse<any>> {
+  static async updatePaymentSettings(
+    data: PaymentSettingsUpdatePayload
+  ): Promise<ApiResponse<PaymentSettingsData>> {
     const response = await apiClient.put('/settings/payment', data)
     return response.data
   }
@@ -2382,6 +2633,8 @@ export type ClientWalletSettings = {
   refundPolicy: "service_credit_only" | "no_refunds"
   minRechargeAmount: number
   expiryAlertsEnabled: boolean
+  /** When true, POS redeems across all client wallets FIFO (soonest expiry first). */
+  combineMultipleWallets: boolean
 }
 
 /** POST /client-wallet/issue */
@@ -2482,6 +2735,28 @@ export class ClientWalletAPI {
     return response.data
   }
 
+  /** Staff: when customer overpaid and there is no cash change, credit excess to prepaid wallet */
+  static async creditChange(body: {
+    walletId: string
+    amount: number
+    saleId?: string
+    billNo?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/credit-change", body)
+    return response.data
+  }
+
+  /** Staff: customer had no prepaid wallet — create one from an active plan and credit bill change */
+  static async creditChangeOpenWallet(body: {
+    clientId: string
+    amount: number
+    saleId: string
+    billNo?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post("/client-wallet/credit-change-open-wallet", body)
+    return response.data
+  }
+
   static async getLiability(): Promise<
     ApiResponse<{ totalOutstanding: number; activeWalletCount: number }>
   > {
@@ -2496,6 +2771,102 @@ export class ClientWalletAPI {
     limit?: number
   }): Promise<ApiResponse<{ history: any[] }>> {
     const response = await apiClient.get("/client-wallet/history", { params })
+    return response.data
+  }
+}
+
+// ── Reward points (loyalty) ─────────────────────────────────────────────────
+
+export type RewardPointsSettings = {
+  enabled: boolean
+  earnRupeeStep: number
+  earnPointsStep: number
+  redeemPointsStep: number
+  redeemRupeeStep: number
+  minRedeemPoints: number
+  maxRedeemPercentOfBill: number
+  earnOnWalletPurchaseLines: boolean
+  /** When true, service lines count toward earn base. */
+  earnPointsOnServices: boolean
+  /** When true, product lines count toward earn base. */
+  earnPointsOnProducts: boolean
+  /** When true, membership plan purchase lines count toward earn base. */
+  earnPointsOnMembershipPurchases: boolean
+  /** When true, prepaid wallet plan purchase lines count toward earn base. */
+  earnPointsOnPrepaidPlan: boolean
+  /** Package retail lines (defaults true if omitted). */
+  earnPointsOnPackages?: boolean
+  firstVisitBonusPoints: number
+  birthdayBonusPoints: number
+  birthdayBonusWindowDays: number
+}
+
+export class RewardPointsAPI {
+  static async getSettings(): Promise<ApiResponse<RewardPointsSettings>> {
+    const response = await apiClient.get("/reward-points/settings")
+    return response.data
+  }
+
+  static async updateSettings(
+    body: Partial<RewardPointsSettings>
+  ): Promise<ApiResponse<RewardPointsSettings>> {
+    const response = await apiClient.put("/reward-points/settings", body)
+    return response.data
+  }
+
+  static async preview(params: {
+    billSubtotal: number
+    points: number
+    clientId: string
+  }): Promise<
+    ApiResponse<{
+      ok: boolean
+      error?: string
+      pointsToRedeem: number
+      discountRupees: number
+      currentBalance: number
+      settings: RewardPointsSettings
+    }>
+  > {
+    const qs = new URLSearchParams({
+      billSubtotal: String(params.billSubtotal),
+      points: String(params.points),
+      clientId: params.clientId,
+    })
+    const response = await apiClient.get(`/reward-points/preview?${qs.toString()}`)
+    return response.data
+  }
+
+  static async getLedger(
+    clientId: string,
+    params?: { limit?: number; skip?: number }
+  ): Promise<ApiResponse<{ rows: any[]; total: number; limit: number; skip: number }>> {
+    const qs = new URLSearchParams({ clientId })
+    if (params?.limit != null) qs.set("limit", String(params.limit))
+    if (params?.skip != null) qs.set("skip", String(params.skip))
+    const response = await apiClient.get(`/reward-points/ledger?${qs.toString()}`)
+    return response.data
+  }
+
+  static async getSummary(clientId: string): Promise<
+    ApiResponse<{
+      balance: number
+      lifetimeEarned: number
+      lifetimeRedeemed: number
+      lastBillEarnPoints: number
+      lastBillEarnAt: string | null
+    }>
+  > {
+    const response = await apiClient.get(`/reward-points/summary?clientId=${encodeURIComponent(clientId)}`)
+    return response.data
+  }
+
+  static async grantManualBonus(body: {
+    clientId: string
+    points: number
+    reason?: string
+  }): Promise<ApiResponse<{ balance: number }>> {
+    const response = await apiClient.post("/reward-points/manual-bonus", body)
     return response.data
   }
 }
@@ -2816,6 +3187,41 @@ export class PackagesAPI {
     return response.data
   }
 }
+
+export type { PaymentConfiguration, PaymentRedemptionLine } from "./payment-redemption-eligibility"
+
+/** GET /settings/payment `data` shape (aligned with backend/server.js). */
+export type PaymentSettingsData = {
+  paymentConfiguration?: Partial<PaymentConfiguration> | null
+  processingFee?: number | string
+  enableProcessingFees?: boolean
+  currency?: string
+  taxRate?: number
+  enableCurrency?: boolean
+  enableTax?: boolean
+  taxType?: "single" | "gst" | "vat" | "sales"
+  cgstRate?: number
+  sgstRate?: number
+  igstRate?: number
+  serviceTaxRate?: number
+  membershipTaxRate?: number
+  packageTaxRate?: number
+  prepaidWalletTaxRate?: number
+  productTaxRate?: number
+  essentialProductRate?: number
+  intermediateProductRate?: number
+  standardProductRate?: number
+  luxuryProductRate?: number
+  exemptProductRate?: number
+  taxCategories?: Array<{ id?: string; name?: string; rate?: number }>
+  priceInclusiveOfTax?: boolean
+}
+
+export type PaymentSettingsUpdatePayload = {
+  processingFee?: number
+  enableProcessingFees?: boolean
+  paymentConfiguration?: PaymentConfiguration
+} & Record<string, unknown>
 
 // Export the main API client for direct use if needed
 export { apiClient }

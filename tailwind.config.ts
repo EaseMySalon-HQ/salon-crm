@@ -78,18 +78,23 @@ const config: Config = {
   					height: 'var(--radix-accordion-content-height)'
   				}
   			},
-  			'accordion-up': {
+  		'accordion-up': {
   				from: {
   					height: 'var(--radix-accordion-content-height)'
   				},
   				to: {
   					height: '0'
   				}
-  			}
+  			},
+  			'gold-sheen': {
+  				'0%': { transform: 'translateX(-120%) skewX(-18deg)' },
+  				'100%': { transform: 'translateX(280%) skewX(-18deg)' },
+  			},
   		},
   		animation: {
   			'accordion-down': 'accordion-down 0.2s ease-out',
-  			'accordion-up': 'accordion-up 0.2s ease-out'
+  			'accordion-up': 'accordion-up 0.2s ease-out',
+  			'gold-sheen': 'gold-sheen 2.6s ease-in-out infinite',
   		}
   	}
   },

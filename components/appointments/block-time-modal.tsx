@@ -145,6 +145,15 @@ export function BlockTimeModal({
         description: description.slice(0, 200) || undefined,
       })
       if (res?.success) {
+        const extra = res as { warning?: string; overlappingAppointments?: unknown[] }
+        if (Array.isArray(extra.overlappingAppointments) && extra.overlappingAppointments.length > 0) {
+          toast({
+            title: "Time blocked",
+            description:
+              extra.warning ||
+              "Existing appointments in this window are unchanged. The block stays visible on the calendar; bookings during this time are still allowed.",
+          })
+        }
         onOpenChange(false)
         onSuccess?.()
       } else {

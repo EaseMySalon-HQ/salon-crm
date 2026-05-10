@@ -614,6 +614,15 @@ export function StaffWorkingHoursContent() {
       })
       if (res?.success) {
         setSelectedBlock(null)
+        const extra = res as { warning?: string; overlappingAppointments?: unknown[] }
+        if (Array.isArray(extra.overlappingAppointments) && extra.overlappingAppointments.length > 0) {
+          toast({
+            title: "Block updated",
+            description:
+              extra.warning ||
+              "Existing appointments in this window are unchanged. The block stays visible on the calendar; bookings during this time are still allowed.",
+          })
+        }
         refetchBlockTimes()
       } else {
         toast({
@@ -698,6 +707,15 @@ export function StaffWorkingHoursContent() {
         description: blockDescription.slice(0, 200) || undefined,
       })
       if (res?.success) {
+        const extra = res as { warning?: string; overlappingAppointments?: unknown[] }
+        if (Array.isArray(extra.overlappingAppointments) && extra.overlappingAppointments.length > 0) {
+          toast({
+            title: "Time blocked",
+            description:
+              extra.warning ||
+              "Existing appointments in this window are unchanged. The block stays visible on the calendar; bookings during this time are still allowed.",
+          })
+        }
         closeBlockTimeModal()
         refetchBlockTimes()
       } else {

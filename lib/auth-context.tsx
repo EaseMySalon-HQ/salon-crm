@@ -42,7 +42,7 @@ interface AuthContextType {
     email: string,
     password: string,
     businessCode: string
-  ) => Promise<{ success: boolean; businessSuspended?: boolean }>
+  ) => Promise<{ success: boolean; businessSuspended?: boolean; error?: string; message?: string }>
   logout: (reason?: string) => void
   exitImpersonation: () => void
   updateUser: (userData: Partial<User>) => void
@@ -86,6 +86,22 @@ function restoreUserFromStorage(storedUser: string): User | null {
   } catch {
     return null
   }
+}
+
+/** Shown when login succeeds but HttpOnly cookies do not round-trip (different frontend vs API host on mobile). */
+const SESSION_VERIFY_FAIL_MESSAGE =
+  "Your browser did not keep the secure session. If this site uses a separate API host, deploy the app with same-origin /api (set NEXT_PUBLIC_API_URL=/api and API_PROXY_TARGET to your API origin), use your production domain setup, or try another browser."
+
+async function fetchVerifiedUserAfterCredentialLogin(): Promise<User | null> {
+  try {
+    const profile = await AuthAPI.getProfile()
+    if (profile.success && profile.data) {
+      return profile.data as User
+    }
+  } catch {
+    /* 401/403/network — session cookie not sent or rejected */
+  }
+  return null
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -224,20 +240,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await AuthAPI.login(email, password)
       
       if (response.success) {
-        const { user: userData, csrfToken } = response.data
+        const { csrfToken } = response.data
         if (csrfToken && typeof csrfToken === 'string') {
           setCsrfTokenPersisted(csrfToken)
         }
-        setUser(userData)
-        
-        if (typeof window !== 'undefined') {
-          localStorage.setItem("salon-auth-user", JSON.stringify(userData))
+
+        const freshUser = await fetchVerifiedUserAfterCredentialLogin()
+        if (!freshUser) {
+          try {
+            await AuthAPI.logout('login_verify_failed')
+          } catch {
+            /* server may already see no session */
+          }
+          clearAuthStorage()
+          setUser(null)
+          setIsLoading(false)
+          return {
+            success: false,
+            error: 'SESSION_NOT_ESTABLISHED',
+            message: SESSION_VERIFY_FAIL_MESSAGE,
+          }
         }
-        
+
+        setUser(freshUser)
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('salon-auth-user', JSON.stringify(freshUser))
+          } catch {
+            /* quota / private mode — cookie session still works */
+          }
+        }
+
         setIsLoading(false)
         return {
           success: true,
-          businessSuspended: !!(userData as User).businessSuspended,
+          businessSuspended: !!freshUser.businessSuspended,
         }
       } else {
         setIsLoading(false)
@@ -262,27 +299,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     password: string,
     businessCode: string
-  ): Promise<{ success: boolean; businessSuspended?: boolean }> => {
+  ): Promise<{
+    success: boolean
+    businessSuspended?: boolean
+    error?: string
+    message?: string
+  }> => {
     setIsLoading(true)
 
     try {
       const response = await AuthAPI.staffLogin(email, password, businessCode)
       
       if (response.success) {
-        const { user: userData, csrfToken } = response.data
+        const { csrfToken } = response.data
         if (csrfToken && typeof csrfToken === 'string') {
           setCsrfTokenPersisted(csrfToken)
         }
-        setUser(userData)
-        
-        if (typeof window !== 'undefined') {
-          localStorage.setItem("salon-auth-user", JSON.stringify(userData))
+
+        const freshUser = await fetchVerifiedUserAfterCredentialLogin()
+        if (!freshUser) {
+          try {
+            await AuthAPI.logout('login_verify_failed')
+          } catch {
+            /* ignore */
+          }
+          clearAuthStorage()
+          setUser(null)
+          setIsLoading(false)
+          return {
+            success: false,
+            error: 'SESSION_NOT_ESTABLISHED',
+            message: SESSION_VERIFY_FAIL_MESSAGE,
+          }
         }
-        
+
+        setUser(freshUser)
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('salon-auth-user', JSON.stringify(freshUser))
+          } catch {
+            /* quota / private mode */
+          }
+        }
+
         setIsLoading(false)
         return {
           success: true,
-          businessSuspended: !!(userData as User).businessSuspended,
+          businessSuspended: !!freshUser.businessSuspended,
         }
       } else {
         setIsLoading(false)

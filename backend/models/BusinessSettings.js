@@ -22,6 +22,7 @@ const businessSettingsSchema = new mongoose.Schema({
   receiptNumber: { type: Number, default: 1 },
   autoIncrementReceipt: { type: Boolean, default: true },
   purchaseOrderNumber: { type: Number, default: 1 },
+  purchaseInvoiceNumber: { type: Number, default: 1 },
   
   // Payment Settings
   currency: { type: String, default: "INR" },
@@ -62,6 +63,9 @@ const businessSettingsSchema = new mongoose.Schema({
   exemptProductRate: { type: Number, default: 0 },
   taxCategories: { type: Array, default: [] }, // Array of tax category objects
   priceInclusiveOfTax: { type: Boolean, default: true }, // true = price includes GST, false = GST added on top
+
+  /** Wallet / reward redemption rules at billing (merged with defaults in API). */
+  paymentConfiguration: { type: mongoose.Schema.Types.Mixed, default: undefined },
   
   // Multi-tenant support
   branchId: {

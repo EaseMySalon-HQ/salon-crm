@@ -18,22 +18,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { PurchaseOrdersAPI, SuppliersAPI, ProductsAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2, Package, Search, Trash2 } from "lucide-react"
+import { Loader2, MessageCircle, Package, Search, Trash2 } from "lucide-react"
 import { format } from "date-fns"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  formatPurchaseOrderWhatsAppMessage,
+  normalizePhoneForWhatsApp,
+  openWhatsAppWebWithText,
+} from "@/lib/whatsapp-share"
 
 interface POFormProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   preselectedSupplierId?: string | null
+  /** When set, form loads this draft PO for editing (Put). */
+  editingPoId?: string | null
   onSaved?: () => void
 }
 
-export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: POFormProps) {
+export function POForm({ open, onOpenChange, preselectedSupplierId, editingPoId, onSaved }: POFormProps) {
   const { toast } = useToast()
   const [saving, setSaving] = React.useState(false)
+  const [loadingPo, setLoadingPo] = React.useState(false)
   const [suppliers, setSuppliers] = React.useState<any[]>([])
   const [products, setProducts] = React.useState<any[]>([])
   const [supplierId, setSupplierId] = React.useState("")
@@ -41,32 +56,103 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
   const [expectedDeliveryDate, setExpectedDeliveryDate] = React.useState("")
   const [items, setItems] = React.useState<{ productId: string; productName: string; quantity: number; unitCost: number; gstPercent: number }[]>([])
   const [notes, setNotes] = React.useState("")
+  const [sharePromptOpen, setSharePromptOpen] = React.useState(false)
+  const [pendingSharePo, setPendingSharePo] = React.useState<any | null>(null)
   const [productSearch, setProductSearch] = React.useState("")
   const [productSearchOpen, setProductSearchOpen] = React.useState(false)
-  const [gstMode, setGstMode] = React.useState<"exclude" | "include">("exclude")
 
   React.useEffect(() => {
-    if (open) {
-      SuppliersAPI.getAll({ activeOnly: true }).then((r) => {
-        if (r.success) setSuppliers(r.data || [])
-      })
-      ProductsAPI.getAll({ limit: 500 }).then((r) => {
-        if (r.success) setProducts(Array.isArray(r.data) ? r.data : (r.data?.data || []))
-      })
-      setSupplierId(preselectedSupplierId || "")
-      setOrderDate(format(new Date(), "yyyy-MM-dd"))
-      setExpectedDeliveryDate("")
-      setItems([])
-      setNotes("")
+    if (!open) return
+
+    SuppliersAPI.getAll({ activeOnly: true }).then((r) => {
+      if (r.success) setSuppliers(r.data || [])
+    })
+    ProductsAPI.getAll({ limit: 500 }).then((r) => {
+      if (r.success) setProducts(Array.isArray(r.data) ? r.data : (r.data?.data || []))
+    })
+
+    if (editingPoId) {
+      setLoadingPo(true)
+      PurchaseOrdersAPI.getById(editingPoId)
+        .then((r) => {
+          if (!r.success || !r.data) {
+            toast({ title: "Error", description: "Could not load purchase order", variant: "destructive" })
+            onOpenChange(false)
+            return
+          }
+          const po = r.data
+          if (po.status !== "draft") {
+            toast({ title: "Only draft orders can be edited", variant: "destructive" })
+            onOpenChange(false)
+            return
+          }
+          setSupplierId((po.supplierId?._id || po.supplierId)?.toString() || "")
+          setOrderDate(po.orderDate ? format(new Date(po.orderDate), "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"))
+          setExpectedDeliveryDate(
+            po.expectedDeliveryDate ? format(new Date(po.expectedDeliveryDate), "yyyy-MM-dd") : ""
+          )
+          setNotes(po.notes || "")
+          setItems(
+            (po.items || []).map((it: any) => ({
+              productId: (it.productId?._id || it.productId)?.toString() || "",
+              productName: it.productName || "",
+              quantity: it.quantity ?? 1,
+              unitCost: it.unitCost ?? 0,
+              gstPercent: it.gstPercent ?? 0,
+            }))
+          )
+        })
+        .finally(() => setLoadingPo(false))
+      return
     }
-  }, [open, preselectedSupplierId])
+
+    setLoadingPo(false)
+    setSupplierId(preselectedSupplierId || "")
+    setOrderDate(format(new Date(), "yyyy-MM-dd"))
+    setExpectedDeliveryDate("")
+    setItems([])
+    setNotes("")
+  }, [open, editingPoId, preselectedSupplierId, toast, onOpenChange])
 
   React.useEffect(() => {
-    if (preselectedSupplierId && open) setSupplierId(preselectedSupplierId)
-  }, [preselectedSupplierId, open])
+    if (preselectedSupplierId && open && !editingPoId) setSupplierId(preselectedSupplierId)
+  }, [preselectedSupplierId, open, editingPoId])
 
   // Get selected supplier for category filtering
   const selectedSupplier = React.useMemo(() => suppliers.find((s) => s._id === supplierId), [suppliers, supplierId])
+
+  const openShareForSavedPo = React.useCallback(
+    (po: any) => {
+      if (!po) return
+      const supId = (po.supplierId?._id || po.supplierId)?.toString?.() || String(po.supplierId || "")
+      const sup =
+        suppliers.find((s) => s._id === supId)
+      const intl = normalizePhoneForWhatsApp(String(sup?.whatsapp || sup?.phone || "").trim())
+      if (!intl) return
+      const orderDateLabel = po.orderDate ? format(new Date(po.orderDate), "dd MMM yyyy") : ""
+      const exp = po.expectedDeliveryDate ? format(new Date(po.expectedDeliveryDate), "dd MMM yyyy") : undefined
+      const lines = (po.items || []).map((it: any) => ({
+        productName: it.productName || "Product",
+        quantity: Number(it.quantity) || 0,
+        unitCost: Number(it.unitCost) || 0,
+        lineTotal: Number(it.total) || 0,
+      }))
+      const msg = formatPurchaseOrderWhatsAppMessage({
+        supplierName: sup?.name || "",
+        contactPerson: sup?.contactPerson,
+        poNumber: po.poNumber,
+        orderDateLabel,
+        expectedDeliveryLabel: exp,
+        notes: po.notes,
+        lines,
+        subtotal: Number(po.subtotal) || 0,
+        gstAmount: Number(po.gstAmount) || 0,
+        grandTotal: Number(po.grandTotal) || 0,
+      })
+      openWhatsAppWebWithText(intl, msg)
+    },
+    [suppliers]
+  )
   const supplierCategories = React.useMemo(
     () => (Array.isArray(selectedSupplier?.categories) ? selectedSupplier.categories : selectedSupplier?.category ? [selectedSupplier.category] : []),
     [selectedSupplier]
@@ -121,8 +207,8 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
         productId: product._id,
         productName: product.name,
         quantity: 1,
-        unitCost: product.cost || product.price || 0,
-        gstPercent: 18,
+        unitCost: 0,
+        gstPercent: 0,
       },
     ])
     setProductSearch("")
@@ -141,33 +227,23 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
     setItems((prev) => prev.filter((_, i) => i !== idx))
   }
 
-  const { subtotal, gstAmount, grandTotal, lineTotal } = React.useMemo(() => {
-    if (gstMode === "exclude") {
-      const st = items.reduce((s, i) => s + i.quantity * i.unitCost, 0)
-      const gst = items.reduce((s, i) => s + i.quantity * i.unitCost * (i.gstPercent / 100), 0)
-      return {
-        subtotal: st,
-        gstAmount: gst,
-        grandTotal: Math.round((st + gst) * 100) / 100,
-        lineTotal: (i: (typeof items)[0]) => i.quantity * i.unitCost * (1 + i.gstPercent / 100),
-      }
+  const canOfferWhatsAppShareForPo = React.useCallback(
+    (po: any) => {
+      const supId = (po?.supplierId?._id || po?.supplierId)?.toString?.() ?? String(po?.supplierId ?? "")
+      const sup = suppliers.find((s) => s._id === supId)
+      return !!normalizePhoneForWhatsApp(String(sup?.whatsapp || sup?.phone || "").trim())
+    },
+    [suppliers]
+  )
+
+  const prevSheetOpenRef = React.useRef(false)
+  React.useEffect(() => {
+    if (open && !prevSheetOpenRef.current) {
+      setSharePromptOpen(false)
+      setPendingSharePo(null)
     }
-    const st = items.reduce((s, i) => {
-      const base = i.unitCost / (1 + i.gstPercent / 100)
-      return s + i.quantity * base
-    }, 0)
-    const gst = items.reduce((s, i) => {
-      const base = i.unitCost / (1 + i.gstPercent / 100)
-      return s + i.quantity * (i.unitCost - base)
-    }, 0)
-    const gt = items.reduce((s, i) => s + i.quantity * i.unitCost, 0)
-    return {
-      subtotal: Math.round(st * 100) / 100,
-      gstAmount: Math.round(gst * 100) / 100,
-      grandTotal: Math.round(gt * 100) / 100,
-      lineTotal: (i: (typeof items)[0]) => i.quantity * i.unitCost,
-    }
-  }, [items, gstMode])
+    prevSheetOpenRef.current = open
+  }, [open])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -179,29 +255,85 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
       toast({ title: "Error", description: "Add at least one item", variant: "destructive" })
       return
     }
+    for (let idx = 0; idx < items.length; idx++) {
+      const it = items[idx]
+      if (!it.productName?.trim()) {
+        toast({
+          title: "Product name required",
+          description: `Line ${idx + 1}: enter or pick a product with a name.`,
+          variant: "destructive",
+        })
+        return
+      }
+      if (!Number.isFinite(it.quantity) || it.quantity < 1) {
+        toast({
+          title: "Quantity required",
+          description: `Line ${idx + 1}: quantity must be at least 1.`,
+          variant: "destructive",
+        })
+        return
+      }
+      if (!it.productId) {
+        toast({
+          title: "Product required",
+          description: `Line ${idx + 1}: choose a product from the list.`,
+          variant: "destructive",
+        })
+        return
+      }
+    }
     try {
       setSaving(true)
+      const payloadItems = items.map((i) => ({
+        productId: i.productId,
+        productName: i.productName.trim(),
+        quantity: i.quantity,
+        unitCost: 0,
+        gstPercent: 0,
+      }))
+
+      if (editingPoId) {
+        const res = await PurchaseOrdersAPI.update(editingPoId, {
+          supplierId,
+          orderDate,
+          expectedDeliveryDate: expectedDeliveryDate || undefined,
+          items: payloadItems,
+          notes,
+        })
+        if (res.success) {
+          const po = res.data
+          toast({
+            title: "Purchase order updated",
+            description: po?.poNumber ? `${po.poNumber} saved.` : "Saved.",
+          })
+          onSaved?.()
+          onOpenChange(false)
+        } else {
+          toast({ title: "Error", description: res.error || "Failed", variant: "destructive" })
+        }
+        return
+      }
+
       const res = await PurchaseOrdersAPI.create({
         supplierId,
         orderDate,
         expectedDeliveryDate: expectedDeliveryDate || undefined,
-        items: items.map((i) => {
-          const unitCost = gstMode === "include" ? i.unitCost / (1 + i.gstPercent / 100) : i.unitCost
-          return {
-            productId: i.productId,
-            productName: i.productName,
-            quantity: i.quantity,
-            unitCost,
-            gstPercent: i.gstPercent,
-          }
-        }),
+        items: payloadItems,
         notes,
         status: "ordered",
       })
       if (res.success) {
-        toast({ title: "Success", description: "Purchase order created" })
+        const po = res.data
+        toast({
+          title: "Purchase order created",
+          description: po?.poNumber ? `${po.poNumber} submitted.` : "Submitted.",
+        })
         onSaved?.()
         onOpenChange(false)
+        if (po && canOfferWhatsAppShareForPo(po)) {
+          setPendingSharePo(po)
+          setSharePromptOpen(true)
+        }
       } else {
         toast({ title: "Error", description: res.error || "Failed", variant: "destructive" })
       }
@@ -217,11 +349,17 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <>
+      <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="sm:max-w-2xl overflow-y-auto">
         <SheetHeader>
-          <SheetTitle>New Purchase Order</SheetTitle>
+          <SheetTitle>{editingPoId ? "Edit purchase order" : "New Purchase Order"}</SheetTitle>
         </SheetHeader>
+        {loadingPo ? (
+          <div className="flex justify-center py-16">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -249,8 +387,7 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
+          <div className="space-y-2">
               <Label>Expected Delivery Date</Label>
               <Input
                 type="date"
@@ -258,23 +395,6 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
                 onChange={(e) => setExpectedDeliveryDate(e.target.value)}
               />
             </div>
-            <div className="space-y-2">
-              <Label>GST</Label>
-              <RadioGroup value={gstMode} onValueChange={(v: "exclude" | "include") => setGstMode(v)} className="flex gap-4">
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="exclude" id="gst-exclude" />
-                  <Label htmlFor="gst-exclude" className="font-normal cursor-pointer">Exclude GST</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="include" id="gst-include" />
-                  <Label htmlFor="gst-include" className="font-normal cursor-pointer">Include GST</Label>
-                </div>
-              </RadioGroup>
-              <p className="text-xs text-muted-foreground">
-                {gstMode === "exclude" ? "Unit cost is before tax; GST will be added." : "Unit cost already includes GST."}
-              </p>
-            </div>
-          </div>
 
           <div className="space-y-2" data-po-product-search>
             <Label>Add Products</Label>
@@ -317,7 +437,6 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
                               <span className="font-medium truncate block">{product.name}</span>
                               <span className="text-xs text-muted-foreground">Stock: {product.stock ?? 0}</span>
                             </span>
-                            <span className="shrink-0">₹{((product.cost || product.price) || 0).toFixed(2)}</span>
                           </button>
                         ))}
                       </div>
@@ -332,15 +451,13 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
           {items.length > 0 && (
             <div className="space-y-2">
               <Label>Items</Label>
+              <p className="text-xs text-muted-foreground">Product and quantity are required on each line.</p>
               <div className="rounded-md border">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-muted/50">
-                      <th className="text-left p-2">Product</th>
-                      <th className="text-right p-2 w-20">Qty</th>
-                      <th className="text-right p-2 w-24">Unit Cost {gstMode === "include" ? "(incl.)" : "(ex-GST)"}</th>
-                      <th className="text-right p-2 w-20">GST %</th>
-                      <th className="text-right p-2 w-24">Total</th>
+                      <th className="text-left p-2">Product *</th>
+                      <th className="text-right p-2 w-20">Qty *</th>
                       <th className="w-10"></th>
                     </tr>
                   </thead>
@@ -362,27 +479,6 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
                               onChange={(e) => updateItem(idx, "quantity", parseInt(e.target.value) || 1)}
                             />
                           </td>
-                          <td className="p-2 text-right">
-                            <Input
-                              type="number"
-                              min={0}
-                              step={0.01}
-                              className="w-20 h-8 text-right"
-                              value={item.unitCost}
-                              onChange={(e) => updateItem(idx, "unitCost", parseFloat(e.target.value) || 0)}
-                            />
-                          </td>
-                          <td className="p-2 text-right">
-                            <Input
-                              type="number"
-                              min={0}
-                              step={0.01}
-                              className="w-16 h-8 text-right"
-                              value={item.gstPercent}
-                              onChange={(e) => updateItem(idx, "gstPercent", parseFloat(e.target.value) || 0)}
-                            />
-                          </td>
-                          <td className="p-2 text-right">₹{lineTotal(item).toFixed(2)}</td>
                           <td className="p-2">
                             <Button type="button" variant="ghost" size="icon" onClick={() => removeItem(idx)}>
                               <Trash2 className="h-4 w-4" />
@@ -392,11 +488,6 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
                     ))}
                   </tbody>
                 </table>
-              </div>
-              <div className="flex justify-end gap-4 text-sm mt-2">
-                <span>Subtotal: ₹{subtotal.toFixed(2)}</span>
-                <span>GST: ₹{gstAmount.toFixed(2)}</span>
-                <span className="font-semibold">Grand Total: ₹{grandTotal.toFixed(2)}</span>
               </div>
             </div>
           )}
@@ -408,15 +499,69 @@ export function POForm({ open, onOpenChange, preselectedSupplierId, onSaved }: P
 
           <SheetFooter className="mt-6">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              Close
             </Button>
             <Button type="submit" disabled={saving || items.length === 0}>
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Create & Submit Order
+              {editingPoId ? "Save changes" : "Create & Submit Order"}
             </Button>
           </SheetFooter>
         </form>
+        )}
       </SheetContent>
-    </Sheet>
+      </Sheet>
+
+      <Dialog
+        open={sharePromptOpen}
+        onOpenChange={(next) => {
+          setSharePromptOpen(next)
+          if (!next) setPendingSharePo(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Share purchase order on WhatsApp?</DialogTitle>
+            <DialogDescription>
+              {pendingSharePo?.poNumber ? (
+                <>
+                  Send <span className="font-medium text-foreground">{pendingSharePo.poNumber}</span> to the supplier&apos;s
+                  WhatsApp or phone number on file. Opens WhatsApp Web in your browser — use the tab where you&apos;re already
+                  logged in, same idea as booking a demo.
+                </>
+              ) : (
+                <>
+                  Opens WhatsApp Web in your browser with a draft message. Use your logged-in WhatsApp Web session to send it
+                  to the supplier&apos;s saved number.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setSharePromptOpen(false)
+                setPendingSharePo(null)
+              }}
+            >
+              Not now
+            </Button>
+            <Button
+              type="button"
+              className="bg-green-600 text-white hover:bg-green-700"
+              onClick={() => {
+                if (pendingSharePo) openShareForSavedPo(pendingSharePo)
+                setSharePromptOpen(false)
+                setPendingSharePo(null)
+              }}
+            >
+              <MessageCircle className="h-4 w-4 mr-2" />
+              Share via WhatsApp
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

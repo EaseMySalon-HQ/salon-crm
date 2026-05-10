@@ -30,6 +30,8 @@ const clientWalletSchema = new mongoose.Schema(
     expiryDate: { type: Date, required: true },
     gracePeriodDays: { type: Number, default: 0, min: 0 },
     effectiveExpiryDate: { type: Date, required: true },
+    /** Set when balance includes bill cash-change credit — wallet does not expire (far-future dates). */
+    nonExpiring: { type: Boolean, default: false },
     status: {
       type: String,
       enum: ['active', 'expired', 'exhausted', 'cancelled'],

@@ -21,6 +21,8 @@ import { Switch } from "@/components/ui/switch"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, ProductsAPI, type SalesSummaryData } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
 import { ProductListReport } from "@/components/reports/product-list-report"
+import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
+import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
@@ -92,9 +94,34 @@ interface SalesRecord {
   staffName: string
   tipStaffId?: string
   tipStaffName?: string
+  tipLines?: Array<{ staffId?: string; staffName?: string; amount: number }>
   isEdited?: boolean // Track if bill has been edited
   editedAt?: Date | string
   items?: Array<{ type: string; [key: string]: unknown }>
+}
+
+function expandSaleTipAllocations(sale: SalesRecord): { staffId: string; staffName: string; amount: number }[] {
+  const raw = sale.tipLines
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .map((l) => ({
+        staffId: String(l.staffId || "").trim(),
+        staffName: String(l.staffName || "").trim(),
+        amount: Math.max(0, Number(l.amount) || 0),
+      }))
+      .filter((l) => l.amount > 0.005 && (l.staffId || l.staffName))
+  }
+  const tip = sale.tip || 0
+  if (tip > 0.005 && (sale.tipStaffId || sale.tipStaffName)) {
+    return [
+      {
+        staffId: String(sale.tipStaffId || "").trim(),
+        staffName: (sale.tipStaffName || "").trim() || "—",
+        amount: tip,
+      },
+    ]
+  }
+  return []
 }
 
 function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
@@ -110,6 +137,24 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
     tip: (sale.tip as number) || 0,
     tipStaffId: sale.tipStaffId != null ? String(sale.tipStaffId) : undefined,
     tipStaffName: sale.tipStaffName as string | undefined,
+    tipLines: Array.isArray(sale.tipLines)
+      ? (sale.tipLines as Record<string, unknown>[]).map((l) => {
+          const sid = l.staffId
+          const staffIdStr =
+            sid != null
+              ? String(
+                  typeof sid === "object" && sid !== null && "_id" in sid
+                    ? (sid as { _id?: unknown })._id
+                    : sid,
+                )
+              : ""
+          return {
+            staffId: staffIdStr || undefined,
+            staffName: l.staffName != null ? String(l.staffName) : undefined,
+            amount: Math.max(0, Number(l.amount) || 0),
+          }
+        })
+      : undefined,
     netTotal: Number(sale.netTotal ?? 0),
     taxAmount: Number(sale.taxAmount ?? 0),
     grossTotal: Number(sale.grossTotal ?? 0),
@@ -275,17 +320,24 @@ export function SalesReport() {
   /** Ref for sales list: reset page when filter key changes (avoids stale page + fetch race). */
   const prevSalesFilterKeyRef = useRef<string | null>(null)
 
-  // Function to navigate to receipt page (Back restores tab + report type, e.g. Deleted Invoice)
+  const openReceiptInNewTab = (path: string) => {
+    if (typeof window === "undefined") return
+    window.open(path, "_blank", "noopener,noreferrer")
+  }
+
+  /** Open receipt in a new tab (keeps Reports open). */
   const handleViewReceipt = (sale: SalesRecord) => {
-    router.push(`/receipt/${sale.billNo}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
+    openReceiptInNewTab(`/receipt/${sale.billNo}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
   }
 
   const navigateToReceiptByBillNo = useCallback(
     (billNo: string) => {
       if (!billNo?.trim()) return
-      router.push(`/receipt/${encodeURIComponent(billNo.trim())}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`)
+      openReceiptInNewTab(
+        `/receipt/${encodeURIComponent(billNo.trim())}?returnTo=${encodeURIComponent(buildReportsReturnPath())}`,
+      )
     },
-    [router, buildReportsReturnPath],
+    [buildReportsReturnPath],
   )
 
   const handleEditBill = (sale: SalesRecord) => {
@@ -830,8 +882,10 @@ export function SalesReport() {
   const staffTipSales =
     reportType === "staff-tip" && staffTipDateRange && staffTipDateRange.from != null && staffTipDateRange.to != null
       ? staffTipData.filter((sale) => {
-          const hasTip = !!(sale.tip && sale.tip > 0) && (sale.tipStaffId || sale.tipStaffName)
-          const matchesStaff = staffTipFilter === "all" || sale.tipStaffId === staffTipFilter
+          const allocs = expandSaleTipAllocations(sale)
+          const hasTip = allocs.length > 0
+          const matchesStaff =
+            staffTipFilter === "all" || allocs.some((a) => a.staffId === staffTipFilter)
           return hasTip && matchesStaff
         })
       : []
@@ -857,27 +911,32 @@ export function SalesReport() {
   const staffTipAggregated = (() => {
     const map = new Map<string, { staffId: string; staffName: string; tipAmount: number; cashTipAmount: number; nonCashTipAmount: number; paymentModes: string[] }>()
     staffTipSales.forEach((sale) => {
-      const id = (sale.tipStaffId || sale.tipStaffName || "").toString()
-      const name = sale.tipStaffName || (salesStaff.find((s) => s._id === sale.tipStaffId)?.name) || "—"
-      const tipAmt = sale.tip || 0
       const mode = getTipPaymentMode(sale)
       const isCash = mode === "Cash"
-      const existing = map.get(id)
-      if (existing) {
-        existing.tipAmount += tipAmt
-        if (isCash) existing.cashTipAmount += tipAmt
-        else existing.nonCashTipAmount += tipAmt
-        if (!existing.paymentModes.includes(mode)) existing.paymentModes.push(mode)
-      } else {
-        map.set(id, {
-          staffId: id,
-          staffName: name,
-          tipAmount: tipAmt,
-          cashTipAmount: isCash ? tipAmt : 0,
-          nonCashTipAmount: isCash ? 0 : tipAmt,
-          paymentModes: [mode]
-        })
-      }
+      expandSaleTipAllocations(sale).forEach((alloc) => {
+        const id = (alloc.staffId || alloc.staffName || "—").toString()
+        const name =
+          alloc.staffName ||
+          (salesStaff.find((s) => s._id === alloc.staffId || String(s._id) === alloc.staffId)?.name) ||
+          "—"
+        const tipAmt = alloc.amount
+        const existing = map.get(id)
+        if (existing) {
+          existing.tipAmount += tipAmt
+          if (isCash) existing.cashTipAmount += tipAmt
+          else existing.nonCashTipAmount += tipAmt
+          if (!existing.paymentModes.includes(mode)) existing.paymentModes.push(mode)
+        } else {
+          map.set(id, {
+            staffId: id,
+            staffName: name,
+            tipAmount: tipAmt,
+            cashTipAmount: isCash ? tipAmt : 0,
+            nonCashTipAmount: isCash ? 0 : tipAmt,
+            paymentModes: [mode],
+          })
+        }
+      })
     })
     return Array.from(map.values()).sort((a, b) => b.tipAmount - a.tipAmount)
   })()
@@ -944,6 +1003,8 @@ export function SalesReport() {
       ? "Cash payments only"
       : paymentFilter === "Cash"
         ? "Filtered: Cash only"
+        : paymentFilter === "Wallet"
+          ? "Filtered: bills with prepaid wallet payment"
         : "All cash payments"
   const onlineCashCollectedTooltip =
     paymentFilter === "all"
@@ -952,7 +1013,9 @@ export function SalesReport() {
         ? "Filtered: Card only"
         : paymentFilter === "Online"
           ? "Filtered: Online only"
-          : "All online payments"
+        : paymentFilter === "Wallet"
+          ? "Filtered: bills with prepaid wallet payment"
+        : "All online payments"
 
   const salesStatSkeleton = <div className="h-8 w-24 max-w-full bg-slate-200 rounded animate-pulse" aria-hidden />
 
@@ -1407,7 +1470,9 @@ export function SalesReport() {
         setIsDeleteDialogOpen(false)
         setSelectedSale(null)
         setDeleteSaleReason("")
-        
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("appointments-refresh"))
+        }
         toast({
           title: "Sale Deleted",
           description: `Sale record for ${selectedSale.customerName} has been successfully deleted.`,
@@ -1646,6 +1711,7 @@ export function SalesReport() {
                       <SelectItem value="Cash">Cash</SelectItem>
                       <SelectItem value="Card">Card</SelectItem>
                       <SelectItem value="Online">Online</SelectItem>
+                      <SelectItem value="Wallet">Wallet</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -1733,17 +1799,12 @@ export function SalesReport() {
               )}
               {reportType === "service-list" && (
                 <>
-                  <Select value={serviceListServiceFilter} onValueChange={setServiceListServiceFilter}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                      <SelectValue placeholder="Service" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All services</SelectItem>
-                      {serviceListServices.map((s) => (
-                        <SelectItem key={s._id} value={s._id}>{s.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <ServiceFilterCombobox
+                    value={serviceListServiceFilter}
+                    onValueChange={setServiceListServiceFilter}
+                    services={serviceListServices}
+                    triggerClassName="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                  />
                   <Select value={serviceListDatePeriod} onValueChange={handleServiceListDatePeriodChange}>
                     <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
@@ -1830,23 +1891,19 @@ export function SalesReport() {
                       <SelectItem value="Cash">Cash</SelectItem>
                       <SelectItem value="Card">Card</SelectItem>
                       <SelectItem value="Online">Online</SelectItem>
+                      <SelectItem value="Wallet">Wallet</SelectItem>
                     </SelectContent>
                   </Select>
                 </>
               )}
               {reportType === "product-list" && (
                 <>
-                  <Select value={productListProductFilter} onValueChange={setProductListProductFilter}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                      <SelectValue placeholder="Product" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All products</SelectItem>
-                      {productListProducts.map((p) => (
-                        <SelectItem key={p._id} value={p._id}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <ProductFilterCombobox
+                    value={productListProductFilter}
+                    onValueChange={setProductListProductFilter}
+                    products={productListProducts}
+                    triggerClassName="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                  />
                   <Select value={productListDatePeriod} onValueChange={handleProductListDatePeriodChange}>
                     <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
@@ -1933,6 +1990,7 @@ export function SalesReport() {
                       <SelectItem value="Cash">Cash</SelectItem>
                       <SelectItem value="Card">Card</SelectItem>
                       <SelectItem value="Online">Online</SelectItem>
+                      <SelectItem value="Wallet">Wallet</SelectItem>
                     </SelectContent>
                   </Select>
                 </>
@@ -2431,6 +2489,12 @@ export function SalesReport() {
                           total: (bill.grossTotal || 0) + (bill.tip || 0),
                           tip: bill.tip || 0,
                           tipStaffName: bill.tipStaffName,
+                          tipLines: Array.isArray(bill.tipLines)
+                            ? bill.tipLines.map((tl: { staffName?: string; amount?: number }) => ({
+                                staffName: tl.staffName,
+                                amount: Math.max(0, Number(tl.amount) || 0),
+                              }))
+                            : undefined,
                           payments: (bill.payments || []).map((p: any) => ({ type: (p.mode || p.type || "cash").toLowerCase(), amount: p.amount })),
                           staffName: bill.staffName,
                           taxBreakdown: bill.taxBreakdown,
@@ -2445,8 +2509,8 @@ export function SalesReport() {
                                   type="button"
                                   onClick={() => {
                                     const dataStr = encodeURIComponent(JSON.stringify(receiptData))
-                                    router.push(
-                                      `/receipt/${encodeURIComponent(row.billNo || bill.billNo)}?data=${dataStr}&returnTo=${encodeURIComponent(buildReportsReturnPath())}`
+                                    openReceiptInNewTab(
+                                      `/receipt/${encodeURIComponent(row.billNo || bill.billNo)}?data=${dataStr}&returnTo=${encodeURIComponent(buildReportsReturnPath())}`,
                                     )
                                   }}
                                   className="text-indigo-600 hover:text-indigo-800 hover:underline font-medium text-left"

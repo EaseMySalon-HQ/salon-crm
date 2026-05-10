@@ -11,7 +11,9 @@ const cron = require('node-cron');
 const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 const { ensureAdminAccessDefaults } = require('./utils/admin-access');
-const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString } = require('./utils/date-utils');
+const { parseDateIST, getStartOfDayIST, getEndOfDayIST, getTodayIST, toDateStringIST, parseTimeToMinutes, minutesToTimeString, parseSupplierPaymentDateInput } = require('./utils/date-utils');
+const { billChangeCreditedToWalletCashAddition } = require('./utils/bill-change-wallet-cash');
+const { supplierPayableReferenceLabel: formatSupplierPayableBillRef } = require('./utils/supplier-payable-reference-label');
 const {
   buildSalesListMatch,
   buildSalesListDuePaymentSplitMatches,
@@ -73,6 +75,7 @@ const {
 
 // Import Routes
 const cashRegistryRoutes = require('./routes/cashRegistry');
+const purchaseInvoicesRoutes = require('./routes/purchaseInvoices');
 const adminRoutes = require('./routes/admin');
 
 require('dotenv').config();
@@ -112,20 +115,47 @@ dbPromise
 app.use(helmet());
 
 // Enhanced CORS configuration for Railway deployment
-const allowedOrigins = process.env.CORS_ORIGINS 
-  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
+const rawCorsOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map((origin) => origin.trim())
   : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+
+/**
+ * Browsers send an exact Origin string; tablets often land on www vs apex first.
+ * Expand allowlist with the alternate hostname (skip IP / localhost).
+ */
+function expandAllowedOrigins(origins) {
+  const set = new Set(origins.filter(Boolean));
+  for (const o of [...set]) {
+    try {
+      const u = new URL(o);
+      if (u.hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)) continue;
+      if (u.hostname.startsWith('www.')) {
+        const alt = new URL(o);
+        alt.hostname = u.hostname.slice(4);
+        set.add(alt.origin);
+      } else {
+        const alt = new URL(o);
+        alt.hostname = `www.${u.hostname}`;
+        set.add(alt.origin);
+      }
+    } catch {
+      /* ignore non-URL entries */
+    }
+  }
+  return [...set];
+}
+
+const allowedOrigins = expandAllowedOrigins(rawCorsOrigins);
 
 logger.info('Environment: %s, CORS Origins: %s, MongoDB URI: %s, JWT Secret: %s',
   process.env.NODE_ENV || 'development', allowedOrigins,
   process.env.MONGODB_URI ? 'Set' : 'Not set', process.env.JWT_SECRET ? 'Set' : 'Not set');
 
-// Dynamic CORS configuration
-app.use(cors({
-  origin: function (origin, callback) {
+const tenantCorsOptions = {
+  origin(origin, callback) {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
-    
+
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -137,8 +167,11 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-CSRF-Token', 'X-XSRF-Token'],
   preflightContinue: false,
-  optionsSuccessStatus: 200
-}));
+  optionsSuccessStatus: 200,
+};
+
+// Dynamic CORS configuration (must match explicit OPTIONS handler for credentialed Safari preflights)
+app.use(cors(tenantCorsOptions));
 
 // Body + cookies before rate limiters so auth routes can key off JSON (email, etc.)
 app.use(express.json({ limit: '10mb' }));
@@ -179,8 +212,8 @@ if (process.env.NODE_ENV !== 'production' && process.env.HTTP_LOG !== '0') {
 const { csrfProtection, setCsrfCookie } = require('./middleware/csrf');
 app.use(csrfProtection);
 
-// Handle CORS preflight for all routes
-app.options('*', cors());
+// Handle CORS preflight for all routes (same options as app.use — avoid default cors() without credentials)
+app.options('*', cors(tenantCorsOptions));
 
 /** Public: set `ems_csrf` cookie for double-submit CSRF (safe before login; no auth). */
 app.get('/api/auth/csrf', (req, res) => {
@@ -320,9 +353,11 @@ app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/client-wallet', require('./routes/client-wallet'));
+app.use('/api/reward-points', require('./routes/reward-points'));
 app.use('/api/plan', require('./routes/plan-checkout'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/packages', require('./routes/packages'));
+app.use('/api/purchase-invoices', purchaseInvoicesRoutes);
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 
@@ -4680,7 +4715,7 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
 app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Product, InventoryTransaction } = req.businessModels;
-    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
+    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit, imageUrl } = req.body;
 
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
@@ -4694,6 +4729,8 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
           : 'Name, category, price, and stock are required'
       });
     }
+
+    const imageUrlTrimmed = typeof imageUrl === 'string' ? imageUrl.trim() : '';
 
     const costVal = cost !== undefined && cost !== null && cost !== '' ? parseFloat(cost) : undefined;
     const newProduct = new Product({
@@ -4714,7 +4751,8 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
       taxCategory: taxCategory || 'standard',
       productType: productType || 'retail',
       isActive: true,
-      branchId: req.user.branchId
+      branchId: req.user.branchId,
+      ...(imageUrlTrimmed ? { imageUrl: imageUrlTrimmed } : {})
     });
 
     const savedProduct = await newProduct.save();
@@ -4759,7 +4797,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
   try {
     
     const { Product, InventoryTransaction } = req.businessModels;
-    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, isActive, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit } = req.body;
+    const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, isActive, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit, imageUrl } = req.body;
 
     // For service products, price is not required
     const isServiceProduct = productType === 'service';
@@ -4773,6 +4811,8 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
           : 'Name, category, price, and stock are required'
       });
     }
+
+    const imageUrlTrimmed = typeof imageUrl === 'string' ? imageUrl.trim() : undefined;
 
     // Get current product to compare stock levels
     const currentProduct = await Product.findById(req.params.id);
@@ -4807,6 +4847,10 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
       productType: productType || 'retail',
       isActive: isActive !== undefined ? isActive : true,
     };
+
+    if (imageUrlTrimmed !== undefined) {
+      updateData.imageUrl = imageUrlTrimmed;
+    }
     
     // Add minimumStock if provided (handle empty string, null, and undefined)
     if (minimumStock !== undefined && minimumStock !== null && minimumStock !== '') {
@@ -5204,7 +5248,7 @@ app.get('/api/suppliers/summary', authenticateToken, setupBusinessDatabase, requ
     const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     const posThisMonth = await PurchaseOrder.find({
       branchId,
-      status: { $in: ['ordered', 'partially_received', 'received'] },
+      status: { $in: ['ordered', 'partially_received', 'received', 'fully_received'] },
       orderDate: { $gte: monthStart, $lte: monthEnd }
     }).lean().catch(() => []);
     const purchasesThisMonth = posThisMonth.reduce((sum, po) => sum + (po.grandTotal || 0), 0);
@@ -5237,7 +5281,7 @@ app.get('/api/suppliers/summary', authenticateToken, setupBusinessDatabase, requ
 app.get('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
-    const supplier = await Supplier.findById(req.params.id);
+    const supplier = await Supplier.findOne({ _id: req.params.id, branchId: req.user.branchId });
 
     if (!supplier) {
       return res.status(404).json({
@@ -5259,18 +5303,40 @@ app.get('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireS
   }
 });
 
-// Get supplier's purchase orders
+// Get supplier purchase order + purchase invoice history (newest first)
 app.get('/api/suppliers/:id/orders', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const { PurchaseOrder } = req.businessModels;
+    const { PurchaseOrder, PurchaseInvoice } = req.businessModels;
     const supplierId = req.params.id;
     const branchId = req.user.branchId;
 
-    const orders = await PurchaseOrder.find({ supplierId, branchId })
-      .sort({ orderDate: -1 })
-      .lean();
+    const [orders, invoices] = await Promise.all([
+      PurchaseOrder.find({ supplierId, branchId }).sort({ orderDate: -1, createdAt: -1, _id: -1 }).lean(),
+      PurchaseInvoice.find({ supplierId, branchId }).sort({ invoiceDate: -1, createdAt: -1, _id: -1 }).lean()
+    ]);
 
-    res.json({ success: true, data: orders });
+    const rows = [
+      ...orders.map((o) => ({
+        kind: 'purchase_order',
+        _id: o._id,
+        reference: o.poNumber || '',
+        date: o.orderDate,
+        status: o.status,
+        total: o.grandTotal || 0
+      })),
+      ...invoices.map((inv) => ({
+        kind: 'purchase_invoice',
+        _id: inv._id,
+        reference: String(inv.supplierInvoiceNumber || '').trim() || inv.invoiceNumber || '',
+        date: inv.invoiceDate,
+        status: inv.status,
+        total: inv.grandTotal || 0
+      }))
+    ];
+
+    rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    res.json({ success: true, data: rows });
   } catch (error) {
     logger.error('Error fetching supplier orders:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -5286,6 +5352,8 @@ app.get('/api/suppliers/:id/outstanding', authenticateToken, setupBusinessDataba
 
     const payables = await SupplierPayable.find({ supplierId, branchId, status: { $in: ['pending', 'partial'] } })
       .populate('purchaseOrderId', 'poNumber orderDate')
+      .populate('purchaseInvoiceId', 'invoiceNumber supplierInvoiceNumber invoiceDate')
+      .sort({ createdAt: -1, _id: -1 })
       .lean();
 
     const outstanding = payables.reduce((sum, p) => sum + (p.totalAmount - (p.amountPaid || 0)), 0);
@@ -5296,6 +5364,186 @@ app.get('/api/suppliers/:id/outstanding', authenticateToken, setupBusinessDataba
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
+
+/** All supplier payments recorded against any payable for this supplier (newest first). */
+app.get('/api/suppliers/:id/payments', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Supplier, SupplierPayable, SupplierPayment } = req.businessModels;
+    const supplierId = req.params.id;
+    const branchId = req.user.branchId;
+
+    const supplier = await Supplier.findOne({ _id: supplierId, branchId });
+    if (!supplier) {
+      return res.status(404).json({ success: false, error: 'Supplier not found' });
+    }
+
+    const payableIds = await SupplierPayable.find({ supplierId, branchId }).distinct('_id');
+    if (!payableIds.length) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const payments = await SupplierPayment.find({
+      supplierPayableId: { $in: payableIds },
+      branchId
+    })
+      .populate({
+        path: 'supplierPayableId',
+        select: 'purchaseOrderId purchaseInvoiceId',
+        populate: [
+          { path: 'purchaseOrderId', select: 'poNumber' },
+          { path: 'purchaseInvoiceId', select: 'invoiceNumber supplierInvoiceNumber' }
+        ]
+      })
+      .sort({ paymentDate: -1, createdAt: -1, _id: -1 })
+      .lean();
+
+    const data = payments.map((pay) => {
+      const payable = pay.supplierPayableId;
+      const payableRef =
+        payable && typeof payable === 'object'
+          ? formatSupplierPayableBillRef(payable)
+          : '—';
+      return {
+        _id: pay._id,
+        paymentDate: pay.paymentDate,
+        amount: pay.amount,
+        paymentMethod: pay.paymentMethod,
+        payableReferenceNumber: payableRef
+      };
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Error fetching supplier payments:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * One payment allocated across payables FIFO by due date (oldest due first), then _id tie-break.
+ * Mirrors paying the earliest bill in full before applying remainder to the next.
+ */
+app.post(
+  '/api/suppliers/:id/payments/auto-allocate',
+  authenticateToken,
+  setupBusinessDatabase,
+  requireStaff,
+  async (req, res) => {
+    try {
+      const { Supplier, SupplierPayable, SupplierPayment } = req.businessModels;
+      const supplierId = req.params.id;
+      const branchId = req.user.branchId;
+
+      const supplier = await Supplier.findOne({ _id: supplierId, branchId });
+      if (!supplier) {
+        return res.status(404).json({ success: false, error: 'Supplier not found' });
+      }
+
+      const { amount, paymentMethod, paymentDate, reference, notes } = req.body;
+      const payAmountRaw = parseFloat(amount);
+      if (!payAmountRaw || payAmountRaw <= 0) {
+        return res.status(400).json({ success: false, error: 'Valid amount is required' });
+      }
+      const payAmountRound = Math.round(payAmountRaw * 100) / 100;
+
+      const payableDocs = await SupplierPayable.find({
+        supplierId,
+        branchId,
+        status: { $in: ['pending', 'partial'] },
+      }).sort({ dueDate: 1, _id: 1 });
+
+      const queue = [];
+      let totalDue = 0;
+      for (const p of payableDocs) {
+        const bal = Math.round((p.totalAmount - (p.amountPaid || 0)) * 100) / 100;
+        if (bal > 0.005) {
+          queue.push({ doc: p, balance: bal });
+          totalDue = Math.round((totalDue + bal) * 100) / 100;
+        }
+      }
+
+      if (totalDue <= 0.005) {
+        return res.status(400).json({ success: false, error: 'No outstanding dues for this supplier' });
+      }
+
+      if (payAmountRound > totalDue + 0.01) {
+        return res.status(400).json({
+          success: false,
+          error: `Amount cannot exceed total outstanding (₹${totalDue.toFixed(2)})`,
+        });
+      }
+
+      const meth = paymentMethod || 'Cash';
+      const pd =
+        paymentDate !== undefined &&
+        paymentDate !== null &&
+        String(paymentDate).trim()
+          ? parseSupplierPaymentDateInput(paymentDate)
+          : new Date();
+      const ref = reference != null ? String(reference).trim() : '';
+      const noteTxt = notes != null ? String(notes).trim() : '';
+
+      let remaining = payAmountRound;
+      const allocations = [];
+      const createdPayments = [];
+
+      for (const { doc: payable, balance } of queue) {
+        if (remaining <= 0.005) break;
+        const apply = Math.round(Math.min(remaining, balance) * 100) / 100;
+        if (apply <= 0) continue;
+
+        const payment = new SupplierPayment({
+          supplierPayableId: payable._id,
+          amount: apply,
+          paymentMethod: meth,
+          paymentDate: pd,
+          reference: ref,
+          notes: noteTxt,
+          branchId,
+          createdBy: req.user._id,
+        });
+        await payment.save();
+        createdPayments.push(payment);
+
+        payable.amountPaid = Math.round(((payable.amountPaid || 0) + apply) * 100) / 100;
+        payable.status = payable.amountPaid >= payable.totalAmount - 0.005 ? 'paid' : 'partial';
+        if (payable.status === 'paid') {
+          payable.paidOn = pd;
+        }
+        await payable.save();
+
+        await syncPurchaseInvoiceFromPayablePayment(req, payable, meth);
+
+        const balAfter = Math.max(
+          0,
+          Math.round((payable.totalAmount - payable.amountPaid) * 100) / 100
+        );
+        allocations.push({
+          payableId: payable._id,
+          amountApplied: apply,
+          balanceAfter: balAfter,
+        });
+
+        remaining = Math.round((remaining - apply) * 100) / 100;
+      }
+
+      if (remaining > 0.02) {
+        logger.warn('supplier auto-allocate remaining unexpected', { supplierId, remaining });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          totalApplied: Math.round((payAmountRound - Math.max(0, remaining)) * 100) / 100,
+          allocations,
+        },
+      });
+    } catch (error) {
+      logger.error('Error auto-allocating supplier payment:', error);
+      res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+    }
+  }
+);
 
 // Create a new supplier
 app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
@@ -5505,8 +5753,8 @@ app.post('/api/settings/business/increment-purchase-order', authenticateToken, a
 // Get all purchase orders
 app.get('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const { PurchaseOrder } = req.businessModels;
-    const { supplier, status, dateFrom, dateTo } = req.query;
+    const { PurchaseOrder, Supplier } = req.businessModels;
+    const { supplier, status, dateFrom, dateTo, search } = req.query;
     const branchId = req.user.branchId;
 
     let query = { branchId };
@@ -5521,13 +5769,28 @@ app.get('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requir
         query.orderDate.$lte = d;
       }
     }
+    if (search && String(search).trim()) {
+      const s = String(search).trim();
+      const rx = new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const supIds = await Supplier.find({ branchId, name: rx }).select('_id').lean();
+      const sidList = supIds.map((x) => x._id);
+      query.$or = [
+        { poNumber: rx },
+        ...(sidList.length ? [{ supplierId: { $in: sidList } }] : [])
+      ];
+    }
 
     const orders = await PurchaseOrder.find(query)
       .populate('supplierId', 'name contactPerson phone')
-      .sort({ orderDate: -1 })
+      .sort({ orderDate: -1, createdAt: -1, _id: -1 })
       .lean();
 
-    res.json({ success: true, data: orders });
+    const normalized = orders.map((o) => {
+      if (o.status === 'received') return { ...o, status: 'fully_received' };
+      return o;
+    });
+
+    res.json({ success: true, data: normalized });
   } catch (error) {
     logger.error('Error fetching purchase orders:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -5544,8 +5807,28 @@ app.get('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, re
     if (!order || order.branchId.toString() !== req.user.branchId.toString()) {
       return res.status(404).json({ success: false, error: 'Purchase order not found' });
     }
+    if (order.status === 'received') {
+      order.status = 'fully_received';
+    }
     const payable = await SupplierPayable.findOne({ purchaseOrderId: order._id }).lean();
-    res.json({ success: true, data: { ...order, payable } });
+    const receivedMap = {};
+    for (const ri of order.receivedItems || []) {
+      const pid = (ri.productId?._id || ri.productId)?.toString();
+      if (pid) receivedMap[pid] = parseFloat(ri.receivedQty) || 0;
+    }
+    const lineProgress = (order.items || []).map((item) => {
+      const pid = (item.productId?._id || item.productId)?.toString();
+      const ordered = parseFloat(item.quantity) || 0;
+      const received = receivedMap[pid] || 0;
+      return {
+        productId: item.productId,
+        productName: item.productName,
+        orderedQty: ordered,
+        receivedQty: received,
+        pendingQty: Math.max(0, ordered - received)
+      };
+    });
+    res.json({ success: true, data: { ...order, payable, lineProgress } });
   } catch (error) {
     logger.error('Error fetching purchase order:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -5558,8 +5841,28 @@ app.post('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requi
     const { PurchaseOrder, Supplier } = req.businessModels;
     const { supplierId, orderDate, expectedDeliveryDate, items, notes, status } = req.body;
 
+    const allowedCreateStatus = ['draft', 'sent', 'ordered'];
+    const initialStatus = status || 'draft';
+    if (!allowedCreateStatus.includes(initialStatus)) {
+      return res.status(400).json({ success: false, error: 'Invalid purchase order status' });
+    }
+
     if (!supplierId || !items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ success: false, error: 'Supplier and items are required' });
+    }
+
+    for (const it of items) {
+      const nameRaw = typeof it.productName === 'string' ? it.productName.trim() : '';
+      if (!nameRaw) {
+        return res.status(400).json({ success: false, error: 'Each line item needs a product name' });
+      }
+      const qty = parseFloat(it.quantity);
+      if (!(qty >= 1)) {
+        return res.status(400).json({ success: false, error: 'Each item needs quantity at least 1' });
+      }
+      if (!it.productId) {
+        return res.status(400).json({ success: false, error: 'Each item needs a product selected' });
+      }
     }
 
     const supplier = await Supplier.findById(supplierId);
@@ -5596,31 +5899,28 @@ app.post('/api/purchase-orders', authenticateToken, setupBusinessDatabase, requi
       }
     }
 
-    let subtotal = 0, gstAmount = 0;
+    /** PO lines are qty-only; pricing is captured on the purchase invoice after receipt. */
     const validItems = items.map((it) => {
       const qty = parseFloat(it.quantity) || 0;
-      const cost = parseFloat(it.unitCost) || 0;
-      const gst = parseFloat(it.gstPercent) || 0;
-      const lineTotal = qty * cost * (1 + gst / 100);
-      subtotal += qty * cost;
-      gstAmount += lineTotal - qty * cost;
       return {
         productId: it.productId,
         productName: it.productName || 'Product',
         quantity: qty,
-        unitCost: cost,
-        gstPercent: gst,
-        total: Math.round(lineTotal * 100) / 100
+        unitCost: 0,
+        gstPercent: 0,
+        total: 0,
       };
     });
-    const grandTotal = Math.round((subtotal + gstAmount) * 100) / 100;
+    const subtotal = 0;
+    const gstAmount = 0;
+    const grandTotal = 0;
 
     const po = new PurchaseOrder({
       poNumber,
       supplierId,
       orderDate: orderDate ? new Date(orderDate) : new Date(),
       expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
-      status: status || 'draft',
+      status: initialStatus,
       items: validItems,
       subtotal,
       gstAmount,
@@ -5661,26 +5961,33 @@ app.put('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, re
     if (notes !== undefined) po.notes = notes;
 
     if (items && Array.isArray(items) && items.length > 0) {
-      let subtotal = 0, gstAmount = 0;
+      for (const it of items) {
+        const nameRaw = typeof it.productName === 'string' ? it.productName.trim() : '';
+        if (!nameRaw) {
+          return res.status(400).json({ success: false, error: 'Each line item needs a product name' });
+        }
+        const qty = parseFloat(it.quantity);
+        if (!(qty >= 1)) {
+          return res.status(400).json({ success: false, error: 'Each item needs quantity at least 1' });
+        }
+        if (!it.productId) {
+          return res.status(400).json({ success: false, error: 'Each item needs a product selected' });
+        }
+      }
       po.items = items.map((it) => {
         const qty = parseFloat(it.quantity) || 0;
-        const cost = parseFloat(it.unitCost) || 0;
-        const gst = parseFloat(it.gstPercent) || 0;
-        const lineTotal = qty * cost * (1 + gst / 100);
-        subtotal += qty * cost;
-        gstAmount += lineTotal - qty * cost;
         return {
           productId: it.productId,
           productName: it.productName || 'Product',
           quantity: qty,
-          unitCost: cost,
-          gstPercent: gst,
-          total: Math.round(lineTotal * 100) / 100
+          unitCost: 0,
+          gstPercent: 0,
+          total: 0,
         };
       });
-      po.subtotal = subtotal;
-      po.gstAmount = gstAmount;
-      po.grandTotal = Math.round((subtotal + gstAmount) * 100) / 100;
+      po.subtotal = 0;
+      po.gstAmount = 0;
+      po.grandTotal = 0;
     }
     await po.save();
     res.json({ success: true, data: po });
@@ -5701,8 +6008,23 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
     if (po.status === 'cancelled') {
       return res.status(400).json({ success: false, error: 'Cannot receive a cancelled order' });
     }
+    if (po.status === 'draft') {
+      return res.status(400).json({ success: false, error: 'Send or confirm the order before receiving stock' });
+    }
+    if (po.status === 'fully_received' || po.status === 'received') {
+      return res.status(400).json({ success: false, error: 'Order is already fully received' });
+    }
 
-    const { receivedItems, invoiceUrl, grnNotes } = req.body;
+    /** recordInventory: when true, bumps stock at GRN (legacy / explicit opt-in). */
+    const {
+      receivedItems,
+      invoiceUrl,
+      grnNotes,
+      supplierInvoiceNumber,
+      recordInventory,
+    } = req.body;
+    const bumpInventory = recordInventory === true;
+    const trimmedSupplierInvoice = typeof supplierInvoiceNumber === 'string' ? supplierInvoiceNumber.trim() : '';
     if (!receivedItems || !Array.isArray(receivedItems) || receivedItems.length === 0) {
       return res.status(400).json({ success: false, error: 'receivedItems array is required' });
     }
@@ -5713,12 +6035,47 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
       receivedMap[pid] = { receivedQty: parseFloat(ri.receivedQty) || 0, unitCost: parseFloat(ri.unitCost) || 0 };
     }
 
+    for (const item of po.items) {
+      const pid = item.productId.toString();
+      const rec = receivedMap[pid];
+      const thisDeliveryQty = rec ? rec.receivedQty : 0;
+      if (thisDeliveryQty > 0 && bumpInventory) {
+        const uc = rec.unitCost;
+        if (!(uc > 0)) {
+          return res.status(400).json({
+            success: false,
+            error: 'Enter a unit cost (landing cost ₹) greater than zero for each line you receive. Supplier billing stays on the purchase invoice.',
+          });
+        }
+      }
+    }
+
     // For partially_received POs, accumulate with previous deliveries
     const existingReceivedMap = {};
-    if (po.status === 'partially_received' && Array.isArray(po.receivedItems)) {
+    if (
+      (po.status === 'partially_received' || po.status === 'fully_received' || po.status === 'received') &&
+      Array.isArray(po.receivedItems)
+    ) {
       for (const ri of po.receivedItems) {
         const pid = (ri.productId || ri._id || ri).toString();
         existingReceivedMap[pid] = parseFloat(ri.receivedQty) || 0;
+      }
+    }
+
+    /** Book-only GRN: refuse duplicate booking when totals already match the PO */
+    if (!bumpInventory) {
+      const fullyBookedAlready = po.items.every((item) => {
+        const pid = item.productId.toString();
+        const prev = existingReceivedMap[pid] || 0;
+        const qty = parseFloat(item.quantity) || 0;
+        return prev >= qty - 1e-9;
+      });
+      if (fullyBookedAlready) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'All ordered quantities are already booked on this purchase order. Post the linked purchase invoice to complete it.',
+        });
       }
     }
 
@@ -5736,30 +6093,33 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
 
       if (thisDeliveryQty > 0) {
         anyReceived = true;
-        const product = await Product.findById(pid);
-        if (product) {
-          const prevStock = product.stock || 0;
-          const newStock = prevStock + thisDeliveryQty;
-          await Product.findByIdAndUpdate(pid, { stock: newStock, cost: unitCost });
+        if (bumpInventory) {
+          const product = await Product.findById(pid);
+          if (product) {
+            const prevStock = product.stock || 0;
+            const newStock = prevStock + thisDeliveryQty;
+            await Product.findByIdAndUpdate(pid, { stock: newStock, cost: unitCost });
 
-          await new InventoryTransaction({
-            productId: product._id,
-            productName: product.name,
-            transactionType: 'purchase',
-            quantity: thisDeliveryQty,
-            previousStock: prevStock,
-            newStock,
-            unitCost,
-            totalValue: thisDeliveryQty * unitCost,
-            referenceType: 'purchase',
-            referenceId: po._id.toString(),
-            referenceNumber: po.poNumber,
-            processedBy: req.user.email || 'System',
-            location: 'main',
-            reason: po.status === 'partially_received' ? 'Partial delivery - remaining goods received' : 'Goods received from PO',
-            notes: grnNotes || '',
-            transactionDate: new Date()
-          }).save();
+            await new InventoryTransaction({
+              productId: product._id,
+              productName: product.name,
+              transactionType: 'purchase_order_receipt',
+              quantity: thisDeliveryQty,
+              previousStock: prevStock,
+              newStock,
+              unitCost,
+              totalValue: thisDeliveryQty * unitCost,
+              referenceType: 'purchase_order',
+              referenceId: po._id.toString(),
+              referenceNumber: po.poNumber,
+              purchaseOrderId: po._id,
+              processedBy: req.user.email || 'System',
+              location: 'main',
+              reason: po.status === 'partially_received' ? 'Partial delivery - remaining goods received' : 'Goods received from PO',
+              notes: grnNotes || '',
+              transactionDate: new Date()
+            }).save();
+          }
         }
         processedItems.push({ productId: item.productId, orderedQty: item.quantity, receivedQty: cumulativeReceived, unitCost });
       } else {
@@ -5777,6 +6137,7 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
     po.receivedItems = processedItems;
     po.invoiceUrl = invoiceUrl || '';
     po.grnNotes = grnNotes || '';
+    po.supplierInvoiceNumber = trimmedSupplierInvoice;
 
     // Build delivery event for this receive (what was received in THIS delivery)
     const thisDeliveryItems = [];
@@ -5794,20 +6155,31 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
         });
       }
     }
-    const deliveryEvent = { receivedAt, receivedItems: thisDeliveryItems, grnNotes: grnNotes || '' };
+    const deliveryEvent = {
+      receivedAt,
+      receivedItems: thisDeliveryItems,
+      grnNotes: grnNotes || '',
+      supplierInvoiceNumber: trimmedSupplierInvoice,
+      recordedInventory: bumpInventory,
+    };
     if (!po.deliveryHistory) po.deliveryHistory = [];
     po.deliveryHistory.push(deliveryEvent);
 
-    po.status = allReceived ? 'received' : 'partially_received';
+    if (bumpInventory) {
+      po.status = allReceived ? 'fully_received' : 'partially_received';
+    } else {
+      po.status = 'partially_received';
+    }
     await po.save();
 
-    const grandTotal = po.grandTotal;
+    const grandTotal = po.grandTotal || 0;
     const paymentTerms = parseInt(po.supplierId?.paymentTerms || '30', 10) || 30;
     const dueDate = new Date(po.orderDate);
     dueDate.setDate(dueDate.getDate() + paymentTerms);
 
     let payable = await SupplierPayable.findOne({ purchaseOrderId: po._id });
-    if (!payable) {
+    /** Qty-only POs bill on purchase invoice — no ₹0 payable at GRN. */
+    if (!payable && grandTotal > 0.005) {
       payable = new SupplierPayable({
         purchaseOrderId: po._id,
         supplierId: po.supplierId._id || po.supplierId,
@@ -5827,6 +6199,39 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, setupBusinessDat
   }
 });
 
+// Update purchase order workflow status (draft → sent → ordered)
+app.post('/api/purchase-orders/:id/status', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder } = req.businessModels;
+    const { status } = req.body;
+    const allowed = ['draft', 'sent', 'ordered'];
+    if (!status || !allowed.includes(status)) {
+      return res.status(400).json({ success: false, error: 'Invalid status. Use draft, sent, or ordered.' });
+    }
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po || po.branchId.toString() !== req.user.branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Purchase order not found' });
+    }
+    const rank = { draft: 0, sent: 1, ordered: 2 };
+    let current = po.status === 'received' ? 'fully_received' : po.status;
+    if (['partially_received', 'fully_received', 'cancelled'].includes(current)) {
+      return res.status(400).json({ success: false, error: 'Cannot change workflow status for this order' });
+    }
+    if (!(current in rank) || !(status in rank)) {
+      return res.status(400).json({ success: false, error: 'Invalid workflow transition' });
+    }
+    if (rank[status] < rank[current]) {
+      return res.status(400).json({ success: false, error: 'Cannot revert to an earlier workflow status' });
+    }
+    po.status = status;
+    await po.save();
+    res.json({ success: true, data: po });
+  } catch (error) {
+    logger.error('Error updating PO status:', error);
+    res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+});
+
 // Cancel purchase order
 app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
@@ -5835,7 +6240,7 @@ app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessData
     if (!po || po.branchId.toString() !== req.user.branchId.toString()) {
       return res.status(404).json({ success: false, error: 'Purchase order not found' });
     }
-    if (po.status === 'received' || po.status === 'partially_received') {
+    if (po.status === 'fully_received' || po.status === 'received' || po.status === 'partially_received') {
       return res.status(400).json({ success: false, error: 'Cannot cancel received order' });
     }
     po.status = 'cancelled';
@@ -5849,20 +6254,78 @@ app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessData
 
 // ==================== SUPPLIER PAYABLE ROUTES ====================
 
+/** Keep PurchaseInvoice paid/due in sync when payments are recorded against a payable tied to a PI. */
+async function syncPurchaseInvoiceFromPayablePayment(req, payable, lastPaymentMethod) {
+  try {
+    const { PurchaseInvoice } = req.businessModels;
+    const piId = payable.purchaseInvoiceId;
+    if (!piId) return;
+    const inv = await PurchaseInvoice.findById(piId);
+    if (!inv || inv.branchId.toString() !== req.user.branchId.toString()) return;
+    const grand = inv.grandTotal || 0;
+    const paidRaw = payable.amountPaid || 0;
+    const paid = Math.round(Math.min(paidRaw, grand) * 100) / 100;
+    inv.paidAmount = paid;
+    inv.dueAmount = Math.round((grand - paid) * 100) / 100;
+    if (paid <= 0.005) inv.paymentStatus = 'unpaid';
+    else if (paid >= grand - 0.005) inv.paymentStatus = 'paid';
+    else inv.paymentStatus = 'partially_paid';
+    if (lastPaymentMethod && String(lastPaymentMethod).trim()) {
+      inv.paymentMethod = String(lastPaymentMethod).trim();
+    }
+    await inv.save();
+  } catch (e) {
+    logger.error('syncPurchaseInvoiceFromPayablePayment', e);
+  }
+}
+
 app.get('/api/supplier-payables', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const { SupplierPayable, SupplierPayment } = req.businessModels;
-    const { supplier, status } = req.query;
+    const { SupplierPayable, SupplierPayment, PurchaseInvoice, PurchaseOrder } = req.businessModels;
+    const { supplier, status, search, dateFrom, dateTo } = req.query;
     const branchId = req.user.branchId;
 
     let query = { branchId };
     if (supplier) query.supplierId = supplier;
     if (status) query.status = status;
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) {
+        const d = new Date(dateTo);
+        d.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = d;
+      }
+    }
+
+    const searchTrim = search != null ? String(search).trim() : '';
+    if (searchTrim) {
+      const rx = new RegExp(searchTrim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const [piIds, poIds] = await Promise.all([
+        PurchaseInvoice.find({
+          branchId,
+          $or: [{ supplierInvoiceNumber: rx }, { invoiceNumber: rx }]
+        })
+          .select('_id')
+          .lean(),
+        PurchaseOrder.find({ branchId, poNumber: rx }).select('_id').lean()
+      ]);
+      const piIdList = piIds.map((x) => x._id);
+      const poIdList = poIds.map((x) => x._id);
+      if (piIdList.length === 0 && poIdList.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+      query.$or = [
+        ...(piIdList.length ? [{ purchaseInvoiceId: { $in: piIdList } }] : []),
+        ...(poIdList.length ? [{ purchaseOrderId: { $in: poIdList } }] : [])
+      ];
+    }
 
     const payables = await SupplierPayable.find(query)
       .populate('supplierId', 'name contactPerson phone')
-      .populate('purchaseOrderId', 'poNumber orderDate')
-      .sort({ dueDate: 1 })
+      .populate('purchaseOrderId', 'poNumber orderDate status')
+      .populate('purchaseInvoiceId', 'invoiceNumber supplierInvoiceNumber invoiceDate status grandTotal')
+      .sort({ createdAt: -1, _id: -1 })
       .lean();
 
     const paidIdsWithoutPaidOn = payables.filter((p) => p.status === 'paid' && !p.paidOn).map((p) => p._id);
@@ -5901,6 +6364,7 @@ app.get('/api/supplier-payables/:id', authenticateToken, setupBusinessDatabase, 
     const payable = await SupplierPayable.findById(req.params.id)
       .populate('supplierId')
       .populate('purchaseOrderId')
+      .populate('purchaseInvoiceId', 'invoiceNumber supplierInvoiceNumber invoiceDate status grandTotal paymentStatus')
       .lean();
     if (!payable || payable.branchId.toString() !== req.user.branchId.toString()) {
       return res.status(404).json({ success: false, error: 'Payable not found' });
@@ -5938,11 +6402,18 @@ app.post('/api/supplier-payables/:id/payments', authenticateToken, setupBusiness
       return res.status(400).json({ success: false, error: `Amount cannot exceed balance due (₹${balance.toFixed(2)})` });
     }
 
+    const paymentInstant =
+      paymentDate !== undefined &&
+      paymentDate !== null &&
+      String(paymentDate).trim()
+        ? parseSupplierPaymentDateInput(paymentDate)
+        : new Date();
+
     const payment = new SupplierPayment({
       supplierPayableId: payable._id,
       amount: payAmount,
       paymentMethod: paymentMethod || 'Cash',
-      paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
+      paymentDate: paymentInstant,
       reference: reference || '',
       notes: notes || '',
       branchId: req.user.branchId,
@@ -5957,9 +6428,12 @@ app.post('/api/supplier-payables/:id/payments', authenticateToken, setupBusiness
     }
     await payable.save();
 
+    await syncPurchaseInvoiceFromPayablePayment(req, payable, payment.paymentMethod);
+
     const updated = await SupplierPayable.findById(req.params.id)
       .populate('supplierId')
       .populate('purchaseOrderId')
+      .populate('purchaseInvoiceId', 'invoiceNumber supplierInvoiceNumber invoiceDate status grandTotal paymentStatus paidAmount dueAmount')
       .lean();
 
     res.json({
@@ -5994,7 +6468,7 @@ app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requi
       }
     }
 
-    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received'] }, ...dateFilter })
+    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received', 'fully_received'] }, ...dateFilter })
       .populate('supplierId', 'name')
       .lean();
 
@@ -6059,7 +6533,7 @@ app.get('/api/reports/purchase', authenticateToken, setupBusinessDatabase, requi
       }
     }
 
-    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received'] }, ...dateFilter })
+    const pos = await PurchaseOrder.find({ branchId, status: { $in: ['ordered', 'partially_received', 'received', 'fully_received'] }, ...dateFilter })
       .populate('supplierId', 'name categories')
       .lean();
 
@@ -7315,7 +7789,7 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
     }
     const rec = ['none', 'daily', 'weekly', 'monthly'].includes(recurringFrequency) ? recurringFrequency : 'none';
     const blockEndDate = endDate && ['daily', 'weekly', 'monthly'].includes(rec) ? String(endDate) : null;
-    const conflicts = await getBlockTimeAppointmentConflicts(
+    const overlappingAppointments = await getBlockTimeAppointmentConflicts(
       Appointment,
       staffId,
       String(startDate),
@@ -7324,15 +7798,6 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
       String(endTime),
       rec
     );
-    if (conflicts.length > 0) {
-      const msg = conflicts.map((c) => `${c.date} ${c.time} - ${c.clientName} (${c.serviceName})`).join('; ');
-      return res.status(400).json({
-        success: false,
-        error: 'Staff has appointment(s) scheduled for the time being blocked',
-        conflicts,
-        errorDetail: msg
-      });
-    }
     const doc = {
       staffId,
       title: String(title).trim(),
@@ -7348,7 +7813,13 @@ app.post('/api/block-time', authenticateToken, setupBusinessDatabase, requireMan
     const populated = await BlockTime.findById(created._id).lean();
     const staff = await req.businessModels.Staff.findById(created.staffId).select('name').lean();
     const data = { ...populated, staffId: { _id: created.staffId, name: staff?.name || 'Staff' } };
-    res.status(201).json({ success: true, data });
+    const payload = { success: true, data };
+    if (overlappingAppointments.length > 0) {
+      payload.overlappingAppointments = overlappingAppointments;
+      payload.warning =
+        'This block overlaps existing appointments; those appointments were not changed. The block appears on the calendar; bookings during this period are still allowed.';
+    }
+    res.status(201).json(payload);
   } catch (error) {
     logger.error('Error creating block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -7379,7 +7850,7 @@ app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, require
     const finalEndTime = updateData.endTime ?? existing.endTime;
     const finalRec = updateData.recurringFrequency ?? existing.recurringFrequency;
     const finalEndDate = updateData.endDate !== undefined ? updateData.endDate : existing.endDate;
-    const conflicts = await getBlockTimeAppointmentConflicts(
+    const overlappingAppointments = await getBlockTimeAppointmentConflicts(
       Appointment,
       existing.staffId,
       finalStartDate,
@@ -7388,19 +7859,16 @@ app.put('/api/block-time/:id', authenticateToken, setupBusinessDatabase, require
       finalEndTime,
       finalRec
     );
-    if (conflicts.length > 0) {
-      const msg = conflicts.map((c) => `${c.date} ${c.time} - ${c.clientName} (${c.serviceName})`).join('; ');
-      return res.status(400).json({
-        success: false,
-        error: 'Staff has appointment(s) scheduled for the time being blocked',
-        conflicts,
-        errorDetail: msg
-      });
-    }
     const updated = await BlockTime.findByIdAndUpdate(req.params.id, { $set: updateData }, { new: true }).lean();
     const staff = await req.businessModels.Staff.findById(updated.staffId).select('name').lean();
     const data = { ...updated, staffId: { _id: updated.staffId, name: staff?.name || 'Staff' } };
-    res.json({ success: true, data });
+    const payload = { success: true, data };
+    if (overlappingAppointments.length > 0) {
+      payload.overlappingAppointments = overlappingAppointments;
+      payload.warning =
+        'This block overlaps existing appointments; those appointments were not changed. The block appears on the calendar; bookings during this period are still allowed.';
+    }
+    res.json(payload);
   } catch (error) {
     logger.error('Error updating block time:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -7420,6 +7888,62 @@ app.delete('/api/block-time/:id', authenticateToken, setupBusinessDatabase, requ
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
+
+/** Normalize POS staff references (ObjectId instance, {_id}, or hex string). */
+function normalizeSaleStaffReferenceToIdString(raw) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'object' && raw !== null && raw._id != null) {
+    return String(raw._id).trim();
+  }
+  return String(raw).trim();
+}
+
+/** Client / Mongoose hybrids: never pass objects into ObjectId.isValid (String(obj) → "[object Object]"). */
+function normalizeClientAppointmentIdString(raw) {
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'object' && raw !== null && raw._id != null) {
+    return String(raw._id).trim();
+  }
+  return String(raw).trim();
+}
+
+/** IST wall time HH:mm (24h) for “now” — aligns with checkout add-on rows at payment time. */
+function getNowWallTimeHHmmIST() {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = parts.find((p) => p.type === 'hour')?.value ?? '00';
+  const m = parts.find((p) => p.type === 'minute')?.value ?? '00';
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function pickBillingWalkInDisplayTime(sale) {
+  const t = sale && sale.time != null ? String(sale.time).trim() : '';
+  if (t) return t;
+  return getNowWallTimeHHmmIST();
+}
+
+/** Minutes from midnight (IST-consistent via parseTimeToMinutes) — wall moment when checkout/payment completes. */
+function pickBillingWalkInCheckoutEndMinutes(sale) {
+  return parseTimeToMinutes(pickBillingWalkInDisplayTime(sale));
+}
+
+/**
+ * Canonical performing staff on a sale service line — prefer legacy `staffId` (what Quick Sale persists on each row)
+ * so we never attribute billing to stale `staffContributions[0]` after the stylist is changed at checkout.
+ */
+function resolvePrimarySaleLineStaffIdString(item) {
+  if (!item) return '';
+  const lineSid = normalizeSaleStaffReferenceToIdString(item.staffId);
+  const c0 = (item.staffContributions || [])[0];
+  const contribSid = normalizeSaleStaffReferenceToIdString(c0?.staffId);
+  if (lineSid && mongoose.Types.ObjectId.isValid(lineSid)) return lineSid;
+  if (contribSid && mongoose.Types.ObjectId.isValid(contribSid)) return contribSid;
+  return '';
+}
 
 /** Resolve catalog service ObjectId from a sale line (handles ObjectId, hex string, populated { _id }). */
 function extractSaleLineServiceId(item) {
@@ -7460,7 +7984,77 @@ function serviceIdsFromBookedAppointment(appointment) {
       pushId(id);
     }
   }
+  const addOns = appointment.addOnLineItems;
+  if (Array.isArray(addOns)) {
+    for (const row of addOns) {
+      const id = row?.serviceId?._id != null ? row.serviceId._id : row?.serviceId;
+      pushId(id);
+    }
+  }
   return ids;
+}
+
+/** Primary staff id string from a plain appointment doc (lean or hydrated). */
+function getPrimaryStaffIdStringFromAppointmentShape(a) {
+  if (!a) return null;
+  const sid = a.staffId;
+  if (sid) {
+    const v = typeof sid === 'object' && sid !== null && sid._id != null ? sid._id : sid;
+    return v != null ? String(v) : null;
+  }
+  const p = (a.staffAssignments || [])[0];
+  if (p?.staffId) {
+    const v = typeof p.staffId === 'object' && p.staffId !== null && p.staffId._id != null ? p.staffId._id : p.staffId;
+    return v != null ? String(v) : null;
+  }
+  return null;
+}
+
+/**
+ * Set `lineSource` on each service row for appointment-linked bills: catalog services that were part of the
+ * original booking snapshot are `appointment`; checkout-only add-ons are `walk_in`.
+ * Drops any client-sent `lineSource` (trusted server derivation only).
+ */
+async function annotateAppointmentLinkedSaleItemsLineSource(AppointmentModel, appointmentId, items) {
+  const mongooseSales = require('mongoose');
+  if (!AppointmentModel || !appointmentId || !Array.isArray(items)) return items;
+  const aidStr = normalizeClientAppointmentIdString(appointmentId);
+  if (!aidStr || !mongooseSales.Types.ObjectId.isValid(aidStr)) return items;
+
+  const anchor = await AppointmentModel.findById(aidStr).select('bookingGroupId').lean();
+  if (!anchor) {
+    return items.map((row) => {
+      if (!row || typeof row !== 'object') return row;
+      const { lineSource: _d, ...rest } = row;
+      return rest;
+    });
+  }
+
+  let snapshot = [];
+  if (anchor.bookingGroupId) {
+    snapshot = await AppointmentModel.find({ bookingGroupId: anchor.bookingGroupId }).lean();
+  } else {
+    const full = await AppointmentModel.findById(aidStr).lean();
+    if (full) snapshot = [full];
+  }
+
+  const bookedCatalogIds = new Set();
+  for (const a of snapshot) {
+    for (const oid of serviceIdsFromBookedAppointment(a)) {
+      bookedCatalogIds.add(String(oid));
+    }
+  }
+
+  return items.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const { lineSource: _discard, ...rest } = row;
+    if (rest.type !== 'service') return rest;
+    const sid = extractSaleLineServiceId(rest);
+    const key = sid ? String(sid) : '';
+    if (!key) return rest;
+    const source = bookedCatalogIds.has(key) ? 'appointment' : 'walk_in';
+    return { ...rest, lineSource: source };
+  });
 }
 
 const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = null, businessModels = null) => {
@@ -7472,11 +8066,12 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
       return;
     }
 
-    if (appointment.status === 'completed' || appointment.status === 'cancelled') {
+    if (appointment.status === 'cancelled' || appointment.status === 'cancelled_at_billing') {
       return;
     }
 
-    appointment.status = 'completed';
+    /** When the anchor card is already `completed`, still replay misassign cleanup + billing walk-ins (e.g. bill edited in POS after checkout). */
+    const onlyReplayBillingArtifacts = appointment.status === 'completed';
 
     const aptStaffId = appointment.staffId ? String(appointment.staffId) : null;
     const aptStaffFromAssignments = (appointment.staffAssignments || [])[0]?.staffId;
@@ -7485,7 +8080,10 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
     // Sync appointment services with actual services performed (added during checkout)
     // Same staff: update this card with primary + additional. Different staff: create new card(s).
     if (sale && sale.items && Array.isArray(sale.items) && businessModels?.Service) {
+      // sale.items entries are Mongoose subdocuments — spreading them with `...` skips real data
+      // and copies internal getters instead, so we explicitly toObject() before any mutation.
       const serviceItems = sale.items
+        .map((i) => (i && typeof i.toObject === 'function' ? i.toObject() : i))
         .filter((i) => {
           if (i.type !== 'service') return false;
           if (extractSaleLineServiceId(i)) return true;
@@ -7495,13 +8093,37 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
           return false;
         })
         .map((i) => {
-          const contrib = (i.staffContributions || [])[0];
-          const staffId = contrib ? String(contrib.staffId) : (i.staffId ? String(i.staffId) : null);
+          const staffId = resolvePrimarySaleLineStaffIdString(i) || null;
           return { ...i, _primaryStaffId: staffId };
         });
 
       if (serviceItems.length > 0) {
         const { Service } = businessModels;
+
+        let initialGroupSnapshot = [];
+        if (appointment.bookingGroupId) {
+          initialGroupSnapshot = await AppointmentModel.find({ bookingGroupId: appointment.bookingGroupId }).lean();
+        } else {
+          initialGroupSnapshot = [appointment.toObject ? appointment.toObject() : appointment];
+        }
+        if (!initialGroupSnapshot.length) {
+          initialGroupSnapshot = [appointment.toObject ? appointment.toObject() : appointment];
+        }
+
+        const bookedServiceIdsGlobal = new Set();
+        const scheduledStaffByServiceId = new Map();
+        for (const a of initialGroupSnapshot) {
+          const st = getPrimaryStaffIdStringFromAppointmentShape(a);
+          if (!st) continue;
+          for (const oid of serviceIdsFromBookedAppointment(a)) {
+            const key = String(oid);
+            bookedServiceIdsGlobal.add(key);
+            scheduledStaffByServiceId.set(key, st);
+          }
+        }
+
+        const bookedIdsOnThisCard = new Set(serviceIdsFromBookedAppointment(appointment).map((x) => String(x)));
+
         const servicesByStaff = new Map();
         serviceItems.forEach((item, idx) => {
           const sid = item._primaryStaffId || 'unknown';
@@ -7509,14 +8131,21 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
           servicesByStaff.get(sid).push({ ...item, _order: idx });
         });
 
-        const linkedServices = linkedStaffId ? (servicesByStaff.get(linkedStaffId) || []) : [];
+        // Only merge sale lines onto THIS card when the booked service belongs on this card and the billed staff matches whom it was scheduled with.
+        const servicesMatchingScheduledStaffForThisCard = serviceItems.filter((i) => {
+          const id = extractSaleLineServiceId(i)?.toString();
+          if (!id || !bookedIdsOnThisCard.has(id)) return false;
+          if (!i._primaryStaffId) return false;
+          const sched = scheduledStaffByServiceId.get(id);
+          if (!sched) return true;
+          return String(i._primaryStaffId) === String(sched);
+        });
 
-        // Booked staff A but sale attributes work to staff B: linkedServices is empty. Move this card to
-        // the performing staff (first invoice line) and apply their lines here — do not leave card under A
-        // nor duplicate a second completed card for B.
-        let servicesToApplyToMain = linkedServices;
-        let reassignedPrimaryStaffId = null;
-        if (linkedServices.length === 0) {
+        // Booked staff A but invoice attributes work on this card's services to staff B: try first sale line staff for lines that belong on THIS card only.
+        let servicesToApplyToMain = [...servicesMatchingScheduledStaffForThisCard].sort(
+          (a, b) => (a._order ?? 0) - (b._order ?? 0)
+        );
+        if (servicesToApplyToMain.length === 0) {
           const primaryFromSale = getPrimaryStaffFromSaleServiceItems(sale.items);
           const psid =
             primaryFromSale?.staffId && mongoose.Types.ObjectId.isValid(primaryFromSale.staffId)
@@ -7524,9 +8153,14 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
               : null;
           if (psid && (!linkedStaffId || psid !== linkedStaffId)) {
             const primaryGroup = servicesByStaff.get(psid) || [];
-            if (primaryGroup.length > 0) {
-              servicesToApplyToMain = primaryGroup;
-              reassignedPrimaryStaffId = psid;
+            const filteredPrimary = primaryGroup
+              .filter((i) => {
+                const id = extractSaleLineServiceId(i)?.toString();
+                return id && bookedIdsOnThisCard.has(id);
+              })
+              .sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+            if (filteredPrimary.length > 0) {
+              servicesToApplyToMain = filteredPrimary;
               appointment.staffId = new mongoose.Types.ObjectId(psid);
               appointment.staffAssignments = [
                 {
@@ -7540,104 +8174,221 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
           }
         }
 
-        const otherStaffServices = [];
-        servicesByStaff.forEach((items, sid) => {
-          if (sid !== 'unknown' && (!linkedStaffId || sid !== linkedStaffId)) {
-            if (reassignedPrimaryStaffId && sid === reassignedPrimaryStaffId) {
-              return;
-            }
-            otherStaffServices.push(...items);
-          }
-        });
-
-        if (servicesToApplyToMain.length > 0) {
-          let serviceIds = servicesToApplyToMain.map((i) => extractSaleLineServiceId(i)).filter(Boolean);
-          if (serviceIds.length === 0) {
-            const fromBooking = serviceIdsFromBookedAppointment(appointment);
-            if (fromBooking.length > 0) {
-              serviceIds = fromBooking;
-              logger.debug(
-                `Appointment ${appointmentId}: sale lines had no resolvable serviceIds; using booked service ids (${serviceIds.length})`
-              );
-            } else {
-              logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
-            }
-          }
-          const firstServiceId = serviceIds[0];
-          const firstItem = servicesToApplyToMain[0];
-          const firstService = firstServiceId ? await Service.findById(firstServiceId).lean() : null;
-          if (firstService) {
-            appointment.serviceId = firstServiceId;
-            appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
-            appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
-            let totalDuration = firstService.duration ?? appointment.duration ?? 60;
-            if (serviceIds.length > 1) {
-              const additionalServices = await Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
-              totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
-            }
-            appointment.duration = totalDuration;
-            logger.debug(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
-          }
+        const misassignedDocIds = [];
+        for (const a of initialGroupSnapshot) {
+          const aid = a._id;
+          const svcKey = String(a.serviceId?._id != null ? a.serviceId._id : a.serviceId);
+          if (!mongoose.Types.ObjectId.isValid(svcKey)) continue;
+          const sched = getPrimaryStaffIdStringFromAppointmentShape(a);
+          const line = serviceItems.find((it) => {
+            if (String(it.lineSource || '').toLowerCase() === 'walk_in') return false;
+            return extractSaleLineServiceId(it)?.toString() === svcKey;
+          });
+          if (!line || !line._primaryStaffId || !sched) continue;
+          if (String(line._primaryStaffId) === String(sched)) continue;
+          misassignedDocIds.push(aid);
         }
 
-        // Create new appointment cards for services with different staff (skip if staff already has a card in group)
-        if (otherStaffServices.length > 0) {
-          const existingGroupStaffIds = new Set();
-          if (appointment.bookingGroupId) {
-            const groupApts = await AppointmentModel.find({ bookingGroupId: appointment.bookingGroupId }).lean();
-            groupApts.forEach((a) => {
-              if (a.staffId) existingGroupStaffIds.add(String(a.staffId));
-              (a.staffAssignments || []).forEach((as) => { if (as.staffId) existingGroupStaffIds.add(String(as.staffId)); });
-            });
-          }
-          const baseTimeM = parseTimeToMinutes(appointment.time || '09:00');
-          const allOrdered = [...serviceItems].sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
-          const bookingGroupId = appointment.bookingGroupId || uuidv4();
-          if (!appointment.bookingGroupId) appointment.bookingGroupId = bookingGroupId;
+        if (misassignedDocIds.length > 0) {
+          await AppointmentModel.updateMany(
+            { _id: { $in: misassignedDocIds } },
+            { $set: { status: 'cancelled_at_billing' } }
+          );
+        }
 
-          for (const item of otherStaffServices) {
-            const contrib = (item.staffContributions || [])[0];
-            const staffId = contrib?.staffId || item.staffId;
-            if (!staffId || existingGroupStaffIds.has(String(staffId))) continue;
-            const itemSid = extractSaleLineServiceId(item)?.toString();
-            const idx = allOrdered.findIndex((o) => {
-              const oSid = extractSaleLineServiceId(o)?.toString();
-              return itemSid && oSid && itemSid === oSid;
-            });
-            let cumulativeM = 0;
-            for (let i = 0; i < idx; i++) {
-              const oid = extractSaleLineServiceId(allOrdered[i]);
-              const s = oid ? await Service.findById(oid).select('duration').lean() : null;
-              cumulativeM += s?.duration ?? 60;
+        const anchorMisassigned = misassignedDocIds.some((id) => String(id) === String(appointmentId));
+
+        const bookingGroupId = appointment.bookingGroupId || uuidv4();
+        if (!appointment.bookingGroupId) appointment.bookingGroupId = bookingGroupId;
+        const billingWalkInEndM = pickBillingWalkInCheckoutEndMinutes(sale);
+
+        /** Cross-staff (booked service, different performer) and add-ons (service not on original booking): completed cards with Walk-in attribution. */
+        const createBillingWalkInCards = async () => {
+          const supplementalKeys = new Set();
+          // Parallel add-ons: each line ends at checkout; start = checkout − that line's duration (no sequential chaining).
+          const walkInLines = serviceItems.filter((i) => String(i.lineSource || '').toLowerCase() === 'walk_in');
+          const walkInStaffSet = new Set(
+            walkInLines.map((i) => String(i._primaryStaffId || '').trim()).filter((x) => x && mongoose.Types.ObjectId.isValid(x)),
+          );
+          if (walkInLines.length > 0 && walkInStaffSet.size === 1) {
+            for (const item of walkInLines) {
+              const rawStaffId = item._primaryStaffId;
+              const lineServiceId = extractSaleLineServiceId(item);
+              const lineKey = lineServiceId ? String(lineServiceId) : '';
+              if (!rawStaffId || !mongoose.Types.ObjectId.isValid(String(rawStaffId)) || !lineKey) continue;
+              if (bookedServiceIdsGlobal.has(lineKey)) continue;
+              const dedupeKey = `wi:${lineKey}:${String(rawStaffId)}`;
+              if (supplementalKeys.has(dedupeKey)) continue;
+              supplementalKeys.add(dedupeKey);
+              const staffObjId = new mongoose.Types.ObjectId(String(rawStaffId));
+              const serviceDoc = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
+              if (!serviceDoc) continue;
+              const dupWalkIn = await AppointmentModel.findOne({
+                branchId: appointment.branchId,
+                clientId: appointment.clientId,
+                date: appointment.date,
+                bookingGroupId,
+                staffId: staffObjId,
+                serviceId: lineServiceId,
+                status: 'completed',
+                leadSource: new RegExp('^walk-in$', 'i'),
+              }).lean();
+              if (dupWalkIn) continue;
+              const dur = serviceDoc.duration ?? 60;
+              const startMinutes = Math.max(0, billingWalkInEndM - dur);
+              const newApt = new AppointmentModel({
+                clientId: appointment.clientId,
+                serviceId: lineServiceId,
+                date: appointment.date,
+                time: minutesToTimeString(startMinutes),
+                duration: dur,
+                status: 'completed',
+                price: item.price ?? item.total ?? serviceDoc.price ?? 0,
+                branchId: appointment.branchId,
+                bookingGroupId,
+                staffId: staffObjId,
+                staffAssignments: [{ staffId: staffObjId, percentage: 100, role: 'primary' }],
+                leadSource: 'Walk-in',
+              });
+              await newApt.save();
+              logger.debug(`✅ Billing walk-in card (checkout add-on, single staff): ${serviceDoc.name}`);
             }
-            const serviceTime = minutesToTimeString(baseTimeM + cumulativeM);
-            const lineServiceId = extractSaleLineServiceId(item);
-            const service = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
-            if (!service) continue;
+          }
 
-            existingGroupStaffIds.add(String(staffId));
+          for (const item of serviceItems) {
+            if (String(item.lineSource || '').toLowerCase() === 'walk_in') continue;
+            const rawStaffId = item._primaryStaffId;
+            const lineOid = extractSaleLineServiceId(item);
+            const lineKey = lineOid ? String(lineOid) : '';
+            if (!rawStaffId || !mongoose.Types.ObjectId.isValid(String(rawStaffId)) || !lineKey) continue;
+
+            let isBillingWalkIn = false;
+            if (!bookedServiceIdsGlobal.has(lineKey)) {
+              isBillingWalkIn = true;
+            } else {
+              const sched = scheduledStaffByServiceId.get(lineKey);
+              if (sched && String(rawStaffId) !== String(sched)) {
+                isBillingWalkIn = true;
+              }
+            }
+            if (!isBillingWalkIn) continue;
+
+            const dedupeKey = `${lineKey}:${String(rawStaffId)}:${item._order ?? 0}`;
+            if (supplementalKeys.has(dedupeKey)) continue;
+            supplementalKeys.add(dedupeKey);
+
+            const staffIdToStore = item._primaryStaffId;
+            const staffObjId =
+              mongoose.Types.ObjectId.isValid(String(staffIdToStore))
+                ? new mongoose.Types.ObjectId(String(staffIdToStore))
+                : null;
+            if (!staffObjId) continue;
+
+            const lineServiceId = extractSaleLineServiceId(item);
+            const serviceDoc = lineServiceId ? await Service.findById(lineServiceId).lean() : null;
+            if (!serviceDoc) continue;
+            const dur = serviceDoc.duration ?? 60;
+            const serviceTime = minutesToTimeString(Math.max(0, billingWalkInEndM - dur));
+
+            const dupWalkIn = await AppointmentModel.findOne({
+              branchId: appointment.branchId,
+              clientId: appointment.clientId,
+              date: appointment.date,
+              bookingGroupId,
+              staffId: staffObjId,
+              serviceId: lineServiceId,
+              status: 'completed',
+              leadSource: new RegExp('^walk-in$', 'i'),
+            }).lean();
+            if (dupWalkIn) continue;
+
             const newApt = new AppointmentModel({
               clientId: appointment.clientId,
               serviceId: lineServiceId,
               date: appointment.date,
               time: serviceTime,
-              duration: service.duration ?? 60,
+              duration: serviceDoc.duration ?? 60,
               status: 'completed',
-              price: item.price ?? item.total ?? service.price ?? 0,
+              price: item.price ?? item.total ?? serviceDoc.price ?? 0,
               branchId: appointment.branchId,
               bookingGroupId,
-              staffId,
-              staffAssignments: [{ staffId, percentage: 100, role: 'primary' }],
+              staffId: staffObjId,
+              staffAssignments: [{ staffId: staffObjId, percentage: 100, role: 'primary' }],
+              leadSource: 'Walk-in',
             });
             await newApt.save();
-            logger.debug(`✅ Created new appointment card for different-staff service: ${service.name}`);
+            logger.debug(
+              `✅ Billing walk-in card (${bookedServiceIdsGlobal.has(lineKey) ? 'cross-staff' : 'add-on'}): ${serviceDoc.name}`
+            );
+          }
+        };
+
+        await createBillingWalkInCards();
+        await createStandaloneStyleWalkInsForLinkedSaleAddons(
+          sale,
+          businessModels,
+          appointment.branchId || sale.branchId,
+        );
+
+        if (onlyReplayBillingArtifacts) {
+          logger.debug(
+            `✅ Billing calendar replay for already-completed appointment ${appointmentId} (walk-ins / mismatched-slot cleanup)`
+          );
+          return;
+        }
+
+        if (anchorMisassigned) {
+          appointment.status = 'cancelled_at_billing';
+          logger.debug(
+            `✅ Appointment ${appointmentId} cancelled_at_billing (invoice staff ≠ booked staff); supplemental walk-in rows created where applicable.`
+          );
+        } else {
+          appointment.status = 'completed';
+
+          if (servicesToApplyToMain.length > 0) {
+            let serviceIds = servicesToApplyToMain.map((i) => extractSaleLineServiceId(i)).filter(Boolean);
+            if (serviceIds.length === 0) {
+              const fromBooking = serviceIdsFromBookedAppointment(appointment);
+              if (fromBooking.length > 0) {
+                serviceIds = fromBooking;
+                logger.debug(
+                  `Appointment ${appointmentId}: sale lines had no resolvable serviceIds; using booked service ids (${serviceIds.length})`
+                );
+              } else {
+                logger.warn(`⚠️ Appointment ${appointmentId}: linked services have no valid serviceIds, skipping update`);
+              }
+            }
+            const firstServiceId = serviceIds[0];
+            const firstItem = servicesToApplyToMain[0];
+            const firstService = firstServiceId ? await Service.findById(firstServiceId).lean() : null;
+            if (firstService) {
+              appointment.serviceId = firstServiceId;
+              appointment.price = firstItem.price ?? firstItem.total ?? firstService.price ?? appointment.price;
+              appointment.additionalServiceIds = serviceIds.length > 1 ? serviceIds.slice(1) : [];
+              let totalDuration = firstService.duration ?? appointment.duration ?? 60;
+              if (serviceIds.length > 1) {
+                const additionalServices = await Service.find({ _id: { $in: serviceIds.slice(1) } }).select('duration').lean();
+                totalDuration += additionalServices.reduce((sum, s) => sum + (s.duration || 0), 0);
+              }
+              appointment.duration = totalDuration;
+              logger.debug(`✅ Appointment ${appointmentId} updated with ${serviceIds.length} service(s) for same staff`);
+            }
           }
         }
+
+      } else if (onlyReplayBillingArtifacts) {
+        return;
+      } else if (!onlyReplayBillingArtifacts) {
+        appointment.status = 'completed';
       }
+    } else if (!onlyReplayBillingArtifacts) {
+      appointment.status = 'completed';
     }
 
-    await appointment.save();
-    logger.debug(`✅ Appointment ${appointmentId} marked as completed after sale.`);
+    if (!onlyReplayBillingArtifacts) {
+      await appointment.save();
+      logger.debug(`✅ Appointment ${appointmentId} saved after sale completion flow.`);
+    }
 
     // Do not mark other appointments in bookingGroupId completed here. Multi-day (and separate cards for
     // same client) share a group but are billed independently; each sale completes only its linked appointment.
@@ -7646,22 +8397,20 @@ const markAppointmentCompleted = async (AppointmentModel, appointmentId, sale = 
   }
 };
 
-/** Primary staff on the first service line (same precedence as markAppointmentCompleted). */
+/** Primary staff on the first service row (canonical `staffId` wins over `staffContributions[0]`). */
 const getPrimaryStaffFromSaleServiceItems = (items) => {
   if (!items || !Array.isArray(items)) return null;
   for (const item of items) {
     if (item.type !== 'service') continue;
-    const contribs = item.staffContributions;
-    if (Array.isArray(contribs) && contribs.length > 0) {
-      const c = contribs[0];
-      const sid = c && c.staffId != null ? String(c.staffId) : '';
-      if (sid && mongoose.Types.ObjectId.isValid(sid)) {
-        return { staffId: sid, staffName: c.staffName || '' };
-      }
-    }
-    const legacyId = item.staffId != null ? String(item.staffId) : '';
-    if (legacyId && mongoose.Types.ObjectId.isValid(legacyId)) {
-      return { staffId: legacyId, staffName: item.staffName || '' };
+    if (String(item.lineSource || '').toLowerCase() === 'walk_in') continue;
+    const sid = resolvePrimarySaleLineStaffIdString(item);
+    if (sid && mongoose.Types.ObjectId.isValid(sid)) {
+      const c0 = (item.staffContributions || [])[0];
+      const name =
+        (item.staffName && String(item.staffName).trim()) ||
+        (c0?.staffName && String(c0.staffName).trim()) ||
+        '';
+      return { staffId: sid, staffName: name };
     }
   }
   return null;
@@ -7716,6 +8465,107 @@ const syncCompletedLinkedAppointmentStaffFromSale = async (AppointmentModel, sal
   }
 };
 
+/**
+ * Checkout-only service lines (`line_source: walk_in`) on an appointment-linked bill: mimic **standalone Quick Sale**
+ * calendar behaviour — attach to a synthetic bookingGroupId derived from this sale only; only create calendar rows
+ * when the addon subset has ≥2 performing staff. Each add-on is **parallel**: ends at checkout time (start = checkout − duration).
+ * Does not reuse the appointment group's id.
+ */
+const createStandaloneStyleWalkInsForLinkedSaleAddons = async (sale, businessModels, branchId) => {
+  if (!sale || !businessModels?.Appointment || !businessModels?.Service) return;
+  if (!sale.appointmentId || String(sale.status || '').toLowerCase() !== 'completed') return;
+
+  try {
+    const { Appointment, Service } = businessModels;
+
+    let clientOid = sale.customerId;
+    if (!clientOid) return;
+    if (typeof clientOid !== 'object' && mongoose.Types.ObjectId.isValid(String(clientOid))) {
+      clientOid = new mongoose.Types.ObjectId(String(clientOid));
+    } else if (typeof clientOid === 'object' && clientOid?._id) {
+      clientOid = clientOid._id;
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(clientOid))) return;
+
+    const serviceItems = (sale.items || [])
+      .map((i) => (i && typeof i.toObject === 'function' ? i.toObject() : i))
+      .filter(
+        (i) =>
+          i &&
+          i.type === 'service' &&
+          String(i.lineSource || '').toLowerCase() === 'walk_in' &&
+          i.serviceId &&
+          mongoose.Types.ObjectId.isValid(String(extractSaleLineServiceId(i) || ''))
+      )
+      .map((i, idx) => {
+        const sid = resolvePrimarySaleLineStaffIdString(i);
+        return { ...i, _primaryStaffId: sid, _order: idx };
+      })
+      .filter((i) => i._primaryStaffId && mongoose.Types.ObjectId.isValid(String(i._primaryStaffId)));
+
+    if (serviceItems.length === 0) return;
+    const uniqueStaffIds = [...new Set(serviceItems.map((i) => String(i._primaryStaffId)))];
+    if (uniqueStaffIds.length < 2) return;
+
+    const saleDate =
+      sale.date != null && sale.date !== ''
+        ? typeof sale.date === 'string'
+          ? String(sale.date).slice(0, 10)
+          : new Date(sale.date).toISOString().slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+
+    const checkoutEndM = pickBillingWalkInCheckoutEndMinutes(sale);
+    const branchOid =
+      branchId && mongoose.Types.ObjectId.isValid(String(branchId))
+        ? new mongoose.Types.ObjectId(String(branchId))
+        : sale.branchId;
+    const bookingGroupId = sale._id ? `sale-addon-${String(sale._id)}` : uuidv4();
+
+    for (const item of serviceItems) {
+      const staffIdStr = String(item._primaryStaffId);
+      const svcOid = extractSaleLineServiceId(item);
+      const service = await Service.findById(svcOid).lean();
+      if (!service) continue;
+      const dur = service.duration ?? 60;
+      const serviceTime = minutesToTimeString(Math.max(0, checkoutEndM - dur));
+
+      const staffObjId = new mongoose.Types.ObjectId(staffIdStr);
+      const dup = await Appointment.findOne({
+        branchId: branchOid,
+        clientId: clientOid,
+        date: saleDate,
+        bookingGroupId,
+        staffId: staffObjId,
+        serviceId: svcOid,
+        status: 'completed',
+        leadSource: new RegExp('^walk-in$', 'i'),
+      }).lean();
+      if (dup) continue;
+
+      const newApt = new Appointment({
+        clientId: clientOid,
+        serviceId: svcOid,
+        date: saleDate,
+        time: serviceTime,
+        duration: dur,
+        status: 'completed',
+        price: item.price ?? item.total ?? service.price ?? 0,
+        branchId: branchOid,
+        bookingGroupId,
+        staffId: staffObjId,
+        staffAssignments: [{ staffId: staffObjId, percentage: 100, role: 'primary' }],
+        leadSource: 'Walk-in',
+      });
+      await newApt.save();
+      logger.debug(
+        `✅ Addon walk-in (standalone-style, linked bill): sale ${sale.billNo || sale._id} staff ${staffIdStr} · ${service.name}`,
+      );
+    }
+  } catch (err) {
+    logger.error('❌ createStandaloneStyleWalkInsForLinkedSaleAddons failed:', err);
+  }
+};
+
 /** Create walk-in appointment cards for a completed sale with multiple staff when NOT linked to an appointment. */
 const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId) => {
   if (!sale || !businessModels?.Appointment || !businessModels?.Service || !businessModels?.Client) return;
@@ -7724,7 +8574,9 @@ const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId
 
   try {
     const { Appointment, Service, Client } = businessModels;
+    // Mongoose subdocs lose their data fields when spread with `...`, so flatten first.
     const serviceItems = (sale.items || [])
+      .map((i) => (i && typeof i.toObject === 'function' ? i.toObject() : i))
       .filter((i) => i.type === 'service' && i.serviceId)
       .map((i, idx) => {
         const contrib = (i.staffContributions || [])[0];
@@ -7801,7 +8653,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
-    let query = {};
+    let query = { branchId: req.user.branchId };
 
     if (date) {
       query.date = date;
@@ -7871,7 +8723,11 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
     const allServiceIds = [...new Set([...primaryServiceIds.map((id) => id.toString()), ...additionalIds.map((id) => id.toString())])];
     const { Client, Service } = req.businessModels;
     const [clients, services] = await Promise.all([
-      clientIds.length ? Client.find({ _id: { $in: clientIds } }).select('name phone email').lean() : [],
+      clientIds.length
+        ? Client.find({ _id: { $in: clientIds } })
+            .select('name phone email totalVisits totalSpent lastVisit')
+            .lean()
+        : [],
       allServiceIds.length ? Service.find({ _id: { $in: allServiceIds } }).select('name price duration').lean() : [],
     ]);
     const clientMap = new Map(clients.map((c) => [c._id.toString(), c]));
@@ -7909,8 +8765,10 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    const { Appointment } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId } = req.body;
+    const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel } = req.body;
+    const schedulingMode = rawSchedulingMode === 'custom' ? 'custom' : 'sequential';
+    const allowParallelBooking = rawAllowParallel === true;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
       return res.status(400).json({
@@ -7935,84 +8793,255 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
       return id ? String(id) : null;
     };
 
-    // When all services have the same staff: create single appointment card listing all services
-    const allSameStaff = services.length > 1 && services.every((s, i) => {
-      const a = getPrimaryStaffId(services[0]);
-      const b = getPrimaryStaffId(s);
-      return a && b && a === b;
-    });
-
+    // Multi-service bookings always create one Appointment document per service so the
+    // calendar shows separate cards (visually linked via shared bookingGroupId).
+    // Legacy `additionalServiceIds` is no longer written from this path; existing rows
+    // that still use it are read by the GET handlers (backward compatible).
     const createdAppointments = [];
 
-    if (allSameStaff && services.length > 1) {
-      // Single appointment with multiple services (same staff)
-      const first = services[0];
-      const additionalIds = services.slice(1).map((s) => s.serviceId);
-      const totalDur = services.reduce((sum, s) => sum + (s.duration || 0), 0);
-      const totalPrice = services.reduce((sum, s) => sum + (s.price || 0), 0);
+    if (schedulingMode === 'custom') {
+      // Per-service custom start times: one Appointment doc per service even when staff is shared.
+      // Duration always comes from the Service catalog; endTime = startTime + duration (computed server-side).
+      const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
 
-      const appointmentData = {
-        clientId,
-        serviceId: first.serviceId,
-        additionalServiceIds: additionalIds,
-        date,
-        time,
-        duration: totalDur,
-        status,
-        notes,
-        leadSource: leadSource || '',
-        createdBy,
-        price: totalPrice,
-        branchId: req.user.branchId
-      };
+      // Pre-validate each service: startTime present + Service catalog duration exists.
+      const serviceCatalogIds = services.map(s => s.serviceId).filter(Boolean);
+      const catalogDocs = await BusinessService.find({ _id: { $in: serviceCatalogIds } })
+        .select('_id name duration')
+        .lean();
+      const catalogById = new Map(catalogDocs.map(d => [String(d._id), d]));
 
-      if (first.staffAssignments && Array.isArray(first.staffAssignments)) {
-        appointmentData.staffAssignments = first.staffAssignments;
-        const totalPercentage = first.staffAssignments.reduce((sum, a) => sum + a.percentage, 0);
-        if (Math.abs(totalPercentage - 100) > 0.01) {
-          return res.status(400).json({ success: false, error: 'Staff assignment percentages must add up to 100%' });
+      const resolved = [];
+      for (let i = 0; i < services.length; i++) {
+        const s = services[i];
+        const catalog = catalogById.get(String(s.serviceId));
+        const fallbackName = s.name || `Service ${i + 1}`;
+        const displayName = catalog?.name || fallbackName;
+        const startTimeRaw = s.startTime || s.time || null;
+        if (!startTimeRaw || typeof startTimeRaw !== 'string' || !/^\d{1,2}:\d{2}/.test(startTimeRaw)) {
+          return res.status(400).json({
+            success: false,
+            error: `Please select start time for ${displayName}`
+          });
         }
-      } else if (first.staffId) {
-        appointmentData.staffId = first.staffId;
-        appointmentData.staffAssignments = [{ staffId: first.staffId, percentage: 100, role: 'primary' }];
-      } else {
-        return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
+        if (!catalog || !catalog.duration || catalog.duration < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Service duration is missing in service settings for ${displayName}`
+          });
+        }
+        const duration = catalog.duration;
+        const startMinutes = parseTimeToMinutes(startTimeRaw);
+        const dayStart = parseDateIST(date);
+        const startAt = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
+        const endAt = new Date(startAt.getTime() + duration * 60 * 1000);
+        resolved.push({
+          raw: s,
+          name: displayName,
+          serviceId: s.serviceId,
+          time: minutesToTimeString(startMinutes),
+          duration,
+          price: typeof s.price === 'number' ? s.price : 0,
+          startAt,
+          endAt
+        });
       }
 
-      const newAppointment = new Appointment(appointmentData);
-      const savedAppointment = await newAppointment.save();
-      const populatedAppointment = await Appointment.findById(savedAppointment._id)
-        .populate('clientId', 'name phone email')
-        .populate('serviceId', 'name price duration')
-        .populate('staffId', 'name role')
-        .populate('staffAssignments.staffId', 'name role');
+      // Conflict pre-check across submitted services + existing bookings.
+      const formatTimeForError = (timeStr) => {
+        const m = parseTimeToMinutes(timeStr);
+        const h24 = Math.floor(m / 60);
+        const mins = m % 60;
+        const period = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+        return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
+      };
 
-      createdAppointments.push(populatedAppointment);
+      // Within-batch overlap (same staff in this submission) — skip when parallel booking is allowed.
+      if (!allowParallelBooking) {
+        for (let i = 0; i < resolved.length; i++) {
+          const a = resolved[i];
+          const aStaffId = getPrimaryStaffId(a.raw);
+          for (let j = i + 1; j < resolved.length; j++) {
+            const b = resolved[j];
+            const bStaffId = getPrimaryStaffId(b.raw);
+            if (!aStaffId || !bStaffId) continue;
+            if (aStaffId !== bStaffId) continue;
+            if (a.startAt < b.endAt && a.endAt > b.startAt) {
+              return res.status(409).json({
+                success: false,
+                error: `Staff is already booked from ${formatTimeForError(a.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(a.time) + a.duration))}`
+              });
+            }
+          }
+        }
+      }
+
+      // External conflict check against existing appointments per staff.
+      if (!allowParallelBooking) {
+        for (const r of resolved) {
+          const staffId = getPrimaryStaffId(r.raw);
+          if (!staffId) {
+            return res.status(400).json({ success: false, error: 'Either staffId or staffAssignments is required' });
+          }
+          const result = await detectStaffConflict(
+            { Appointment, BookingHold },
+            {
+              branchId: req.user.branchId,
+              staffId,
+              start: r.startAt,
+              end: r.endAt,
+              skipHoldCheck: true
+            }
+          );
+          if (result.conflict) {
+            return res.status(409).json({
+              success: false,
+              error: `Staff is already booked from ${formatTimeForError(r.time)} to ${formatTimeForError(minutesToTimeString(parseTimeToMinutes(r.time) + r.duration))}`
+            });
+          }
+        }
+      }
+
+      const bookingGroupId = existingBookingGroupId || uuidv4();
+      for (const r of resolved) {
+        const appointmentData = {
+          clientId,
+          serviceId: r.serviceId,
+          date,
+          time: r.time,
+          duration: r.duration,
+          startAt: r.startAt,
+          endAt: r.endAt,
+          status,
+          notes,
+          leadSource: leadSource || '',
+          createdBy,
+          price: r.price,
+          branchId: req.user.branchId,
+          bookingGroupId,
+          schedulingMode: 'custom',
+          ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
+        };
+
+        if (r.raw.staffAssignments && Array.isArray(r.raw.staffAssignments)) {
+          appointmentData.staffAssignments = r.raw.staffAssignments;
+          const totalPercentage = r.raw.staffAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
+          if (Math.abs(totalPercentage - 100) > 0.01) {
+            return res.status(400).json({
+              success: false,
+              error: 'Staff assignment percentages must add up to 100%'
+            });
+          }
+        } else if (r.raw.staffId) {
+          appointmentData.staffId = r.raw.staffId;
+          appointmentData.staffAssignments = [{
+            staffId: r.raw.staffId,
+            percentage: 100,
+            role: 'primary'
+          }];
+        }
+
+        const newAppointment = new Appointment(appointmentData);
+        const savedAppointment = await newAppointment.save();
+
+        const populatedAppointment = await Appointment.findById(savedAppointment._id)
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role')
+          .populate('staffAssignments.staffId', 'name role');
+
+        createdAppointments.push(populatedAppointment);
+      }
     } else {
-      // Different staff per service (or single service): create one appointment per service
-      // Each service starts after the previous ends (sequential: Service A 9:00–9:30, Service B 9:30–10:00)
-      // Use existingBookingGroupId when adding new staff cards from edit (link to existing group)
+      // Sequential mode: create one appointment per service so each service is its own card.
+      // Each service starts after the previous ends (Service A 9:00–9:30, Service B 9:30–10:00)
+      // and all cards share a bookingGroupId so the calendar links them visually.
+      // Single-service bookings get a unique group id too, but the UI only shows the link
+      // styling when more than one document shares the id.
+      const formatTimeForError = (timeStr) => {
+        const m = parseTimeToMinutes(timeStr);
+        const h24 = Math.floor(m / 60);
+        const mins = m % 60;
+        const period = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+        return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
+      };
+
+      const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
+
+      const serviceCatalogIds = [...new Set(services.map((s) => String(s.serviceId)).filter(Boolean))];
+      const catalogDocs = await BusinessService.find({ _id: { $in: serviceCatalogIds } })
+        .select('_id name duration')
+        .lean();
+      const catalogById = new Map(catalogDocs.map((d) => [String(d._id), d]));
+
       const bookingGroupId = existingBookingGroupId || uuidv4();
       const baseTimeMinutes = parseTimeToMinutes(time);
       let cumulativeMinutes = 0;
       for (let i = 0; i < services.length; i++) {
         const service = services[i];
+        const catalog = catalogById.get(String(service.serviceId));
+        const displayName = catalog?.name || service.name || 'Service';
+        let effectiveDuration = catalog && catalog.duration >= 1 ? catalog.duration : (typeof service.duration === 'number' ? service.duration : 0);
+        if (!Number.isFinite(effectiveDuration)) effectiveDuration = 0;
+        if (effectiveDuration < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Service duration is missing in service settings for ${displayName}`,
+          });
+        }
+
         const serviceStartMinutes = baseTimeMinutes + cumulativeMinutes;
         const serviceTime = minutesToTimeString(serviceStartMinutes);
-        cumulativeMinutes += service.duration || 0;
+        cumulativeMinutes += effectiveDuration;
+
+        const dayStart = parseDateIST(date);
+        const startAt = new Date(dayStart.getTime() + serviceStartMinutes * 60 * 1000);
+        const endAt = new Date(startAt.getTime() + effectiveDuration * 60 * 1000);
+
+        const seqStaffId = getPrimaryStaffId(service);
+        if (!seqStaffId) {
+          return res.status(400).json({
+            success: false,
+            error: 'Either staffId or staffAssignments is required',
+          });
+        }
+        const overlapResult = allowParallelBooking
+          ? { conflict: false }
+          : await detectStaffConflict(
+          { Appointment, BookingHold },
+          {
+            branchId: req.user.branchId,
+            staffId: seqStaffId,
+            start: startAt,
+            end: endAt,
+            skipHoldCheck: true,
+          }
+        );
+        if (overlapResult.conflict) {
+          const endMinuteStr = minutesToTimeString(serviceStartMinutes + effectiveDuration);
+          return res.status(409).json({
+            success: false,
+            error: `Staff is already booked from ${formatTimeForError(serviceTime)} to ${formatTimeForError(endMinuteStr)}`,
+          });
+        }
+
         const appointmentData = {
           clientId,
           serviceId: service.serviceId,
           date,
           time: serviceTime,
-          duration: service.duration,
+          duration: effectiveDuration,
           status,
           notes,
           leadSource: leadSource || '',
           createdBy,
           price: service.price,
           branchId: req.user.branchId,
-          bookingGroupId
+          bookingGroupId,
+          staffLocked: !!service.staffLocked,
+          ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
         };
 
         if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
@@ -8021,7 +9050,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
           if (Math.abs(totalPercentage - 100) > 0.01) {
             return res.status(400).json({
               success: false,
-              error: 'Staff assignment percentages must add up to 100%'
+              error: 'Staff assignment percentages must add up to 100%',
             });
           }
         } else if (service.staffId) {
@@ -8029,12 +9058,12 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
           appointmentData.staffAssignments = [{
             staffId: service.staffId,
             percentage: 100,
-            role: 'primary'
+            role: 'primary',
           }];
         } else {
           return res.status(400).json({
             success: false,
-            error: 'Either staffId or staffAssignments is required'
+            error: 'Either staffId or staffAssignments is required',
           });
         }
 
@@ -8629,13 +9658,17 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         }));
       }
 
-      if (!item.staffContributions && item.staffId && item.staffName) {
-        item.staffContributions = [{
-          staffId: item.staffId,
-          staffName: item.staffName,
-          percentage: 100,
-          amount: linePreTax
-        }];
+      if ((!item.staffContributions || item.staffContributions.length === 0)) {
+        const trimmedStaffId = item.staffId != null ? String(item.staffId).trim() : '';
+        if (trimmedStaffId) {
+          const nm = item.staffName != null ? String(item.staffName).trim() : '';
+          item.staffContributions = [{
+            staffId: trimmedStaffId,
+            staffName: nm || 'Staff',
+            percentage: 100,
+            amount: linePreTax
+          }];
+        }
       }
       
       return item;
@@ -9041,7 +10074,7 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
   try {
     const { id } = req.params;
     const { Appointment } = req.businessModels;
-    const raw = await Appointment.findById(id).lean();
+    const raw = await Appointment.findOne({ _id: id, branchId: req.user.branchId }).lean();
     if (!raw) {
       return res.status(404).json({ success: false, error: 'Appointment not found' });
     }
@@ -9060,6 +10093,7 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
     if (raw.bookingGroupId) {
       relatedRaw = await Appointment.find({
         bookingGroupId: raw.bookingGroupId,
+        branchId: req.user.branchId,
         _id: { $ne: id },
         status: { $ne: 'cancelled' }
       }).lean();
@@ -9141,12 +10175,190 @@ app.get('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
   }
 });
 
+/**
+ * Finalize a multi-service booking for billing.
+ *
+ * Per-service confirmation step before Raise Sale:
+ *   - 'cancel' decisions set status='cancelled_at_billing' (audit fields written).
+ *   - 'perform' decisions optionally carry a `shift` (new time/startAt/endAt) when
+ *     compression freed an earlier slot — those rows are validated against
+ *     detectStaffConflict before persisting.
+ *
+ * dryRun mode runs all conflict checks WITHOUT persisting and returns a per-row
+ * conflict list so the modal can warn the user before they confirm.
+ */
+app.post('/api/appointments/finalize-for-billing', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { Appointment, BookingHold } = req.businessModels;
+    const { decisions, dryRun: bodyDryRun } = req.body || {};
+    const dryRun = bodyDryRun === true || String(req.query.dryRun || '') === '1';
+
+    if (!Array.isArray(decisions) || decisions.length === 0) {
+      return res.status(400).json({ success: false, error: 'decisions[] is required' });
+    }
+
+    const ids = decisions.map((d) => String(d.appointmentId || ''));
+    if (ids.some((id) => !id)) {
+      return res.status(400).json({ success: false, error: 'Each decision needs an appointmentId' });
+    }
+
+    // Load all referenced appointments in one shot, scoped to the user's branch.
+    const docs = await Appointment.find({
+      _id: { $in: ids },
+      branchId: req.user.branchId,
+    });
+    if (docs.length !== ids.length) {
+      return res.status(404).json({ success: false, error: 'One or more appointments not found' });
+    }
+    const docById = new Map(docs.map((d) => [String(d._id), d]));
+
+    const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
+
+    const getPrimaryStaffId = (apt) => {
+      if (apt.staffId) return String(apt.staffId._id || apt.staffId);
+      const a = Array.isArray(apt.staffAssignments) ? apt.staffAssignments[0] : null;
+      return a?.staffId ? String(a.staffId._id || a.staffId) : null;
+    };
+
+    // Pre-flight: validate every shift before doing any writes.
+    // The frontend sends only the new wall-clock `time` (12h or 24h string); the
+    // backend derives startAt/endAt using parseDateIST so timezone logic stays
+    // centralized.
+    const cancelIdsInBatch = decisions.filter((d) => d.action === 'cancel').map((d) => String(d.appointmentId));
+    // Rows being cancelled haven't been persisted yet during dry-run, but they're still ACTIVE
+    // in Mongo — they'd overlap the sibling we're sliding earlier and cause a false conflict.
+    // Also exclude every perform row that carries a shift: their old UTC windows are still on
+    // disk until saves run, yet we're validating the booked state *after* the batch lands.
+    const shiftedPerformIds = decisions
+      .filter((d) => d.action === 'perform' && d.shift && d.shift.time)
+      .map((d) => String(d.appointmentId));
+    const finalizeBatchExcludeOverlapIds = [...new Set([...cancelIdsInBatch, ...shiftedPerformIds])];
+
+    const shiftPlan = new Map(); // appointmentId -> { time, startAt, endAt }
+    const conflicts = [];
+    for (const dec of decisions) {
+      if (dec.action !== 'perform' || !dec.shift) continue;
+      const apt = docById.get(String(dec.appointmentId));
+      if (!apt) continue;
+      const time = dec.shift.time;
+      if (!time || !/^\d{1,2}:\d{2}/.test(String(time))) {
+        return res.status(400).json({
+          success: false,
+          error: 'shift.time is required and must be HH:MM',
+        });
+      }
+      const dayStart = parseDateIST(apt.date);
+      const startMinutes = parseTimeToMinutes(time);
+      const startDate = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
+      const duration = apt.duration || 0;
+      if (duration < 1) {
+        return res.status(400).json({
+          success: false,
+          error: `Service duration is missing for appointment ${apt._id}`,
+        });
+      }
+      const endDate = new Date(startDate.getTime() + duration * 60 * 1000);
+
+      shiftPlan.set(String(apt._id), { time, startAt: startDate, endAt: endDate });
+
+      const staffId = getPrimaryStaffId(apt);
+      if (!staffId) {
+        conflicts.push({ appointmentId: String(apt._id), reason: 'missing_staff' });
+        continue;
+      }
+
+      const result = await detectStaffConflict(
+        { Appointment, BookingHold },
+        {
+          branchId: req.user.branchId,
+          staffId,
+          start: startDate,
+          end: endDate,
+          excludeAppointmentIds: finalizeBatchExcludeOverlapIds,
+          skipHoldCheck: true,
+        }
+      );
+      if (result.conflict) {
+        conflicts.push({
+          appointmentId: String(apt._id),
+          reason: result.reason || 'appointment_overlap',
+        });
+      }
+    }
+
+    if (conflicts.length > 0 && !dryRun) {
+      return res.status(409).json({ success: false, conflicts });
+    }
+    if (dryRun) {
+      return res.json({ success: true, conflicts, dryRun: true });
+    }
+
+    const cancelledBy = req.user?.name
+      || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null)
+      || req.user?.email
+      || '';
+
+    const updated = [];
+    for (const dec of decisions) {
+      const apt = docById.get(String(dec.appointmentId));
+      if (!apt) continue;
+
+      if (dec.action === 'cancel') {
+        // Edge Case 4: never re-cancel a service that already happened.
+        if (apt.status === 'completed') {
+          updated.push(apt);
+          continue;
+        }
+        apt.status = 'cancelled_at_billing';
+        apt.cancelledAtBillingAt = new Date();
+        apt.cancelledAtBillingBy = cancelledBy;
+        await apt.save();
+        updated.push(apt);
+        continue;
+      }
+
+      // perform
+      const plan = shiftPlan.get(String(apt._id));
+      if (plan) {
+        apt.time = plan.time;
+        apt.startAt = plan.startAt;
+        apt.endAt = plan.endAt;
+        await apt.save();
+      }
+      updated.push(apt);
+    }
+
+    return res.json({ success: true, data: updated });
+  } catch (error) {
+    const dupMsg = String(error?.message || error?.errmsg || '');
+    const isDup =
+      Number(error?.code) === 11000 ||
+      error?.codeName === 'DuplicateKey' ||
+      /duplicate key|E11000|slotKey_/i.test(dupMsg);
+    if (isDup) {
+      logger.warn(
+        'Finalize for billing duplicate slotKey (same staff + window already exists)',
+        dupMsg.slice(0, 500),
+      );
+      return res.status(409).json({
+        success: false,
+        error:
+          'This time slot is already booked for the selected staff member. Compression or reschedule caused a clash — use "Keep original timing" or pick another slot.',
+      });
+    }
+    logger.error('Error finalizing appointments for billing:', error);
+    return res.status(500).json({ success: false, error: 'Failed to finalize appointments' });
+  }
+});
+
 // Update appointment
 app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
-    const { Appointment } = req.businessModels;
+    const updateData = { ...req.body };
+    const allowParallelBooking = updateData.allowParallelBooking === true;
+    delete updateData.allowParallelBooking;
+    const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
 
     // Find the appointment
     const appointment = await Appointment.findById(id)
@@ -9172,6 +10384,94 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       ((updateData.date && updateData.date !== appointment.date) ||
        (updateData.time && updateData.time !== appointment.time));
 
+    // When the time changes for a single appointment doc (per-service edit), refetch duration
+    // from the Service catalog as source of truth, recompute startAt/endAt, and pre-check staff conflict.
+    const timeIsChanging = updateData.time && updateData.time !== appointment.time;
+    const dateIsChanging = updateData.date && updateData.date !== appointment.date;
+    if ((timeIsChanging || dateIsChanging) && updateData.status !== 'cancelled') {
+      const newTime = updateData.time || appointment.time;
+      const newDate = updateData.date || appointment.date;
+      if (!/^\d{1,2}:\d{2}/.test(String(newTime || ''))) {
+        return res.status(400).json({ success: false, error: 'Please select a valid start time' });
+      }
+
+      const serviceCatalog = appointment.serviceId && typeof appointment.serviceId === 'object' && appointment.serviceId.duration
+        ? appointment.serviceId
+        : await BusinessService.findById(appointment.serviceId).select('_id name duration').lean();
+      const serviceName = serviceCatalog?.name || 'this service';
+      const catalogDuration = serviceCatalog?.duration;
+      // For sequential same-staff multi-service docs, appointment.duration is the sum across services and the
+      // catalog row only covers the primary service — keep the existing total in that case.
+      const hasAdditional = Array.isArray(appointment.additionalServiceIds) && appointment.additionalServiceIds.length > 0;
+      let durationForWindow = appointment.duration || 60;
+      if (!hasAdditional) {
+        if (!catalogDuration || catalogDuration < 1) {
+          return res.status(400).json({
+            success: false,
+            error: `Service duration is missing in service settings for ${serviceName}`
+          });
+        }
+        durationForWindow = catalogDuration;
+        updateData.duration = catalogDuration;
+      }
+
+      const dayStart = parseDateIST(newDate);
+      const startMinutes = parseTimeToMinutes(newTime);
+      const startAt = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
+      const endAt = new Date(startAt.getTime() + durationForWindow * 60 * 1000);
+      updateData.startAt = startAt;
+      updateData.endAt = endAt;
+
+      // Conflict detection (skip if newly cancelled).
+      const primaryStaffId = (() => {
+        if (updateData.staffId) return String(updateData.staffId);
+        if (Array.isArray(updateData.staffAssignments) && updateData.staffAssignments[0]?.staffId) {
+          return String(updateData.staffAssignments[0].staffId);
+        }
+        if (appointment.staffId) {
+          return String(appointment.staffId._id || appointment.staffId);
+        }
+        if (Array.isArray(appointment.staffAssignments) && appointment.staffAssignments[0]?.staffId) {
+          return String(appointment.staffAssignments[0].staffId);
+        }
+        return null;
+      })();
+      if (primaryStaffId && !allowParallelBooking) {
+        const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
+        const result = await detectStaffConflict(
+          { Appointment, BookingHold },
+          {
+            branchId: req.user.branchId,
+            staffId: primaryStaffId,
+            start: startAt,
+            end: endAt,
+            excludeAppointmentId: id,
+            skipHoldCheck: true
+          }
+        );
+        if (result.conflict) {
+          const formatTimeForError = (timeStr) => {
+            const m = parseTimeToMinutes(timeStr);
+            const h24 = Math.floor(m / 60);
+            const mins = m % 60;
+            const period = h24 >= 12 ? 'PM' : 'AM';
+            const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+            return `${h12}:${String(mins).padStart(2, '0')} ${period}`;
+          };
+          const endStr = minutesToTimeString(startMinutes + durationForWindow);
+          return res.status(409).json({
+            success: false,
+            error: `Staff is already booked from ${formatTimeForError(newTime)} to ${formatTimeForError(endStr)}`
+          });
+        }
+      }
+    }
+
+    // Checkout often bulk PATCHes `{ status: 'completed' }` on siblings; never revive slots suppressed at billing.
+    if (previousStatus === 'cancelled_at_billing' && updateData.status === 'completed') {
+      delete updateData.status;
+    }
+
     // Update the appointment
     const updatedAppointment = await Appointment.findByIdAndUpdate(
       id,
@@ -9192,6 +10492,18 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           status: { $in: ['scheduled', 'confirmed'] }
         },
         { $set: { status: 'arrived' } }
+      );
+    }
+
+    // No-show: mark sibling pre-service cards in the same group so the day view stays in sync after refresh.
+    if (updateData.status === 'missed' && appointment.bookingGroupId) {
+      await Appointment.updateMany(
+        {
+          bookingGroupId: appointment.bookingGroupId,
+          _id: { $ne: appointment._id },
+          status: { $in: ['scheduled', 'confirmed', 'arrived'] }
+        },
+        { $set: { status: 'missed' } }
       );
     }
 
@@ -9459,6 +10771,13 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       data: updatedAppointment
     });
   } catch (error) {
+    if (error.code === 11000 || error.codeName === 'DuplicateKey' || /duplicate key/i.test(String(error.message || ''))) {
+      logger.warn('Appointment slot conflict on update (duplicate slotKey):', error.message);
+      return res.status(409).json({
+        success: false,
+        error: 'This time slot is already booked for the selected staff member. Please choose a different time.'
+      });
+    }
     logger.error('Error updating appointment:', error);
     res.status(500).json({
       success: false,
@@ -9786,6 +11105,9 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+      totalSalesCash += walletCashAdd;
+      cashAmt += walletCashAdd;
       if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;
@@ -9948,11 +11270,38 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       logger.debug('👤 User:', req.user?.email);
     }
     
-    const { Sale, Product, InventoryTransaction, Appointment } = req.businessModels;
+    const { Sale, Product, InventoryTransaction, Appointment, BusinessSettings } = req.businessModels;
     const saleData = req.body;
     
     // Process items to handle staff contributions and preserve productId/serviceId
     const mongoose = require('mongoose');
+    /** Quick Sale drift (booking → direct bill): suppress synthetic walk-in calendar rows & cancel originals. Stripped before Sale ctor. */
+    const suppressStandaloneWalkInCalendarCards =
+      saleData.suppressStandaloneWalkInCalendarCards === true;
+    const rawVoidBookingAppointmentIds = Array.isArray(saleData.voidBookingAppointmentIds)
+      ? saleData.voidBookingAppointmentIds
+      : [];
+    delete saleData.suppressStandaloneWalkInCalendarCards;
+    delete saleData.voidBookingAppointmentIds;
+    const voidBookingAppointmentObjectIds = [
+      ...new Set(
+        rawVoidBookingAppointmentIds
+          .map((id) => (id != null ? String(id).trim() : ''))
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      ),
+    ].map((id) => new mongoose.Types.ObjectId(id));
+    const skipStandaloneWalkInCalendarCards =
+      suppressStandaloneWalkInCalendarCards === true || voidBookingAppointmentObjectIds.length > 0;
+
+    if (saleData.appointmentId != null && saleData.appointmentId !== '') {
+      const aptNorm = normalizeClientAppointmentIdString(saleData.appointmentId);
+      if (mongoose.Types.ObjectId.isValid(aptNorm)) {
+        saleData.appointmentId = new mongoose.Types.ObjectId(aptNorm);
+      } else {
+        delete saleData.appointmentId;
+      }
+    }
+
     const { getItemPreTaxTotal } = require('./lib/sale-item-pretax');
     if (saleData.items && Array.isArray(saleData.items)) {
       saleData.items = saleData.items.map(item => {
@@ -9983,21 +11332,116 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           }));
         }
 
-        if (!item.staffContributions && item.staffId && item.staffName) {
-          item.staffContributions = [{
-            staffId: item.staffId,
-            staffName: item.staffName,
-            percentage: 100,
-            amount: linePreTax
-          }];
+        if ((!item.staffContributions || item.staffContributions.length === 0)) {
+          const trimmedStaffId = item.staffId != null ? String(item.staffId).trim() : '';
+          if (trimmedStaffId) {
+            const nm = item.staffName != null ? String(item.staffName).trim() : '';
+            item.staffContributions = [{
+              staffId: trimmedStaffId,
+              staffName: nm || 'Staff',
+              percentage: 100,
+              amount: linePreTax
+            }];
+          }
         }
-        
+
+        // Single-assign lines: if the checkout row `staffId` was changed but contributions stayed on the old stylist, fix before persist.
+        if (item.type === 'service') {
+          const lineSid = item.staffId != null ? String(item.staffId).trim() : '';
+          const contribs = item.staffContributions;
+          if (
+            lineSid &&
+            mongoose.Types.ObjectId.isValid(lineSid) &&
+            Array.isArray(contribs) &&
+            contribs.length === 1
+          ) {
+            const c0 = contribs[0];
+            const cSid = c0?.staffId != null ? String(c0.staffId).trim() : '';
+            const pct = Number(c0?.percentage) || 100;
+            if (pct === 100 && cSid && cSid !== lineSid) {
+              const nm =
+                (item.staffName != null && String(item.staffName).trim()) ||
+                String(c0?.staffName || 'Staff').trim() ||
+                'Staff';
+              item.staffContributions = [
+                { staffId: lineSid, staffName: nm, percentage: 100, amount: linePreTax },
+              ];
+            }
+          }
+        }
+
         return item;
       });
+      if (saleData.appointmentId && mongoose.Types.ObjectId.isValid(String(saleData.appointmentId))) {
+        saleData.items = await annotateAppointmentLinkedSaleItemsLineSource(
+          Appointment,
+          saleData.appointmentId,
+          saleData.items,
+        );
+      } else if (Array.isArray(saleData.items)) {
+        saleData.items = saleData.items.map((row) => {
+          if (!row || typeof row !== 'object') return row;
+          const { lineSource, ...rest } = row;
+          return rest;
+        });
+      }
     }
     
     // Add branchId to sale data
     saleData.branchId = req.user.branchId;
+
+    const {
+      mergePaymentConfiguration,
+      eligibleRedemptionSubtotal,
+      sumWalletPayments,
+    } = require('./lib/payment-redemption-eligibility');
+    let eligibleRewardSubCreate = null;
+    let eligibleWalletSubCreate = null;
+    if (BusinessSettings) {
+      const payDoc = await BusinessSettings.findOne().select('paymentConfiguration').lean();
+      const payCfg = mergePaymentConfiguration(payDoc?.paymentConfiguration);
+      const itemsForRedeem = Array.isArray(saleData.items) ? saleData.items : [];
+      eligibleWalletSubCreate = eligibleRedemptionSubtotal(itemsForRedeem, payCfg, 'wallet');
+      eligibleRewardSubCreate = eligibleRedemptionSubtotal(itemsForRedeem, payCfg, 'reward');
+      const walletPaid = sumWalletPayments(saleData.payments);
+      if (walletPaid > eligibleWalletSubCreate + 0.02) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'Wallet payment exceeds amount allowed for eligible bill lines (payment configuration).',
+        });
+      }
+      if (payCfg.billingRedemption?.allowWalletAndPointsTogether === false) {
+        const ptsCreate = Math.floor(Number(saleData.loyaltyPointsRedeemed) || 0);
+        if (walletPaid > 0.02 && ptsCreate > 0) {
+          return res.status(400).json({
+            success: false,
+            error:
+              'Use only one of wallet or reward points on this bill (payment configuration).',
+          });
+        }
+      }
+    }
+
+    const rewardPointsSvcCreate = require('./services/reward-points-service');
+    const rpSettingsCreate = await rewardPointsSvcCreate.getMergedSettings(req.user.branchId);
+    try {
+      rewardPointsSvcCreate.validateSaleLoyaltyBeforeSave(
+        saleData,
+        rpSettingsCreate,
+        eligibleRewardSubCreate
+      );
+    } catch (loyErr) {
+      return res.status(loyErr.status || 400).json({ success: false, error: loyErr.message });
+    }
+    const redeemedPre = Math.floor(Number(saleData.loyaltyPointsRedeemed) || 0);
+    if (rpSettingsCreate.enabled && redeemedPre > 0 && saleData.customerId) {
+      const { Client: ClientForRp } = req.businessModels;
+      const cliRp = await ClientForRp.findById(saleData.customerId).select('rewardPointsBalance').lean();
+      if (!cliRp || Number(cliRp.rewardPointsBalance) < redeemedPre) {
+        return res.status(400).json({ success: false, error: 'Insufficient reward points balance' });
+      }
+    }
 
     // Validate customerId is a valid ObjectId if present
     if (saleData.customerId && !mongoose.Types.ObjectId.isValid(saleData.customerId)) {
@@ -10014,7 +11458,11 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       delete saleData.planToAssignId;
       delete saleData.membershipPlanPrice;
     }
-    
+
+    const { normalizeSaleTipPayload } = require('./lib/sale-tip-normalize');
+    const { Staff: StaffForTipCreate } = req.businessModels;
+    await normalizeSaleTipPayload(saleData, StaffForTipCreate || null);
+
     const sale = new Sale(saleData);
     await sale.save();
     
@@ -10027,10 +11475,38 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
       await savedSale.save();
     }
 
+    try {
+      if (
+        voidBookingAppointmentObjectIds.length > 0 &&
+        savedSale.customerId &&
+        mongoose.Types.ObjectId.isValid(String(savedSale.customerId))
+      ) {
+        const custId =
+          typeof savedSale.customerId === 'object' &&
+          savedSale.customerId &&
+          savedSale.customerId._id != null
+            ? savedSale.customerId._id
+            : savedSale.customerId;
+        await Appointment.updateMany(
+          {
+            _id: { $in: voidBookingAppointmentObjectIds },
+            branchId: req.user.branchId,
+            clientId: custId,
+          },
+          { $set: { status: 'cancelled_at_billing' } }
+        );
+        logger.debug('[Sale create] Cancelled bookings (cancelled_at_billing) from voidBookingAppointmentIds:', {
+          count: voidBookingAppointmentObjectIds.length,
+        });
+      }
+    } catch (voidAptErr) {
+      logger.error('❌ voidBookingAppointmentIds update failed:', voidAptErr);
+    }
+
     if (savedSale.appointmentId && String(savedSale.status).toLowerCase() === 'completed') {
       await markAppointmentCompleted(Appointment, savedSale.appointmentId, savedSale, req.businessModels);
       await syncCompletedLinkedAppointmentStaffFromSale(Appointment, savedSale);
-    } else if (String(savedSale.status).toLowerCase() === 'completed') {
+    } else if (String(savedSale.status).toLowerCase() === 'completed' && !skipStandaloneWalkInCalendarCards) {
       // Standalone sale with multiple staff: create walk-in cards for calendar
       await createWalkInCardsForStandaloneSale(savedSale, req.businessModels, req.user.branchId);
     }
@@ -10677,6 +12153,17 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
     logger.debug('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
 
     const createdSale = savedSale || sale;
+    try {
+      await rewardPointsSvcCreate.processSaleCompletionLoyalty({
+        savedSale: createdSale,
+        branchId: req.user.branchId,
+        businessModels: req.businessModels,
+        userId: req.user._id,
+      });
+    } catch (rpErr) {
+      logger.error('[reward-points] process sale completion failed', rpErr);
+    }
+
     scheduleActivityLog(
       {
         businessId: req.user.branchId,
@@ -10827,15 +12314,60 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
             ...contribution,
             amount: (linePreTax * (Number(contribution.percentage) || 0)) / 100,
           }));
-        } else if (plain.staffId && plain.staffName) {
-          plain.staffContributions = [{
-            staffId: plain.staffId,
-            staffName: plain.staffName,
-            percentage: 100,
-            amount: linePreTax,
-          }];
+        } else {
+          const trimmedStaffId = plain.staffId != null ? String(plain.staffId).trim() : '';
+          if (trimmedStaffId) {
+            const nm = plain.staffName != null ? String(plain.staffName).trim() : '';
+            plain.staffContributions = [{
+              staffId: trimmedStaffId,
+              staffName: nm || 'Staff',
+              percentage: 100,
+              amount: linePreTax,
+            }];
+          }
         }
+
+        if (plain.type === 'service') {
+          const lineSid = plain.staffId != null ? String(plain.staffId).trim() : '';
+          const contribs = plain.staffContributions;
+          if (
+            lineSid &&
+            mongooseSales.Types.ObjectId.isValid(lineSid) &&
+            Array.isArray(contribs) &&
+            contribs.length === 1
+          ) {
+            const c0 = contribs[0];
+            const cSid = c0?.staffId != null ? String(c0.staffId).trim() : '';
+            const pct = Number(c0?.percentage) || 100;
+            if (pct === 100 && cSid && cSid !== lineSid) {
+              const nm =
+                (plain.staffName != null && String(plain.staffName).trim()) ||
+                String(c0?.staffName || 'Staff').trim() ||
+                'Staff';
+              plain.staffContributions = [
+                { staffId: lineSid, staffName: nm, percentage: 100, amount: linePreTax },
+              ];
+            }
+          }
+        }
+
         return plain;
+      });
+    }
+
+    const existingAptIdNorm = normalizeClientAppointmentIdString(existingSale.appointmentId);
+    if (existingAptIdNorm && mongooseSales.Types.ObjectId.isValid(existingAptIdNorm)) {
+      const { Appointment: AppointmentPut } = req.businessModels;
+      updatedItems = await annotateAppointmentLinkedSaleItemsLineSource(
+        AppointmentPut,
+        existingAptIdNorm,
+        updatedItems,
+      );
+    } else if (Array.isArray(updatedItems)) {
+      updatedItems = updatedItems.map((row) => {
+        if (!row || typeof row !== 'object') return row;
+        const { lineSource, ...rest } = row;
+        return rest;
       });
     }
 
@@ -10940,6 +12472,39 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       });
     }
 
+    const tipKeysTouched =
+      'tip' in updateData ||
+      'tipLines' in updateData ||
+      'tipStaffId' in updateData ||
+      'tipStaffName' in updateData;
+
+    if (tipKeysTouched) {
+      const { normalizeSaleTipPayload } = require('./lib/sale-tip-normalize');
+      const { Staff: StaffForTipPut } = req.businessModels;
+      const existingLines =
+        Array.isArray(existingSale.tipLines) && existingSale.tipLines.length > 0
+          ? existingSale.tipLines.map((l) => ({
+              staffId: l.staffId,
+              staffName: l.staffName,
+              amount: l.amount,
+            }))
+          : [];
+      const tipPayload = {
+        tip: updateData.tip !== undefined ? updateData.tip : existingSale.tip,
+        tipStaffId:
+          updateData.tipStaffId !== undefined ? updateData.tipStaffId : existingSale.tipStaffId,
+        tipStaffName:
+          updateData.tipStaffName !== undefined ? updateData.tipStaffName : existingSale.tipStaffName,
+        tipLines: updateData.tipLines !== undefined ? updateData.tipLines : existingLines,
+      };
+      await normalizeSaleTipPayload(tipPayload, StaffForTipPut || null);
+      existingSale.tip = tipPayload.tip;
+      existingSale.tipStaffId = tipPayload.tipStaffId;
+      existingSale.tipStaffName = tipPayload.tipStaffName;
+      existingSale.tipLines = tipPayload.tipLines;
+      existingSale.markModified('tipLines');
+    }
+
     // Update editable fields on the sale
     const editableRootFields = [
       'items',
@@ -10954,10 +12519,10 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       'payments',
       'paymentMode',
       'status', // Allow updating status when payments change
-      'tip',
-      'tipStaffId',
-      'tipStaffName',
       'staffName', // Header staff on bill; keeps sale in sync when invoice staff changes
+      'loyaltyPointsRedeemed',
+      'loyaltyDiscountAmount',
+      'billChangeCreditedToWallet',
     ];
 
     editableRootFields.forEach((field) => {
@@ -10992,14 +12557,6 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
           logger.debug('💳 Updating paymentMode:', updateData.paymentMode);
           existingSale.paymentMode = updateData.paymentMode || '';
           logger.debug('💳 Updated paymentMode on sale:', existingSale.paymentMode);
-        } else if (field === 'tip') {
-          existingSale.tip = Number(updateData.tip) || 0;
-          existingSale.tipStaffId = existingSale.tip > 0 ? (updateData.tipStaffId || null) : null;
-          existingSale.tipStaffName = existingSale.tip > 0 ? (updateData.tipStaffName || '') : '';
-        } else if (field === 'tipStaffId') {
-          existingSale.tipStaffId = updateData.tipStaffId ?? null;
-        } else if (field === 'tipStaffName') {
-          existingSale.tipStaffName = updateData.tipStaffName ?? '';
         } else {
           existingSale[field] = updateData[field];
         }
@@ -11079,6 +12636,60 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
       }
     }
 
+    const rewardPointsSvcPut = require('./services/reward-points-service');
+    const rpSettingsPut = await rewardPointsSvcPut.getMergedSettings(req.user.branchId);
+    const mergedLoyaltyBody = {
+      grossTotal:
+        updateData.grossTotal != null ? Number(updateData.grossTotal) : Number(existingSale.grossTotal) || 0,
+      loyaltyPointsRedeemed:
+        updateData.loyaltyPointsRedeemed != null
+          ? Number(updateData.loyaltyPointsRedeemed)
+          : Number(existingSale.loyaltyPointsRedeemed) || 0,
+      loyaltyDiscountAmount:
+        updateData.loyaltyDiscountAmount != null
+          ? Number(updateData.loyaltyDiscountAmount)
+          : Number(existingSale.loyaltyDiscountAmount) || 0,
+    };
+
+    const {
+      mergePaymentConfiguration: mergePayCfgPut,
+      eligibleRedemptionSubtotal: eligibleRedemptionSubtotalPut,
+      sumWalletPayments: sumWalletPaymentsPut,
+    } = require('./lib/payment-redemption-eligibility');
+    const { BusinessSettings: BizSettingsRedeemPut } = req.businessModels;
+    let eligibleRewardPut = null;
+    if (BizSettingsRedeemPut) {
+      const payDocPut = await BizSettingsRedeemPut.findOne().select('paymentConfiguration').lean();
+      const payCfgPut = mergePayCfgPut(payDocPut?.paymentConfiguration);
+      const itemsForRedeemPut = Array.isArray(existingSale.items) ? existingSale.items : [];
+      const eligibleWalletPut = eligibleRedemptionSubtotalPut(itemsForRedeemPut, payCfgPut, 'wallet');
+      eligibleRewardPut = eligibleRedemptionSubtotalPut(itemsForRedeemPut, payCfgPut, 'reward');
+      const walletPaidPut = sumWalletPaymentsPut(existingSale.payments);
+      if (walletPaidPut > eligibleWalletPut + 0.02) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'Wallet payment exceeds amount allowed for eligible bill lines (payment configuration).',
+        });
+      }
+      if (payCfgPut.billingRedemption?.allowWalletAndPointsTogether === false) {
+        const loyPutEx = Math.floor(Number(mergedLoyaltyBody.loyaltyPointsRedeemed) || 0);
+        if (walletPaidPut > 0.02 && loyPutEx > 0) {
+          return res.status(400).json({
+            success: false,
+            error:
+              'Use only one of wallet or reward points on this bill (payment configuration).',
+          });
+        }
+      }
+    }
+
+    try {
+      rewardPointsSvcPut.validateSaleLoyaltyBeforeSave(mergedLoyaltyBody, rpSettingsPut, eligibleRewardPut);
+    } catch (loyErr) {
+      return res.status(loyErr.status || 400).json({ success: false, error: loyErr.message });
+    }
+
     const beforeSnapshot = existingSale.toObject();
 
     // Mark bill as edited
@@ -11127,6 +12738,28 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManag
         await autoConsumption.reverseConsumptionForBill(savedSale._id, req.businessModels);
       } catch (reversalErr) {
         logger.error('Auto consumption reversal on bill cancel failed:', reversalErr);
+      }
+      try {
+        await rewardPointsSvcPut.reverseSaleLoyalty({
+          sale: savedSale,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          userId: req.user._id,
+        });
+      } catch (rpRevErr) {
+        logger.error('[reward-points] reverse on bill cancel failed:', rpRevErr);
+      }
+    }
+    if (newStatus === 'completed' && previousStatus !== 'completed') {
+      try {
+        await rewardPointsSvcPut.processSaleCompletionLoyalty({
+          savedSale,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          userId: req.user._id,
+        });
+      } catch (rpProcErr) {
+        logger.error('[reward-points] process on bill completion (edit) failed:', rpProcErr);
       }
     }
 
@@ -11762,7 +13395,24 @@ app.post(
       });
     }
 
-    const updatedItems = Array.isArray(payload.items) ? payload.items : existingSale.items || [];
+    let updatedItems = Array.isArray(payload.items) ? payload.items : [...(existingSale.items || [])];
+
+    const { Appointment: AppointmentExchange } = req.businessModels;
+    const exchangeAptIdNorm = normalizeClientAppointmentIdString(existingSale.appointmentId);
+    if (exchangeAptIdNorm && mongoose.Types.ObjectId.isValid(exchangeAptIdNorm)) {
+      updatedItems = await annotateAppointmentLinkedSaleItemsLineSource(
+        AppointmentExchange,
+        exchangeAptIdNorm,
+        updatedItems,
+      );
+    } else {
+      updatedItems = updatedItems.map((row) => {
+        const plain = row && typeof row.toObject === 'function' ? row.toObject() : row;
+        if (!plain || typeof plain !== 'object') return plain;
+        const { lineSource, ...rest } = plain;
+        return rest;
+      });
+    }
 
     // Archive original bill snapshot once per exchange
     try {
@@ -12672,11 +14322,15 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         gstNumber: "",
         autoResetReceipt: false,
         resetFrequency: "monthly",
-        branchId: branchId
+        branchId: branchId,
+        paymentConfiguration: require('./lib/payment-redemption-eligibility').mergePaymentConfiguration(null),
       });
       await settings.save();
       logger.debug("✅ Default business settings created");
     }
+
+    const { mergePaymentConfiguration } = require('./lib/payment-redemption-eligibility');
+    const paymentConfigurationMerged = mergePaymentConfiguration(settings.paymentConfiguration);
 
     // Build tax categories array from settings
     let taxCategories = []
@@ -12736,7 +14390,8 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         luxuryProductRate: settings.luxuryProductRate || 28,
         exemptProductRate: settings.exemptProductRate || 0,
         taxCategories: taxCategories,
-        priceInclusiveOfTax: settings.priceInclusiveOfTax !== false
+        priceInclusiveOfTax: settings.priceInclusiveOfTax !== false,
+        paymentConfiguration: paymentConfigurationMerged,
       }
     });
   } catch (error) {
@@ -12772,7 +14427,8 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       luxuryProductRate,
       exemptProductRate,
       taxCategories,
-      priceInclusiveOfTax
+      priceInclusiveOfTax,
+      paymentConfiguration
     } = req.body;
     const { BusinessSettings } = req.businessModels;
 
@@ -12784,6 +14440,8 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
         error: "Business settings not found"
       });
     }
+
+    const { mergePaymentConfiguration: mergePayCfg } = require('./lib/payment-redemption-eligibility');
 
     // Update payment settings
     if (currency !== undefined) settings.currency = currency;
@@ -12812,12 +14470,19 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
       settings.taxCategories = taxCategories;
     }
     if (priceInclusiveOfTax !== undefined) settings.priceInclusiveOfTax = priceInclusiveOfTax;
+    if (paymentConfiguration !== undefined && paymentConfiguration !== null && typeof paymentConfiguration === 'object') {
+      settings.paymentConfiguration = mergePayCfg(paymentConfiguration);
+      settings.markModified('paymentConfiguration');
+    }
 
     await settings.save();
 
     res.json({
       success: true,
-      data: settings,
+      data: {
+        ...settings.toObject(),
+        paymentConfiguration: mergePayCfg(settings.paymentConfiguration),
+      },
       message: "Payment settings updated successfully"
     });
   } catch (error) {
@@ -12861,6 +14526,20 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       return res.status(404).json({ success: false, error: 'Sale not found' });
     }
     logger.debug(`✅ Sale found: ${sale.billNo}, items count: ${sale.items?.length || 0}`);
+
+    if (String(sale.status || '').toLowerCase() === 'completed' && sale.customerId) {
+      try {
+        const rewardPointsSvcDel = require('./services/reward-points-service');
+        await rewardPointsSvcDel.reverseSaleLoyalty({
+          sale,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          userId: req.user._id,
+        });
+      } catch (rpDelErr) {
+        logger.error('[reward-points] reverse on bill delete failed:', rpDelErr);
+      }
+    }
 
     // Archive bill before deletion
     const deleteReason = (req.body?.reason || '').trim() || 'Bill deleted';
@@ -13030,6 +14709,41 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAd
       await Sale.findByIdAndDelete(saleId).session(session);
     } else {
       await Sale.findByIdAndDelete(saleId);
+    }
+
+    // Remove calendar appointment(s) linked to this invoice (runs after bill row is
+    // removed so wallet/inventory bookkeeping stays coherent if this step fails ).
+    const { Appointment } = req.businessModels;
+    if (sale.appointmentId && Appointment) {
+      try {
+        const anchor = await Appointment.findOne({
+          _id: sale.appointmentId,
+          branchId: req.user.branchId,
+        })
+          .select('_id bookingGroupId')
+          .lean();
+        if (anchor) {
+          if (anchor.bookingGroupId) {
+            const delGrp = await Appointment.deleteMany({
+              branchId: req.user.branchId,
+              bookingGroupId: anchor.bookingGroupId,
+            });
+            logger.debug('Bill delete: removed booking group appointments', {
+              billNo: sale.billNo,
+              bookingGroupId: anchor.bookingGroupId,
+              deletedCount: delGrp.deletedCount,
+            });
+          } else {
+            await Appointment.findByIdAndDelete(anchor._id);
+            logger.debug('Bill delete: removed single linked appointment', {
+              billNo: sale.billNo,
+              appointmentId: String(anchor._id),
+            });
+          }
+        }
+      } catch (aptDelErr) {
+        logger.error('Bill delete: sale removed but linked appointment cleanup failed — please remove manually.', aptDelErr);
+      }
     }
 
     if (useTransactions && session) {
@@ -13323,6 +15037,8 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
     let cashBalance = 0;
     let balanceDifference = 0;
     let onlinePosDifference = 0;
+    /** CRM Card+Online total for closing day (persisted on the row); derived from Sale when Sale model exists */
+    let onlineCashToSave = Number(onlineCash) || 0;
     let openingBalanceStored = Number(openingBalance) || 0;
 
     // Parse date in IST (Asia/Kolkata) - all dates use IST
@@ -13371,6 +15087,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
             isAllCash = true;
           }
         }
+        cashAmt += billChangeCreditedToWalletCashAddition(sale);
         const tip = sale.tip || 0;
         cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
       });
@@ -13396,7 +15113,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
 
-      const { resolveOpeningBalanceForRegistryDay } = require('./utils/cash-registry-ledger');
+      const { resolveOpeningBalanceForRegistryDay, computeDayOnlineSales } = require('./utils/cash-registry-ledger');
       let effectiveOpening = Number(openingBalance) || 0;
       if (!effectiveOpening) {
         effectiveOpening = await resolveOpeningBalanceForRegistryDay({
@@ -13412,7 +15129,17 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       // Calculate cash balance and differences
       cashBalance = effectiveOpening + cashCollected - expenseValue;
       balanceDifference = closingTotalPhysical - cashBalance;
-      onlinePosDifference = onlineCash - posCash;
+      const posCashNum = Number(posCash) || 0;
+      let totalOnlineSales = Number(onlineCash) || 0;
+      if (Sale) {
+        totalOnlineSales = await computeDayOnlineSales({
+          Sale,
+          branchId,
+          registryDate: dateObj,
+        });
+      }
+      onlinePosDifference = posCashNum - totalOnlineSales;
+      onlineCashToSave = totalOnlineSales;
       openingBalanceStored = effectiveOpening;
     }
     
@@ -13430,7 +15157,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
       cashBalance,
       balanceDifference,
       balanceDifferenceReason: balanceDifference !== 0 ? 'Manual adjustment required' : 'Balanced',
-      onlineCash: shiftType === 'closing' ? onlineCash : 0,
+      onlineCash: shiftType === 'closing' ? onlineCashToSave : 0,
       posCash: shiftType === 'closing' ? posCash : 0,
       onlinePosDifference,
       onlineCashDifferenceReason: onlinePosDifference !== 0 ? 'Difference detected' : 'Balanced',
@@ -13484,11 +15211,11 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
     
     if (cashRegistry.shiftType === 'closing') {
       updates.closingBalance = closingBalance;
-      updates.onlineCash = onlineCash;
       updates.posCash = posCash;
 
       const {
         computeDayCashLedger,
+        computeDayOnlineSales,
         resolveOpeningBalanceForRegistryDay,
       } = require('./utils/cash-registry-ledger');
       const branchId = cashRegistry.branchId || req.user.branchId;
@@ -13516,7 +15243,17 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
       const cashBalance = resolvedOpening + cashCollected - expenseValue;
       updates.cashBalance = cashBalance;
       updates.balanceDifference = closingBalance - cashBalance;
-      updates.onlinePosDifference = onlineCash - posCash;
+      const posCashNum = Number(posCash) || 0;
+      let totalOnlineSales = Number(onlineCash) || 0;
+      if (Sale) {
+        totalOnlineSales = await computeDayOnlineSales({
+          Sale,
+          branchId,
+          registryDate: cashRegistry.date,
+        });
+      }
+      updates.onlineCash = totalOnlineSales;
+      updates.onlinePosDifference = posCashNum - totalOnlineSales;
     }
     
     const updatedCashRegistry = await CashRegistry.findByIdAndUpdate(
@@ -13594,6 +15331,7 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
     if (cashRegistry.shiftType === 'closing' && Sale && Expense) {
       const {
         computeDayCashLedger,
+        computeDayOnlineSales,
         resolveOpeningBalanceForRegistryDay,
       } = require('./utils/cash-registry-ledger');
       const branchId = cashRegistry.branchId || req.user.branchId;
@@ -13610,11 +15348,15 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
         closingDocFallback: cashRegistry.openingBalance,
       });
       const closingBal = Number(cashRegistry.closingBalance) || 0;
-      const onlineCash = Number(cashRegistry.onlineCash) || 0;
-      const posCash = Number(cashRegistry.posCash) || 0;
+      const posCashNum = Number(cashRegistry.posCash) || 0;
+      const totalOnlineSales = await computeDayOnlineSales({
+        Sale,
+        branchId,
+        registryDate: cashRegistry.date,
+      });
       const cashBalance = resolvedOpening + cashCollected - expenseValue;
       const balanceDifference = closingBal - cashBalance;
-      const onlinePosDifference = onlineCash - posCash;
+      const onlinePosDifference = posCashNum - totalOnlineSales;
 
       hasBalanceDifference = !negligible(balanceDifference);
       hasOnlinePosDifference = !negligible(onlinePosDifference);
@@ -13625,6 +15367,7 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
         expenseValue,
         cashBalance,
         balanceDifference,
+        onlineCash: totalOnlineSales,
         onlinePosDifference,
       };
     }
