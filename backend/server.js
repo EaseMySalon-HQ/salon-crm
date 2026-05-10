@@ -28,6 +28,7 @@ const { getWhatsAppSettingsWithDefaults } = require('./lib/whatsapp-settings-def
 const { sendAppointmentWhatsAppAfterCreate, sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('./lib/send-appointment-whatsapp');
 const { logSmsMessage, logEmailMessage } = require('./lib/channel-logs');
 const { canDeductSms, deductSms, canDeductWhatsApp, deductWhatsApp } = require('./lib/wallet-deduction');
+const serviceBundle = require('./lib/service-bundle');
 const { buildDashboardInitPayload, buildAppointmentsSummary } = require('./lib/dashboard-init');
 const {
   buildAnalyticsRevenueTab,
@@ -3782,7 +3783,57 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
 app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Service } = req.businessModels;
-    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isAutoConsumptionEnabled } = req.body;
+    const body = req.body || {};
+    const serviceKind = body.serviceKind === 'bundle' ? 'bundle' : 'simple';
+
+    if (serviceKind === 'bundle') {
+      const { name, category, description, isAutoConsumptionEnabled, hsnSacCode } = body;
+      if (!name || !category) {
+        return res.status(400).json({
+          success: false,
+          error: 'Name and category are required'
+        });
+      }
+      let resolved;
+      try {
+        resolved = await serviceBundle.resolveBundleForSave(Service, req.user.branchId, {
+          bundleItemsRaw: body.bundleItems,
+          bundleScheduleType: body.bundleScheduleType,
+          bundlePricingType: body.bundlePricingType,
+          bundlePercentOff: body.bundlePercentOff,
+          bundleRetailPriceRaw: body.bundleRetailPrice != null ? body.bundleRetailPrice : body.retailPrice,
+        });
+      } catch (e) {
+        const code = e.statusCode && e.statusCode !== 500 ? e.statusCode : 400;
+        return res.status(code).json({ success: false, error: e.message || 'Invalid bundle' });
+      }
+
+      const doc = {
+        name,
+        category,
+        description: description || '',
+        hsnSacCode: hsnSacCode || '',
+        isActive: true,
+        isAutoConsumptionEnabled: !!isAutoConsumptionEnabled,
+        branchId: req.user.branchId,
+        serviceKind: 'bundle',
+        bundleItems: resolved.bundleItems,
+        bundleScheduleType: resolved.bundleScheduleType,
+        bundlePricingType: resolved.bundlePricingType,
+        duration: resolved.duration,
+        price: resolved.price,
+        fullPrice: resolved.fullPrice,
+        offerPrice: resolved.offerPrice,
+        taxApplicable: resolved.taxApplicable,
+      };
+      if (resolved.bundlePercentOff != null) doc.bundlePercentOff = resolved.bundlePercentOff;
+      if (resolved.bundleRetailPrice != null) doc.bundleRetailPrice = resolved.bundleRetailPrice;
+      const newService = new Service(doc);
+      const savedService = await newService.save();
+      return res.status(201).json({ success: true, data: savedService });
+    }
+
+    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isAutoConsumptionEnabled } = body;
 
     const full = fullPrice != null ? parseFloat(fullPrice) : (price != null ? parseFloat(price) : null);
     const offer = offerPrice != null ? parseFloat(offerPrice) : null;
@@ -3807,7 +3858,8 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
       description: description || '',
       isActive: true,
       isAutoConsumptionEnabled: !!isAutoConsumptionEnabled,
-      branchId: req.user.branchId
+      branchId: req.user.branchId,
+      serviceKind: 'simple'
     });
 
     const savedService = await newService.save();
@@ -3828,7 +3880,84 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
 app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
   try {
     const { Service } = req.businessModels;
-    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isActive, isAutoConsumptionEnabled } = req.body;
+    const body = req.body || {};
+    const serviceKind = body.serviceKind === 'bundle' ? 'bundle' : 'simple';
+
+    if (serviceKind === 'bundle') {
+      const { name, category, description, isActive, isAutoConsumptionEnabled, hsnSacCode } = body;
+      if (!name || !category) {
+        return res.status(400).json({
+          success: false,
+          error: 'Name and category are required'
+        });
+      }
+      let resolved;
+      try {
+        resolved = await serviceBundle.resolveBundleForSave(Service, req.user.branchId, {
+          bundleItemsRaw: body.bundleItems,
+          bundleScheduleType: body.bundleScheduleType,
+          bundlePricingType: body.bundlePricingType,
+          bundlePercentOff: body.bundlePercentOff,
+          bundleRetailPriceRaw: body.bundleRetailPrice != null ? body.bundleRetailPrice : body.retailPrice,
+        });
+      } catch (e) {
+        const code = e.statusCode && e.statusCode !== 500 ? e.statusCode : 400;
+        return res.status(code).json({ success: false, error: e.message || 'Invalid bundle' });
+      }
+
+      const setPayload = {
+        name,
+        category,
+        description: description || '',
+        hsnSacCode: hsnSacCode || '',
+        isActive: isActive !== undefined ? isActive : true,
+        serviceKind: 'bundle',
+        bundleItems: resolved.bundleItems,
+        bundleScheduleType: resolved.bundleScheduleType,
+        bundlePricingType: resolved.bundlePricingType,
+        duration: resolved.duration,
+        price: resolved.price,
+        fullPrice: resolved.fullPrice,
+        offerPrice: resolved.offerPrice,
+        taxApplicable: resolved.taxApplicable,
+      };
+      if (resolved.bundlePercentOff != null) {
+        setPayload.bundlePercentOff = resolved.bundlePercentOff;
+      }
+      if (resolved.bundleRetailPrice != null) {
+        setPayload.bundleRetailPrice = resolved.bundleRetailPrice;
+      }
+      if (isAutoConsumptionEnabled !== undefined) {
+        setPayload.isAutoConsumptionEnabled = !!isAutoConsumptionEnabled;
+      }
+
+      const unset = {};
+      if (resolved.bundlePercentOff == null) unset.bundlePercentOff = '';
+      if (resolved.bundleRetailPrice == null) unset.bundleRetailPrice = '';
+
+      const updatedService = await Service.findByIdAndUpdate(
+        req.params.id,
+        {
+          $set: setPayload,
+          ...(Object.keys(unset).length ? { $unset: unset } : {}),
+        },
+        { new: true }
+      );
+
+      if (!updatedService) {
+        return res.status(404).json({
+          success: false,
+          error: 'Service not found'
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: updatedService
+      });
+    }
+
+    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isActive, isAutoConsumptionEnabled } = body;
 
     const full = fullPrice != null ? parseFloat(fullPrice) : (price != null ? parseFloat(price) : null);
     const offer = offerPrice != null ? parseFloat(offerPrice) : null;
@@ -3852,12 +3981,22 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireMa
       hsnSacCode: hsnSacCode || '',
       description: description || '',
       isActive: isActive !== undefined ? isActive : true,
+      serviceKind: 'simple',
     };
     if (isAutoConsumptionEnabled !== undefined) updatePayload.isAutoConsumptionEnabled = !!isAutoConsumptionEnabled;
 
     const updatedService = await Service.findByIdAndUpdate(
       req.params.id,
-      updatePayload,
+      {
+        $set: updatePayload,
+        $unset: {
+          bundleItems: '',
+          bundleScheduleType: '',
+          bundlePricingType: '',
+          bundlePercentOff: '',
+          bundleRetailPrice: '',
+        },
+      },
       { new: true }
     );
 
@@ -3884,6 +4023,17 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireMa
 app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
   try {
     const { Service } = req.businessModels;
+    const refBundle = await serviceBundle.findBundleReferencingService(
+      Service,
+      req.user.branchId,
+      req.params.id
+    );
+    if (refBundle) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot delete: service is part of bundle "${refBundle.name || 'Bundle'}". Remove it from the bundle first.`,
+      });
+    }
     const deletedService = await Service.findByIdAndDelete(req.params.id);
     
     if (!deletedService) {
@@ -15642,6 +15792,31 @@ app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabas
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to export products report'
+    });
+  }
+});
+
+// Export services catalog report (emailed to admin) — used by Settings → Services export
+app.post('/api/reports/export/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { format = 'xlsx', filters = {} } = req.body;
+
+    const { exportServicesReport } = require('./utils/report-exporter');
+    const result = await exportServicesReport({
+      branchId: req.user.branchId,
+      format,
+      filters
+    });
+
+    res.json({
+      success: true,
+      message: result.message || 'Services report has been generated and sent to admin email(s)'
+    });
+  } catch (error) {
+    logger.error('Error exporting services catalog report:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to export services report'
     });
   }
 });

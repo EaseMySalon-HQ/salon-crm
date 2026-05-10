@@ -74,6 +74,7 @@ import {
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import { clientStore, type Client } from "@/lib/client-store"
 import { ClientDetailsDrawer } from "@/components/clients/client-details-drawer"
 import {
@@ -88,9 +89,11 @@ import {
 } from "@/lib/api"
 import {
   clearServiceCheckoutDraftByRef,
-  createServiceCheckoutDraft,
   dispatchServiceCheckoutDraftChanged,
+  findLatestServiceCheckoutDraftRefForContext,
   readServiceCheckoutDraftByRef,
+  removeOtherServiceCheckoutDraftsForContext,
+  upsertServiceCheckoutDraft,
 } from "@/lib/service-checkout-draft-storage"
 import {
   eligibleRedemptionSubtotal,
@@ -136,6 +139,8 @@ export type ServiceCheckoutLine = {
   locked?: boolean
   /** Discount was applied from the client’s active membership; cleared when membership is removed. */
   membershipAutoDiscount?: boolean
+  /** Line prices come from a catalog bundle — do not apply membership included-service / % discount. */
+  fromBundle?: boolean
 }
 
 /** Create scheduled appointment docs before Quick Sale when checking out from a new (calendar) booking. */
@@ -316,7 +321,7 @@ function applyMembershipToCheckoutServiceLines(
   })
 
   return lines.map((line) => {
-    if (!line.serviceId || line.membershipAutoDiscount === false) return line
+    if (!line.serviceId || line.membershipAutoDiscount === false || line.fromBundle) return line
 
     const sid = String(line.serviceId)
     const u = usageMap.get(sid)
@@ -1583,9 +1588,41 @@ export function ServiceCheckoutDialog({
   }
 
   function addCatalogService(svc: any) {
+    const defaultStaffId = defaultStaffAcrossCart()
+
+    if (isBundleService(svc)) {
+      const expanded = expandBundleToLines(svc, catalogServices || [])
+      if (!expanded.length) {
+        toast({
+          title: "Bundle error",
+          description: "Could not expand bundle services.",
+          variant: "destructive",
+        })
+        return
+      }
+      setLines((prev) => {
+        const ts = Date.now()
+        const additions = expanded.map((line, i) => ({
+          id: `add-${ts}-${i}-${Math.random().toString(36).slice(2, 7)}`,
+          serviceId: line.serviceId,
+          staffId: defaultStaffId,
+          name: line.name || "Service",
+          duration: Number(line.duration) || 60,
+          price: Number(line.price) || 0,
+          quantity: 1,
+          locked: false,
+          discountValue: 0,
+          discountIsPercent: true,
+          membershipAutoDiscount: false,
+          fromBundle: true,
+        }))
+        return [...prev, ...additions]
+      })
+      return
+    }
+
     const sid = String(svc._id || svc.id || "")
     if (!sid) return
-    const defaultStaffId = defaultStaffAcrossCart()
     setLines((prev) => [
       ...prev,
       {
@@ -2400,22 +2437,30 @@ export function ServiceCheckoutDialog({
     }
     const clientId = String(customer._id || customer.id || "")
     if (!clientId) return
-    const draftRef = createServiceCheckoutDraft({
-      clientId,
-      clientName: customer.name?.trim() || undefined,
-      appointmentId: appointmentId ? String(appointmentId) : null,
-      bookingSnapshot: cloneLines(snapshotRef.current),
-      lines: cloneLines(lines),
-      productLines: cloneProductLines(productLines),
-      membershipLines: cloneMembershipLines(membershipLines),
-      packageLines: clonePackageLines(packageLines),
-      prepaidLines: clonePrepaidLines(prepaidLines),
-      checkoutTipLines: cloneCheckoutTipLines(checkoutTipLines),
-      checkoutCartDiscountType,
-      checkoutCartDiscountValue,
-      checkoutSaleNote,
-      savedAt: new Date().toISOString(),
-    })
+    const appointmentIdNorm = appointmentId ? String(appointmentId) : null
+    const existingRef =
+      persistedDraftRef.current ||
+      findLatestServiceCheckoutDraftRefForContext(clientId, appointmentIdNorm)
+    const draftRef = upsertServiceCheckoutDraft(
+      {
+        clientId,
+        clientName: customer.name?.trim() || undefined,
+        appointmentId: appointmentIdNorm,
+        bookingSnapshot: cloneLines(snapshotRef.current),
+        lines: cloneLines(lines),
+        productLines: cloneProductLines(productLines),
+        membershipLines: cloneMembershipLines(membershipLines),
+        packageLines: clonePackageLines(packageLines),
+        prepaidLines: clonePrepaidLines(prepaidLines),
+        checkoutTipLines: cloneCheckoutTipLines(checkoutTipLines),
+        checkoutCartDiscountType,
+        checkoutCartDiscountValue,
+        checkoutSaleNote,
+        savedAt: new Date().toISOString(),
+      },
+      existingRef
+    )
+    removeOtherServiceCheckoutDraftsForContext(clientId, appointmentIdNorm, draftRef)
     persistedDraftRef.current = draftRef
     setHasPersistedDraft(true)
     dispatchServiceCheckoutDraftChanged()

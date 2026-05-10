@@ -70,6 +70,7 @@ import { ServiceCheckoutDialog, type ServiceCheckoutLine, type EnsureAppointment
 import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
+import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 
 /** Convert 24h time (e.g. "09:00") to 12h for API storage ("9:00 AM") for backward compatibility */
 function formatTimeForApi(time: string): string {
@@ -242,6 +243,8 @@ interface SelectedService {
   staffLocked?: boolean
   /** Per-service start time in 24h "HH:mm". Only used in custom scheduling mode. */
   startTime?: string
+  /** Row was expanded from a catalog bundle — checkout skips membership auto-discount on these lines. */
+  fromBundle?: boolean
 }
 
 /** Stable snapshot for detecting unsaved appointment edits (drawer + page). */
@@ -264,6 +267,7 @@ function serializeAppointmentEditState(
     price: Number(s.price) || 0,
     staffLocked: !!s.staffLocked,
     startTime: s.startTime || "",
+    fromBundle: !!s.fromBundle,
   }))
   const scheduling = services.some((s) => !!s.startTime) ? "custom" : "sequential"
   return JSON.stringify({
@@ -1766,29 +1770,74 @@ export function AppointmentForm({
 
   // Update a service
   const updateService = (id: string, field: keyof SelectedService, value: any) => {
-    setSelectedServices(selectedServices => 
-      selectedServices.map(service => {
+    setSelectedServices((prev) => {
+      const rowIndex = prev.findIndex((s) => s.id === id)
+      if (rowIndex < 0) return prev
+
+      if (field === "serviceId" && value) {
+        const chosen = services.find((s) => String(s._id || s.id) === String(value))
+        if (chosen && isBundleService(chosen)) {
+          const lines = expandBundleToLines(chosen, services)
+          if (lines.length === 0) {
+            toast({
+              title: "Bundle incomplete",
+              description: "Could not resolve bundled services from the catalog.",
+              variant: "destructive",
+            })
+            return prev
+          }
+          const replaced = prev[rowIndex]
+          const inheritStaffId = replaced?.staffId ?? ""
+          const inheritLocked = !!replaced?.staffLocked
+          const parallel = chosen.bundleScheduleType === "parallel"
+
+          let sharedStart: string | undefined
+          if (parallel && formTime) {
+            const chainM = computeChainedStartMinutes(prev, formTime, rowIndex)
+            sharedStart = minutesToTimeString(chainM)
+          }
+
+          const newRows: SelectedService[] = lines.map((line, idx) => ({
+            id: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 9)}`,
+            serviceId: line.serviceId,
+            staffId: inheritStaffId,
+            name: line.name,
+            duration: line.duration,
+            price: line.price,
+            staffLocked: inheritLocked,
+            fromBundle: true,
+            ...(parallel && sharedStart ? { startTime: sharedStart } : {}),
+          }))
+
+          return [...prev.slice(0, rowIndex), ...newRows, ...prev.slice(rowIndex + 1)]
+        }
+      }
+
+      return prev.map((service) => {
         if (service.id === id) {
           const updatedService = { ...service, [field]: value }
-          
-          // Auto-fill service details when service is selected
+
+          if (field === "serviceId") {
+            updatedService.fromBundle = false
+          }
+
           if (field === "serviceId" && value) {
-            const selectedService = services.find(s => s._id === value || s.id === value)
-            if (selectedService) {
-              updatedService.name = selectedService.name
-              updatedService.duration = selectedService.duration
-              updatedService.price = selectedService.price
+            const sel = services.find((s) => String(s._id || s.id) === String(value))
+            if (sel) {
+              updatedService.name = sel.name
+              updatedService.duration = sel.duration
+              updatedService.price = sel.price
             }
           }
           if (field === "staffId" && !value) {
             updatedService.staffLocked = false
           }
-          
+
           return updatedService
         }
         return service
       })
-    )
+    })
   }
 
   // Get or initialize dropdown state for a service
@@ -1840,6 +1889,9 @@ export function AppointmentForm({
         quantity: 1,
         discountValue: 0,
         discountIsPercent: true,
+        ...(s.fromBundle
+          ? { membershipAutoDiscount: false as const, fromBundle: true as const }
+          : {}),
       }))
   }, [selectedServices])
 

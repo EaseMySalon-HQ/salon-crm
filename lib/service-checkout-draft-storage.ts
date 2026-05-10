@@ -9,7 +9,7 @@ import type {
 
 /** Legacy: one key per client + appointment */
 const V1_PREFIX = "salon-crm:service-checkout-draft:v1:"
-/** New: one UUID key per save (multiple drafts allowed). */
+/** v2 drafts: UUID key; reuse same key when updating an existing draft (same chip). */
 const V2_PREFIX = "salon-crm:service-checkout-draft:v2:"
 
 export const SERVICE_CHECKOUT_DRAFT_CHANGED_EVENT = "service-checkout-draft-changed"
@@ -122,7 +122,7 @@ export function readServiceCheckoutDraftByRef(draftRef: string): ServiceCheckout
   return null
 }
 
-/** Each save creates a new v2 entry (does not overwrite previous pills). Returns `draftRef` for the session. */
+/** New draft (new floating chip). Prefer `upsertServiceCheckoutDraft` from checkout save. */
 export function createServiceCheckoutDraft(payload: ServiceCheckoutDraftPayload): string {
   if (typeof window === "undefined") return ""
   const draftId = crypto.randomUUID()
@@ -133,6 +133,69 @@ export function createServiceCheckoutDraft(payload: ServiceCheckoutDraftPayload)
   }
   localStorage.setItem(V2_PREFIX + draftId, JSON.stringify(full))
   return encodeV2DraftRef(draftId)
+}
+
+/**
+ * Overwrite an existing draft if `existingDraftRef` points at stored data; otherwise create a new draft.
+ */
+export function upsertServiceCheckoutDraft(
+  payload: ServiceCheckoutDraftPayload,
+  existingDraftRef?: string | null
+): string {
+  if (typeof window === "undefined") return ""
+  const ref = existingDraftRef?.trim() || ""
+  if (ref) {
+    const v2Id = decodeV2DraftRef(ref)
+    if (v2Id && localStorage.getItem(V2_PREFIX + v2Id)) {
+      const full: StoredDraftFile = { v: 2, draftId: v2Id, ...payload }
+      localStorage.setItem(V2_PREFIX + v2Id, JSON.stringify(full))
+      return encodeV2DraftRef(v2Id)
+    }
+    const v1 = decodeV1DraftRef(ref)
+    if (v1 && localStorage.getItem(v1StorageKey(v1.clientId, v1.appointmentId))) {
+      const full: StoredDraftFile = { v: 1, ...payload }
+      localStorage.setItem(v1StorageKey(v1.clientId, v1.appointmentId), JSON.stringify(full))
+      return encodeV1DraftRef(v1.clientId, v1.appointmentId)
+    }
+  }
+  return createServiceCheckoutDraft(payload)
+}
+
+/** Newest-first draft pill for this client + appointment (including `appointmentId === null` for new booking). */
+export function findLatestServiceCheckoutDraftRefForContext(
+  clientId: string,
+  appointmentId: string | null
+): string | null {
+  const cid = String(clientId || "").trim()
+  if (!cid) return null
+  const aidNorm = appointmentId ? String(appointmentId).trim() : null
+  for (const meta of listServiceCheckoutDrafts()) {
+    if (String(meta.clientId) !== cid) continue
+    const mAid = meta.appointmentId ? String(meta.appointmentId).trim() : null
+    if (mAid !== aidNorm) continue
+    return meta.draftRef
+  }
+  return null
+}
+
+/** After upserting, drop older duplicate pills for the same client + booking. */
+export function removeOtherServiceCheckoutDraftsForContext(
+  clientId: string,
+  appointmentId: string | null,
+  keepDraftRef: string
+): void {
+  if (typeof window === "undefined") return
+  const cid = String(clientId || "").trim()
+  if (!cid) return
+  const aidNorm = appointmentId ? String(appointmentId).trim() : null
+  const metas = listServiceCheckoutDrafts()
+  for (const meta of metas) {
+    if (meta.draftRef === keepDraftRef) continue
+    if (String(meta.clientId) !== cid) continue
+    const mAid = meta.appointmentId ? String(meta.appointmentId).trim() : null
+    if (mAid !== aidNorm) continue
+    clearServiceCheckoutDraftByRef(meta.draftRef)
+  }
 }
 
 export function clearServiceCheckoutDraftByRef(draftRef: string): void {
