@@ -697,13 +697,19 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }, {})
   const categoryOrder = Object.keys(servicesByCategory).sort((a, b) => a.localeCompare(b))
 
-  // Filtered products (search by name or category)
+  // Filtered products (search by name, category, barcode, or SKU)
   const filteredProductsForDropdown = products.filter(product => {
     const q = productDropdownSearch.toLowerCase().trim()
     if (!q) return true
     const nameMatch = product.name?.toLowerCase().includes(q)
     const categoryMatch = product.category?.toLowerCase().includes(q)
-    return nameMatch || categoryMatch
+    const barcodeMatch = String(product.barcode || "")
+      .toLowerCase()
+      .includes(q)
+    const skuMatch = String(product.sku || "")
+      .toLowerCase()
+      .includes(q)
+    return nameMatch || categoryMatch || barcodeMatch || skuMatch
   })
 
   // Group filtered products by category for dropdown display
@@ -7850,7 +7856,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           <div className="relative">
                             <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                             <Input
-                              placeholder="Search products..."
+                              placeholder="Search products (name, category, barcode)..."
                               value={productDropdownSearch}
                               onChange={(e) => setProductDropdownSearch(e.target.value)}
                               className="h-8 pl-7 pr-8 text-sm"

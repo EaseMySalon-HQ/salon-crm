@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
+import {
+  PublicInvoiceFeedbackSection,
+  type FeedbackEligibility,
+} from "@/components/receipts/public-invoice-feedback"
 import { Button } from "@/components/ui/button"
 import { Download } from "lucide-react"
 import { SalesAPI } from "@/lib/api"
@@ -55,6 +59,7 @@ export default function PublicReceiptPage() {
   const params = useParams()
   const [receipt, setReceipt] = useState<ReceiptData | null>(null)
   const [businessSettings, setBusinessSettings] = useState<any>(null)
+  const [feedbackEligibility, setFeedbackEligibility] = useState<FeedbackEligibility | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -158,13 +163,21 @@ export default function PublicReceiptPage() {
                 logo: null
               })
             }
+
+            if (response.feedbackEligibility) {
+              setFeedbackEligibility(response.feedbackEligibility as FeedbackEligibility)
+            } else {
+              setFeedbackEligibility(null)
+            }
           } else {
             console.log('❌ Sale not found for bill number and token:', billNo)
             setError('Receipt not found or invalid link')
+            setFeedbackEligibility(null)
           }
         } catch (apiError: any) {
           console.error('❌ API error:', apiError)
           setError(apiError.response?.data?.error || 'Failed to load receipt')
+          setFeedbackEligibility(null)
         }
       } catch (err) {
         console.error('Error loading receipt:', err)
@@ -210,67 +223,81 @@ export default function PublicReceiptPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      {/* Download PDF Button - Only for customers */}
-      <div className="max-w-4xl mx-auto mb-4 flex justify-end no-print">
-        <Button 
-          onClick={handleDownloadPDF}
-          variant="outline"
-          className="bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-        >
-          <Download className="h-4 w-4 mr-2" />
-          Download PDF
-        </Button>
-      </div>
-
       {/* Receipt Content - Clean view without action buttons */}
       <div className="max-w-4xl mx-auto">
-        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-          <ReceiptPreview 
-            receipt={{
-              id: receipt.id,
-              receiptNumber: receipt.billNo,
-              clientId: receipt.id,
-              clientName: receipt.customerName,
-              clientPhone: receipt.customerPhone,
-              date: receipt.date,
-              time: receipt.time,
-              items: receipt.items?.map(item => ({
-                id: item.name,
-                name: item.name,
-                type: item.type as "service" | "product",
-                price: item.price,
-                quantity: item.quantity,
-                discount: (item as any).discount ?? 0,
-                discountType: ((item as any).discountType || 'percentage') as "percentage" | "fixed",
-                staffId: receipt.id,
-                staffName: item.staffName || receipt.staffName,
-                staffContributions: item.staffContributions,
-                total: item.total,
-                hsnSacCode: (item as any).hsnSacCode || '',
-                taxAmount: (item as any).taxAmount,
-                priceExcludingGST: (item as any).priceExcludingGST,
-                taxRate: (item as any).taxRate
-              })) || [],
-              subtotal: receipt.netTotal,
-              subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
-              tip: 0,
-              discount: 0,
-              tax: receipt.taxAmount,
-              total: receipt.grossTotal,
-              payments: receipt.payments?.map(payment => ({
-                type: (payment?.type || 'unknown') as "cash" | "card" | "online" | "wallet" | "unknown",
-                amount: payment?.amount || 0,
-                recordedAt: payment?.recordedAt,
-              })) || [],
-              staffId: receipt.id,
-              staffName: receipt.staffName,
-              notes: '',
-              taxBreakdown: receipt.taxBreakdown,
-              billChangeCreditedToWallet: receipt.billChangeCreditedToWallet,
-            }}
-            businessSettings={businessSettings} 
-          />
-        </div>
+        <PublicInvoiceFeedbackSection
+          billNo={params.billNo as string}
+          shareToken={params.token as string}
+          eligibility={feedbackEligibility}
+          businessName={businessSettings?.name}
+          receipt={
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+              <ReceiptPreview
+                receipt={{
+                  id: receipt.id,
+                  receiptNumber: receipt.billNo,
+                  clientId: receipt.id,
+                  clientName: receipt.customerName,
+                  clientPhone: receipt.customerPhone,
+                  date: receipt.date,
+                  time: receipt.time,
+                  items:
+                    receipt.items?.map((item) => ({
+                      id: item.name,
+                      name: item.name,
+                      type: item.type as "service" | "product",
+                      price: item.price,
+                      quantity: item.quantity,
+                      discount: (item as any).discount ?? 0,
+                      discountType: ((item as any).discountType || "percentage") as "percentage" | "fixed",
+                      staffId: receipt.id,
+                      staffName: item.staffName || receipt.staffName,
+                      staffContributions: item.staffContributions,
+                      total: item.total,
+                      hsnSacCode: (item as any).hsnSacCode || "",
+                      taxAmount: (item as any).taxAmount,
+                      priceExcludingGST: (item as any).priceExcludingGST,
+                      taxRate: (item as any).taxRate,
+                    })) || [],
+                  subtotal: receipt.netTotal,
+                  subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
+                  tip: 0,
+                  discount: 0,
+                  tax: receipt.taxAmount,
+                  total: receipt.grossTotal,
+                  payments:
+                    receipt.payments?.map((payment) => ({
+                      type: (payment?.type || "unknown") as
+                        | "cash"
+                        | "card"
+                        | "online"
+                        | "wallet"
+                        | "unknown",
+                      amount: payment?.amount || 0,
+                      recordedAt: payment?.recordedAt,
+                    })) || [],
+                  staffId: receipt.id,
+                  staffName: receipt.staffName,
+                  notes: "",
+                  taxBreakdown: receipt.taxBreakdown,
+                  billChangeCreditedToWallet: receipt.billChangeCreditedToWallet,
+                }}
+                businessSettings={businessSettings}
+              />
+            </div>
+          }
+          trailingActions={
+            <Button
+              type="button"
+              onClick={handleDownloadPDF}
+              variant="outline"
+              className="bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download PDF
+            </Button>
+          }
+        />
       </div>
 
       {/* Print styles - hide button when printing */}
