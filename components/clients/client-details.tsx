@@ -9,6 +9,7 @@ import { ClientsAPI } from "@/lib/api"
 import { ClientForm } from "@/components/clients/client-form"
 import { toast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
+import { isWalkInClient } from "@/lib/walk-in-client"
 import {
   Dialog,
   DialogContent,
@@ -77,6 +78,7 @@ export function ClientDetailsPage({
 
         if (clientData) {
           setClient(clientData)
+          if (isWalkInClient(clientData)) setIsEditMode(false)
         } else {
           toast({
             title: "Error",
@@ -107,6 +109,7 @@ export function ClientDetailsPage({
   }, [clientId])
 
   const handleEdit = () => {
+    if (client && isWalkInClient(client)) return
     setIsEditMode(true)
   }
 
@@ -116,6 +119,15 @@ export function ClientDetailsPage({
 
   const handleDelete = async () => {
     if (!client) return
+    if (isWalkInClient(client)) {
+      toast({
+        title: "Cannot delete",
+        description: "The Walk-in profile cannot be deleted.",
+        variant: "destructive",
+      })
+      setIsDeleteDialogOpen(false)
+      return
+    }
 
     try {
       const success = await clientStore.deleteClient(clientId)
@@ -170,6 +182,9 @@ export function ClientDetailsPage({
     )
   }
 
+  const isWalkInProfile = isWalkInClient(client)
+  const formEditMode = isEditMode && !isWalkInProfile
+
   return (
     <div className="flex flex-col space-y-6">
       <div
@@ -186,12 +201,12 @@ export function ClientDetailsPage({
               </Link>
             </Button>
             <h1 className="text-3xl font-bold tracking-tight">
-              {isEditMode ? "Edit User Details" : "User Details"}
+              {formEditMode ? "Edit User Details" : "User Details"}
             </h1>
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2">
-          {!isEditMode && (
+          {!formEditMode && (
             <>
               <Button asChild variant="outline" size="sm">
                 <Link href={`/clients/${clientId}/wallet`}>
@@ -199,13 +214,19 @@ export function ClientDetailsPage({
                   Wallet
                 </Link>
               </Button>
-              <Button onClick={handleEdit} variant="outline" size="sm">
+              <Button
+                onClick={handleEdit}
+                variant="outline"
+                size="sm"
+                disabled={isWalkInProfile}
+                title={isWalkInProfile ? "Walk-in cannot be edited" : undefined}
+              >
                 <Edit className="mr-2 h-4 w-4" />
                 Edit
               </Button>
             </>
           )}
-          {isEditMode && (
+          {formEditMode && (
             <>
               <Button onClick={handleCancelEdit} variant="outline" size="sm">
                 <X className="mr-2 h-4 w-4" />
@@ -220,7 +241,12 @@ export function ClientDetailsPage({
           <Button
             variant="destructive"
             size="sm"
-            onClick={() => setIsDeleteDialogOpen(true)}
+            disabled={isWalkInProfile}
+            title={isWalkInProfile ? "Walk-in cannot be deleted" : undefined}
+            onClick={() => {
+              if (isWalkInProfile) return
+              setIsDeleteDialogOpen(true)
+            }}
           >
             Delete
           </Button>
@@ -229,7 +255,7 @@ export function ClientDetailsPage({
 
       <ClientForm
         client={client}
-        isEditMode={isEditMode}
+        isEditMode={formEditMode}
         onEditComplete={() => {
           setIsEditMode(false)
           void clientStore.loadClients()

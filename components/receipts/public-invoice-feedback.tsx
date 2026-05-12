@@ -33,6 +33,8 @@ type Props = {
   receipt: ReactNode
   /** Placed after the rate CTA in the top toolbar (e.g. Download PDF). */
   trailingActions?: ReactNode
+  /** After successful feedback submit — re-fetch public receipt / eligibility (e.g. toolbar state). */
+  onFeedbackSubmitted?: () => void | Promise<void>
 }
 
 export function PublicInvoiceFeedbackSection({
@@ -42,6 +44,7 @@ export function PublicInvoiceFeedbackSection({
   businessName,
   receipt,
   trailingActions,
+  onFeedbackSubmitted,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [rating, setRating] = useState(0)
@@ -111,6 +114,7 @@ export function PublicInvoiceFeedbackSection({
       } else {
         setThankYou({ kind: "internal" })
       }
+      await onFeedbackSubmitted?.()
     } catch (e: any) {
       setError(e?.response?.data?.error || "Could not submit feedback")
     } finally {
@@ -130,21 +134,41 @@ export function PublicInvoiceFeedbackSection({
     </p>
   ) : null
 
+  /** Primary actions + Download: one row on mobile (two equal columns). */
+  const dualColumnToolbar =
+    !!trailingActions && (showCTA || pendingToolbarNote)
+
   const toolbar =
     showCTA || pendingToolbarNote ? (
-      <div className="mb-4 flex flex-wrap justify-end gap-2 items-start no-print">
+      <div
+        className={cn(
+          "mb-4 gap-2 items-stretch no-print w-full max-w-full",
+          dualColumnToolbar ? "grid grid-cols-2" : "flex flex-wrap justify-end items-start"
+        )}
+      >
         {showCTA ? (
           <Button
             type="button"
             onClick={openModal}
             variant="outline"
-            className="bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 w-full sm:w-auto"
+            className={cn(
+              "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100",
+              dualColumnToolbar ? "w-full min-w-0 px-2 sm:px-4 text-sm h-auto py-2 whitespace-normal text-center" : "w-full sm:w-auto"
+            )}
           >
             Rate Your Experience
           </Button>
         ) : null}
-        {pendingToolbarNote}
-        {trailingActions}
+        {pendingToolbarNote && dualColumnToolbar ? (
+          <div className="min-w-0 flex items-center">{pendingToolbarNote}</div>
+        ) : (
+          pendingToolbarNote
+        )}
+        {dualColumnToolbar && trailingActions ? (
+          <div className="min-w-0 flex items-stretch [&>button]:w-full [&>button]:h-full">{trailingActions}</div>
+        ) : (
+          trailingActions
+        )}
       </div>
     ) : trailingActions ? (
       <div className="mb-4 flex flex-wrap justify-end gap-2 items-start no-print">

@@ -52,6 +52,8 @@ const purchaseInvoiceSchema = new mongoose.Schema({
   },
   purchaseOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder', default: null },
   lines: { type: [purchaseInvoiceLineSchema], default: [] },
+  /** Draft preference: when posting, also write MRP (etc.) from lines to catalog products. */
+  applyRetailPrices: { type: Boolean, default: false },
   postedAt: { type: Date, default: null },
   postedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   /** Snapshot at post time for accurate cancel reversals */

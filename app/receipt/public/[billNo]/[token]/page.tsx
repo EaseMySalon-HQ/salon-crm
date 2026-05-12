@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import {
@@ -54,6 +54,68 @@ interface ReceiptData {
   billChangeCreditedToWallet?: number
 }
 
+function mapSaleToReceiptData(saleData: any): ReceiptData {
+  return {
+    id: saleData._id || saleData.id,
+    billNo: saleData.billNo,
+    customerName: saleData.customerName,
+    customerPhone: saleData.customerPhone || "N/A",
+    date: saleData.date,
+    time: saleData.time || new Date(saleData.date).toLocaleTimeString(),
+    items: saleData.items.map((item: any) => ({
+      name: item.name,
+      type: item.type,
+      quantity: item.quantity,
+      price: item.price,
+      total: item.total,
+      discount: item.discount ?? 0,
+      discountType: item.discountType || "percentage",
+      staffName: item.staffName || saleData.staffName,
+      staffContributions: item.staffContributions,
+      hsnSacCode: item.hsnSacCode || "",
+      taxAmount: item.taxAmount,
+      priceExcludingGST: item.priceExcludingGST,
+      taxRate: item.taxRate,
+      lineSource: item.lineSource,
+    })),
+    netTotal: saleData.netTotal,
+    taxAmount: saleData.taxAmount,
+    grossTotal: saleData.grossTotal,
+    subtotalExcludingTax:
+      (saleData.items || []).reduce((sum: number, item: any) => {
+        const base =
+          item.priceExcludingGST != null
+            ? item.priceExcludingGST * (item.quantity || 1)
+            : (item.total || 0) - (item.taxAmount || 0)
+        return sum + base
+      }, 0) || (saleData.grossTotal - saleData.taxAmount),
+    paymentMode: saleData.paymentMode,
+    payments:
+      saleData.payments?.length > 0
+        ? buildReceiptPaymentsFromSale({
+            date: saleData.date,
+            payments: saleData.payments,
+            paymentHistory: saleData.paymentHistory || [],
+          })
+        : [
+            {
+              type: (String(saleData.paymentMode || "cash").split(",")[0]?.trim().toLowerCase() ||
+                "unknown") as "cash" | "card" | "online" | "wallet" | "unknown",
+              amount: saleData.grossTotal,
+              recordedAt: new Date(saleData.date).toISOString(),
+            },
+          ],
+    staffName: saleData.staffName,
+    status: saleData.status,
+    taxBreakdown: saleData.taxBreakdown,
+    billChangeCreditedToWallet:
+      saleData.billChangeCreditedToWallet != null &&
+      Number(saleData.billChangeCreditedToWallet) > 0.005
+        ? Number(saleData.billChangeCreditedToWallet)
+        : undefined,
+  }
+}
+
 // Public receipt page - no authentication required
 export default function PublicReceiptPage() {
   const params = useParams()
@@ -63,132 +125,81 @@ export default function PublicReceiptPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const applyPublicReceiptResponse = useCallback((response: Awaited<ReturnType<typeof SalesAPI.getByBillNoPublic>>) => {
+    if (!response.success || !response.data) return false
+    const receiptData = mapSaleToReceiptData(response.data)
+    setReceipt(receiptData)
+    if (response.businessSettings) {
+      setBusinessSettings(response.businessSettings)
+    } else {
+      setBusinessSettings({
+        name: "Business",
+        address: "",
+        phone: "",
+        email: "",
+        gstin: "",
+        logo: null,
+      })
+    }
+    if (response.feedbackEligibility) {
+      setFeedbackEligibility(response.feedbackEligibility as FeedbackEligibility)
+    } else {
+      setFeedbackEligibility(null)
+    }
+    return true
+  }, [])
+
+  /** Re-fetch receipt + eligibility after feedback submit (no full-page loader). */
+  const refreshPublicReceipt = useCallback(async () => {
+    const billNo = params.billNo as string
+    const token = params.token as string
+    if (!billNo || !token) return
+    try {
+      const response = await SalesAPI.getByBillNoPublic(billNo, token)
+      if (response.success && response.data) {
+        applyPublicReceiptResponse(response)
+      }
+    } catch {
+      /* keep current UI */
+    }
+  }, [params.billNo, params.token, applyPublicReceiptResponse])
+
   // Load receipt data by bill number and token
   useEffect(() => {
     const loadReceipt = async () => {
       try {
         const billNo = params.billNo as string
         const token = params.token as string
-        
-        console.log('🎯 Public Receipt Page Debug:')
-        console.log('Bill Number:', billNo)
-        console.log('Token:', token ? `${token.substring(0, 10)}...` : 'none')
-        
+
         if (!billNo || !token) {
-          setError('Bill number and token are required')
+          setError("Bill number and token are required")
           setIsLoading(false)
           return
         }
 
-        // Fetch sale data from public API
         try {
           const response = await SalesAPI.getByBillNoPublic(billNo, token)
-          if (response.success && response.data) {
-            console.log('✅ Sale data found from public API:', response.data)
-            
-            // Transform sale data to receipt format
-            const saleData = response.data
-            console.log('🔍 Raw sale data from API:', saleData)
-            
-            const receiptData: ReceiptData = {
-              id: saleData._id || saleData.id,
-              billNo: saleData.billNo,
-              customerName: saleData.customerName,
-              customerPhone: saleData.customerPhone || 'N/A',
-              date: saleData.date,
-              time: saleData.time || new Date(saleData.date).toLocaleTimeString(),
-              items: saleData.items.map((item: any) => ({
-                name: item.name,
-                type: item.type,
-                quantity: item.quantity,
-                price: item.price,
-                total: item.total,
-                discount: item.discount ?? 0,
-                discountType: item.discountType || 'percentage',
-                staffName: item.staffName || saleData.staffName,
-                staffContributions: item.staffContributions,
-                hsnSacCode: item.hsnSacCode || '',
-                taxAmount: item.taxAmount,
-                priceExcludingGST: item.priceExcludingGST,
-                taxRate: item.taxRate,
-                lineSource: item.lineSource,
-              })),
-              netTotal: saleData.netTotal,
-              taxAmount: saleData.taxAmount,
-              grossTotal: saleData.grossTotal,
-              subtotalExcludingTax: (saleData.items || []).reduce((sum: number, item: any) => {
-                const base = item.priceExcludingGST != null ? item.priceExcludingGST * (item.quantity || 1) : (item.total || 0) - (item.taxAmount || 0)
-                return sum + base
-              }, 0) || (saleData.grossTotal - saleData.taxAmount),
-              paymentMode: saleData.paymentMode,
-              payments:
-                saleData.payments?.length > 0
-                  ? buildReceiptPaymentsFromSale({
-                      date: saleData.date,
-                      payments: saleData.payments,
-                      paymentHistory: saleData.paymentHistory || [],
-                    })
-                  : [
-                      {
-                        type: (String(saleData.paymentMode || "cash").split(",")[0]?.trim().toLowerCase() ||
-                          "unknown") as "cash" | "card" | "online" | "wallet" | "unknown",
-                        amount: saleData.grossTotal,
-                        recordedAt: new Date(saleData.date).toISOString(),
-                      },
-                    ],
-              staffName: saleData.staffName,
-              status: saleData.status,
-              taxBreakdown: saleData.taxBreakdown,
-              billChangeCreditedToWallet:
-                saleData.billChangeCreditedToWallet != null &&
-                Number(saleData.billChangeCreditedToWallet) > 0.005
-                  ? Number(saleData.billChangeCreditedToWallet)
-                  : undefined,
-            }
-            
-            console.log('🔍 Final receipt data from API:', receiptData)
-            setReceipt(receiptData)
-
-            // Use business settings from API response if available
-            if (response.businessSettings) {
-              setBusinessSettings(response.businessSettings)
-            } else {
-              // Fallback to minimal settings
-              setBusinessSettings({
-                name: 'Business',
-                address: '',
-                phone: '',
-                email: '',
-                gstin: '',
-                logo: null
-              })
-            }
-
-            if (response.feedbackEligibility) {
-              setFeedbackEligibility(response.feedbackEligibility as FeedbackEligibility)
-            } else {
-              setFeedbackEligibility(null)
-            }
+          if (applyPublicReceiptResponse(response)) {
+            setError(null)
           } else {
-            console.log('❌ Sale not found for bill number and token:', billNo)
-            setError('Receipt not found or invalid link')
+            setError("Receipt not found or invalid link")
             setFeedbackEligibility(null)
           }
         } catch (apiError: any) {
-          console.error('❌ API error:', apiError)
-          setError(apiError.response?.data?.error || 'Failed to load receipt')
+          console.error("Public receipt API error:", apiError)
+          setError(apiError.response?.data?.error || "Failed to load receipt")
           setFeedbackEligibility(null)
         }
       } catch (err) {
-        console.error('Error loading receipt:', err)
-        setError('Failed to load receipt')
+        console.error("Error loading receipt:", err)
+        setError("Failed to load receipt")
       } finally {
         setIsLoading(false)
       }
     }
 
     loadReceipt()
-  }, [params.billNo, params.token])
+  }, [params.billNo, params.token, applyPublicReceiptResponse])
 
   const handleDownloadPDF = () => {
     // Simply trigger browser's print dialog (user can save as PDF)
@@ -230,6 +241,7 @@ export default function PublicReceiptPage() {
           shareToken={params.token as string}
           eligibility={feedbackEligibility}
           businessName={businessSettings?.name}
+          onFeedbackSubmitted={refreshPublicReceipt}
           receipt={
             <div className="bg-white rounded-lg shadow-sm overflow-hidden">
               <ReceiptPreview

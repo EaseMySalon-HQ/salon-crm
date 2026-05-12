@@ -43,6 +43,7 @@ const {
 const databaseManager = require('./config/database-manager');
 const modelFactory = require('./models/model-factory');
 const { setupBusinessDatabase, setupMainDatabase } = require('./middleware/business-db');
+const { WALK_IN_PHONE } = require('./lib/ensure-walk-in-client');
 
 // Import main database models (for admin operations)
 const User = require('./models/User').model;
@@ -2287,7 +2288,7 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
     const { Client } = req.businessModels;
     const { q } = req.query;
     const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const projection = 'name phone email lastVisit status';
+    const projection = 'name phone email lastVisit status isWalkIn';
 
     if (!q) {
       const clients = await Client.find({})
@@ -2295,7 +2296,13 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
         .sort({ lastVisit: -1, createdAt: -1 })
         .limit(limit)
         .lean();
-      return res.json({ success: true, data: clients });
+      const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
+      let merged = clients;
+      if (walkIn && !merged.some((c) => String(c._id) === String(walkIn._id))) {
+        merged = [walkIn, ...merged];
+        if (merged.length > limit) merged = merged.slice(0, limit);
+      }
+      return res.json({ success: true, data: merged });
     }
 
     if (String(q).trim().length < 2) {
@@ -2318,7 +2325,21 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
       .limit(limit)
       .lean();
 
-    res.json({ success: true, data: searchResults });
+    const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
+    let merged = searchResults;
+    const qt = String(q).trim();
+    if (
+      walkIn &&
+      !merged.some((c) => String(c._id) === String(walkIn._id)) &&
+      (/^walk/i.test(qt) ||
+        (walkIn.name && new RegExp(`^${escaped}`, 'i').test(walkIn.name)) ||
+        (walkIn.phone && walkIn.phone.startsWith(qt)))
+    ) {
+      merged = [walkIn, ...merged];
+      if (merged.length > limit) merged = merged.slice(0, limit);
+    }
+
+    res.json({ success: true, data: merged });
   } catch (error) {
     logger.error('Error searching clients:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -2355,6 +2376,13 @@ app.post(
   async (req, res) => {
   try {
     const { name, email, phone, address, notes } = req.body;
+
+    if (String(phone || '').trim() === WALK_IN_PHONE) {
+      return res.status(400).json({
+        success: false,
+        error: 'This phone value is reserved for the system Walk-in profile.'
+      });
+    }
 
     if (!name || !phone) {
       return res.status(400).json({
@@ -2427,7 +2455,27 @@ app.put(
   try {
     const { Client } = req.businessModels;
     const { phone } = req.body;
-    
+    const existingDoc = await Client.findById(req.params.id).select('isWalkIn phone').lean();
+    if (!existingDoc) {
+      return res.status(404).json({
+        success: false,
+        error: 'Client not found'
+      });
+    }
+
+    if (existingDoc.isWalkIn) {
+      return res.status(403).json({
+        success: false,
+        error: 'The Walk-in customer profile cannot be edited.'
+      });
+    }
+
+    if (phone !== undefined && String(phone || '').trim() === WALK_IN_PHONE && !existingDoc.isWalkIn) {
+      return res.status(400).json({
+        success: false,
+        error: 'This phone value is reserved for the system Walk-in profile.'
+      });
+    }
     // If phone number is being updated, check for duplicates
     if (phone) {
       const existingClient = await Client.findOne({ 
@@ -2487,6 +2535,19 @@ app.delete(
   async (req, res) => {
   try {
     const { Client } = req.businessModels;
+    const target = await Client.findById(req.params.id).select('isWalkIn name').lean();
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        error: 'Client not found'
+      });
+    }
+    if (target.isWalkIn) {
+      return res.status(403).json({
+        success: false,
+        error: 'The Walk-in customer profile cannot be deleted.'
+      });
+    }
     const deletedClient = await Client.findByIdAndDelete(req.params.id);
     
     if (!deletedClient) {

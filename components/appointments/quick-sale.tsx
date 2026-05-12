@@ -101,6 +101,7 @@ import {
 } from "@/lib/payment-redemption-eligibility"
 import type { RewardPointsSettings } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
+import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay } from "@/lib/walk-in-client"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
@@ -2101,12 +2102,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
   }, [services])
 
-  // Filter customers based on search (matches from start)
-  const filteredCustomers = clients.filter(
-    (client) =>
-      client.name.toLowerCase().startsWith(customerSearch.toLowerCase()) ||
-      client.phone.startsWith(customerSearch) ||
-      (client.email && client.email.toLowerCase().startsWith(customerSearch.toLowerCase())),
+  // Filter customers based on search (matches from start); empty search shows Walk-in only
+  const filteredCustomers = useMemo(
+    () => customerDropdownList(clients, customerSearch),
+    [clients, customerSearch],
   )
 
   // Get the correct customer ID (handles both id and _id properties)
@@ -2190,8 +2189,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       const phoneValue = value.replace(/\D/g, '').slice(0, 10)
       setCustomerSearch(phoneValue)
     } else if (value.length === 0) {
-      // Allow empty string
       setCustomerSearch(value)
+      setSelectedCustomer(null)
     } else {
       // Allow text for name/email search (contains letters or special chars)
       setCustomerSearch(value)
@@ -6442,7 +6441,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     className="pl-10"
                   />
 
-                  {showCustomerDropdown && customerSearch && (
+                  {showCustomerDropdown && (customerSearch.trim().length > 0 || findWalkInClient(clients)) && (
                     <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-auto">
                       {filteredCustomers.length > 0 ? (
                         filteredCustomers.map((customer, index) => (
@@ -6455,7 +6454,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               <User className="h-4 w-4 text-muted-foreground" />
                               <div>
                                 <div className="font-medium">{customer.name}</div>
-                                <div className="text-sm text-muted-foreground">📞 {customer.phone}</div>
+                                <div className="text-sm text-muted-foreground">📞 {formatClientPhoneForDisplay(customer)}</div>
                               </div>
                             </div>
                           </div>
@@ -6532,7 +6531,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   <div className="flex items-center gap-4 text-sm text-muted-foreground">
                     <div className="flex items-center gap-1">
                       <Phone className="h-3 w-3" />
-                      {selectedCustomer.phone}
+                      {formatClientPhoneForDisplay(selectedCustomer)}
                     </div>
                     {selectedCustomer.email && (
                       <div className="flex items-center gap-1">
@@ -7039,7 +7038,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               </div>
 
               {/* Customer Dropdown */}
-              {showCustomerDropdown && customerSearch && (
+              {showCustomerDropdown && (customerSearch.trim().length > 0 || findWalkInClient(clients)) && (
                 <div className="absolute top-full left-0 right-0 z-50 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl max-h-60 overflow-auto backdrop-blur-sm">
                   {filteredCustomers.length > 0 ? (
                     filteredCustomers.map((customer, index) => (
@@ -7057,7 +7056,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             <div className="text-sm text-muted-foreground flex items-center gap-4 mt-1">
                               <span className="flex items-center gap-1">
                                 <Phone className="h-3 w-3" />
-                                {customer.phone}
+                                {formatClientPhoneForDisplay(customer)}
                               </span>
                               {customer.email && (
                                 <span className="flex items-center gap-1">
@@ -7159,7 +7158,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     <h4 className="truncate text-base font-semibold tracking-tight text-slate-900">
                       {selectedCustomer.name}
                     </h4>
-                    <p className="mt-0.5 text-sm text-slate-500 tabular-nums">{selectedCustomer.phone}</p>
+                    <p className="mt-0.5 text-sm text-slate-500 tabular-nums">{formatClientPhoneForDisplay(selectedCustomer)}</p>
                     {selectedCustomer.email && (
                       <p className="mt-0.5 truncate text-sm text-slate-500">{selectedCustomer.email}</p>
                     )}
