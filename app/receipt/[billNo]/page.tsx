@@ -438,7 +438,7 @@ ${publicUrl}`
         </div>
         <h1 className="text-xl font-semibold text-gray-900 mb-2">Receipt Not Found</h1>
         <p className="text-gray-600 mb-6">{error || 'The requested receipt could not be found.'}</p>
-        <Link href="/reports">
+        <Link href="/reports" prefetch={false}>
           <Button variant="outline" className="mr-2">
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back to Reports

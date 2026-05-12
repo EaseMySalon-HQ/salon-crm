@@ -4,7 +4,7 @@
 
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
-const { JWT_SECRET } = require('../../config/jwt');
+const { JWT_SECRET, refreshExpiresMs } = require('../../config/jwt');
 const {
   COOKIE,
   TOKEN_USE,
@@ -128,7 +128,8 @@ describe('setTenantAuthCookies', () => {
     expect(refresh).toBeDefined();
     expect(refresh.value).toBe('rt');
     expect(refresh.opts.httpOnly).toBe(true);
-    expect(refresh.opts.maxAge).toBe(24 * 60 * 60 * 1000);
+    /** Aligns with `config/jwt.js` — refresh cookie maxAge tracks JWT_REFRESH_EXPIRES (default 30d). */
+    expect(refresh.opts.maxAge).toBe(refreshExpiresMs);
   });
 
   it('uses secure=false in development by default', () => {
