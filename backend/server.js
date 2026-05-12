@@ -2,6 +2,7 @@ const { logger } = require('./utils/logger');
 logger.info('Starting EaseMySalon Backend Server...');
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const bcrypt = require('bcryptjs');
@@ -97,6 +98,14 @@ const {
   getRateLimitHealthPayload,
 } = require('./middleware/rate-limit');
 const { apiV1AliasMiddleware } = require('./middleware/api-v1-alias');
+const { perfLogMiddleware, markCache } = require('./middleware/perf-log');
+const {
+  getDashboardCache,
+  setDashboardCache,
+  invalidateDashboardCache,
+  dashboardInvalidateOnMutation,
+} = require('./lib/dashboard-cache');
+const { withReportCache, reportCacheMiddleware } = require('./lib/report-cache');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -175,6 +184,26 @@ const tenantCorsOptions = {
 // Dynamic CORS configuration (must match explicit OPTIONS handler for credentialed Safari preflights)
 app.use(cors(tenantCorsOptions));
 
+// Per-request perf log (active in dev or when ENABLE_PERF_LOGS=true). Mounted early so it
+// captures even auth/CSRF rejections. Never logs cookies, tokens, request bodies, or PII.
+app.use(perfLogMiddleware);
+
+/**
+ * gzip/deflate JSON responses above 1KB to cut Railway egress. `compression()` only
+ * wraps `res.write`/`res.end`; it does not alter request-body parsing, so webhooks /
+ * raw-body parsers are unaffected. Health probes are skipped to keep them deterministic
+ * and CPU-light, and clients can opt out per-request with `X-No-Compression: 1`.
+ */
+app.use(compression({
+  threshold: 1024,
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    const p = req.path || '';
+    if (p === '/health' || p === '/api/health') return false;
+    return compression.filter(req, res);
+  },
+}));
+
 // Body + cookies before rate limiters so auth routes can key off JSON (email, etc.)
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
@@ -213,6 +242,14 @@ if (process.env.NODE_ENV !== 'production' && process.env.HTTP_LOG !== '0') {
 
 const { csrfProtection, setCsrfCookie } = require('./middleware/csrf');
 app.use(csrfProtection);
+
+/**
+ * After CSRF and (per-route) auth populate `req.user`, drop the tenant's dashboard cache
+ * when a 2xx mutation lands on any resource feeding the summary. The hook runs on
+ * `res.on('finish')` so it never delays the response, and silently no-ops on auth
+ * failures (no `branchId` → no eviction needed).
+ */
+app.use(dashboardInvalidateOnMutation);
 
 // Handle CORS preflight for all routes (same options as app.use — avoid default cors() without credentials)
 app.options('*', cors(tenantCorsOptions));
@@ -2265,7 +2302,8 @@ app.get('/api/clients', authenticateToken, requireStaff, setupBusinessDatabase, 
     const clients = await Client.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.json({
       success: true,
@@ -4903,7 +4941,8 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
     const products = await Product.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
-      .sort({ category: 1, name: 1 }); // Sort by category alphabetically, then by name
+      .sort({ category: 1, name: 1 }) // Sort by category alphabetically, then by name
+      .lean();
 
     logger.debug('Products found: %d', products.length);
     res.json({
@@ -6664,7 +6703,7 @@ app.post('/api/supplier-payables/:id/payments', authenticateToken, setupBusiness
 
 // ==================== SUPPLIER & PURCHASE REPORTS ====================
 
-app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
   try {
     const { PurchaseOrder, SupplierPayable, Supplier } = req.businessModels;
     const branchId = req.user.branchId;
@@ -6729,7 +6768,7 @@ app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requi
   }
 });
 
-app.get('/api/reports/purchase', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/reports/purchase', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
   try {
     const { PurchaseOrder, Supplier } = req.businessModels;
     const branchId = req.user.branchId;
@@ -8862,14 +8901,39 @@ const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId
 app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment } = req.businessModels;
-    const { page = 1, limit = 10, date, status, clientId } = req.query;
+    const {
+      page = 1,
+      limit = 10,
+      date,
+      dateFrom,
+      dateTo,
+      status,
+      clientId,
+      view,
+      fields,
+    } = req.query;
     const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
+    /**
+     * Calendar/list views frequently need a whole month at once; allow a generous cap when a
+     * bounded date window is supplied. Without a window we still cap tightly to prevent
+     * accidental "download world" requests from buggy callers.
+     */
+    const hasBoundedWindow = Boolean(date) || Boolean(dateFrom && dateTo);
+    const requestedLimit = parseInt(limit);
+    const limitNum = Math.max(
+      1,
+      Math.min(hasBoundedWindow ? 1000 : 200, Number.isFinite(requestedLimit) ? requestedLimit : 10),
+    );
 
     let query = { branchId: req.user.branchId };
 
     if (date) {
       query.date = date;
+    } else if (dateFrom || dateTo) {
+      // `date` is stored as `YYYY-MM-DD` strings — lexicographic range matches IST calendar days.
+      query.date = {};
+      if (dateFrom) query.date.$gte = String(dateFrom).slice(0, 10);
+      if (dateTo) query.date.$lte = String(dateTo).slice(0, 10);
     }
 
     if (status) {
@@ -8880,11 +8944,19 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
       query.clientId = clientId;
     }
 
+    /**
+     * `view=calendar` and `fields=minimal` drop heavy embedded client analytics and inflate
+     * compression less. Default ("full") preserves the legacy shape for existing callers.
+     */
+    const isMinimal = String(view).toLowerCase() === 'calendar' || String(fields).toLowerCase() === 'minimal';
+    /** Sort by `date` for calendar windows; preserve legacy createdAt order otherwise. */
+    const sortSpec = hasBoundedWindow ? { date: 1, time: 1 } : { createdAt: -1 };
+
     const totalAppointments = await Appointment.countDocuments(query);
     const rawAppointments = await Appointment.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
-      .sort({ createdAt: -1 })
+      .sort(sortSpec)
       .lean();
 
     // Resolve staff names: Staff from business DB, Owner from main DB (User)
@@ -8935,10 +9007,15 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
     const additionalIds = appointments.flatMap((a) => a.additionalServiceIds || []).filter(Boolean);
     const allServiceIds = [...new Set([...primaryServiceIds.map((id) => id.toString()), ...additionalIds.map((id) => id.toString())])];
     const { Client, Service } = req.businessModels;
+    /**
+     * Calendar/list cards only need name + phone for the client and name/price/duration for
+     * services. The legacy "full" view keeps email + visit history for the appointment drawer.
+     */
+    const clientProjection = isMinimal ? 'name phone' : 'name phone email totalVisits totalSpent lastVisit';
     const [clients, services] = await Promise.all([
       clientIds.length
         ? Client.find({ _id: { $in: clientIds } })
-            .select('name phone email totalVisits totalSpent lastVisit')
+            .select(clientProjection)
             .lean()
         : [],
       allServiceIds.length ? Service.find({ _id: { $in: allServiceIds } }).select('name price duration').lean() : [],
@@ -11050,7 +11127,7 @@ app.get('/api/receipts/client/:clientId', authenticateToken, setupBusinessDataba
 });
 
 // Reports routes
-app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
   try {
     
     const { Service, Product, Staff, Client, Appointment, Receipt, Sale, MembershipSubscription, MembershipPlan } = req.businessModels;
@@ -11123,14 +11200,24 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-// Single aggregated payload for tenant dashboard (reduces N+1 client fetches)
+// Single aggregated payload for tenant dashboard (reduces N+1 client fetches).
+// Short TTL cache absorbs duplicate hits from dashboard cards/navigation; mutation routes
+// call `invalidateDashboardCache(branchId)` so sales/appointments/inventory edits are
+// reflected immediately.
 app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
+    const cached = getDashboardCache(req.user.branchId);
+    if (cached) {
+      markCache(res, 'HIT');
+      return res.json(cached);
+    }
     const payload = await buildDashboardInitPayload({
       branchId: req.user.branchId,
       businessModels: req.businessModels,
       user: req.user,
     });
+    setDashboardCache(req.user.branchId, payload);
+    markCache(res, 'MISS');
     res.json(payload);
   } catch (error) {
     logger.error('Error building dashboard init:', error);
@@ -11152,9 +11239,18 @@ const analyticsTabOpts = (req) => ({
   query: req.query,
 });
 
+/**
+ * Analytics tab payloads are heavy server-side aggregations and the user typically clicks
+ * back and forth between tabs. Cache 3 minutes per (tenant, tab, filter) — mutation routes
+ * invalidate the whole tenant slice so figures stay accurate after writes.
+ */
 app.get('/api/analytics/revenue', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const payload = await buildAnalyticsRevenueTab(analyticsTabOpts(req));
+    const payload = await withReportCache(req, res, {
+      reportType: 'analytics:revenue',
+      filters: req.query,
+      compute: () => buildAnalyticsRevenueTab(analyticsTabOpts(req)),
+    });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'revenue analytics');
@@ -11163,7 +11259,11 @@ app.get('/api/analytics/revenue', authenticateToken, setupBusinessDatabase, requ
 
 app.get('/api/analytics/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const payload = await buildAnalyticsServicesTab(analyticsTabOpts(req));
+    const payload = await withReportCache(req, res, {
+      reportType: 'analytics:services',
+      filters: req.query,
+      compute: () => buildAnalyticsServicesTab(analyticsTabOpts(req)),
+    });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'services analytics');
@@ -11172,7 +11272,11 @@ app.get('/api/analytics/services', authenticateToken, setupBusinessDatabase, req
 
 app.get('/api/analytics/clients', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const payload = await buildAnalyticsClientsTab(analyticsTabOpts(req));
+    const payload = await withReportCache(req, res, {
+      reportType: 'analytics:clients',
+      filters: req.query,
+      compute: () => buildAnalyticsClientsTab(analyticsTabOpts(req)),
+    });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'clients analytics');
@@ -11181,7 +11285,11 @@ app.get('/api/analytics/clients', authenticateToken, setupBusinessDatabase, requ
 
 app.get('/api/analytics/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const payload = await buildAnalyticsProductsTab(analyticsTabOpts(req));
+    const payload = await withReportCache(req, res, {
+      reportType: 'analytics:products',
+      filters: req.query,
+      compute: () => buildAnalyticsProductsTab(analyticsTabOpts(req)),
+    });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'products analytics');
@@ -11190,7 +11298,11 @@ app.get('/api/analytics/products', authenticateToken, setupBusinessDatabase, req
 
 app.get('/api/analytics/staff', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const payload = await buildAnalyticsStaffTab(analyticsTabOpts(req));
+    const payload = await withReportCache(req, res, {
+      reportType: 'analytics:staff',
+      filters: req.query,
+      compute: () => buildAnalyticsStaffTab(analyticsTabOpts(req)),
+    });
     res.json(payload);
   } catch (error) {
     return handleAnalyticsTabError(res, error, 'staff analytics');
@@ -11199,9 +11311,13 @@ app.get('/api/analytics/staff', authenticateToken, setupBusinessDatabase, requir
 
 app.get('/api/analytics/staff/:staffId/trends', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const payload = await buildAnalyticsStaffDrillDown({
-      ...analyticsTabOpts(req),
-      staffId: req.params.staffId,
+    const payload = await withReportCache(req, res, {
+      reportType: 'analytics:staff-trends',
+      filters: { ...req.query, staffId: req.params.staffId },
+      compute: () => buildAnalyticsStaffDrillDown({
+        ...analyticsTabOpts(req),
+        staffId: req.params.staffId,
+      }),
     });
     res.json(payload);
   } catch (error) {
@@ -11229,7 +11345,7 @@ app.get('/api/dashboard/appointments-summary', authenticateToken, setupBusinessD
 });
 
 // Summary report (same metrics as daily summary email)
-app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
   try {
     const { Sale, Receipt, CashRegistry, Expense } = req.businessModels;
     const branchId = req.user.branchId;
@@ -16127,7 +16243,7 @@ app.post('/api/reports/export/product-list', authenticateToken, setupBusinessDat
 });
 
 // Get appointment list for report (with filters)
-app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
   try {
     const { Appointment, Client, Sale } = req.businessModels;
     const { dateFrom, dateTo, dateFilterType = 'appointment_date', status, showWalkIn } = req.query;
@@ -16257,7 +16373,7 @@ app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabas
 });
 
 // Get unpaid/part-paid bills for report (includes dues settled column + merged dues-only rows when status=all)
-app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
   try {
     const { Sale } = req.businessModels;
     const { dateFrom, dateTo, status } = req.query;
@@ -16285,7 +16401,7 @@ app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabas
 });
 
 // Get deleted invoices (archived bills) for report
-app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
   try {
     const { archivedAtRangeFromParams } = require('./utils/archived-date-query');
     const { BillArchive } = req.businessModels;
@@ -16391,7 +16507,7 @@ app.post('/api/reports/export/appointment-list', authenticateToken, setupBusines
 });
 
 // Tip payouts (for Staff Tip report - Mark as Paid)
-app.get('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
   try {
     const { TipPayout } = req.businessModels;
     const { dateFrom, dateTo } = req.query;

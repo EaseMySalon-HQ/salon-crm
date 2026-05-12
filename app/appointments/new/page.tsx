@@ -91,7 +91,7 @@ function NewAppointmentContent() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 p-4 sm:p-6 flex flex-col space-y-6 w-full max-w-full">
       <div className="flex items-center gap-4">
         <Button asChild variant="outline" size="icon">
-          <Link href="/appointments">
+          <Link href="/appointments" prefetch={false}>
             <ArrowLeft className="h-4 w-4" />
           </Link>
         </Button>
@@ -130,7 +130,7 @@ export default function NewAppointmentPage() {
           <div className="flex flex-col space-y-6">
             <div className="flex items-center gap-4">
               <Button asChild variant="outline" size="icon">
-                <Link href="/appointments">
+                <Link href="/appointments" prefetch={false}>
                   <ArrowLeft className="h-4 w-4" />
                 </Link>
               </Button>

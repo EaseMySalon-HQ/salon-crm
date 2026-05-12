@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { addDays, format } from "date-fns"
+import { addDays, format, subDays } from "date-fns"
 import { Pencil, Eye, ChevronDown, Square, List, Calendar, Heart } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -312,15 +312,22 @@ export const AppointmentsCalendar = forwardRef<
     return arr
   }, [])
 
-  // Fetch appointments from API
+  // Fetch appointments from API within a bounded window around the current view.
+  // Without this, the route returned the most recent 100 rows by `createdAt`, which
+  // could exclude future appointments and inflated Railway egress for calendar use.
   const fetchAppointments = async () => {
     try {
       setLoading(true)
+      const anchor = currentDate ?? new Date()
+      const dateFrom = format(subDays(anchor, 7), "yyyy-MM-dd")
+      const dateTo = format(addDays(anchor, 30), "yyyy-MM-dd")
       const response = await AppointmentsAPI.getAll({
-        limit: 100, // Get more appointments to cover the week
-        status: undefined // Get all statuses
+        limit: 1000,
+        dateFrom,
+        dateTo,
+        view: "list",
       })
-      
+
       if (response.success) {
         setAppointments(response.data || [])
       } else {

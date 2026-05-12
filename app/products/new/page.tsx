@@ -22,7 +22,7 @@ export default function NewProductPage() {
         <div className="flex flex-col space-y-6">
               <div className="flex items-center gap-4">
                 <Button asChild variant="outline" size="icon">
-                  <Link href="/settings?section=products">
+                  <Link href="/settings?section=products" prefetch={false}>
                     <ArrowLeft className="h-4 w-4" />
                   </Link>
                 </Button>
