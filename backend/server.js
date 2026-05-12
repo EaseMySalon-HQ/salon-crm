@@ -31,6 +31,7 @@ const { logSmsMessage, logEmailMessage } = require('./lib/channel-logs');
 const { canDeductSms, deductSms, canDeductWhatsApp, deductWhatsApp } = require('./lib/wallet-deduction');
 const serviceBundle = require('./lib/service-bundle');
 const { buildDashboardInitPayload, buildAppointmentsSummary } = require('./lib/dashboard-init');
+const { buildNotificationsFeed } = require('./lib/notifications-feed');
 const {
   buildAnalyticsRevenueTab,
   buildAnalyticsServicesTab,
@@ -11222,6 +11223,20 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
   } catch (error) {
     logger.error('Error building dashboard init:', error);
     res.status(500).json({ success: false, error: 'Failed to load dashboard' });
+  }
+});
+
+/** Staff alerts derived from inventory and subscription/package dates (same sources as dashboard cards). */
+app.get('/api/notifications/feed', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const payload = await buildNotificationsFeed({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+    });
+    res.json(payload);
+  } catch (error) {
+    logger.error('Error building notifications feed:', error);
+    res.status(500).json({ success: false, error: 'Failed to load notifications' });
   }
 });
 
