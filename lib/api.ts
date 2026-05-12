@@ -995,7 +995,21 @@ function recoverAppointmentMutationFromAxiosError(e: unknown): ApiResponse<any> 
 }
 
 export class AppointmentsAPI {
-  static async getAll(params?: { page?: number; limit?: number; date?: string; status?: string; clientId?: string }): Promise<PaginatedResponse<any>> {
+  static async getAll(params?: {
+    page?: number
+    limit?: number
+    date?: string
+    /** IST `YYYY-MM-DD` lower bound; uses Appointment.date string index. */
+    dateFrom?: string
+    /** IST `YYYY-MM-DD` upper bound (inclusive). */
+    dateTo?: string
+    status?: string
+    clientId?: string
+    /** `calendar` returns minimal client fields (name+phone) and skips visit analytics. */
+    view?: "calendar" | "list"
+    /** Alias for `view` — `minimal` matches the backend short-form projection. */
+    fields?: "minimal" | "full"
+  }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/appointments', { params })
     return response.data
   }

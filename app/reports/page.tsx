@@ -161,56 +161,71 @@ function ReportsTabsBody() {
               )}
             </TabsList>
 
+            {/**
+             * Render only the active tab's report. Radix `TabsContent` mounts every child
+             * even when hidden; without this gate every report fires its initial API call on
+             * page load, multiplying Railway egress for users who only view one tab.
+             */}
             {canViewFinancialReports && (
               <>
                 <TabsContent value="sales" className="space-y-6">
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardContent className="pt-6">
-                      <SalesReport />
-                    </CardContent>
-                  </Card>
+                  {activeTab === "sales" && (
+                    <Card className="border-0 shadow-sm bg-slate-50/50">
+                      <CardContent className="pt-6">
+                        <SalesReport />
+                      </CardContent>
+                    </Card>
+                  )}
                 </TabsContent>
 
                 <TabsContent value="membership" className="space-y-6">
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardContent className="pt-6">
-                      <MembershipReport />
-                    </CardContent>
-                  </Card>
+                  {activeTab === "membership" && (
+                    <Card className="border-0 shadow-sm bg-slate-50/50">
+                      <CardContent className="pt-6">
+                        <MembershipReport />
+                      </CardContent>
+                    </Card>
+                  )}
                 </TabsContent>
 
                 <TabsContent value="expense" className="space-y-6">
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardContent className="pt-6">
-                      <ExpenseReport />
-                    </CardContent>
-                  </Card>
+                  {activeTab === "expense" && (
+                    <Card className="border-0 shadow-sm bg-slate-50/50">
+                      <CardContent className="pt-6">
+                        <ExpenseReport />
+                      </CardContent>
+                    </Card>
+                  )}
                 </TabsContent>
               </>
             )}
 
             {canViewStaffCommission && (
               <TabsContent value="staff" className="space-y-6">
-                <FeatureGate
-                  featureId="staff_commissions"
-                  upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to track staff commissions and performance analytics."
-                >
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardContent className="pt-6">
-                      <StaffPerformanceReport />
-                    </CardContent>
-                  </Card>
-                </FeatureGate>
+                {activeTab === "staff" && (
+                  <FeatureGate
+                    featureId="staff_commissions"
+                    upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to track staff commissions and performance analytics."
+                  >
+                    <Card className="border-0 shadow-sm bg-slate-50/50">
+                      <CardContent className="pt-6">
+                        <StaffPerformanceReport />
+                      </CardContent>
+                    </Card>
+                  </FeatureGate>
+                )}
               </TabsContent>
             )}
 
             {canViewPackageReports && (
               <TabsContent value="package" className="space-y-6">
-                <Card className="border-0 shadow-sm bg-slate-50/50">
-                  <CardContent className="pt-6">
-                    <PackageReport embedded />
-                  </CardContent>
-                </Card>
+                {activeTab === "package" && (
+                  <Card className="border-0 shadow-sm bg-slate-50/50">
+                    <CardContent className="pt-6">
+                      <PackageReport embedded />
+                    </CardContent>
+                  </Card>
+                )}
               </TabsContent>
             )}
           </Tabs>

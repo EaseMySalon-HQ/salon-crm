@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { DashboardAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { GC_TIME, STALE_TIME } from "@/lib/queries/staleness"
 
 export function useDashboardInit(enabled = true) {
   const { user } = useAuth()
@@ -18,5 +19,7 @@ export function useDashboardInit(enabled = true) {
       return res.data
     },
     enabled: Boolean(enabled && user),
+    staleTime: STALE_TIME.dashboard,
+    gcTime: GC_TIME.default,
   })
 }

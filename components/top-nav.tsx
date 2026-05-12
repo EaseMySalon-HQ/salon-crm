@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
 import { SettingsAPI, ClientsAPI, WalletAPI } from "@/lib/api"
+import { STALE_TIME } from "@/lib/queries/staleness"
 import { Input } from "@/components/ui/input"
 import { useTodayOnlineSales } from "@/hooks/use-today-online-sales"
 import { ExpenseForm } from "@/components/expenses/expense-form"
@@ -65,7 +66,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
       }
       return response.data
     },
-    staleTime: 5 * 60_000,
+    staleTime: STALE_TIME.businessSettings,
     enabled: !!user,
   })
   const businessName = businessSettingsData?.name || "EaseMySalon"
@@ -79,7 +80,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
       }
       return res.data
     },
-    staleTime: 30_000,
+    staleTime: STALE_TIME.walletBalance,
     refetchOnWindowFocus: true,
     enabled: !!user,
     retry: 1,
@@ -120,7 +121,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
           else setClientResults([])
         })
         .catch(() => setClientResults([]))
-    }, 280)
+    }, 350)
     return () => clearTimeout(t)
   }, [clientSearch])
 

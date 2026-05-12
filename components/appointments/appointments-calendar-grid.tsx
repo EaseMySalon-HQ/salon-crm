@@ -871,9 +871,17 @@ export const AppointmentsCalendarGrid = forwardRef<
     setListFetchError(false)
     try {
       setLoading(true)
+      /**
+       * Bounded date window around `selectedDate` — covers the "Upcoming" modal but skips
+       * the old `sort by createdAt DESC` page which would miss future appointments and
+       * fetch arbitrary recent rows. `view=calendar` drops embedded client analytics.
+       */
+      const anchor = selectedDate ? new Date(selectedDate + "T12:00:00") : new Date()
+      const dateFrom = format(subDays(anchor, 7), "yyyy-MM-dd")
+      const dateTo = format(addDays(anchor, 60), "yyyy-MM-dd")
       const [staffRes, aptRes] = await Promise.all([
         StaffDirectoryAPI.getAll(),
-        AppointmentsAPI.getAll({ limit: 200 }),
+        AppointmentsAPI.getAll({ limit: 1000, dateFrom, dateTo, view: "calendar" }),
       ])
       if (staffRes?.success && Array.isArray(staffRes.data)) {
         setStaffList(staffRes.data)
@@ -892,7 +900,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     } finally {
       setLoading(false)
     }
-  }, [calendarRetryKey])
+  }, [calendarRetryKey, selectedDate])
 
   const reloadDaySalesForCalendar = useCallback(async () => {
     if (!selectedDate) return
