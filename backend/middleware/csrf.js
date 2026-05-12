@@ -26,6 +26,8 @@ function isCsrfEnabled() {
 
 /** Paths that skip CSRF (login, password reset, token refresh, logout, admin login). */
 const SKIP_PREFIXES = [
+  '/api/public/feedback',
+  '/api/public/sales/bill',
   '/api/auth/login',
   '/api/auth/staff-login',
   '/api/auth/forgot-password',

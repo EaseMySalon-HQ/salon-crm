@@ -29,6 +29,7 @@ import {
   IdCard,
   CircleDollarSign,
   Gift,
+  MessageSquare,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -45,6 +46,7 @@ import { PlanBilling } from "./plan-billing"
 import { MembershipPlansTable } from "@/components/membership/membership-plans-table"
 import { PackagesSettingsPanel } from "@/components/packages/PackagesSettingsPanel"
 import { ChannelUsageSettings } from "./channel-usage-settings"
+import { FeedbackManagementSettings } from "./feedback-management-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { RewardPointsProgramSettings } from "./reward-points-settings"
@@ -74,6 +76,7 @@ const SETTINGS_SECTION_IDS = [
   "products",
   "packages",
   "channel-usage",
+  "feedback",
   "recharge",
   "prepaid-wallet",
   "reward-points",
@@ -232,6 +235,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "WhatsApp, SMS, and email delivery stats and message logs.",
         icon: BarChart2,
         searchTerms: ["whatsapp", "logs", "delivered"],
+      },
+      {
+        id: "feedback",
+        title: "Feedback management",
+        description: "Customer ratings, reviews, and follow-up after visits.",
+        icon: MessageSquare,
+        searchTerms: ["reviews", "ratings", "google", "nps"],
       },
       {
         id: "recharge",
@@ -449,6 +459,8 @@ export function SettingsPage() {
         return <PackagesSettingsPanel />
       case "channel-usage":
         return <ChannelUsageSettings />
+      case "feedback":
+        return <FeedbackManagementSettings />
       case "recharge":
         return <RechargeSettings />
       case "prepaid-wallet":

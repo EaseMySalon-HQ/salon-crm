@@ -203,7 +203,7 @@ export function PurchaseInvoiceDetail({
               role="columnheader"
               className="flex h-12 items-center justify-end border-b bg-slate-50/80 px-4 align-middle font-medium text-muted-foreground"
             >
-              Received
+              Quantity
             </div>
             <div
               role="columnheader"

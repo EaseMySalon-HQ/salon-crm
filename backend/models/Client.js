@@ -48,6 +48,11 @@ const clientSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Business',
     required: true
+  },
+  /** System placeholder profile for anonymous walk-ins (see backend/lib/ensure-walk-in-client.js). */
+  isWalkIn: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef, useReducer, type ReactNode } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -71,6 +71,7 @@ import { PaymentCollectionModal } from "@/components/reports/payment-collection-
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
 import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
+import { findWalkInClient, formatClientPhoneForDisplay, prependWalkInIfMissing } from "@/lib/walk-in-client"
 
 /** Convert 24h time (e.g. "09:00") to 12h for API storage ("9:00 AM") for backward compatibility */
 function formatTimeForApi(time: string): string {
@@ -539,6 +540,17 @@ export function AppointmentForm({
   const [clients, setClients] = useState<Client[]>([])
   const [searchingClients, setSearchingClients] = useState(false)
   const clientSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const [clientDirEpoch, bumpClientDir] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    void clientStore.loadClients().finally(() => bumpClientDir())
+    return clientStore.subscribe(bumpClientDir)
+  }, [])
+
+  const walkInClient = useMemo(
+    () => findWalkInClient(clientStore.getClients()) ?? null,
+    [clientDirEpoch],
+  )
 
   // Services and staff state
   const [services, setServices] = useState<any[]>([])
@@ -1519,15 +1531,7 @@ export function AppointmentForm({
     return unsubscribe
   }, [customerSearch, selectedCustomer])
 
-  // Hide client details panel when search box is empty (no number/name)
-  useEffect(() => {
-    if (!isEditMode && !customerSearch.trim() && selectedCustomer) {
-      setSelectedCustomer(null)
-      onClientSelect?.(null)
-    }
-  }, [isEditMode, customerSearch, selectedCustomer, onClientSelect])
-
-  // Handle click outside to close dropdown
+  // Client clears when search is emptied (handleCustomerSearchChange).
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Element
@@ -1609,7 +1613,13 @@ export function AppointmentForm({
     }
   }, [customerSearch, selectedCustomer])
 
-  const filteredCustomers = clients
+  const filteredCustomers = useMemo(() => {
+    const trimmed = customerSearch.trim()
+    if (!trimmed) {
+      return prependWalkInIfMissing(walkInClient ?? undefined, clients)
+    }
+    return clients
+  }, [walkInClient, clients, customerSearch])
 
   // Handle customer selection
   const handleCustomerSelect = (customer: Client) => {
@@ -1628,8 +1638,7 @@ export function AppointmentForm({
       const phoneValue = value.replace(/\D/g, '').slice(0, 10)
       setCustomerSearch(phoneValue)
     } else if (value.length === 0) {
-      // Allow empty string and clear selection
-      setCustomerSearch(value)
+      setCustomerSearch("")
       setSelectedCustomer(null)
       onClientSelect?.(null)
     } else {
@@ -2600,16 +2609,18 @@ export function AppointmentForm({
                   }}
                   onFocus={() => {
                     setShowCustomerDropdown(true)
-                    if (!customerSearch.trim() && !selectedCustomer) {
-                      clientStore.preloadRecent().then(recent => {
-                        if (recent.length) setClients(recent)
+                    if (!customerSearch.trim()) {
+                      clientStore.preloadRecent().then((recent) => {
+                        const w = findWalkInClient(clientStore.getClients())
+                        const merged = prependWalkInIfMissing(w, recent)
+                        if (merged.length) setClients(merged)
                       })
                     }
                   }}
                   className="pl-12 h-12 border-slate-200 focus:border-indigo-500 focus:ring-indigo-500 rounded-xl"
                 />
 
-                {showCustomerDropdown && (customerSearch || clients.length > 0) && (
+                {showCustomerDropdown && (customerSearch.trim() || filteredCustomers.length > 0) && (
                   <div className="absolute top-full left-0 right-0 z-10 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-auto">
                     {searchingClients ? (
                       <div className="p-4 text-center text-slate-500 flex items-center justify-center gap-2">
@@ -2635,7 +2646,7 @@ export function AppointmentForm({
                               <div className="font-semibold text-slate-800">{customer.name}</div>
                               <div className="text-sm text-slate-500 flex items-center gap-1">
                                 <Phone className="h-3 w-3" />
-                                {customer.phone}
+                                {formatClientPhoneForDisplay(customer)}
                               </div>
                             </div>
                           </div>

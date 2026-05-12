@@ -17,7 +17,8 @@ const permissionSchema = new mongoose.Schema({
       'settings',
       'payment_settings',
       'pos_settings',
-      'general_settings'
+      'general_settings',
+      'feedback'
     ]
   },
   feature: {
@@ -124,7 +125,14 @@ const roleDefinitions = {
       { module: 'general_settings', feature: 'create', enabled: true },
       { module: 'general_settings', feature: 'edit', enabled: true },
       { module: 'general_settings', feature: 'delete', enabled: true },
-      { module: 'general_settings', feature: 'manage', enabled: true }
+      { module: 'general_settings', feature: 'manage', enabled: true },
+
+      // Feedback
+      { module: 'feedback', feature: 'view', enabled: true },
+      { module: 'feedback', feature: 'create', enabled: true },
+      { module: 'feedback', feature: 'edit', enabled: true },
+      { module: 'feedback', feature: 'delete', enabled: true },
+      { module: 'feedback', feature: 'manage', enabled: true }
     ]
   },
   manager: {
@@ -190,7 +198,14 @@ const roleDefinitions = {
       { module: 'general_settings', feature: 'create', enabled: true },
       { module: 'general_settings', feature: 'edit', enabled: true },
       { module: 'general_settings', feature: 'delete', enabled: true },
-      { module: 'general_settings', feature: 'manage', enabled: true }
+      { module: 'general_settings', feature: 'manage', enabled: true },
+
+      // Feedback
+      { module: 'feedback', feature: 'view', enabled: true },
+      { module: 'feedback', feature: 'create', enabled: true },
+      { module: 'feedback', feature: 'edit', enabled: true },
+      { module: 'feedback', feature: 'delete', enabled: true },
+      { module: 'feedback', feature: 'manage', enabled: true }
     ]
   },
   staff: {

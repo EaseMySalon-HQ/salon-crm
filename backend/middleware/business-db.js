@@ -1,6 +1,7 @@
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
+const { ensureWalkInClient } = require('../lib/ensure-walk-in-client');
 
 /**
  * Middleware to set up business-specific database models
@@ -79,6 +80,17 @@ const setupBusinessDatabase = async (req, res, next) => {
       })();
     }
     await businessConnection.supplierPayableIndexRepairPromise;
+
+    if (!businessConnection.ensureWalkInClientPromise) {
+      businessConnection.ensureWalkInClientPromise = (async () => {
+        try {
+          await ensureWalkInClient(businessModels, businessId);
+        } catch (e) {
+          logger.warn('ensureWalkInClient failed:', e.message);
+        }
+      })();
+    }
+    await businessConnection.ensureWalkInClientPromise;
 
     // Attach models to request object
     req.businessModels = businessModels;

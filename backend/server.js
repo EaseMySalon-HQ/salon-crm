@@ -43,6 +43,7 @@ const {
 const databaseManager = require('./config/database-manager');
 const modelFactory = require('./models/model-factory');
 const { setupBusinessDatabase, setupMainDatabase } = require('./middleware/business-db');
+const { WALK_IN_PHONE } = require('./lib/ensure-walk-in-client');
 
 // Import main database models (for admin operations)
 const User = require('./models/User').model;
@@ -360,6 +361,8 @@ app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/packages', require('./routes/packages'));
 app.use('/api/purchase-invoices', purchaseInvoicesRoutes);
 app.use('/api/bookings', require('./routes/bookings'));
+app.use('/api/public/feedback', require('./routes/public-feedback'));
+app.use('/api/feedback', require('./routes/feedback'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 
 const {
@@ -2285,7 +2288,7 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
     const { Client } = req.businessModels;
     const { q } = req.query;
     const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const projection = 'name phone email lastVisit status';
+    const projection = 'name phone email lastVisit status isWalkIn';
 
     if (!q) {
       const clients = await Client.find({})
@@ -2293,7 +2296,13 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
         .sort({ lastVisit: -1, createdAt: -1 })
         .limit(limit)
         .lean();
-      return res.json({ success: true, data: clients });
+      const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
+      let merged = clients;
+      if (walkIn && !merged.some((c) => String(c._id) === String(walkIn._id))) {
+        merged = [walkIn, ...merged];
+        if (merged.length > limit) merged = merged.slice(0, limit);
+      }
+      return res.json({ success: true, data: merged });
     }
 
     if (String(q).trim().length < 2) {
@@ -2316,7 +2325,21 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
       .limit(limit)
       .lean();
 
-    res.json({ success: true, data: searchResults });
+    const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
+    let merged = searchResults;
+    const qt = String(q).trim();
+    if (
+      walkIn &&
+      !merged.some((c) => String(c._id) === String(walkIn._id)) &&
+      (/^walk/i.test(qt) ||
+        (walkIn.name && new RegExp(`^${escaped}`, 'i').test(walkIn.name)) ||
+        (walkIn.phone && walkIn.phone.startsWith(qt)))
+    ) {
+      merged = [walkIn, ...merged];
+      if (merged.length > limit) merged = merged.slice(0, limit);
+    }
+
+    res.json({ success: true, data: merged });
   } catch (error) {
     logger.error('Error searching clients:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -2353,6 +2376,13 @@ app.post(
   async (req, res) => {
   try {
     const { name, email, phone, address, notes } = req.body;
+
+    if (String(phone || '').trim() === WALK_IN_PHONE) {
+      return res.status(400).json({
+        success: false,
+        error: 'This phone value is reserved for the system Walk-in profile.'
+      });
+    }
 
     if (!name || !phone) {
       return res.status(400).json({
@@ -2425,7 +2455,27 @@ app.put(
   try {
     const { Client } = req.businessModels;
     const { phone } = req.body;
-    
+    const existingDoc = await Client.findById(req.params.id).select('isWalkIn phone').lean();
+    if (!existingDoc) {
+      return res.status(404).json({
+        success: false,
+        error: 'Client not found'
+      });
+    }
+
+    if (existingDoc.isWalkIn) {
+      return res.status(403).json({
+        success: false,
+        error: 'The Walk-in customer profile cannot be edited.'
+      });
+    }
+
+    if (phone !== undefined && String(phone || '').trim() === WALK_IN_PHONE && !existingDoc.isWalkIn) {
+      return res.status(400).json({
+        success: false,
+        error: 'This phone value is reserved for the system Walk-in profile.'
+      });
+    }
     // If phone number is being updated, check for duplicates
     if (phone) {
       const existingClient = await Client.findOne({ 
@@ -2485,6 +2535,19 @@ app.delete(
   async (req, res) => {
   try {
     const { Client } = req.businessModels;
+    const target = await Client.findById(req.params.id).select('isWalkIn name').lean();
+    if (!target) {
+      return res.status(404).json({
+        success: false,
+        error: 'Client not found'
+      });
+    }
+    if (target.isWalkIn) {
+      return res.status(403).json({
+        success: false,
+        error: 'The Walk-in customer profile cannot be deleted.'
+      });
+    }
     const deletedClient = await Client.findByIdAndDelete(req.params.id);
     
     if (!deletedClient) {
@@ -10071,7 +10134,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                       businessName: business.name,
                       total: savedReceipt.total
                     },
-                    receiptLink: receiptLink
+                    receiptLink: receiptLink,
                   });
                   
                   // Log to WhatsAppMessageLog
@@ -10176,7 +10239,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                 clientName: client.name,
                 receiptNumber: savedReceipt.receiptNumber,
                 receiptData: { businessName: business.name, total: savedReceipt.total },
-                receiptLink
+                receiptLink,
               });
               if (result.success) {
                 if (useWalletForSms) {
@@ -12113,7 +12176,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                       businessName: business?.name || 'Business',
                       total: sale.netTotal || sale.grossTotal || 0
                     },
-                    receiptLink: whatsappReceiptLink
+                    receiptLink: whatsappReceiptLink,
                   });
                   
                   // Log to WhatsAppMessageLog
@@ -12266,7 +12329,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
                 clientName: sale.customerName || 'Customer',
                 receiptNumber: sale.billNo,
                 receiptData: { businessName: business?.name || 'Business', total: sale.netTotal || sale.grossTotal || 0 },
-                receiptLink
+                receiptLink,
               });
               if (result.success) {
                 if (useWalletForSaleSms) {
@@ -13335,13 +13398,29 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
         const businessModels = modelFactory.createBusinessModels(businessDb);
         const { Sale, BusinessSettings } = businessModels;
         
-        // Find sale by billNo and shareToken
+          // Find sale by billNo and shareToken
         const sale = await Sale.findOne({ 
           billNo: billNo,
           shareToken: token 
         });
         
         if (sale) {
+          const { getFeedbackEligibilityForSale } = require('./lib/execute-public-feedback-submit');
+          let feedbackEligibility;
+          try {
+            feedbackEligibility = await getFeedbackEligibilityForSale(businessModels, sale, {
+              forInvoicePage: true,
+            });
+          } catch (feErr) {
+            logger.warn('public sale feedback eligibility:', feErr?.message);
+            feedbackEligibility = {
+              completed: false,
+              canSubmit: false,
+              alreadySubmitted: false,
+              allowResubmission: false,
+              submittedRating: null,
+            };
+          }
           // Found the sale - get business settings
           let businessSettings = await BusinessSettings.findOne();
           if (!businessSettings) {
@@ -13371,7 +13450,8 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
           return res.json({ 
             success: true, 
             data: sale,
-            businessSettings: businessSettings
+            businessSettings: businessSettings,
+            feedbackEligibility
           });
         }
       } catch (businessError) {
@@ -13394,6 +13474,87 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
     });
   }
 });
+
+const publicInvoiceFeedbackLimiter = require('express-rate-limit')({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many submissions. Please try again later.' },
+});
+
+// Public: submit feedback for a receipt (billNo + shareToken — same as invoice link)
+app.post(
+  '/api/public/sales/bill/:billNo/:token/feedback',
+  publicInvoiceFeedbackLimiter,
+  async (req, res) => {
+    try {
+      const { billNo, token } = req.params;
+      if (!billNo || !token) {
+        return res.status(400).json({ success: false, error: 'Bill number and token are required' });
+      }
+
+      const {
+        sanitizeReviewText,
+        normalizeFeedbackSource,
+        executePublicFeedbackSubmit,
+      } = require('./lib/execute-public-feedback-submit');
+
+      const rating = Number(req.body?.rating);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return res
+          .status(400)
+          .json({ success: false, error: 'Rating must be between 1 and 5' });
+      }
+
+      const reviewText = sanitizeReviewText(req.body?.reviewText);
+      const rawSource = req.body?.source;
+      const source =
+        rawSource != null && String(rawSource).trim() !== ''
+          ? normalizeFeedbackSource(rawSource)
+          : 'invoice_page';
+
+      const databaseManager = require('./config/database-manager');
+      const mainConnection = await databaseManager.getMainConnection();
+      const Business = mainConnection.model('Business', require('./models/Business').schema);
+      const modelFactory = require('./models/model-factory');
+      const businesses = await Business.find({ status: 'active' });
+
+      for (const business of businesses) {
+        try {
+          const businessDb = await databaseManager.getConnection(business._id, mainConnection);
+          const businessModels = modelFactory.createBusinessModels(businessDb);
+          const { Sale } = businessModels;
+          const sale = await Sale.findOne({ billNo, shareToken: token });
+          if (sale) {
+            const result = await executePublicFeedbackSubmit({
+              businessModels,
+              tenantBusinessId: business._id,
+              sale,
+              rating,
+              reviewText,
+              source,
+            });
+            if (!result.success) {
+              return res
+                .status(result.status || 400)
+                .json({ success: false, error: result.error });
+            }
+            return res.json({ success: true, data: result.data });
+          }
+        } catch (businessError) {
+          logger.error(`Error in public invoice feedback for business ${business.name}:`, businessError.message);
+          continue;
+        }
+      }
+
+      return res.status(404).json({ success: false, error: 'Receipt not found or invalid token' });
+    } catch (err) {
+      logger.error('Error in public invoice feedback:', err);
+      res.status(500).json({ success: false, error: 'Failed to submit feedback' });
+    }
+  }
+);
 
 // Add payment to a sale
 app.post(
@@ -13996,6 +14157,8 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
       state,
       zipCode,
       googleMapsUrl,
+      googleReviewUrl,
+      allowFeedbackResubmission,
       socialMedia,
       logo,
       gstNumber
@@ -14036,6 +14199,27 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
       }
     }
 
+    let googleReviewStored = "";
+    const reviewTrimmed =
+      typeof googleReviewUrl === "string" ? googleReviewUrl.trim() : "";
+    if (reviewTrimmed) {
+      try {
+        const u = new URL(reviewTrimmed);
+        if (u.protocol !== "http:" && u.protocol !== "https:") {
+          return res.status(400).json({
+            success: false,
+            error: "Google Review URL must start with http:// or https://"
+          });
+        }
+        googleReviewStored = reviewTrimmed;
+      } catch {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid Google Review URL"
+        });
+      }
+    }
+
     let settings = await BusinessSettings.findOne();
     
     if (!settings) {
@@ -14055,6 +14239,9 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
     settings.state = state;
     settings.zipCode = zipCode;
     settings.googleMapsUrl = mapsStored;
+    settings.googleReviewUrl = googleReviewStored;
+    settings.allowFeedbackResubmission =
+      allowFeedbackResubmission === true || allowFeedbackResubmission === "true";
     settings.socialMedia = socialMedia || "@glamoursalon";
     settings.logo = logo || "";
     settings.gstNumber = gstNumber || "";

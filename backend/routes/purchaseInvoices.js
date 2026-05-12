@@ -460,7 +460,16 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { PurchaseInvoice, Supplier, Product, PurchaseOrder } = req.businessModels;
-    const { supplierId, purchaseOrderId, supplierInvoiceNumber, invoiceDate, lines, notes, paymentMethod } = req.body;
+    const {
+      supplierId,
+      purchaseOrderId,
+      supplierInvoiceNumber,
+      invoiceDate,
+      lines,
+      notes,
+      paymentMethod,
+      applyRetailPrices
+    } = req.body;
 
     if (!supplierId) {
       return res.status(400).json({ success: false, error: 'supplierId is required' });
@@ -539,7 +548,8 @@ router.post('/', async (req, res) => {
       purchaseOrderId: poId,
       lines: builtLines,
       branchId: req.user.branchId,
-      createdBy: req.user._id
+      createdBy: req.user._id,
+      applyRetailPrices: !!applyRetailPrices,
     });
     syncPaymentFields(inv, req.body);
     await inv.save();
@@ -562,7 +572,16 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Only draft invoices can be edited' });
     }
 
-    const { supplierId, purchaseOrderId, supplierInvoiceNumber, invoiceDate, lines, notes, paymentMethod } = req.body;
+    const {
+      supplierId,
+      purchaseOrderId,
+      supplierInvoiceNumber,
+      invoiceDate,
+      lines,
+      notes,
+      paymentMethod,
+      applyRetailPrices
+    } = req.body;
 
     if (supplierId) {
       const supplier = await Supplier.findById(supplierId);
@@ -591,6 +610,7 @@ router.put('/:id', async (req, res) => {
     if (invoiceDate) inv.invoiceDate = parsePurchaseInvoiceCalendarDate(invoiceDate);
     if (notes !== undefined) inv.notes = notes || '';
     if (paymentMethod !== undefined) inv.paymentMethod = paymentMethod || '';
+    if (applyRetailPrices !== undefined) inv.applyRetailPrices = !!applyRetailPrices;
 
     if (lines && Array.isArray(lines)) {
       const builtLines = [];
@@ -735,8 +755,11 @@ router.post('/:id/post', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Supplier not found' });
     }
 
-    /** When true, also write catalog fields from each line to the product (HSN/SAC, MRP, SKU). Cost & stock always update from the invoice. */
-    const applyRetailPrices = !!req.body.applyRetailPrices;
+    /** When true, also write catalog fields from each line to the product (e.g. MRP). Cost & stock always update from the invoice. */
+    const applyRetailPrices =
+      typeof req.body.applyRetailPrices === 'boolean'
+        ? req.body.applyRetailPrices
+        : !!inv.applyRetailPrices;
     const postedSnapshot = [];
 
     for (const line of inv.lines) {

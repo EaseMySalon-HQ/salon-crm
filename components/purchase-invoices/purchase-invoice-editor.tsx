@@ -51,6 +51,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { PurchaseInvoiceProductCombobox } from "@/components/purchase-invoices/purchase-invoice-product-combobox"
+import { ProductForm } from "@/components/products/product-form"
 
 /** Hides browser increment/decrement controls on number inputs (WebKit + Firefox). */
 const NO_NUMBER_SPIN =
@@ -112,6 +113,44 @@ function productUnitLabel(p: any): string {
   return ""
 }
 
+/** Volume / pack units — keep in sync with `ProductForm` unit Select. */
+const PURCHASE_INVOICE_UNIT_OPTIONS = [
+  { value: "mg", label: "Milligram (mg)" },
+  { value: "g", label: "Gram (g)" },
+  { value: "kg", label: "Kilogram (kg)" },
+  { value: "ml", label: "Milliliters (ml)" },
+  { value: "l", label: "Liters (l)" },
+  { value: "oz", label: "Ounce (oz)" },
+  { value: "pcs", label: "Pieces (pcs)" },
+  { value: "pkt", label: "Packets (pkt)" },
+] as const
+
+const PURCHASE_INVOICE_UNIT_VALUE_SET = new Set(
+  PURCHASE_INVOICE_UNIT_OPTIONS.map((o) => o.value),
+)
+
+/**
+ * Map free-text line unit to a catalog select code (e.g. "ml" from "500ml"),
+ * or "" if only a custom label like "box" fits.
+ */
+function purchaseInvoiceLineUnitSelectCode(raw: string | undefined | null): string {
+  const t = (raw ?? "").trim().replace(/\s+/g, "")
+  if (!t) return ""
+  const lower = t.toLowerCase()
+  if (PURCHASE_INVOICE_UNIT_VALUE_SET.has(lower)) return lower
+  const m = /^(\d+(?:\.\d+)?)(mg|g|kg|ml|l|oz|pcs|pkt)$/i.exec(t)
+  if (m && PURCHASE_INVOICE_UNIT_VALUE_SET.has(m[2].toLowerCase())) return m[2].toLowerCase()
+  return ""
+}
+
+function purchaseInvoiceUnitSelectValue(raw: string | undefined | null): string {
+  const t = (raw ?? "").trim()
+  if (!t) return "__none__"
+  const code = purchaseInvoiceLineUnitSelectCode(raw)
+  if (!code) return "__custom__"
+  return code
+}
+
 type Line = {
   productId: string
   productName: string
@@ -148,6 +187,42 @@ function emptyLine(): Line {
     unit: "",
     poItemProductId: null,
   }
+}
+
+/** Apply catalog product fields to a line (same rules as choosing a product in the combobox). */
+function mergeCatalogProductIntoLine(line: Line, p: any): Line {
+  const pid = productDocIdStr(p)
+  const next: Line = {
+    ...line,
+    productId: pid,
+    productName: (p.name ?? "").trim() || line.productName,
+    sku: p.sku != null ? String(p.sku) : "",
+    hsnSacCode: p.hsnSacCode != null ? String(p.hsnSacCode) : "",
+    unit: productUnitLabel(p) ?? line.unit ?? "",
+  }
+  const pin = line.poItemProductId
+  if (pin && String(pid).toLowerCase() !== String(pin).toLowerCase()) next.poItemProductId = null
+  if (!next.poItemProductId) {
+    if (next.purchasePrice === 0 && p.cost != null) next.purchasePrice = p.cost
+    else if (next.purchasePrice === 0) next.purchasePrice = p.price || 0
+  }
+  if (next.sellingPrice == null) next.sellingPrice = p.price ?? null
+  return next
+}
+
+/**
+ * On-hand stock from the loaded product list for the read-only "Old Qty" column.
+ * IDs in `quickAddedIds` are products created via this invoice’s quick-add — shown as 0 per product workflow.
+ */
+function inventoryOldQtyForLine(line: Line, products: any[], quickAddedIds: ReadonlySet<string>): number {
+  const pid = line.productId?.trim()
+  if (!pid) return 0
+  const key = pid.toLowerCase()
+  if (quickAddedIds.has(key)) return 0
+  const p = products.find((x) => productDocIdStr(x).toLowerCase() === key)
+  if (!p) return 0
+  const n = Number(p.stock)
+  return Number.isFinite(n) ? n : 0
 }
 
 type PostFieldHighlight = {
@@ -248,6 +323,13 @@ export function PurchaseInvoiceEditor({
   /** Linked PO already received — duplicate stock confirmation from API. */
   const [confirmPostOpen, setConfirmPostOpen] = React.useState(false)
   const [pendingPost, setPendingPost] = React.useState(false)
+  /** Quick-add catalog product from a line’s empty search (name prefilled from search). */
+  const [quickAddProduct, setQuickAddProduct] = React.useState<{ lineIdx: number; searchQuery: string } | null>(
+    null,
+  )
+  const quickAddProductRef = React.useRef<{ lineIdx: number; searchQuery: string } | null>(null)
+  /** Product ids created through “Add to inventory” from this editor — Old Qty displays as 0. */
+  const quickAddedCatalogIdsRef = React.useRef<Set<string>>(new Set())
   /** Red borders for fields that block posting (missing / invalid values). */
   const [postFieldHighlight, setPostFieldHighlight] = React.useState<PostFieldHighlight>({})
   /** GRN → PI handoff: survives PO prefill effect re-runs when `products` loads. */
@@ -341,6 +423,7 @@ export function PurchaseInvoiceEditor({
           setPaymentMethod(normalizePurchaseInvoicePaymentMethod(d.paymentMethod))
           setNotes(d.notes || "")
           setPaidAmount(d.paidAmount || 0)
+          setApplyRetail(Boolean(d.applyRetailPrices))
           const pref = d.purchaseOrderId as { poNumber?: string; _id?: string } | string | null | undefined
           if (!pref) {
             setLinkedPoNumber("")
@@ -499,24 +582,45 @@ export function PurchaseInvoiceEditor({
       next[idx] = { ...next[idx], ...patch }
       if (patch.productId) {
         const p = products.find((x) => productDocIdStr(x).toLowerCase() === String(patch.productId).toLowerCase())
-        if (p) {
-          next[idx].productName = p.name
-          next[idx].sku = p.sku != null ? String(p.sku) : ""
-          next[idx].hsnSacCode = p.hsnSacCode != null ? String(p.hsnSacCode) : ""
-          next[idx].unit = productUnitLabel(p) ?? ""
-          const pin = next[idx].poItemProductId
-          if (pin && String(patch.productId).toLowerCase() !== String(pin).toLowerCase())
-            next[idx].poItemProductId = null
-          if (!next[idx].poItemProductId) {
-            if (next[idx].purchasePrice === 0 && p.cost != null) next[idx].purchasePrice = p.cost
-            else if (next[idx].purchasePrice === 0) next[idx].purchasePrice = p.price || 0
-          }
-          if (next[idx].sellingPrice == null) next[idx].sellingPrice = p.price ?? null
-        }
+        if (p) next[idx] = mergeCatalogProductIntoLine(next[idx], p)
       }
       return next
     })
   }
+
+  const handleProductCreatedFromQuickAdd = React.useCallback((created: any) => {
+    const ctx = quickAddProductRef.current
+    quickAddProductRef.current = null
+    setQuickAddProduct(null)
+    if (!ctx || !created) return
+    const idx = ctx.lineIdx
+    const createdId = productDocIdStr(created)
+    if (createdId) quickAddedCatalogIdsRef.current.add(createdId.toLowerCase())
+    setProducts((prev) => {
+      const id = productDocIdStr(created)
+      if (prev.some((x) => productDocIdStr(x).toLowerCase() === id.toLowerCase())) return prev
+      return [...prev, created]
+    })
+    setLines((prev) => {
+      if (idx < 0 || idx >= prev.length) return prev
+      const next = [...prev]
+      next[idx] = mergeCatalogProductIntoLine(next[idx], created)
+      const stockRaw = created?.stock
+      if (stockRaw !== undefined && stockRaw !== null && stockRaw !== "") {
+        const q = Number(stockRaw)
+        if (Number.isFinite(q) && q >= 0) next[idx].receivedQty = q
+      }
+      return next
+    })
+    setPostFieldHighlight((p) => {
+      let h = clearLineHighlightKey(p, idx, "lineProduct")
+      if (created?.stock !== undefined && created?.stock !== null && created?.stock !== "") {
+        const q = Number(created.stock)
+        if (Number.isFinite(q) && q >= 0) h = clearLineHighlightKey(h, idx, "lineReceivedQty")
+      }
+      return h
+    })
+  }, [])
 
   const totals = React.useMemo(() => {
     let sub = 0
@@ -652,6 +756,7 @@ export function PurchaseInvoiceEditor({
     gstTotal: Math.round(totals.gstTotal * 100) / 100,
     discountTotal: Math.round(totals.discountTotal * 100) / 100,
     grandTotal: totals.grandTotal,
+    applyRetailPrices: applyRetail,
   })
 
   const saveDraft = async () => {
@@ -718,7 +823,7 @@ export function PurchaseInvoiceEditor({
       toast({
         title: "Fix highlighted fields",
         description:
-          "Enter supplier invoice #, landed cost per line (purchase ₹), and positive received qtys. Highlighted fields block posting.",
+          "Enter supplier invoice #, landed cost per line (purchase ₹), and positive quantity on each line. Highlighted fields block posting.",
         variant: "destructive",
       })
       return
@@ -787,7 +892,7 @@ export function PurchaseInvoiceEditor({
           <h1 className="text-lg font-semibold tracking-tight text-slate-900">
             {invoiceId ? "Edit purchase invoice" : "New purchase invoice"}
           </h1>
-          <p className="text-sm text-slate-500">Supplier bill details and received quantities. Stock updates on post only.</p>
+          <p className="text-sm text-slate-500">Supplier bill details and line quantities. Stock updates on post only.</p>
         </div>
       )}
 
@@ -919,24 +1024,22 @@ export function PurchaseInvoiceEditor({
           </Button>
         </div>
         <div className="overflow-x-auto">
-          <Table className="min-w-[1100px]">
+          <Table className="min-w-[940px] table-fixed w-full">
             <TableHeader>
               <TableRow className="bg-slate-50/80">
                 <TableHead className="w-10 shrink-0 px-1 text-center font-normal">S.No.</TableHead>
-                <TableHead className="min-w-[9rem] max-w-[14rem] px-1.5 text-left font-normal">Product</TableHead>
-                <TableHead className="w-[5.5rem] shrink-0 px-1 text-left font-normal">HSN code</TableHead>
-                <TableHead className="w-20 shrink-0 px-1 text-right font-normal">Ordered</TableHead>
-                <TableHead className="w-20 shrink-0 px-1 text-right font-normal">Received</TableHead>
-                <TableHead className="min-w-[4.75rem] max-w-[6rem] shrink-0 px-1 text-center font-normal">Unit</TableHead>
-                <TableHead className="w-24 shrink-0 px-1 text-right font-normal">MRP ₹</TableHead>
-                <TableHead className="w-[4.25rem] shrink-0 px-1 text-right font-normal">Discount</TableHead>
-                <TableHead className="w-28 shrink-0 px-1 text-right font-normal">
-                  Purchase ₹
+                <TableHead className="w-[11rem] min-w-0 max-w-[11rem] shrink-0 px-1.5 text-center font-normal">
+                  Product
                 </TableHead>
-                <TableHead className="w-16 shrink-0 px-1 text-right font-normal">GST</TableHead>
-                <TableHead className="min-w-[5rem] shrink-0 px-1 text-left font-normal">SKU no.</TableHead>
-                <TableHead className="w-28 shrink-0 px-1 text-left font-normal">Expiry</TableHead>
-                <TableHead className="w-10 shrink-0 px-1" />
+                <TableHead className="w-20 shrink-0 px-1 text-center font-normal">Old Qty</TableHead>
+                <TableHead className="w-20 shrink-0 px-1 text-center font-normal">Purchased Qty</TableHead>
+                <TableHead className="w-16 max-w-16 shrink-0 px-0.5 text-center font-normal">Unit</TableHead>
+                <TableHead className="w-24 shrink-0 px-1 text-center font-normal">MRP</TableHead>
+                <TableHead className="w-[4.25rem] shrink-0 px-1 text-center font-normal">Discount</TableHead>
+                <TableHead className="w-28 shrink-0 px-1 text-center font-normal">Purchase Price</TableHead>
+                <TableHead className="w-16 shrink-0 px-1 text-center font-normal">GST</TableHead>
+                <TableHead className="w-28 shrink-0 px-1 text-center font-normal">Expiry</TableHead>
+                <TableHead className="w-10 shrink-0 px-1 text-center" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -949,7 +1052,7 @@ export function PurchaseInvoiceEditor({
 
                 const notInListPlaceholder =
                   line.productName && line.productName.trim()
-                    ? `${truncateMiddleLabel(line.productName, 42)} · select`
+                    ? `${truncateMiddleLabel(line.productName, 22)} · select`
                     : "Select product"
 
                 const productButtonLabel = !linePidRaw
@@ -968,6 +1071,11 @@ export function PurchaseInvoiceEditor({
                     products={products}
                     portalContainer={embeddedInModal ? popoverPortalContainer : undefined}
                     buttonLabel={productButtonLabel}
+                    onRequestAddProduct={(q) => {
+                      const payload = { lineIdx: idx, searchQuery: q }
+                      quickAddProductRef.current = payload
+                      setQuickAddProduct(payload)
+                    }}
                     triggerClassName={cn(
                       postFieldHighlight.lineProduct?.[idx] &&
                         "border-destructive ring-2 ring-destructive/30",
@@ -982,31 +1090,27 @@ export function PurchaseInvoiceEditor({
 
                 return (
                   <TableRow key={idx}>
-                    <TableCell className="w-10 px-1 text-center align-top text-muted-foreground tabular-nums text-xs">
-                      {idx + 1}
+                    <TableCell className="w-10 p-1.5 align-top text-muted-foreground tabular-nums text-xs">
+                      <div className="flex h-9 items-center justify-center">{idx + 1}</div>
                     </TableCell>
-                    <TableCell className="min-w-[9rem] max-w-[14rem] px-1.5 align-top">{productPick}</TableCell>
-                    <TableCell className="align-top px-1">
-                      <Input
-                        className="h-9 px-1.5 text-xs tabular-nums"
-                        value={line.hsnSacCode ?? ""}
-                        onChange={(e) => updateLine(idx, { hsnSacCode: e.target.value })}
-                        placeholder="—"
-                      />
+                    <TableCell className="w-[11rem] min-w-0 max-w-[11rem] shrink-0 overflow-hidden p-1.5 align-top">
+                      <div className="flex min-h-9 min-w-0 max-h-9 items-center">{productPick}</div>
                     </TableCell>
-                    <TableCell className="px-1 align-top">
+                    <TableCell className="p-1.5 align-top">
                       <Input
                         type="number"
-                        className={cn("h-9 text-right px-1", NO_NUMBER_SPIN)}
-                        value={line.orderedQty ?? ""}
-                        onChange={(e) =>
-                          updateLine(idx, {
-                            orderedQty: e.target.value === "" ? null : parseFloat(e.target.value),
-                          })
-                        }
+                        readOnly
+                        disabled
+                        tabIndex={-1}
+                        title="On-hand stock from inventory. Products added via “Add to inventory” on this invoice show 0."
+                        className={cn(
+                          "h-9 cursor-not-allowed bg-muted/60 px-1 text-right text-xs tabular-nums text-muted-foreground",
+                          NO_NUMBER_SPIN,
+                        )}
+                        value={inventoryOldQtyForLine(line, products, quickAddedCatalogIdsRef.current)}
                       />
                     </TableCell>
-                    <TableCell className="px-1 align-top">
+                    <TableCell className="p-1.5 align-top">
                       <Input
                         type="number"
                         className={cn(
@@ -1026,16 +1130,51 @@ export function PurchaseInvoiceEditor({
                         }}
                       />
                     </TableCell>
-                    <TableCell className="align-top px-1 min-w-[4.75rem] max-w-[6rem]">
-                      <Input
-                        className="h-9 px-1 text-center text-xs"
-                        value={line.unit ?? ""}
-                        onChange={(e) => updateLine(idx, { unit: e.target.value })}
-                        placeholder="pcs, ml…"
-                        title="From catalog when possible; editable if product has no unit"
-                      />
+                    <TableCell className="w-16 max-w-16 shrink-0 p-1.5 align-top">
+                      <div className="flex flex-col gap-1 min-w-0">
+                        <Select
+                          value={purchaseInvoiceUnitSelectValue(line.unit)}
+                          onValueChange={(v) => {
+                            if (v === "__none__") updateLine(idx, { unit: "" })
+                            else if (v === "__custom__") updateLine(idx, { unit: "" })
+                            else updateLine(idx, { unit: v })
+                          }}
+                        >
+                          <SelectTrigger
+                            className="h-9 min-h-9 max-h-9 w-full min-w-0 max-w-full px-1 py-0 text-xs leading-[1.125rem] [&>span]:min-w-0 [&>span]:truncate"
+                            title="Unit — same options as Add Product"
+                          >
+                            <SelectValue placeholder="Unit" />
+                          </SelectTrigger>
+                          <SelectContent
+                            position="popper"
+                            className="max-h-[min(280px,70vh)] max-w-[10rem] min-w-[var(--radix-select-trigger-width)]"
+                          >
+                            <SelectItem value="__none__" className="text-xs">
+                              —
+                            </SelectItem>
+                            {PURCHASE_INVOICE_UNIT_OPTIONS.map((o) => (
+                              <SelectItem key={o.value} value={o.value} className="text-xs">
+                                {o.label}
+                              </SelectItem>
+                            ))}
+                            <SelectItem value="__custom__" className="text-xs">
+                              Other…
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {purchaseInvoiceUnitSelectValue(line.unit) === "__custom__" ? (
+                          <Input
+                            className="h-8 min-w-0 w-full max-w-full px-1 text-xs"
+                            value={line.unit ?? ""}
+                            onChange={(e) => updateLine(idx, { unit: e.target.value })}
+                            placeholder="Custom unit"
+                            title="Use when the unit is not in the list above"
+                          />
+                        ) : null}
+                      </div>
                     </TableCell>
-                    <TableCell className="px-1 align-top">
+                    <TableCell className="p-1.5 align-top">
                       <Input
                         type="number"
                         className={cn("h-9 text-right px-1", NO_NUMBER_SPIN)}
@@ -1047,7 +1186,7 @@ export function PurchaseInvoiceEditor({
                         }
                       />
                     </TableCell>
-                    <TableCell className="px-1 align-top">
+                    <TableCell className="p-1.5 align-top">
                       <Input
                         type="number"
                         className={cn("h-9 text-right px-1", NO_NUMBER_SPIN)}
@@ -1055,7 +1194,7 @@ export function PurchaseInvoiceEditor({
                         onChange={(e) => updateLine(idx, { lineDiscount: parseFloat(e.target.value) || 0 })}
                       />
                     </TableCell>
-                    <TableCell className="px-1 align-top">
+                    <TableCell className="p-1.5 align-top">
                       <Input
                         type="number"
                         className={cn(
@@ -1072,7 +1211,7 @@ export function PurchaseInvoiceEditor({
                         }}
                       />
                     </TableCell>
-                    <TableCell className="px-1 align-top">
+                    <TableCell className="p-1.5 align-top">
                       <Input
                         type="number"
                         className={cn("h-9 text-right px-1", NO_NUMBER_SPIN)}
@@ -1082,15 +1221,7 @@ export function PurchaseInvoiceEditor({
                         }
                       />
                     </TableCell>
-                    <TableCell className="align-top px-1 min-w-[5rem]">
-                      <Input
-                        className="h-9 px-1.5 text-xs tabular-nums"
-                        value={line.sku ?? ""}
-                        onChange={(e) => updateLine(idx, { sku: e.target.value })}
-                        placeholder="—"
-                      />
-                    </TableCell>
-                    <TableCell className="w-28 px-1 align-top">
+                    <TableCell className="w-28 p-1.5 align-top">
                       <Input
                         type="date"
                         className="h-9 w-full min-w-0 px-1 text-xs tabular-nums [color-scheme:light]"
@@ -1098,7 +1229,7 @@ export function PurchaseInvoiceEditor({
                         onChange={(e) => updateLine(idx, { expiryDate: e.target.value })}
                       />
                     </TableCell>
-                    <TableCell className="w-10 px-0.5 align-top">
+                    <TableCell className="w-10 p-1.5 align-top">
                       <Button
                         type="button"
                         variant="ghost"
@@ -1126,8 +1257,8 @@ export function PurchaseInvoiceEditor({
             <span>Update catalog from lines when posting</span>
           </span>
           <span className="pl-6 text-xs font-normal text-muted-foreground leading-snug">
-            When checked: HSN/SAC code, MRP (selling price), and SKU (also saved as barcode) are copied to each
-            product. Cost and stock always follow this invoice.
+            When checked: MRP (selling price) from each line is saved to that product in the catalog. Purchase cost
+            and stock always update from this invoice when you post, with or without this option.
           </span>
         </label>
         <div className="ml-auto space-y-1 text-right text-sm text-slate-600 sm:ml-0 sm:min-w-[220px]">
@@ -1198,6 +1329,37 @@ export function PurchaseInvoiceEditor({
               Post anyway
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(quickAddProduct)}
+        onOpenChange={(open) => {
+          if (!open) {
+            quickAddProductRef.current = null
+            setQuickAddProduct(null)
+          }
+        }}
+      >
+        <DialogContent
+          className="flex max-h-[92vh] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
+          onCloseAutoFocus={(e) => e.preventDefault()}
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>Add product to inventory</DialogTitle>
+            <DialogDescription>Create a catalog product, then continue this purchase line.</DialogDescription>
+          </DialogHeader>
+          {quickAddProduct ? (
+            <ProductForm
+              key={`${quickAddProduct.lineIdx}-${quickAddProduct.searchQuery}`}
+              onClose={() => {
+                quickAddProductRef.current = null
+                setQuickAddProduct(null)
+              }}
+              createPrefill={{ name: quickAddProduct.searchQuery }}
+              onProductCreated={handleProductCreatedFromQuickAdd}
+            />
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>
