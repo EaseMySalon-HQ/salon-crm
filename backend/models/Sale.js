@@ -123,6 +123,12 @@ const saleSchema = new mongoose.Schema({
     unique: true,
     sparse: true // Allows null values but enforces uniqueness when present
   },
+  /** Opaque token for public feedback page (per invoice). */
+  feedbackToken: {
+    type: String,
+    unique: true,
+    sparse: true,
+  },
   // Assign membership on checkout (Quick Sale flow)
   planToAssignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MembershipPlan', default: null },
   membershipPlanPrice: { type: Number, default: 0 },
@@ -170,12 +176,17 @@ saleSchema.pre('save', function(next) {
     }
   }
   
-  // Generate shareToken if it doesn't exist (for public receipt access)
-  if (!this.shareToken) {
+  // Generate shareToken / feedbackToken if missing (public receipt / feedback links)
+  if (!this.shareToken || !this.feedbackToken) {
     const crypto = require('crypto');
-    this.shareToken = crypto.randomBytes(32).toString('hex');
+    if (!this.shareToken) {
+      this.shareToken = crypto.randomBytes(32).toString('hex');
+    }
+    if (!this.feedbackToken) {
+      this.feedbackToken = crypto.randomBytes(32).toString('hex');
+    }
   }
-  
+
   next()
 });
 

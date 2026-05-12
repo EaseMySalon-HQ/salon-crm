@@ -1393,9 +1393,7 @@ export class SalesAPI {
     return response.data
   }
 
-  // Public method to get sale by bill number and token (no authentication required)
-  static async getByBillNoPublic(billNo: string, token: string): Promise<ApiResponse<any>> {
-    // Create a new axios instance without auth interceptor for public access
+  static async getByBillNoPublic(billNo: string, token: string): Promise<ApiResponse<any> & { businessSettings?: any; feedbackEligibility?: any }> {
     const publicClient = axios.create({
       baseURL: API_BASE_URL,
       timeout: 10000,
@@ -1404,6 +1402,26 @@ export class SalesAPI {
       },
     })
     const response = await publicClient.get(`/public/sales/bill/${billNo}/${token}`)
+    return response.data
+  }
+
+  /** Public: submit feedback using invoice billNo + shareToken */
+  static async submitInvoiceFeedbackPublic(
+    billNo: string,
+    shareToken: string,
+    body: { rating: number; reviewText?: string }
+  ): Promise<ApiResponse<any>> {
+    const publicClient = axios.create({
+      baseURL: API_BASE_URL,
+      timeout: 20000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+    const response = await publicClient.post(
+      `/public/sales/bill/${encodeURIComponent(billNo)}/${encodeURIComponent(shareToken)}/feedback`,
+      { ...body, source: 'invoice_page' }
+    )
     return response.data
   }
 
@@ -1915,6 +1933,38 @@ export class SettingsAPI {
     data: PaymentSettingsUpdatePayload
   ): Promise<ApiResponse<PaymentSettingsData>> {
     const response = await apiClient.put('/settings/payment', data)
+    return response.data
+  }
+}
+
+export class FeedbackAPI {
+  static async getStats(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/feedback/stats/summary')
+    return response.data
+  }
+
+  static async getBranches(): Promise<ApiResponse<{ id: string }[]>> {
+    const response = await apiClient.get('/feedback/branches')
+    return response.data
+  }
+
+  static async list(params: Record<string, string | number | undefined>): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/feedback', { params })
+    return response.data
+  }
+
+  static async getById(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/feedback/${encodeURIComponent(id)}`)
+    return response.data
+  }
+
+  static async updateStatus(id: string, status: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/feedback/${encodeURIComponent(id)}/status`, { status })
+    return response.data
+  }
+
+  static async updateNotes(id: string, internalNotes: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.patch(`/feedback/${encodeURIComponent(id)}/notes`, { internalNotes })
     return response.data
   }
 }

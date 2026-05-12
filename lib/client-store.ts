@@ -8,6 +8,8 @@ export interface Client {
   name: string
   email?: string
   phone: string
+  /** Server-managed anonymous checkout profile */
+  isWalkIn?: boolean
   lastVisit?: string
   status?: "active" | "inactive"
   totalVisits?: number

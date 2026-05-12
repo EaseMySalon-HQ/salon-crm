@@ -56,6 +56,8 @@ class ModelFactory {
       
       // Sale model
       Sale: this.getModel('Sale', require('./Sale').schema, connection),
+
+      Feedback: this.getModel('Feedback', require('./Feedback').schema, connection),
       
       // Receipt model
       Receipt: this.getModel('Receipt', require('./Receipt').schema, connection),

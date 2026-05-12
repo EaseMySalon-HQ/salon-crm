@@ -33,6 +33,7 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { clientStore } from "@/lib/client-store"
 import { SalesAPI, ClientsAPI } from "@/lib/api"
+import { isWalkInClient } from "@/lib/walk-in-client"
 import { useAuth } from "@/lib/auth-context"
 import { ClientImportModal } from "./client-import-modal"
 import { ClientDetailsDrawer } from "./client-details-drawer"
@@ -43,6 +44,7 @@ interface Client {
   name: string
   email?: string
   phone: string
+  isWalkIn?: boolean
   lastVisit?: string
   status?: "active" | "inactive"
   totalVisits?: number
@@ -179,6 +181,17 @@ export function ClientsTable({ clients }: ClientsTableProps) {
 
   const handleConfirmDelete = async () => {
     if (!selectedClient) return
+    if (isWalkInClient(selectedClient)) {
+      toast({
+        title: "Cannot delete",
+        description: "The Walk-in profile cannot be deleted.",
+        variant: "destructive",
+        duration: 5000,
+      })
+      setIsDeleteDialogOpen(false)
+      setSelectedClient(null)
+      return
+    }
 
     try {
       const clientId = selectedClient._id || selectedClient.id
@@ -443,6 +456,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
       header: "Actions",
       cell: ({ row }) => {
         const client = row.original
+        const walkInRow = isWalkInClient(client)
         // Ensure we have a valid client ID - use _id first, then id
         const clientId = client._id || client.id
         return (
@@ -466,13 +480,25 @@ export function ClientsTable({ clients }: ClientsTableProps) {
               <DropdownMenuContent align="end" className="w-48">
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => openClientDetailsDrawerForEdit(client)}>
+                <DropdownMenuItem
+                  disabled={walkInRow}
+                  title={walkInRow ? "Walk-in cannot be edited" : undefined}
+                  onClick={() => {
+                    if (walkInRow) return
+                    openClientDetailsDrawerForEdit(client)
+                  }}
+                >
                   <Pencil className="mr-2 h-4 w-4" />
                   Edit Client
                 </DropdownMenuItem>
-                <DropdownMenuItem 
+                <DropdownMenuItem
+                  disabled={walkInRow}
+                  title={walkInRow ? "Walk-in cannot be deleted" : undefined}
                   className="text-destructive focus:text-destructive"
-                  onClick={() => handleDeleteClient(client)}
+                  onClick={() => {
+                    if (walkInRow) return
+                    handleDeleteClient(client)
+                  }}
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Delete Client

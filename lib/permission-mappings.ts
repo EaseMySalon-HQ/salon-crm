@@ -8,7 +8,7 @@
  *
  * === SETTINGS CATEGORIES (staff-permissions-modal) ===
  * general_settings, business_settings, appointment_settings, currency_settings, tax_settings,
- * payment_settings, pos_settings, notification_settings, plan_billing
+ * payment_settings, pos_settings, notification_settings, plan_billing, feedback
  *
  * === REPORTS GRANULAR ===
  * view_financial_reports → Sales tab, Expense tab, Unpaid Bills
@@ -32,7 +32,8 @@
  * === SETTINGS SECTION ID → MODULE ===
  * general → general_settings, business → business_settings, appointments → appointment_settings,
  * currency → currency_settings, tax → tax_settings, payments → payment_settings,
- * pos → pos_settings, notifications → notification_settings, plan-billing → plan_billing
+ * pos → pos_settings, notifications → notification_settings, plan-billing → plan_billing,
+ * feedback → feedback
  */
 
 // Sidebar/route: permission module for page-level access (check "view" feature)
@@ -85,6 +86,7 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   products: "products",
   "channel-usage": "notification_settings",
   recharge: "plan_billing",
+  feedback: "feedback",
 }
 
 // All settings modules (for "has any settings access" check)

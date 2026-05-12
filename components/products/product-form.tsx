@@ -46,26 +46,41 @@ interface TaxCategory {
 interface ProductFormProps {
   onClose: () => void
   product?: any // For edit mode
+  /** When creating, seed fields (e.g. name from purchase invoice search). */
+  createPrefill?: Partial<{
+    name: string
+    sku: string
+    hsnSacCode: string
+  }>
   onProductUpdated?: () => void // Callback to refresh the products list
+  /** Called on successful create with `response.data` before `onClose`. */
+  onProductCreated?: (product: any) => void
   onSwitchToEdit?: (product: any) => void // Callback to switch to edit mode
 }
 
-export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit }: ProductFormProps) {
+export function ProductForm({
+  onClose,
+  product,
+  createPrefill,
+  onProductUpdated,
+  onProductCreated,
+  onSwitchToEdit,
+}: ProductFormProps) {
   const { toast } = useToast()
   const photoInputRef = useRef<HTMLInputElement>(null)
   const [productImageUrl, setProductImageUrl] = useState(() =>
     typeof product?.imageUrl === "string" ? product.imageUrl : "",
   )
   const [formData, setFormData] = useState({
-    name: product?.name || "",
+    name: product?.name || createPrefill?.name || "",
     category: product?.category || "",
     price: product?.price || "",
     cost: product?.cost || "",
     offerPrice: product?.offerPrice ?? "",
     stock: product?.stock || "",
     minStock: product?.minimumStock || product?.minStock || "5",
-    sku: product?.sku || "",
-    hsnSacCode: product?.hsnSacCode ?? "",
+    sku: product?.sku || createPrefill?.sku || "",
+    hsnSacCode: product?.hsnSacCode ?? createPrefill?.hsnSacCode ?? "",
     volume: product?.volume ?? "",
     volumeUnit: product?.volumeUnit || "pcs",
     description: product?.description || "",
@@ -354,16 +369,20 @@ export function ProductForm({ onClose, product, onProductUpdated, onSwitchToEdit
       }
       
       if (response.success) {
+        if (!product && response.data && onProductCreated) {
+          onProductCreated(response.data)
+        }
+
         onClose()
-        
+
         // Call the refresh callback if provided
         if (onProductUpdated) {
           onProductUpdated()
         }
-        
+
         // Dispatch custom event to refresh products list
-        window.dispatchEvent(new CustomEvent('product-added'))
-        console.log('Product update successful, dispatching refresh event')
+        window.dispatchEvent(new CustomEvent("product-added"))
+        console.log("Product update successful, dispatching refresh event")
       } else {
         throw new Error(response.error || `Failed to ${product ? 'update' : 'create'} product`)
       }

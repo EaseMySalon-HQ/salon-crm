@@ -54,6 +54,7 @@ import {
   Wallet,
   DollarSign,
   Calculator,
+  MessageSquare,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StaffAPI } from "@/lib/api"
@@ -248,6 +249,7 @@ const SETTINGS_CATEGORIES = [
   { id: "payment_settings", label: "Payment Settings", icon: CreditCard, adminOnly: true },
   { id: "pos_settings", label: "POS Settings", icon: Receipt, adminOnly: true },
   { id: "notification_settings", label: "Notifications", icon: Bell, adminOnly: false },
+  { id: "feedback", label: "Feedback Management", icon: MessageSquare, adminOnly: false },
   { id: "plan_billing", label: "Plan & Billing", icon: Wallet, adminOnly: true },
   { id: "membership", label: "Membership", icon: CreditCard, adminOnly: false },
   { id: "services", label: "Services", icon: Wrench, adminOnly: false },
@@ -299,6 +301,7 @@ function buildRoleTemplate(role: "admin" | "manager" | "staff"): Permission[] {
       "currency_settings",
       "tax_settings",
       "notification_settings",
+      "feedback",
     ]
     managerModules.forEach((mod) => {
       features.forEach((f) => perms.push({ module: mod, feature: f, enabled: true }))

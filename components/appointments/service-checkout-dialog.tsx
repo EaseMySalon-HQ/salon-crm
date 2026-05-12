@@ -1115,7 +1115,9 @@ export function ServiceCheckoutDialog({
       if (!q) return true
       const name = (p.name || "").toLowerCase()
       const categoryName = (p.category || "").toLowerCase()
-      return name.includes(q) || categoryName.includes(q)
+      const barcode = String(p.barcode || "").toLowerCase()
+      const sku = String(p.sku || "").toLowerCase()
+      return name.includes(q) || categoryName.includes(q) || barcode.includes(q) || sku.includes(q)
     })
   }, [catalogProducts, productSearch])
 
@@ -2756,7 +2758,7 @@ export function ServiceCheckoutDialog({
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Search products"
+                    placeholder="Search products (name, category, barcode)"
                     value={productSearch}
                     onChange={(e) => setProductSearch(e.target.value)}
                     className="pl-9 rounded-lg bg-background"

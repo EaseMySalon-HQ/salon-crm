@@ -3,7 +3,7 @@
 import Link from "next/link"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
-import { CalendarDays, Home, PieChart, Settings, Users, Receipt, Banknote, ChevronLeft, ChevronRight, Phone, Megaphone } from "lucide-react"
+import { CalendarDays, Home, BarChart3, PieChart, Settings, Users, Receipt, Banknote, ChevronLeft, ChevronRight, Phone, Megaphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
@@ -27,7 +27,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
     { title: "Leads", href: "/leads", icon: Phone, permissionModule: "lead_management" },
     { title: "Campaigns", href: "/campaigns", icon: Megaphone, permissionModule: "campaigns" },
     { title: "Cash Register", href: "/cash-registry", icon: Banknote, permissionModule: "cash_registry" },
-    { title: "Analytics", href: "/analytics", icon: PieChart, permissionModule: "analytics" },
+    { title: "Analytics", href: "/analytics", icon: BarChart3, permissionModule: "analytics" },
     { title: "Reports", href: "/reports", icon: PieChart, permissionModule: "reports" },
     { title: "Staff Directory", href: "/staff", icon: Users, permissionModule: "staff" },
     { title: "Settings", href: "/settings", icon: Settings, permissionModule: "settings" },
