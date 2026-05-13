@@ -1836,6 +1836,27 @@ export class DashboardAPI {
   }
 }
 
+export interface NotificationFeedItem {
+  id: string
+  type: string
+  title: string
+  body: string
+  /** Changes when underlying counts shift; client dismissal is scoped to id+fingerprint so alerts return after updates. */
+  fingerprint: string
+  href: string
+  severity: "warning" | "info"
+  at: string
+}
+
+export class NotificationsAPI {
+  static async getFeed(): Promise<
+    ApiResponse<{ items: NotificationFeedItem[] }>
+  > {
+    const response = await apiClient.get("/notifications/feed")
+    return response.data
+  }
+}
+
 export class AnalyticsAPI {
   static async getRevenueTab(params?: {
     dateFrom?: string

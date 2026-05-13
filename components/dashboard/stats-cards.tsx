@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { cn } from "@/lib/utils"
 import { useDashboardInit } from "@/lib/queries/dashboard"
+import { invalidateDashboard } from "@/lib/queries/invalidate"
 
 interface ServiceStats {
   totalServices: number
@@ -234,7 +235,7 @@ export function ServiceStatsCards() {
 
   useEffect(() => {
     const handleServiceAdded = () => {
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "init"] })
+      invalidateDashboard(queryClient)
     }
     window.addEventListener("service-added", handleServiceAdded)
     return () => window.removeEventListener("service-added", handleServiceAdded)
@@ -360,7 +361,7 @@ export function ProductStatsCards({
 
   useEffect(() => {
     const handleProductAdded = () => {
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "init"] })
+      invalidateDashboard(queryClient)
     }
     window.addEventListener("product-added", handleProductAdded)
     return () => window.removeEventListener("product-added", handleProductAdded)
