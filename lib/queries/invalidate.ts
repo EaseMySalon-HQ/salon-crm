@@ -10,6 +10,7 @@ import type { QueryClient } from "@tanstack/react-query"
 /** Drop the cached dashboard summary; next render re-fetches once. */
 export function invalidateDashboard(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ["dashboard", "init"] })
+  qc.invalidateQueries({ queryKey: ["notifications", "feed"] })
 }
 
 /** Calendar/list appointment ranges share a `["appointments"]` key prefix. */
