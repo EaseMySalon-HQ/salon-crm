@@ -96,11 +96,6 @@ export function PublicInvoiceFeedbackSection({
   }
 
   const copySubmittedCommentAndOpenGoogleReview = async (url: string) => {
-    const newTab =
-      typeof window !== "undefined"
-        ? window.open("about:blank", "_blank", "noopener,noreferrer")
-        : null
-
     const t = lastSubmittedReviewText.trim()
     if (t.length > 0) {
       try {
@@ -123,15 +118,7 @@ export function PublicInvoiceFeedbackSection({
       }
     }
 
-    try {
-      if (newTab && !newTab.closed) {
-        newTab.location.href = url
-      } else {
-        window.location.assign(url)
-      }
-    } catch {
-      window.location.assign(url)
-    }
+    window.location.assign(url)
   }
 
   const generateWithAi = async () => {
@@ -298,7 +285,7 @@ export function PublicInvoiceFeedbackSection({
                       <p className="text-xs text-slate-500">
                         {submittedHadText
                           ? "Your comment will be copied to the clipboard before Google opens—you can paste it into your review."
-                          : "Opens Google Reviews in a new tab."}
+                          : "Opens Google Reviews on this tab."}
                       </p>
                     </div>
                   ) : null}
