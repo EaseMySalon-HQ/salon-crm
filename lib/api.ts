@@ -967,7 +967,8 @@ function recoverAppointmentMutationFromAxiosError(e: unknown): ApiResponse<any> 
   const status = ax.response.status
   const d = ax.response.data
   if (!d || typeof d !== "object") {
-    if (status === 409) return { success: false, error: APPOINTMENT_SLOT_TIME_CONFLICT }
+    if (status === 409)
+      return { success: false, error: APPOINTMENT_SLOT_TIME_CONFLICT, data: undefined as any }
     return null
   }
   const apiErr =
@@ -983,13 +984,14 @@ function recoverAppointmentMutationFromAxiosError(e: unknown): ApiResponse<any> 
     } = {
       success: false,
       error: apiErr || APPOINTMENT_SLOT_TIME_CONFLICT,
+      data: undefined as any,
     }
     if (Array.isArray((d as any).conflicts))
       out.conflicts = (d as any).conflicts
     return out
   }
   if (status != null && status >= 400 && status < 500 && apiErr) {
-    return { success: false, error: apiErr }
+    return { success: false, error: apiErr, data: undefined as any }
   }
   return null
 }
@@ -1435,6 +1437,26 @@ export class SalesAPI {
     const response = await publicClient.post(
       `/public/sales/bill/${encodeURIComponent(billNo)}/${encodeURIComponent(shareToken)}/feedback`,
       { ...body, source: 'invoice_page' }
+    )
+    return response.data
+  }
+
+  /** Public: AI-style draft comment for invoice feedback modal (rating + receipt context). */
+  static async suggestInvoiceFeedbackPublic(
+    billNo: string,
+    shareToken: string,
+    body: { rating: number }
+  ): Promise<ApiResponse<{ text: string; source?: 'openai' | 'anthropic' | 'template' }>> {
+    const publicClient = axios.create({
+      baseURL: API_BASE_URL,
+      timeout: 20000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+    const response = await publicClient.post(
+      `/public/sales/bill/${encodeURIComponent(billNo)}/${encodeURIComponent(shareToken)}/suggest-feedback`,
+      body
     )
     return response.data
   }

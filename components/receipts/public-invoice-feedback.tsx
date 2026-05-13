@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { SalesAPI } from "@/lib/api"
-import { Star } from "lucide-react"
+import { Loader2, Sparkles, Star } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export type FeedbackEligibility = {
@@ -50,6 +50,7 @@ export function PublicInvoiceFeedbackSection({
   const [rating, setRating] = useState(0)
   const [reviewText, setReviewText] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [generatingSuggestion, setGeneratingSuggestion] = useState(false)
   const [error, setError] = useState<string | null>(null)
   /** Session-only: after successful submit, thank-you shows in the same dialog. */
   const [justSubmitted, setJustSubmitted] = useState(false)
@@ -58,6 +59,8 @@ export function PublicInvoiceFeedbackSection({
     googleReviewUrl?: string | null
     googleConfigured?: boolean
   } | null>(null)
+  /** Snapshot of comment body at submit (used when opening Google). */
+  const [lastSubmittedReviewText, setLastSubmittedReviewText] = useState("")
   const [submittedHadText, setSubmittedHadText] = useState(false)
 
   const showPendingThankYou =
@@ -79,6 +82,8 @@ export function PublicInvoiceFeedbackSection({
     setJustSubmitted(false)
     setRating(0)
     setReviewText("")
+    setGeneratingSuggestion(false)
+    setLastSubmittedReviewText("")
     setOpen(true)
   }
 
@@ -86,6 +91,70 @@ export function PublicInvoiceFeedbackSection({
     setOpen(false)
     setJustSubmitted(false)
     setThankYou(null)
+    setGeneratingSuggestion(false)
+    setLastSubmittedReviewText("")
+  }
+
+  const copySubmittedCommentAndOpenGoogleReview = async (url: string) => {
+    const newTab =
+      typeof window !== "undefined"
+        ? window.open("about:blank", "_blank", "noopener,noreferrer")
+        : null
+
+    const t = lastSubmittedReviewText.trim()
+    if (t.length > 0) {
+      try {
+        if (typeof navigator.clipboard?.writeText === "function") {
+          await navigator.clipboard.writeText(t)
+        } else {
+          const ta = document.createElement("textarea")
+          ta.value = t
+          ta.setAttribute("readonly", "")
+          ta.style.position = "fixed"
+          ta.style.left = "-9999px"
+          ta.style.opacity = "0"
+          document.body.appendChild(ta)
+          ta.select()
+          document.execCommand("copy")
+          document.body.removeChild(ta)
+        }
+      } catch {
+        /* still navigate */
+      }
+    }
+
+    try {
+      if (newTab && !newTab.closed) {
+        newTab.location.href = url
+      } else {
+        window.location.assign(url)
+      }
+    } catch {
+      window.location.assign(url)
+    }
+  }
+
+  const generateWithAi = async () => {
+    if (rating !== 5 || generatingSuggestion) return
+    setGeneratingSuggestion(true)
+    setError(null)
+    try {
+      const res = await SalesAPI.suggestInvoiceFeedbackPublic(billNo, shareToken, { rating })
+      if (!res.success) {
+        setError(res.error || "Could not generate a suggestion")
+        return
+      }
+      const text = (res.data as { text?: string } | undefined)?.text
+      if (text?.trim()) {
+        setReviewText(text.trim())
+      } else {
+        setError("No suggestion returned. Try again.")
+      }
+    } catch (e: any) {
+      setError(e?.response?.data?.error || "Could not generate a suggestion")
+    } finally {
+      setGeneratingSuggestion(false)
+    }
   }
 
   const submit = async () => {
@@ -102,7 +171,9 @@ export function PublicInvoiceFeedbackSection({
         return
       }
       const d = res.data as any
-      setSubmittedHadText(reviewText.trim().length > 0)
+      const submittedComment = reviewText.trim()
+      setLastSubmittedReviewText(submittedComment)
+      setSubmittedHadText(submittedComment.length > 0)
       setJustSubmitted(true)
       setOpen(true)
       if (d?.thankYouType === "google") {
@@ -216,17 +287,19 @@ export function PublicInvoiceFeedbackSection({
                       <p className="text-slate-600 text-xs">
                         If you&apos;d like, you can also share your experience on Google.
                       </p>
-                      <Button asChild className="w-full rounded-lg" size="sm">
-                        <a href={thankYou.googleReviewUrl} target="_blank" rel="noopener noreferrer">
-                          Post on Google Review
-                        </a>
+                      <Button
+                        type="button"
+                        className="w-full rounded-lg"
+                        size="sm"
+                        onClick={() => copySubmittedCommentAndOpenGoogleReview(thankYou.googleReviewUrl!)}
+                      >
+                        Post on Google Review
                       </Button>
-                      {submittedHadText ? (
-                        <p className="text-xs text-slate-500">
-                          You can copy your comment from the form you just submitted and paste it on
-                          Google.
-                        </p>
-                      ) : null}
+                      <p className="text-xs text-slate-500">
+                        {submittedHadText
+                          ? "Your comment will be copied to the clipboard before Google opens—you can paste it into your review."
+                          : "Opens Google Reviews in a new tab."}
+                      </p>
                     </div>
                   ) : null}
                   {thankYou?.kind === "google" &&
@@ -269,8 +342,33 @@ export function PublicInvoiceFeedbackSection({
                       ))}
                     </div>
                     <div>
-                      <label className="text-xs font-medium text-slate-600">Comment (optional)</label>
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-xs font-medium text-slate-600" htmlFor="invoice-feedback-comment">
+                          Comment (optional)
+                        </label>
+                        {rating === 5 ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 shrink-0 gap-1 px-2 text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700"
+                            disabled={generatingSuggestion}
+                            onClick={generateWithAi}
+                            title="Draft a Maps-style thank-you comment (past visits may be referenced when we know them)"
+                          >
+                            {generatingSuggestion ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                            ) : (
+                              <Sparkles className="h-3.5 w-3.5" aria-hidden />
+                            )}
+                            Generate with AI
+                          </Button>
+                        ) : (
+                          <span className="h-8 shrink-0" aria-hidden />
+                        )}
+                      </div>
                       <Textarea
+                        id="invoice-feedback-comment"
                         value={reviewText}
                         onChange={(e) => setReviewText(e.target.value)}
                         className="mt-1 min-h-[88px] text-sm"

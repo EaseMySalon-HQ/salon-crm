@@ -32,15 +32,54 @@ export default function PublicFeedbackPage() {
   const [error, setError] = useState<string | null>(null)
   const [rating, setRating] = useState(0)
   const [reviewText, setReviewText] = useState("")
+  const [submittedReviewSnapshot, setSubmittedReviewSnapshot] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState<null | {
     kind: "google" | "internal"
     googleReviewUrl?: string | null
-    copyHint?: boolean
     googleConfigured?: boolean
   }>(null)
 
   const sourceParam = useMemo(() => searchParams.get("s") || undefined, [searchParams])
+
+  async function copySubmittedReviewOpenGoogle(url: string) {
+    const newTab =
+      typeof window !== "undefined"
+        ? window.open("about:blank", "_blank", "noopener,noreferrer")
+        : null
+
+    const t = submittedReviewSnapshot.trim()
+    if (t.length > 0) {
+      try {
+        if (typeof navigator.clipboard?.writeText === "function") {
+          await navigator.clipboard.writeText(t)
+        } else {
+          const ta = document.createElement("textarea")
+          ta.value = t
+          ta.setAttribute("readonly", "")
+          ta.style.position = "fixed"
+          ta.style.left = "-9999px"
+          ta.style.opacity = "0"
+          document.body.appendChild(ta)
+          ta.select()
+          document.execCommand("copy")
+          document.body.removeChild(ta)
+        }
+      } catch {
+        /* continue to Google */
+      }
+    }
+
+    try {
+      if (newTab && !newTab.closed) {
+        newTab.location.href = url
+      } else {
+        window.location.assign(url)
+      }
+    } catch {
+      window.location.assign(url)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -102,11 +141,12 @@ export default function PublicFeedbackPage() {
         return
       }
       const payload = res.data.data
+      const snap = reviewText.trim()
+      setSubmittedReviewSnapshot(snap)
       if (payload.thankYouType === "google") {
         setDone({
           kind: "google",
           googleReviewUrl: payload.googleReviewUrl,
-          copyHint: payload.copyHint,
           googleConfigured: payload.googleConfigured,
         })
       } else {
@@ -157,18 +197,17 @@ export default function PublicFeedbackPage() {
                 {done.googleReviewUrl ? (
                   <>
                     <Button
-                      asChild
+                      type="button"
                       className="w-full rounded-xl bg-slate-900 text-white hover:bg-slate-800"
+                      onClick={() => copySubmittedReviewOpenGoogle(done.googleReviewUrl!)}
                     >
-                      <a href={done.googleReviewUrl} target="_blank" rel="noopener noreferrer">
-                        Post on Google Review
-                      </a>
+                      Post on Google Review
                     </Button>
-                    {done.copyHint && reviewText.trim() ? (
-                      <p className="text-xs text-slate-500 leading-relaxed">
-                        You can copy the review you wrote earlier and paste it on Google.
-                      </p>
-                    ) : null}
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      {submittedReviewSnapshot.trim()
+                        ? "Your comment will be copied to the clipboard before Google opens—you can paste it into your review."
+                        : "Opens Google Reviews in a new tab."}
+                    </p>
                   </>
                 ) : (
                   <p className="text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">

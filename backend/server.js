@@ -13687,6 +13687,102 @@ app.post(
   }
 );
 
+const publicInvoiceFeedbackSuggestLimiter = require('express-rate-limit')({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many requests. Please try again later.' },
+});
+
+// Public: draft feedback comment from rating + receipt context (billNo + shareToken)
+app.post(
+  '/api/public/sales/bill/:billNo/:token/suggest-feedback',
+  publicInvoiceFeedbackSuggestLimiter,
+  async (req, res) => {
+    try {
+      const { billNo, token } = req.params;
+      if (!billNo || !token) {
+        return res.status(400).json({ success: false, error: 'Bill number and token are required' });
+      }
+
+      const { resolveSuggestedFeedbackComment } = require('./lib/suggest-public-feedback-comment');
+      const { isCompletedSale } = require('./lib/execute-public-feedback-submit');
+
+      const rating = Number(req.body?.rating);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return res.status(400).json({ success: false, error: 'Rating must be between 1 and 5' });
+      }
+      if (rating !== 5) {
+        return res.status(400).json({
+          success: false,
+          error: 'AI draft suggestions are only available for 5-star ratings.',
+        });
+      }
+
+      const { loadPastCompletedServiceNamesForClient } = require('./lib/collect-feedback-suggest-context');
+      const databaseManager = require('./config/database-manager');
+      const mainConnection = await databaseManager.getMainConnection();
+      const Business = mainConnection.model('Business', require('./models/Business').schema);
+      const modelFactory = require('./models/model-factory');
+      const businesses = await Business.find({ status: 'active' });
+
+      for (const business of businesses) {
+        try {
+          const businessDb = await databaseManager.getConnection(business._id, mainConnection);
+          const businessModels = modelFactory.createBusinessModels(businessDb);
+          const { Sale, BusinessSettings } = businessModels;
+          const sale = await Sale.findOne({ billNo, shareToken: token }).lean();
+          if (sale) {
+            if (!isCompletedSale(sale)) {
+              return res.status(400).json({
+                success: false,
+                error: 'Feedback is only available for completed visits.',
+              });
+            }
+            const settings = await BusinessSettings.findOne().lean();
+            const businessName = settings?.name || business.name || 'Salon';
+            const itemNames = Array.isArray(sale.items)
+              ? sale.items.map((it) => String(it.name || '').trim()).filter(Boolean).slice(0, 15)
+              : [];
+
+            let pastServiceNames = [];
+            if (sale.customerId) {
+              pastServiceNames = await loadPastCompletedServiceNamesForClient(Sale, {
+                customerId: sale.customerId,
+                excludeSaleId: sale._id,
+              });
+            }
+
+            const { text, source } = await resolveSuggestedFeedbackComment({
+              rating,
+              businessName,
+              itemNames,
+              pastServiceNames,
+            });
+
+            return res.json({
+              success: true,
+              data: { text, source },
+            });
+          }
+        } catch (businessError) {
+          logger.error(
+            `Error in public invoice feedback suggest for business ${business.name}:`,
+            businessError.message
+          );
+          continue;
+        }
+      }
+
+      return res.status(404).json({ success: false, error: 'Receipt not found or invalid token' });
+    } catch (err) {
+      logger.error('Error in public invoice feedback suggest:', err);
+      res.status(500).json({ success: false, error: 'Failed to generate suggestion' });
+    }
+  }
+);
+
 // Add payment to a sale
 app.post(
   '/api/sales/:id/payment',
