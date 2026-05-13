@@ -1,6 +1,6 @@
 'use strict';
 
-const { sanitizeReviewText } = require('./execute-public-feedback-submit');
+const { finalizeAiSuggestedReviewText } = require('./execute-public-feedback-submit');
 
 function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -23,69 +23,91 @@ function buildSuggestedFeedbackComment({ rating, businessName, itemNames, pastSe
     (pastServiceNames || []).map((n) => String(n || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
   )].slice(0, 3);
 
-  let serviceBit = '';
+  const shortHinglishService =
+    uniqueItems.length === 1
+      ? `${uniqueItems[0]}, acha mast laga`
+      : uniqueItems.length >= 2
+        ? (() => {
+            const copy = [...uniqueItems];
+            const last = copy.pop();
+            return `${copy.join(' aur ')} aur ${last}, combo mast`;
+          })()
+        : '';
+
+  let serviceBitEn = '';
   if (uniqueItems.length === 1) {
-    serviceBit = ` I especially appreciated ${uniqueItems[0]}.`;
+    serviceBitEn = `, yaad hai ${uniqueItems[0]} khas tha`;
   } else if (uniqueItems.length >= 2) {
     const copy = [...uniqueItems];
     const last = copy.pop();
-    serviceBit = ` Highlights for me were ${copy.join(', ')} and ${last}.`;
+    serviceBitEn = `, ${copy.join(' aur ')} aur ${last} combo tha`;
   }
 
-  let historyBit = '';
+  let historyBitShort = '';
   if (pastForTemplate.length >= 1) {
-    const ph = pastForTemplate.slice(0, 2).join(' & ');
-    historyBit = ph ? ` Earlier visits included ${ph}—this time was just as thoughtful.` : '';
+    const ph = pastForTemplate.slice(0, 2).join(' aur ');
+    historyBitShort = ph ? `, pehle ${ph} bhi yahan, ab dubara trusted` : '';
+  }
+
+  let historyBitEn = '';
+  if (pastForTemplate.length >= 1) {
+    const ph = pastForTemplate.slice(0, 2).join(' aur ');
+    historyBitEn = ph ? `, pehle ${ph} yahan bhi, ab bhi waise hi vibes` : '';
   }
 
   const r = Math.max(1, Math.min(5, Math.round(Number(rating)) || 3));
 
   let raw;
   if (r >= 5) {
+    const svc = shortHinglishService;
+    const c = svc ? `${svc}, ` : '';
     raw = pick([
-      `${biz} was an easy yes for me.${serviceBit} The stylist actually listened instead of speeding through, and I left looking like I'd pictured.`,
-      `Walked into ${biz} on a whim and stayed because the vibe was calm and intentional.${serviceBit} I'd book again.`,
-      `${serviceBit.trim() ? `${serviceBit.trim()} ` : ''}${biz} has that rare mix—you feel looked after without anyone hovering.`,
-      `${biz}: quick check-in, clear expectations, and my hair behaved for days.${serviceBit} Thanks for treating it like craftsmanship, not rushed volume.`,
-      `I'm picky about salons; ${biz} earned the hype from my appointment.${serviceBit} Clean space, kind people, steady hands.`,
-      `Left ${biz} feeling lighter in the best way—not just the haircut.${serviceBit} They checked in enough to get it right, not so much it felt scripted.`,
-      `If you're scrolling reviews for ${biz}, my visit was quietly great.${serviceBit} No drama, solid skill, genuinely friendly front desk.`,
-      `First time trying ${biz}.${serviceBit} They explained choices in plain English and didn't upsell nonsense—really appreciated that.`,
-      `Been to ${biz} more than once at this point; this visit still felt fresh.${serviceBit} Same attention to detail, still easy conversation.`,
-      `Hard to articulate, but ${biz} nailed the mood—bright, organized, unrushed.${serviceBit} Recommend telling them what vibe you want; they steer well.`,
-      `Posting this because friends keep asking where I went: ${biz}.${serviceBit} Book with buffer so you're not squeezed; worth it.`,
+      `${biz}, ${c}friendly staff, hygiene okay, zaroor try once`,
+      `${biz}, ${c}jo bola waisa outcome, time chill, satisfied lagta hai`,
+      `${biz}, ${c}mast flow, stylists calm, chaos nahi, recommend vibes clear`,
+      `nice ${biz}, ${c}clean jagah, polite log, worth hai bolenge`,
+      `${
+        uniqueItems.length >= 2
+          ? `${uniqueItems[0]} aur ${uniqueItems[1]}, ${biz}, neat kaam`
+          : uniqueItems.length === 1
+            ? `${uniqueItems[0]} ke liye gaye, neat delivery mile`
+            : `${biz}`
+      }, dhanywad team`,
+      `${biz}, ${c}slow patiently service mila, thanks, fir jaunga zaroor vibes`,
     ]);
   } else if (r === 4) {
     raw = pick([
-      `I enjoyed my visit to ${biz} and would come again.${serviceBit} A few small things could be even tighter, but overall it was a very good experience.`,
-      `Solid experience at ${biz}.${serviceBit} The team was welcoming; with a little more consistency it would be perfect.`,
-      `Overall a great appointment at ${biz}.${serviceBit} Thank you—I'm happy to recommend you to friends.`,
+      `visit ${biz}, accha, fir se aaunga${serviceBitEn}, ek do point aur tight ho sakta, overall solid`,
+      `solid ${biz} experience${serviceBitEn}, dubara aur perfect lag sakti feeling pakki hai`,
+      `nice appointment overall ${biz}${serviceBitEn}, friends ko easily suggest kara ja sakta hai`,
     ]);
   } else if (r === 3) {
     raw = pick([
-      `My visit to ${biz} was okay.${serviceBit} Some parts went well and others felt average—there's room to make the experience more consistent.`,
-      `Mixed experience at ${biz}.${serviceBit} The basics were fine, but I think communication and pacing could improve.`,
-      `${biz} met my expectations in parts but not across the board.${serviceBit} With a bit more polish I'd rate it higher next time.`,
+      `okay tha, average mix vibes ${biz}${serviceBitEn}, consistency chahenge dubara`,
+      `mixed experience ${biz}${serviceBitEn}, basics fine, pacing aur mazboot baat ki kami lagi`,
+      `${biz}${serviceBitEn}, kabhi thik, kabhi average, polish se uplift mumkin`,
     ]);
   } else if (r === 2) {
     raw = pick([
-      `I was disappointed with my visit to ${biz}.${serviceBit} I think clearer communication and attention to detail would help a lot.`,
-      `Unfortunately this visit didn't go as hoped.${serviceBit} I'd appreciate a more thoughtful experience if I return.`,
-      `Several things felt off during my appointment at ${biz}.${serviceBit} I'm sharing this in the hope it helps the team improve.`,
+      `disappointed ${biz}${serviceBitEn}, clear detail kam laga mujhe poora expectation nahi`,
+      `visit hopes se match nahi kara${serviceBitEn}, dubara better chahiye, ${biz} please note kar lo`,
+      `achcha experience nahi tha ${biz}${serviceBitEn}, honest note team ke naam`,
     ]);
   } else {
     raw = pick([
-      `I did not have a good experience at ${biz}.${serviceBit} I expected better service and follow-through.`,
-      `Very disappointed with my visit to ${biz}.${serviceBit} I hope the team can take this feedback seriously.`,
-      `This visit fell well short of what I expect.${serviceBit} I'm leaving honest feedback so ${biz} can improve.`,
+      `good experience nahin lagi ${biz}${serviceBitEn}, expected zyada, outputs kam lage mere hisaab`,
+      `very disappointing vibes ${biz}${serviceBitEn}, team please dekho, ise seriously samjho`,
+      `expectations niche lagi ${biz}${serviceBitEn}, honest low mood feedback rakha hai`,
     ]);
   }
 
-  if (r >= 5 && historyBit) {
-    raw = `${raw.trimEnd()} ${historyBit.trim()}`.trim();
+  if (r >= 5 && historyBitShort) {
+    raw = `${raw.trimEnd()}${historyBitShort}`.trim();
+  } else if (r < 5 && historyBitEn) {
+    raw = `${raw.trimEnd()}${historyBitEn}`.trim();
   }
 
-  return sanitizeReviewText(raw);
+  return finalizeAiSuggestedReviewText(raw);
 }
 
 /**

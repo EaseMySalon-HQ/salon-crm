@@ -14,6 +14,39 @@ function sanitizeReviewText(raw) {
   return t;
 }
 
+/** AI-generated Maps drafts only — avoid heavy punctuation; guest submissions use sanitizeReviewText alone. */
+function flattenAiSuggestedReviewText(raw) {
+  if (raw == null || typeof raw !== 'string') return '';
+  let t = raw;
+  t = t.replace(/[\u2013\u2014\u2015\u2212]/g, ' ');
+  t = t.replace(/\s*-{2,}\s*/g, ' ');
+  t = t.replace(/-/g, ' ');
+  // Exclamation/question (Maps-style noise)
+  t = t.replace(/[!?]+/g, ' ');
+  // Ellipsis and decorative dots
+  t = t.replace(/\.{2,}/g, ' ');
+  t = t.replace(/…+/g, ' ');
+  // Full stops semicolons colons slashes etc
+  t = t.replace(/\./g, ' ');
+  t = t.replace(/;/g, ' ');
+  t = t.replace(/\s*:\s*/g, ' ');
+  t = t.replace(/\//g, ' ');
+  t = t.replace(/\+/g, ' aur ');
+  t = t.replace(/[[\]{}()]/g, ' ');
+  t = t.replace(/["„‟«»`´]/g, '');
+  // Commas: merge adjacent commas normalize spacing one space after each comma strip stray edge commas
+  t = t.replace(/,{2,}/g, ',');
+  t = t.replace(/\s*,\s*/g, ', ');
+  t = t.replace(/^,\s*|\s*,$/g, '');
+  // Final space collapse again after comma normalization
+  t = t.replace(/\s+/g, ' ').trim();
+  return t;
+}
+
+function finalizeAiSuggestedReviewText(raw) {
+  return flattenAiSuggestedReviewText(sanitizeReviewText(raw));
+}
+
 /** Normalizes body/query source to Feedback.source enum. */
 function normalizeFeedbackSource(v) {
   const raw = v != null ? String(v).trim().toLowerCase() : '';
@@ -194,6 +227,8 @@ async function executePublicFeedbackSubmit({
 module.exports = {
   isCompletedSale,
   sanitizeReviewText,
+  flattenAiSuggestedReviewText,
+  finalizeAiSuggestedReviewText,
   normalizeFeedbackSource,
   parseGoogleReviewUrl,
   getFeedbackEligibilityForSale,

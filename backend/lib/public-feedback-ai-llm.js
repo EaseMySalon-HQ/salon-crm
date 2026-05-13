@@ -1,7 +1,7 @@
 'use strict';
 
 const { logger } = require('../utils/logger');
-const { sanitizeReviewText } = require('./execute-public-feedback-submit');
+const { finalizeAiSuggestedReviewText } = require('./execute-public-feedback-submit');
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
@@ -22,60 +22,96 @@ function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-/** Per-request stylistic dice so drafts don't read like the same paragraph. */
-function buildVariationBlock(salonDisplayName) {
-  const name = salonDisplayName || 'the salon';
-  const lead = pick([
-    'Start with a specific moment or detail (chair area, greeting, pacing) before you zoom out.',
-    'Start with the outcome (hair/skin/feeling after), then bring in the staff and salon.',
-    `Open with how the visit felt—not a slogan—then mention ${name} once when it fits naturally.`,
-    `Put ${name} in the first sentence but vary how you attach the compliment (not always “went to”).`,
-    'Delay the salon name to sentence two; sentence one should be concrete and observational.',
+/** Short anonymised samples; commas at natural pauses (shape only). */
+function buildHumanShapeExamples() {
+  const pair = pick([
+    [
+      'Example A shape only salon X pe haircut aur facial, bahut neat kaam, jo bola waisa hi mila, hygiene decent, zaroor recommend',
+      'Example B shape only colour yahan kara, stylist ne process samjhaya rush nahi kiya, result jo chahiye tha waisa',
+    ],
+    [
+      'Example A shape only lovely experience yaar, staff friendly, time pe ho gaya, salon clean, thanks team',
+      'Example B shape only trim aur cleanup, simple service, paise vasool, polite log, fir se aaungi',
+    ],
+    [
+      'Example A shape only pehla visit, cut bilkul reference jaisa, thank you, happy',
+      'Example B shape only pedicure chill tha, pressure adjust kar di, polite log, ek baar worth try',
+    ],
   ]);
+  return [
+    'Shape reference fictional salons copy mat karo sirf flow dekhna comma jaisa rhythm neeche',
+    pair[0],
+    pair[1],
+  ].join('\n');
+}
+
+/** Per-request stylistic dice so drafts don't read like the same paragraph. */
+function buildVariationBlock(salonDisplayName, itemCount) {
+  const name = salonDisplayName || 'the salon';
+  const hasItems = Number(itemCount) > 0;
+
+  const lead = pick(
+    hasItems
+      ? [
+          `Say services from JSON thisVisitLineItems first plain words then result then ${name} once`,
+          `Start short happy line then bill services aur chota feel jo change`,
+          `Two bill lines ho to Went for vibe do teen services warna ek ok`,
+          `My stylist bola no invented names phir natural ${name}`,
+          `${name} second line outcome first line service only`,
+        ]
+      : [
+          'Outcome team mention ' + name + ' once',
+          'Moment concrete shampoo mirror clean tie ' + name,
+          'Tiny verdict aur detail aur thanks ya recommend last',
+        ]
+  );
 
   const rhythm = pick([
-    'Use 2–4 sentences; mix one short punchy line with one longer, looser sentence; contractions okay.',
-    'About two sentences, one slightly rambly in a believable thumbs-up tone.',
-    'Three tight-ish sentences; no semicolons; read like typing on your phone.',
+    'Do teen choti lines sms type lamba paragraph nahi',
+    'English aur roman hindi mix informal',
+    'roman hindi sporadic natural spoken',
   ]);
 
   const emphasis = pick([
-    'Lean slightly on listening and tailoring the service.',
-    'Lean slightly on cleanliness and calm vibes.',
-    'Lean slightly on being on time and smooth front-desk → chair flow.',
-    'Balance warmth from the team with noticeable technical skill.',
+    'Ek service ek feeling bas pamphlet vibe nahi',
+    'Stylist team brief listened explained tweaked',
+    'Do line items dono bola do ek flowing line ho sake to',
+    'WhatsApp aur english vibe',
   ]);
 
   const ban = pick([
-    'Do NOT lead with phrases like “I highly recommend”, “Five stars”, “Amazing experience”, “top-notch”, “from start to finish”.',
-    'Avoid stacking adjectives (“wonderful, amazing, incredible” together). If one strong word, keep the rest plain.',
-    "Don't lean on vague “great service” without tying it to one concrete moment.",
-    'No press-release polish; imperfect rhythm is preferable to symmetrical marketing lines.',
-    "Don't close with slogans (“Book now”, “Highly recommend”)—trail off naturally when you're done.",
+    'Lamba essay nahi chars chhota max teen chunks lines',
+    'Devanagari nahi roman hi',
+    'Naam nahin banana staff client json naam missing hai',
+    'Friendly professional attentive trio cheesy open nahi',
+    'Example body copy verbatim nahi vibes only',
   ]);
 
   const length = pick([
-    'Target roughly 280–460 characters.',
-    'Target roughly 400–680 characters.',
-    'Target roughly 520–840 characters.',
+    'Chars lagbhag 110 se 240 chhota sabse badhiya',
+    'Chars lagbhag 160 se 320 jitni jaldi done utna mast',
+    'Chars lagbhag 200 se 380 aur 420 se upar kabhi mat jao',
   ]);
 
   const diversity = pick([
-    'Prefer different verbs than whatever you defaulted to last draft—vary word choice.',
-    'If tempted by “perfect” or “flawless”, downgrade one of them to simpler praise.',
-    'Alternate between a “whole team felt solid” vibe vs one stylist standing out—it must stay honest.',
+    'Ending kabhi dhanyavad kabhi zaroor dubara vibes',
+    'Verbs vivid english hindi side qualifiers',
+    'Team ya stylist fake names nahin banana',
+    'Comma thoughtfully natural clause break har teen shabdon par comma nahin rakho aur har sentence me maximum teen char comma rakho readability ke liye',
   ]);
 
   return [
-    '---',
-    'Variation for THIS draft only (follow closely):',
-    `- Lead / structure: ${lead}`,
-    `- Rhythm: ${rhythm}`,
-    `- Emphasis: ${emphasis}`,
-    `- Approx length: ${length}`,
-    `- Anti-formula: ${ban}`,
-    `- Variety: ${diversity}`,
-    '- Every click of “generate” must feel like another human voice, not a template.',
+    'Variation is draft sirf ye follow kar',
+    `Lead structure ${lead}`,
+    `Rhythm ${rhythm}`,
+    `Emphasis ${emphasis}`,
+    `Approx length ${length}`,
+    `Anti formula ${ban}`,
+    `Variety ${diversity}`,
+    'Tone metro india maps hinglish english',
+    'Comma style separate chhoti baatein jotting ideas after comma ek space zaroor rakho commas har doosre shabd par mat daalo Oxford list avoid short review hai comma splices limit natural jaise hindi english bolte waqt',
+    'OUTPUT commas use karo thoughtfully full stop hyphen dash slash colon bang sawal parentheses quotes bullets mat rakho OUTPUT mein',
+    buildHumanShapeExamples(),
   ].join('\n');
 }
 
@@ -108,22 +144,26 @@ function buildPrompts({ rating, businessName, itemNames, pastServiceNames }) {
     pastSalonServicesFromEarlierCompletedVisits: pastList.length ? pastList : null,
     notePastList:
       pastList.length > 0
-        ? 'pastSalonServicesFromEarlierCompletedVisits comes from other completed invoices for this same client at this business — use only when it helps an honest returning-customer story.'
-        : 'No prior linked service history (e.g. walk-in or first visit). Do not claim repeat visits.',
+        ? 'pastSalonServicesFromEarlierCompletedVisits is older completed invoices for same client same business mention only honestly if vibe returning'
+        : 'No linked prior services example walk-in or first visit do not claim repeats',
   });
 
   const system = [
-    'You draft ONE authentic Google Maps / Business review a real guest would paste—never corporate marketing.',
-    `${rating}-star happiness must read clearly, but show it through specifics, not hype adjectives.`,
-    'First person, conversational English. Sound human: tiny imperfections in rhythm are fine; no hashtag/URL/emoji/bullets.',
-    `Mention (${biz}) once early in a natural slot (not twice back-to-back).`,
-    'Ground truth in JSON thisVisitLineItems; use pastSalonServicesFromEarlierCompletedVisits only when non-empty and honest.',
-    'Each response must be structurally and lexically different from what you would write for another random salon—no stock paragraph.',
-    'Return ONLY the review text.',
+    'You write one very tiny Google Maps style review snippet',
+    `${rating} star joy show without rambling`,
+    'English aur casual roman hindi mix hinglish spoken',
+    'First person chota grammar quirks ok contractions ok apostrophe ok',
+    `Name ${biz} exactly once aur natural`,
+    'If thisVisitLineItems non empty then weave one exact bill phrase verbatim or near keep whole thing short',
+    'Fake names stories areas URLs mat',
+    'Optional pastSalonServicesFromEarlierCompletedVisits soft returning nod only honestly still short',
+    'Return review snippet ONLY commas as main separator between short phrases one space after comma no space before comma avoid comma after every single word',
+    'Speech natural jaise bolte waqt chhota breath comma list spam nahi',
+    'Roman script only Devanagari nahi hashtags emoji bullets nahi',
   ].join(' ');
 
-  const variation = buildVariationBlock(biz);
-  const userMsg = `Write their Maps-style salon review.\n${userBlock}\n\n${variation}`;
+  const variation = buildVariationBlock(biz, itemList.length);
+  const userMsg = `SHORT hinglish english maps snippet\n${userBlock}\n\nGrounding truths from JSON stylist names missing so say stylist or inka team no invented titles\n\n${variation}`;
   return { system, userMsg };
 }
 
@@ -211,7 +251,7 @@ async function callOpenAi({ apiKey, model, timeoutMs, system, userMsg, temperatu
         { role: 'system', content: system },
         { role: 'user', content: userMsg },
       ],
-      max_tokens: 450,
+      max_tokens: 260,
       temperature,
       top_p: topP,
       presence_penalty: 0.35,
@@ -239,14 +279,14 @@ async function callOpenAi({ apiKey, model, timeoutMs, system, userMsg, temperatu
       : typeof data?.choices?.[0]?.text === 'string'
         ? data.choices[0].text
         : '';
-  const cleaned = sanitizeReviewText(raw.trim());
+  const cleaned = finalizeAiSuggestedReviewText(raw.trim());
   return cleaned.length >= 15 ? cleaned : null;
 }
 
 async function callAnthropic({ apiKey, model, timeoutMs, system, userMsg, temperature, topP }) {
   const body = {
     model,
-    max_tokens: 450,
+    max_tokens: 260,
     temperature,
     system,
     messages: [{ role: 'user', content: userMsg }],
@@ -289,7 +329,7 @@ async function callAnthropic({ apiKey, model, timeoutMs, system, userMsg, temper
     }
   }
 
-  const cleaned = sanitizeReviewText(raw.trim());
+  const cleaned = finalizeAiSuggestedReviewText(raw.trim());
   return cleaned.length >= 15 ? cleaned : null;
 }
 
