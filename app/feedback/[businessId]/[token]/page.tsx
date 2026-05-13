@@ -43,11 +43,6 @@ export default function PublicFeedbackPage() {
   const sourceParam = useMemo(() => searchParams.get("s") || undefined, [searchParams])
 
   async function copySubmittedReviewOpenGoogle(url: string) {
-    const newTab =
-      typeof window !== "undefined"
-        ? window.open("about:blank", "_blank", "noopener,noreferrer")
-        : null
-
     const t = submittedReviewSnapshot.trim()
     if (t.length > 0) {
       try {
@@ -70,15 +65,7 @@ export default function PublicFeedbackPage() {
       }
     }
 
-    try {
-      if (newTab && !newTab.closed) {
-        newTab.location.href = url
-      } else {
-        window.location.assign(url)
-      }
-    } catch {
-      window.location.assign(url)
-    }
+    window.location.assign(url)
   }
 
   useEffect(() => {
@@ -206,7 +193,7 @@ export default function PublicFeedbackPage() {
                     <p className="text-xs text-slate-500 leading-relaxed">
                       {submittedReviewSnapshot.trim()
                         ? "Your comment will be copied to the clipboard before Google opens—you can paste it into your review."
-                        : "Opens Google Reviews in a new tab."}
+                        : "Opens Google Reviews on this tab."}
                     </p>
                   </>
                 ) : (
