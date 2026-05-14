@@ -11,7 +11,6 @@ import {
   Building2,
   Calendar,
   CreditCard,
-  Bell,
   ChevronRight,
   Receipt,
   DollarSign,
@@ -24,12 +23,12 @@ import {
   Scissors,
   FolderTree,
   Truck,
-  Layers,
   Search,
   IdCard,
   CircleDollarSign,
   Gift,
   MessageSquare,
+  Bell,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -44,7 +43,6 @@ import { NotificationSettings } from "./notification-settings"
 import { POSSettings } from "./pos-settings"
 import { PlanBilling } from "./plan-billing"
 import { MembershipPlansTable } from "@/components/membership/membership-plans-table"
-import { PackagesSettingsPanel } from "@/components/packages/PackagesSettingsPanel"
 import { ChannelUsageSettings } from "./channel-usage-settings"
 import { FeedbackManagementSettings } from "./feedback-management-settings"
 import RechargeSettings from "./recharge-settings"
@@ -74,7 +72,6 @@ const SETTINGS_SECTION_IDS = [
   "membership",
   "services",
   "products",
-  "packages",
   "channel-usage",
   "feedback",
   "recharge",
@@ -158,13 +155,6 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "Retail products, stock, categories, and suppliers.",
         icon: Package,
         searchTerms: ["inventory", "retail", "stock"],
-      },
-      {
-        id: "packages",
-        title: "Packages",
-        description: "Bundles, sittings, redemptions, and package sales.",
-        icon: Layers,
-        searchTerms: ["bundle", "deals"],
       },
       {
         id: "membership",
@@ -455,8 +445,6 @@ export function SettingsPage() {
           </Tabs>
         )
       }
-      case "packages":
-        return <PackagesSettingsPanel />
       case "channel-usage":
         return <ChannelUsageSettings />
       case "feedback":

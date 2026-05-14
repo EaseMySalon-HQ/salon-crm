@@ -2,15 +2,13 @@
 
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { EmailNotificationsAPI } from "@/lib/api"
-import { Settings, Mail, Users, Clock, Calendar, Receipt, Download, AlertTriangle, TestTube, CheckCircle2, XCircle, MessageCircle } from "lucide-react"
+import { Mail, Users, TestTube, CheckCircle2, XCircle, MessageCircle } from "lucide-react"
 import { StaffEmailPreferencesModal } from "./staff-email-preferences-modal"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WhatsAppBusinessSettings } from "./whatsapp-business-settings"
@@ -21,6 +19,8 @@ interface StaffMember {
   email: string
   role: string
   hasLoginAccess: boolean
+  /** True when this row is a main-DB User injected for display (not a Staff document) */
+  isOwner?: boolean
   emailNotifications?: {
     enabled: boolean
     preferences?: {
@@ -31,8 +31,13 @@ interface StaffMember {
       exportAlerts?: boolean
       systemAlerts?: boolean
       lowInventory?: boolean
+      allowReportsDelivery?: boolean
     }
   }
+}
+
+function idInRecipientList(staffId: string, recipientStaffIds: string[]) {
+  return recipientStaffIds.some((id) => String(id) === String(staffId))
 }
 
 export function NotificationSettings() {
@@ -94,6 +99,8 @@ export function NotificationSettings() {
   })
 
   const isAdmin = user?.role === 'admin' || user?.role === 'manager'
+  /** Local dev only — not shown in production builds */
+  const showDevEmailTest = process.env.NODE_ENV === "development"
 
   // Load settings and staff on mount
   useEffect(() => {
@@ -101,37 +108,43 @@ export function NotificationSettings() {
     loadStaff()
   }, [])
   
-  // Sync recipient lists with staff individual preferences
+  // Sync recipient lists from staff — only real Staff IDs belong in settings (server jobs use Staff.find).
+  // Exclude synthetic User rows (isOwner) from merged IDs so loadSettings() does not fight the UI for admins.
   useEffect(() => {
     if (staffMembers.length > 0) {
-      setSettings(prev => {
+      setSettings((prev) => {
         const newSettings = { ...prev }
-        
-        // For Daily Summary - only include staff who have dailySummary preference enabled
+
+        const isRealStaffForRecipients = (staff: StaffMember) => {
+          if (staff.emailNotifications?.enabled !== true) return false
+          if (staff.role === "admin" && staff.isOwner) return false
+          return true
+        }
+
         const dailySummaryRecipients = staffMembers
-          .filter(staff => 
-            staff.emailNotifications?.enabled === true && 
-            staff.emailNotifications?.preferences?.dailySummary === true
+          .filter(
+            (staff) =>
+              staff.emailNotifications?.enabled === true &&
+              staff.emailNotifications?.preferences?.dailySummary === true &&
+              !(staff.role === "admin" && staff.isOwner)
           )
-          .map(staff => staff._id)
-        
-        // For Weekly Summary - only include staff who have weeklySummary preference enabled
+          .map((staff) => staff._id)
+
         const weeklySummaryRecipients = staffMembers
-          .filter(staff => 
-            staff.emailNotifications?.enabled === true && 
-            staff.emailNotifications?.preferences?.weeklySummary === true
+          .filter(
+            (staff) =>
+              staff.emailNotifications?.enabled === true &&
+              staff.emailNotifications?.preferences?.weeklySummary === true &&
+              !(staff.role === "admin" && staff.isOwner)
           )
-          .map(staff => staff._id)
-        
-        // General recipients - all staff with email notifications enabled
-        const generalRecipients = staffMembers
-          .filter(staff => staff.emailNotifications?.enabled === true)
-          .map(staff => staff._id)
-        
+          .map((staff) => staff._id)
+
+        const generalRecipients = staffMembers.filter(isRealStaffForRecipients).map((staff) => staff._id)
+
         newSettings.recipientStaffIds = generalRecipients
         newSettings.dailySummary.recipientStaffIds = dailySummaryRecipients
         newSettings.weeklySummary.recipientStaffIds = weeklySummaryRecipients
-        
+
         return newSettings
       })
     }
@@ -244,6 +257,7 @@ export function NotificationSettings() {
   }
 
   const handleTestEmail = async () => {
+    if (process.env.NODE_ENV !== "development") return
     if (!user?.email) {
       toast({
         title: "Error",
@@ -347,375 +361,14 @@ export function NotificationSettings() {
         </TabsList>
 
         <TabsContent value="email" className="space-y-6 mt-6">
-          <div className="flex justify-end">
-            <Button onClick={handleTestEmail} variant="outline" className="flex items-center gap-2">
-              <TestTube className="h-4 w-4" />
-              Send Test Email
-            </Button>
-          </div>
-
-      {/* Email Notification Types Configuration */}
-      <div className="space-y-4">
-        {/* Daily Summary */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-blue-600" />
-                <CardTitle>Daily Summary</CardTitle>
-              </div>
-              <Switch
-                checked={settings.dailySummary.enabled}
-                onCheckedChange={(checked) =>
-                  setSettings(prev => ({
-                    ...prev,
-                    dailySummary: { ...prev.dailySummary, enabled: checked }
-                  }))
-                }
-              />
+          {showDevEmailTest ? (
+            <div className="flex justify-end">
+              <Button onClick={handleTestEmail} variant="outline" className="flex items-center gap-2">
+                <TestTube className="h-4 w-4" />
+                Send test email (dev)
+              </Button>
             </div>
-            <CardDescription>
-              Receive daily summary emails with sales, appointments, and new clients
-            </CardDescription>
-          </CardHeader>
-          {settings.dailySummary.enabled && (
-            <CardContent className="space-y-4">
-              <div className="flex flex-col gap-2">
-                <Label>When to send</Label>
-                <Select
-                  value={settings.dailySummary.mode}
-                  onValueChange={(value) =>
-                    setSettings(prev => ({
-                      ...prev,
-                      dailySummary: { ...prev.dailySummary, mode: value as "fixedTime" | "afterClosing" }
-                    }))
-                  }
-                >
-                  <SelectTrigger className="w-56">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="fixedTime">At a fixed time every day</SelectItem>
-                    <SelectItem value="afterClosing">After status is verified for that day</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {settings.dailySummary.mode === "fixedTime" && (
-                <div className="flex items-center justify-between">
-                  <Label>Send Time</Label>
-                  <Select
-                    value={settings.dailySummary.time}
-                    onValueChange={(value) =>
-                      setSettings(prev => ({
-                        ...prev,
-                        dailySummary: { ...prev.dailySummary, time: value }
-                      }))
-                    }
-                  >
-                    <SelectTrigger className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Array.from({ length: 24 }, (_, i) => {
-                        const hour = i.toString().padStart(2, '0');
-                        return (
-                          <SelectItem key={hour} value={`${hour}:00`}>
-                            {hour}:00
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {settings.dailySummary.mode === "afterClosing" && (
-                <p className="text-sm text-slate-500">
-                  Daily summary will be sent when the day&apos;s cash registry status is verified.
-                </p>
-              )}
-            </CardContent>
-          )}
-        </Card>
-
-        {/* Weekly Summary */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-5 w-5 text-blue-600" />
-                <CardTitle>Weekly Summary</CardTitle>
-              </div>
-              <Switch
-                checked={settings.weeklySummary.enabled}
-                onCheckedChange={(checked) =>
-                  setSettings(prev => ({
-                    ...prev,
-                    weeklySummary: { ...prev.weeklySummary, enabled: checked }
-                  }))
-                }
-              />
-            </div>
-            <CardDescription>
-              Receive weekly summary emails with revenue, growth, and performance metrics
-            </CardDescription>
-          </CardHeader>
-          {settings.weeklySummary.enabled && (
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <Label>Day of Week</Label>
-                <Select
-                  value={settings.weeklySummary.day}
-                  onValueChange={(value) =>
-                    setSettings(prev => ({
-                      ...prev,
-                      weeklySummary: { ...prev.weeklySummary, day: value }
-                    }))
-                  }
-                >
-                  <SelectTrigger className="w-40">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="sunday">Sunday</SelectItem>
-                    <SelectItem value="monday">Monday</SelectItem>
-                    <SelectItem value="tuesday">Tuesday</SelectItem>
-                    <SelectItem value="wednesday">Wednesday</SelectItem>
-                    <SelectItem value="thursday">Thursday</SelectItem>
-                    <SelectItem value="friday">Friday</SelectItem>
-                    <SelectItem value="saturday">Saturday</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center justify-between">
-                <Label>Send Time</Label>
-                <Select
-                  value={settings.weeklySummary.time}
-                  onValueChange={(value) =>
-                    setSettings(prev => ({
-                      ...prev,
-                      weeklySummary: { ...prev.weeklySummary, time: value }
-                    }))
-                  }
-                >
-                  <SelectTrigger className="w-32">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Array.from({ length: 24 }, (_, i) => {
-                      const hour = i.toString().padStart(2, '0');
-                      return (
-                        <SelectItem key={hour} value={`${hour}:00`}>
-                          {hour}:00
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          )}
-        </Card>
-
-        {/* Appointment Notifications */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-5 w-5 text-green-600" />
-                <CardTitle>Appointment Notifications</CardTitle>
-              </div>
-              <Switch
-                checked={settings.appointmentNotifications.enabled}
-                onCheckedChange={(checked) =>
-                  setSettings(prev => ({
-                    ...prev,
-                    appointmentNotifications: { ...prev.appointmentNotifications, enabled: checked }
-                  }))
-                }
-              />
-            </div>
-            <CardDescription>
-              Receive alerts for new appointments, cancellations, and reminders
-            </CardDescription>
-          </CardHeader>
-          {settings.appointmentNotifications.enabled && (
-            <CardContent className="space-y-3">
-              <div className="flex items-center justify-between p-3 border rounded-lg">
-                <div>
-                  <Label>New Appointments</Label>
-                  <p className="text-xs text-slate-500">Alert when a new appointment is created</p>
-                </div>
-                <Switch
-                  checked={settings.appointmentNotifications.newAppointments}
-                  onCheckedChange={(checked) =>
-                    setSettings(prev => ({
-                      ...prev,
-                      appointmentNotifications: {
-                        ...prev.appointmentNotifications,
-                        newAppointments: checked
-                      }
-                    }))
-                  }
-                />
-              </div>
-              <div className="flex items-center justify-between p-3 border rounded-lg">
-                <div>
-                  <Label>Cancellations</Label>
-                  <p className="text-xs text-slate-500">Alert when an appointment is cancelled</p>
-                </div>
-                <Switch
-                  checked={settings.appointmentNotifications.cancellations}
-                  onCheckedChange={(checked) =>
-                    setSettings(prev => ({
-                      ...prev,
-                      appointmentNotifications: {
-                        ...prev.appointmentNotifications,
-                        cancellations: checked
-                      }
-                    }))
-                  }
-                />
-              </div>
-            </CardContent>
-          )}
-        </Card>
-
-        {/* Receipt Notifications */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Receipt className="h-5 w-5 text-purple-600" />
-                <CardTitle>Receipt Notifications</CardTitle>
-              </div>
-              <Switch
-                checked={settings.receiptNotifications.enabled}
-                onCheckedChange={(checked) =>
-                  setSettings(prev => ({
-                    ...prev,
-                    receiptNotifications: { ...prev.receiptNotifications, enabled: checked }
-                  }))
-                }
-              />
-            </div>
-            <CardDescription>
-              Configure receipt email notifications for clients and staff
-            </CardDescription>
-          </CardHeader>
-          {settings.receiptNotifications.enabled && (
-            <CardContent className="space-y-3">
-              <div className="flex items-center justify-between p-3 border rounded-lg">
-                <div>
-                  <Label>Send to Clients</Label>
-                  <p className="text-xs text-slate-500">Automatically email receipts to clients</p>
-                </div>
-                <Switch
-                  checked={settings.receiptNotifications.sendToClients}
-                  onCheckedChange={(checked) =>
-                    setSettings(prev => ({
-                      ...prev,
-                      receiptNotifications: {
-                        ...prev.receiptNotifications,
-                        sendToClients: checked
-                      }
-                    }))
-                  }
-                />
-              </div>
-              <div className="flex items-center justify-between p-3 border rounded-lg">
-                <div>
-                  <Label>Send to Staff</Label>
-                  <p className="text-xs text-slate-500">Notify staff when receipts are generated</p>
-                </div>
-                <Switch
-                  checked={settings.receiptNotifications.sendToStaff}
-                  onCheckedChange={(checked) =>
-                    setSettings(prev => ({
-                      ...prev,
-                      receiptNotifications: {
-                        ...prev.receiptNotifications,
-                        sendToStaff: checked
-                      }
-                    }))
-                  }
-                />
-              </div>
-            </CardContent>
-          )}
-        </Card>
-
-        {/* Export Notifications */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Download className="h-5 w-5 text-orange-600" />
-                <CardTitle>Export Notifications</CardTitle>
-              </div>
-              <Switch
-                checked={settings.exportNotifications.enabled}
-                onCheckedChange={(checked) =>
-                  setSettings(prev => ({
-                    ...prev,
-                    exportNotifications: { ...prev.exportNotifications, enabled: checked }
-                  }))
-                }
-              />
-            </div>
-            <CardDescription>
-              Receive notifications when data exports are ready
-            </CardDescription>
-          </CardHeader>
-        </Card>
-
-        {/* System Alerts */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-red-600" />
-                <CardTitle>System Alerts</CardTitle>
-              </div>
-              <Switch
-                checked={settings.systemAlerts.enabled}
-                onCheckedChange={(checked) =>
-                  setSettings(prev => ({
-                    ...prev,
-                    systemAlerts: { ...prev.systemAlerts, enabled: checked }
-                  }))
-                }
-              />
-            </div>
-            <CardDescription>
-              Receive alerts for system errors, low inventory, and payment failures
-            </CardDescription>
-          </CardHeader>
-          {settings.systemAlerts.enabled && (
-            <CardContent className="space-y-3">
-              <div className="flex items-center justify-between p-3 border rounded-lg">
-                <div>
-                  <Label>Low Inventory</Label>
-                  <p className="text-xs text-slate-500">Alert when product stock is low</p>
-                </div>
-                <Switch
-                  checked={settings.systemAlerts.lowInventory}
-                  onCheckedChange={(checked) =>
-                    setSettings(prev => ({
-                      ...prev,
-                      systemAlerts: {
-                        ...prev.systemAlerts,
-                        lowInventory: checked
-                      }
-                    }))
-                  }
-                />
-              </div>
-            </CardContent>
-          )}
-        </Card>
-      </div>
+          ) : null}
 
       {/* Staff Recipients Selection */}
       <Card>
@@ -735,7 +388,11 @@ export function NotificationSettings() {
             <div className="text-center py-8 text-slate-500">No staff members with email notifications enabled</div>
           ) : (
             <div className="space-y-3">
-              {staffWithEmailNotifications.map((staff) => (
+              {staffWithEmailNotifications.map((staff) => {
+                const isTenantAdmin = staff.role === "admin"
+                const inRecipients = idInRecipientList(staff._id, settings.recipientStaffIds)
+                const recipientSwitchOn = isTenantAdmin || inRecipients
+                return (
                 <div
                   key={staff._id}
                   className="flex items-center justify-between p-4 border rounded-lg hover:bg-slate-50 transition-colors"
@@ -771,20 +428,24 @@ export function NotificationSettings() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Switch
-                      checked={settings.recipientStaffIds.includes(staff._id)}
-                      onCheckedChange={() => toggleStaffSelection(staff._id, 'general')}
+                      checked={recipientSwitchOn}
+                      disabled={isTenantAdmin}
+                      onCheckedChange={() => {
+                        if (!isTenantAdmin) toggleStaffSelection(staff._id, "general")
+                      }}
                     />
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => openPreferencesModal(staff._id)}
-                      disabled={!settings.recipientStaffIds.includes(staff._id)}
+                      disabled={isTenantAdmin || !recipientSwitchOn}
                     >
                       Configure
                     </Button>
                   </div>
                 </div>
-              ))}
+              )
+              })}
             </div>
           )}
         </CardContent>

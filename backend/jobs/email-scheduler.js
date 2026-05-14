@@ -4,6 +4,7 @@ const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
 const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
+const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
 
 /**
  * Send daily summary emails to all businesses
@@ -22,6 +23,10 @@ async function sendDailySummaries() {
     
     for (const business of businesses) {
       try {
+        if (isPlatformEmailDisabled(business)) {
+          logger.debug(`Skipping daily summary for ${business.name} — platform email disabled`);
+          continue;
+        }
         const emailSettings = business.settings?.emailNotificationSettings;
         
         // Check if daily summary is enabled
@@ -248,6 +253,10 @@ async function sendWeeklySummaries() {
     
     for (const business of businesses) {
       try {
+        if (isPlatformEmailDisabled(business)) {
+          logger.debug(`Skipping weekly summary for ${business.name} — platform email disabled`);
+          continue;
+        }
         const emailSettings = business.settings?.emailNotificationSettings;
         
         // Check if weekly summary is enabled
@@ -567,6 +576,10 @@ async function checkLowInventory() {
     
     for (const business of businesses) {
       try {
+        if (isPlatformEmailDisabled(business)) {
+          logger.debug(`Skipping low inventory email for ${business.name} — platform email disabled`);
+          continue;
+        }
         const emailSettings = business.settings?.emailNotificationSettings;
         
         // Check if low inventory alerts are enabled

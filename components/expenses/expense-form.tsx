@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { CalendarIcon } from "lucide-react"
 import { format } from "date-fns"
 import { Button } from "@/components/ui/button"
@@ -44,6 +44,7 @@ const paymentModes = [
 
 export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFormProps) {
   const { toast } = useToast()
+  const [calendarPortalEl, setCalendarPortalEl] = useState<HTMLDivElement | null>(null)
   const [formData, setFormData] = useState({
     category: expense?.category || "",
     paymentMode: expense?.paymentMode || expense?.paymentMethod || "",
@@ -54,6 +55,11 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
     notes: expense?.notes || "",
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const calendarSelectedDay = useMemo(() => {
+    const d = formData.date
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  }, [formData.date])
 
   const showTransactionId = ["Card", "UPI", "Bank Transfer", "Cheque"].includes(formData.paymentMode)
 
@@ -137,7 +143,7 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
     <form onSubmit={handleSubmit} className="space-y-6">
       {/* Row 1: Date and Expense Category */}
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
+        <div className="space-y-2" ref={setCalendarPortalEl}>
           <Label htmlFor="date">Date *</Label>
           <Popover>
             <PopoverTrigger asChild>
@@ -153,11 +159,23 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
                 {formData.date ? format(formData.date, "PPP") : <span>Pick a date</span>}
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto p-0">
+            <PopoverContent
+              className="w-auto p-0"
+              align="start"
+              container={calendarPortalEl ?? undefined}
+            >
               <Calendar
+                key={expense?.id ?? "create"}
                 mode="single"
-                selected={formData.date}
-                onSelect={(date) => date && handleChange("date", date)}
+                defaultMonth={calendarSelectedDay}
+                selected={calendarSelectedDay}
+                onSelect={(date) => {
+                  if (!date) return
+                  handleChange(
+                    "date",
+                    new Date(date.getFullYear(), date.getMonth(), date.getDate())
+                  )
+                }}
                 initialFocus
               />
             </PopoverContent>
