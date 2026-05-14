@@ -96,11 +96,17 @@ export function StaffTable() {
   const [isEmailPreferencesDialogOpen, setIsEmailPreferencesDialogOpen] = useState(false)
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null)
   const { toast } = useToast()
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
   const router = useRouter()
   
   const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager'
   const isOwner = user?.isOwner === true
+  // Staff granular features (FEATURE_TO_BACKEND in staff-permissions-modal):
+  //   add_staff → create, edit_staff → edit, delete_staff → delete, manage_permissions → manage
+  const canAddStaff = hasPermission("staff", "create")
+  const canEditStaff = hasPermission("staff", "edit")
+  const canDeleteStaff = hasPermission("staff", "delete")
+  const canManageStaffPermissions = hasPermission("staff", "manage")
 
   useEffect(() => {
     fetchStaff()
@@ -520,10 +526,12 @@ export function StaffTable() {
             className="pl-10"
           />
         </div>
-        <Button onClick={handleAddStaff} className="bg-blue-600 hover:bg-blue-700 shrink-0">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Staff
-        </Button>
+        {canAddStaff && (
+          <Button onClick={handleAddStaff} className="bg-blue-600 hover:bg-blue-700 shrink-0">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Staff
+          </Button>
+        )}
       </div>
 
       {/* Staff Table */}
@@ -711,20 +719,22 @@ export function StaffTable() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-48">
-                        <DropdownMenuItem
-                          onClick={() => handleEditStaff(member)}
-                          disabled={member.role === 'admin' && !isOwner && member._id !== user?._id}
-                          className={`flex items-center gap-2 px-3 py-2.5 ${
-                            member.role === 'admin' && !isOwner && member._id !== user?._id
-                              ? "text-gray-400 cursor-not-allowed"
-                              : "hover:bg-slate-50 cursor-pointer"
-                          }`}
-                          title={member.role === 'admin' && !isOwner && member._id !== user?._id ? "Only the business owner can edit other admins" : undefined}
-                        >
-                          <Edit className="h-4 w-4 text-slate-600" />
-                          <span className="font-medium">{member.isOwner && member.source === 'user' ? "View Profile" : "Edit"}</span>
-                        </DropdownMenuItem>
-                        {member.isOwner && (
+                        {canEditStaff && (
+                          <DropdownMenuItem
+                            onClick={() => handleEditStaff(member)}
+                            disabled={member.role === 'admin' && !isOwner && member._id !== user?._id}
+                            className={`flex items-center gap-2 px-3 py-2.5 ${
+                              member.role === 'admin' && !isOwner && member._id !== user?._id
+                                ? "text-gray-400 cursor-not-allowed"
+                                : "hover:bg-slate-50 cursor-pointer"
+                            }`}
+                            title={member.role === 'admin' && !isOwner && member._id !== user?._id ? "Only the business owner can edit other admins" : undefined}
+                          >
+                            <Edit className="h-4 w-4 text-slate-600" />
+                            <span className="font-medium">{member.isOwner && member.source === 'user' ? "View Profile" : "Edit"}</span>
+                          </DropdownMenuItem>
+                        )}
+                        {member.isOwner && canEditStaff && (
                           <DropdownMenuItem
                             onClick={() => handleChangePassword(member)}
                             className="flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50 cursor-pointer"
@@ -733,53 +743,59 @@ export function StaffTable() {
                             <span className="font-medium">Reset password</span>
                           </DropdownMenuItem>
                         )}
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setSelectedStaff(member)
-                            setIsPermissionsDialogOpen(true)
-                          }}
-                          disabled={member.isOwner && member.source === 'user'}
-                          className={`flex items-center gap-2 px-3 py-2.5 ${
-                            member.isOwner && member.source === 'user'
-                              ? "text-gray-400 cursor-not-allowed" 
-                              : "hover:bg-slate-50 cursor-pointer"
-                          }`}
-                          title={member.isOwner && member.source === 'user' ? "Business owner permissions cannot be modified" : "Configure detailed permissions"}
-                        >
-                          <Shield className="h-4 w-4 text-slate-600" />
-                          <span className="font-medium">Permissions</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => {
-                            setSelectedStaff(member)
-                            setIsAccessControlDialogOpen(true)
-                          }}
-                          disabled={!member.hasLoginAccess || (member.isOwner && member.source === 'user')}
-                          className={`flex items-center gap-2 px-3 py-2.5 ${
-                            !member.hasLoginAccess || (member.isOwner && member.source === 'user')
-                              ? "text-gray-400 cursor-not-allowed" 
-                              : "hover:bg-slate-50 cursor-pointer"
-                          }`}
-                          title={member.isOwner && member.source === 'user' ? "Business owner permissions cannot be modified" : member.hasLoginAccess ? "Configure granular permissions for staff roles, pages, and features (Beta)" : "Login access must be enabled to configure permissions"}
-                        >
-                          <Eye className="h-4 w-4 text-slate-600" />
-                          <span className="font-medium">Access Control (Beta)</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleDeleteStaff(member)}
-                          disabled={member.isOwner || (member.role === 'admin' && !isOwner)}
-                          className={`flex items-center gap-2 px-3 py-2.5 ${
-                            member.isOwner || (member.role === 'admin' && !isOwner)
-                              ? "text-gray-400 cursor-not-allowed" 
-                              : "text-red-600 hover:bg-red-50 cursor-pointer"
-                          }`}
-                          title={member.role === 'admin' && !isOwner ? "Only the business owner can delete other admins" : undefined}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          <span className="font-medium">
-                            {member.isOwner ? 'Delete (Protected)' : member.role === 'admin' && !isOwner ? 'Delete (Owner Only)' : 'Delete'}
-                          </span>
-                        </DropdownMenuItem>
+                        {canManageStaffPermissions && (
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setSelectedStaff(member)
+                              setIsPermissionsDialogOpen(true)
+                            }}
+                            disabled={member.isOwner && member.source === 'user'}
+                            className={`flex items-center gap-2 px-3 py-2.5 ${
+                              member.isOwner && member.source === 'user'
+                                ? "text-gray-400 cursor-not-allowed" 
+                                : "hover:bg-slate-50 cursor-pointer"
+                            }`}
+                            title={member.isOwner && member.source === 'user' ? "Business owner permissions cannot be modified" : "Configure detailed permissions"}
+                          >
+                            <Shield className="h-4 w-4 text-slate-600" />
+                            <span className="font-medium">Permissions</span>
+                          </DropdownMenuItem>
+                        )}
+                        {canManageStaffPermissions && (
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setSelectedStaff(member)
+                              setIsAccessControlDialogOpen(true)
+                            }}
+                            disabled={!member.hasLoginAccess || (member.isOwner && member.source === 'user')}
+                            className={`flex items-center gap-2 px-3 py-2.5 ${
+                              !member.hasLoginAccess || (member.isOwner && member.source === 'user')
+                                ? "text-gray-400 cursor-not-allowed" 
+                                : "hover:bg-slate-50 cursor-pointer"
+                            }`}
+                            title={member.isOwner && member.source === 'user' ? "Business owner permissions cannot be modified" : member.hasLoginAccess ? "Configure granular permissions for staff roles, pages, and features (Beta)" : "Login access must be enabled to configure permissions"}
+                          >
+                            <Eye className="h-4 w-4 text-slate-600" />
+                            <span className="font-medium">Access Control (Beta)</span>
+                          </DropdownMenuItem>
+                        )}
+                        {canDeleteStaff && (
+                          <DropdownMenuItem
+                            onClick={() => handleDeleteStaff(member)}
+                            disabled={member.isOwner || (member.role === 'admin' && !isOwner)}
+                            className={`flex items-center gap-2 px-3 py-2.5 ${
+                              member.isOwner || (member.role === 'admin' && !isOwner)
+                                ? "text-gray-400 cursor-not-allowed" 
+                                : "text-red-600 hover:bg-red-50 cursor-pointer"
+                            }`}
+                            title={member.role === 'admin' && !isOwner ? "Only the business owner can delete other admins" : undefined}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            <span className="font-medium">
+                              {member.isOwner ? 'Delete (Protected)' : member.role === 'admin' && !isOwner ? 'Delete (Owner Only)' : 'Delete'}
+                            </span>
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>

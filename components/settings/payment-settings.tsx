@@ -8,11 +8,12 @@ import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI } from "@/lib/api"
 import { useInvalidatePaymentSettings } from "@/lib/queries/payment-settings"
+import { useAuth } from "@/lib/auth-context"
 import {
   mergePaymentConfiguration,
   type PaymentConfiguration,
 } from "@/lib/payment-redemption-eligibility"
-import { Settings, Wallet, Gift, Receipt } from "lucide-react"
+import { Settings, Wallet, Gift, Receipt, Lock } from "lucide-react"
 
 type WalletFlags = PaymentConfiguration["walletRedemption"]
 
@@ -36,6 +37,8 @@ function ToggleRow({
 }
 
 export function PaymentSettings() {
+  const { hasPermission } = useAuth()
+  const canEdit = hasPermission("payment_settings", "edit")
   const [settings, setSettings] = useState({
     processingFee: "2.9",
     enableProcessingFees: true,
@@ -337,11 +340,16 @@ export function PaymentSettings() {
         </div>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end items-center gap-3">
+        {!canEdit && (
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            <Lock className="h-3 w-3" /> You don't have permission to edit payment settings
+          </span>
+        )}
         <Button
           onClick={() => void handleSave()}
-          disabled={isSaving}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+          disabled={isSaving || !canEdit}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium disabled:opacity-60"
         >
           {isSaving ? "Saving..." : "Save Changes"}
         </Button>

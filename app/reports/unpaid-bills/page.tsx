@@ -25,6 +25,7 @@ import {
   RefreshCw
 } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { useAuth } from "@/lib/auth-context"
 
 interface UnpaidBill {
   _id: string
@@ -50,6 +51,8 @@ interface UnpaidBill {
 export default function UnpaidBillsPage() {
   const router = useRouter()
   const { toast } = useToast()
+  const { hasPermission } = useAuth()
+  const canEditSale = hasPermission("sales", "edit")
   const [unpaidBills, setUnpaidBills] = useState<UnpaidBill[]>([])
   const [loading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
@@ -354,25 +357,29 @@ export default function UnpaidBillsPage() {
                               <DollarSign className="h-4 w-4 mr-1" />
                               Collect
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleEditBill(bill)}
-                              title="Edit Bill"
-                            >
-                              <Edit className="h-4 w-4 mr-1" />
-                              Edit
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleExchangeBill(bill)}
-                              title="Exchange Products"
-                              className="border-blue-200 text-blue-700 hover:bg-blue-50"
-                            >
-                              <RefreshCw className="h-4 w-4 mr-1" />
-                              Exchange
-                            </Button>
+                            {canEditSale && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleEditBill(bill)}
+                                title="Edit Bill"
+                              >
+                                <Edit className="h-4 w-4 mr-1" />
+                                Edit
+                              </Button>
+                            )}
+                            {canEditSale && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleExchangeBill(bill)}
+                                title="Exchange Products"
+                                className="border-blue-200 text-blue-700 hover:bg-blue-50"
+                              >
+                                <RefreshCw className="h-4 w-4 mr-1" />
+                                Exchange
+                              </Button>
+                            )}
                             <Button
                               size="sm"
                               variant="outline"

@@ -8,8 +8,8 @@ import { ProtectedRoute } from "@/components/auth/protected-route"
 
 export default function NewClientPage() {
   return (
-    <ProtectedRoute requiredModule="clients">
-      <ProtectedLayout>
+    <ProtectedRoute requiredModule="clients" requiredFeature="create">
+      <ProtectedLayout requiredModule="clients" requiredFeature="create">
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 p-6">
           <div className="max-w-4xl mx-auto">
             <div className="flex items-center gap-4 mb-6">

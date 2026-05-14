@@ -77,7 +77,14 @@ interface CashRegistryReportProps {
 export function CashRegistryReport({ isVerificationModalOpen, onVerificationModalChange }: CashRegistryReportProps) {
   const { toast } = useToast()
   const { hasAccess: canExport } = useFeature("data_export")
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
+  // Cash registry granular features (FEATURE_TO_BACKEND in staff-permissions-modal):
+  //   open_shift → create, close_shift → manage, modify_past_shifts → edit,
+  //   view_cash_difference → view, verify_lock_day → manage
+  const canOpenCashShift = hasPermission("cash_registry", "create")
+  const canCloseCashShift = hasPermission("cash_registry", "manage")
+  const canDeleteCashEntry = hasPermission("cash_registry", "delete")
+  const canCreateOrCloseShift = canOpenCashShift || canCloseCashShift
   const [searchTerm, setSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("today")
@@ -1815,7 +1822,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                               }
                             </p>
                           </div>
-                          {reportType === "summary" && (
+                          {reportType === "summary" && canCreateOrCloseShift && (
                             <Button
                               onClick={() => setIsAddModalOpen(true)}
                               className="bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white border-0 shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 rounded-xl px-6 py-2.5 text-sm"
@@ -2049,15 +2056,17 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                               </TableCell>
                                                               <TableCell className="text-center min-w-[80px]">
                                 <div className="flex items-center justify-center space-x-2">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleDeleteDailySummary(entry)}
-                                    className="h-9 w-9 p-0 text-destructive hover:text-destructive hover:bg-red-50 transition-all duration-200 rounded-xl hover:shadow-md transform hover:scale-105"
-                                    title="Delete daily summary"
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
+                                  {canDeleteCashEntry && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleDeleteDailySummary(entry)}
+                                      className="h-9 w-9 p-0 text-destructive hover:text-destructive hover:bg-red-50 transition-all duration-200 rounded-xl hover:shadow-md transform hover:scale-105"
+                                      title="Delete daily summary"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  )}
                                 </div>
                               </TableCell>
                             </TableRow>
@@ -2102,28 +2111,30 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                                   )}
                                 </TableCell>
                                 <TableCell className="text-center">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleDeleteEntry(entry)}
-                                    disabled={entry.isVerified && user?.role !== 'admin'}
-                                    className={`h-9 w-9 p-0 transition-all duration-200 rounded-xl ${
-                                      entry.isVerified && user?.role !== 'admin'
-                                        ? 'text-muted-foreground cursor-not-allowed opacity-50' 
-                                        : entry.isVerified && user?.role === 'admin'
-                                        ? 'text-orange-600 hover:text-orange-700 hover:bg-orange-50 hover:shadow-md transform hover:scale-105'
-                                        : 'text-destructive hover:text-destructive hover:bg-red-50 hover:shadow-md transform hover:scale-105'
-                                    }`}
-                                    title={
-                                      entry.isVerified && user?.role !== 'admin'
-                                        ? "Cannot delete verified entry (Admin only)"
-                                        : entry.isVerified && user?.role === 'admin'
-                                        ? "Delete verified entry (Admin override)"
-                                        : "Delete entry"
-                                    }
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
+                                  {canDeleteCashEntry && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleDeleteEntry(entry)}
+                                      disabled={entry.isVerified && user?.role !== 'admin'}
+                                      className={`h-9 w-9 p-0 transition-all duration-200 rounded-xl ${
+                                        entry.isVerified && user?.role !== 'admin'
+                                          ? 'text-muted-foreground cursor-not-allowed opacity-50' 
+                                          : entry.isVerified && user?.role === 'admin'
+                                          ? 'text-orange-600 hover:text-orange-700 hover:bg-orange-50 hover:shadow-md transform hover:scale-105'
+                                          : 'text-destructive hover:text-destructive hover:bg-red-50 hover:shadow-md transform hover:scale-105'
+                                      }`}
+                                      title={
+                                        entry.isVerified && user?.role !== 'admin'
+                                          ? "Cannot delete verified entry (Admin only)"
+                                          : entry.isVerified && user?.role === 'admin'
+                                          ? "Delete verified entry (Admin override)"
+                                          : "Delete entry"
+                                      }
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  )}
                                 </TableCell>
                               </TableRow>
                             )
@@ -2160,28 +2171,30 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                                 </TableCell>
                                 <TableCell className="text-center">
                                   <div className="flex items-center justify-center space-x-2">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleDeleteEntry(entry)}
-                                    disabled={entry.isVerified && user?.role !== 'admin'}
-                                    className={`h-9 w-9 p-0 transition-all duration-200 rounded-xl ${
-                                      entry.isVerified && user?.role !== 'admin'
-                                        ? 'text-muted-foreground cursor-not-allowed opacity-50' 
-                                        : entry.isVerified && user?.role === 'admin'
-                                        ? 'text-orange-600 hover:text-orange-700 hover:bg-orange-50 hover:shadow-md transform hover:scale-105'
-                                        : 'text-destructive hover:text-destructive hover:bg-red-50 hover:shadow-md transform hover:scale-105'
-                                    }`}
-                                    title={
-                                      entry.isVerified && user?.role !== 'admin'
-                                        ? "Cannot delete verified entry (Admin only)"
-                                        : entry.isVerified && user?.role === 'admin'
-                                        ? "Delete verified entry (Admin override)"
-                                        : "Delete entry"
-                                    }
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
+                                  {canDeleteCashEntry && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleDeleteEntry(entry)}
+                                      disabled={entry.isVerified && user?.role !== 'admin'}
+                                      className={`h-9 w-9 p-0 transition-all duration-200 rounded-xl ${
+                                        entry.isVerified && user?.role !== 'admin'
+                                          ? 'text-muted-foreground cursor-not-allowed opacity-50' 
+                                          : entry.isVerified && user?.role === 'admin'
+                                          ? 'text-orange-600 hover:text-orange-700 hover:bg-orange-50 hover:shadow-md transform hover:scale-105'
+                                          : 'text-destructive hover:text-destructive hover:bg-red-50 hover:shadow-md transform hover:scale-105'
+                                      }`}
+                                      title={
+                                        entry.isVerified && user?.role !== 'admin'
+                                          ? "Cannot delete verified entry (Admin only)"
+                                          : entry.isVerified && user?.role === 'admin'
+                                          ? "Delete verified entry (Admin override)"
+                                          : "Delete entry"
+                                      }
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  )}
                                   </div>
                                 </TableCell>
                               </TableRow>

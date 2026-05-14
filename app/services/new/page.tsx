@@ -8,8 +8,8 @@ import Link from "next/link"
 
 export default function NewService() {
   return (
-    <ProtectedRoute requiredModule="services">
-      <ProtectedLayout>
+    <ProtectedRoute requiredModule="services" requiredFeature="create">
+      <ProtectedLayout requiredModule="services" requiredFeature="create">
         <div className="max-w-2xl mx-auto space-y-6">
               <div className="flex items-center gap-4">
                 <Link href="/settings?section=services">

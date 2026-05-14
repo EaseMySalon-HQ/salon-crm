@@ -63,7 +63,10 @@ interface ClientsTableProps {
 export function ClientsTable({ clients }: ClientsTableProps) {
   const { toast } = useToast()
   const router = useRouter()
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
+  const canEditSale = hasPermission("sales", "edit")
+  const canEditClient = hasPermission("clients", "edit")
+  const canDeleteClient = hasPermission("clients", "delete")
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [isBillActivityOpen, setIsBillActivityOpen] = useState(false)
@@ -480,29 +483,33 @@ export function ClientsTable({ clients }: ClientsTableProps) {
               <DropdownMenuContent align="end" className="w-48">
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  disabled={walkInRow}
-                  title={walkInRow ? "Walk-in cannot be edited" : undefined}
-                  onClick={() => {
-                    if (walkInRow) return
-                    openClientDetailsDrawerForEdit(client)
-                  }}
-                >
-                  <Pencil className="mr-2 h-4 w-4" />
-                  Edit Client
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={walkInRow}
-                  title={walkInRow ? "Walk-in cannot be deleted" : undefined}
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => {
-                    if (walkInRow) return
-                    handleDeleteClient(client)
-                  }}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete Client
-                </DropdownMenuItem>
+                {canEditClient && (
+                  <DropdownMenuItem
+                    disabled={walkInRow}
+                    title={walkInRow ? "Walk-in cannot be edited" : undefined}
+                    onClick={() => {
+                      if (walkInRow) return
+                      openClientDetailsDrawerForEdit(client)
+                    }}
+                  >
+                    <Pencil className="mr-2 h-4 w-4" />
+                    Edit Client
+                  </DropdownMenuItem>
+                )}
+                {canDeleteClient && (
+                  <DropdownMenuItem
+                    disabled={walkInRow}
+                    title={walkInRow ? "Walk-in cannot be deleted" : undefined}
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => {
+                      if (walkInRow) return
+                      handleDeleteClient(client)
+                    }}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Client
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -819,16 +826,18 @@ export function ClientsTable({ clients }: ClientsTableProps) {
                         >
                           {bill.status || 'completed'}
                         </Badge>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => router.push(`/billing/${bill.billNo || bill._id}?mode=edit`)}
-                          title="Edit Bill"
-                          className="h-8"
-                        >
-                          <Edit className="h-3 w-3" />
-                        </Button>
-                        {bill.items && bill.items.some((item: any) => item.type === 'product') && (
+                        {canEditSale && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => router.push(`/billing/${bill.billNo || bill._id}?mode=edit`)}
+                            title="Edit Bill"
+                            className="h-8"
+                          >
+                            <Edit className="h-3 w-3" />
+                          </Button>
+                        )}
+                        {canEditSale && bill.items && bill.items.some((item: any) => item.type === 'product') && (
                           <Button
                             size="sm"
                             variant="outline"
