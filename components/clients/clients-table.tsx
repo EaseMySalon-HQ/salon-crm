@@ -84,6 +84,8 @@ export function ClientsTable({ clients }: ClientsTableProps) {
   const [detailsDrawerForEdit, setDetailsDrawerForEdit] = useState(false)
   const prevClientsLengthRef = useRef<number>(0)
   const prevClientsIdsRef = useRef<string>('')
+  const lastStatsRequestKeyRef = useRef<string>('')
+  const activeStatsRequestKeyRef = useRef<string>('')
 
   // Reset clientsWithStats when clients prop actually changes (filter changed)
   // Use a stable reference to avoid resetting on every render
@@ -98,6 +100,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
     if (prevClientsLengthRef.current !== clientsLength || prevClientsIdsRef.current !== clientsIds) {
       prevClientsLengthRef.current = clientsLength
       prevClientsIdsRef.current = clientsIds
+      lastStatsRequestKeyRef.current = ''
       setClientsWithStats([])
       // Reset pagination to first page when filter changes
       setPagination(prev => ({ ...prev, pageIndex: 0 }))
@@ -108,13 +111,18 @@ export function ClientsTable({ clients }: ClientsTableProps) {
   const fetchClientStats = async (currentPageIndex: number, currentPageSize: number) => {
     if (!user || clients.length === 0) return
 
-    setIsLoadingStats(true)
     const start = currentPageIndex * currentPageSize
     const end = Math.min(start + currentPageSize, clients.length)
     const visible = clients.slice(start, end)
+    const clientIds = visible.map(c => c._id || c.id).filter(Boolean) as string[]
+    const requestKey = clientIds.join('|')
+    if (!requestKey || requestKey === lastStatsRequestKeyRef.current || requestKey === activeStatsRequestKeyRef.current) {
+      return
+    }
 
     try {
-      const clientIds = visible.map(c => c._id || c.id).filter(Boolean) as string[]
+      activeStatsRequestKeyRef.current = requestKey
+      setIsLoadingStats(true)
       const response = await ClientsAPI.getBulkStats(clientIds)
 
       if (response.success && response.data) {
@@ -135,10 +143,14 @@ export function ClientsTable({ clients }: ClientsTableProps) {
           return c
         })
         setClientsWithStats(merged)
+        lastStatsRequestKeyRef.current = requestKey
       }
     } catch (error) {
       console.error('Error fetching bulk client stats:', error)
     } finally {
+      if (activeStatsRequestKeyRef.current === requestKey) {
+        activeStatsRequestKeyRef.current = ''
+      }
       setIsLoadingStats(false)
     }
   }

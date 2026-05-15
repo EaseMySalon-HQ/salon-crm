@@ -1025,6 +1025,12 @@ export const AppointmentsCalendarGrid = forwardRef<
       const norm = dateNorm(apt.date)
       if (norm !== selectedDate) return false
       if (isHiddenAppointment(apt)) return false
+      // Services added inside the checkout dialog become Appointment docs with
+      // leadSource: 'Walk-in' (created by markAppointmentCompleted on the
+      // server). They are not real bookings — render them through the walk-in
+      // sale card path below so they look distinct from scheduled appointments
+      // and follow the "Show Walk-in" toggle.
+      if (String(apt.leadSource || "").trim().toLowerCase() === "walk-in") return false
       if (staffFilter) {
         const primaryId = getPrimaryStaffId(apt)
         return primaryId === staffFilter
@@ -1315,6 +1321,9 @@ export const AppointmentsCalendarGrid = forwardRef<
     appointments.forEach((apt) => {
       const gid = (apt as Appointment).bookingGroupId
       if (!gid) return
+      // Walk-in cards (created post-checkout) render via the sale stream and
+      // shouldn't influence the booking group accent count.
+      if (String(apt.leadSource || "").trim().toLowerCase() === "walk-in") return
       counts.set(gid, (counts.get(gid) || 0) + 1)
     })
     const colorByGroup = new Map<string, string>()
@@ -1330,23 +1339,81 @@ export const AppointmentsCalendarGrid = forwardRef<
 
   const WALK_IN_SALE_DURATION = 30
 
+  /**
+   * Walk-in Appointment docs (services added during checkout) — rendered as
+   * walk-in cards instead of scheduled-appointment cards, gated by the same
+   * "Show Walk-in" toggle. Filtered out of `filteredAppointments` above.
+   */
+  const walkInAppointmentSales = useMemo(() => {
+    if (!showWalkInCards) return [] as any[]
+    return appointments
+      .filter((apt) => {
+        if (String(apt.leadSource || "").trim().toLowerCase() !== "walk-in") return false
+        if (dateNorm(apt.date) !== selectedDate) return false
+        if (isHiddenAppointment(apt)) return false
+        if (staffFilter) {
+          const primaryId = getPrimaryStaffId(apt)
+          if (primaryId !== staffFilter) return false
+        }
+        return true
+      })
+      .map((apt) => {
+        const primaryStaffId = getPrimaryStaffId(apt)
+        const serviceName = apt.serviceId?.name || "Service"
+        return {
+          // Synthetic sale-shaped object so it flows through the same walk-in
+          // card render path as standalone walk-in sales below.
+          _id: `walkin-apt-${apt._id}`,
+          _walkInAppointmentId: apt._id,
+          customerName: apt.clientId?.name || "Walk-in",
+          billNo: null,
+          date: apt.date,
+          time: apt.time,
+          items: [
+            {
+              type: "service",
+              name: serviceName,
+              staffId: primaryStaffId,
+              price: apt.price,
+            },
+          ],
+          __isWalkInAppointment: true as const,
+          __walkInAppointmentDuration: Math.max(15, Number(apt.duration) || 60),
+          __walkInAppointmentStartM: parseTimeToMinutes(apt.time),
+        }
+      })
+  }, [appointments, showWalkInCards, selectedDate, staffFilter])
+
+  const combinedWalkInSales = useMemo(
+    () => [...effectiveWalkInSales, ...walkInAppointmentSales],
+    [effectiveWalkInSales, walkInAppointmentSales]
+  )
+
   const salesByColumn = useMemo(() => {
     const map: Record<string, Array<{ sale: any; serviceItem: any; itemKey: string; top: number; height: number; startM: number; endM: number }>> = {}
     columns.forEach((col) => {
       map[col._id] = []
     })
-    effectiveWalkInSales.forEach((sale) => {
+    combinedWalkInSales.forEach((sale) => {
       const serviceItems = (sale.items || []).filter((i: any) => i.type === "service")
       if (serviceItems.length === 0) return
-      let timeStr = sale.time
-      if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
-        const d = sale.date ? new Date(sale.date) : new Date()
-        if (!Number.isNaN(d.getTime())) timeStr = format(d, "HH:mm")
+      const isWalkInApt = (sale as any).__isWalkInAppointment === true
+      let startM: number
+      let endM: number
+      if (isWalkInApt) {
+        startM = (sale as any).__walkInAppointmentStartM ?? parseTimeToMinutes(sale.time || "09:00")
+        endM = startM + ((sale as any).__walkInAppointmentDuration || WALK_IN_SALE_DURATION)
+      } else {
+        let timeStr = sale.time
+        if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
+          const d = sale.date ? new Date(sale.date) : new Date()
+          if (!Number.isNaN(d.getTime())) timeStr = format(d, "HH:mm")
+        }
+        const checkoutEndM = parseTimeToMinutes(timeStr || "9:00")
+        endM = checkoutEndM
+        startM = endM - WALK_IN_SALE_DURATION
       }
-      const checkoutEndM = parseTimeToMinutes(timeStr || "9:00")
-      const duration = WALK_IN_SALE_DURATION
-      const endM = checkoutEndM
-      const startM = endM - duration
+      const duration = endM - startM
       const top = ((startM - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
       const height = Math.max(slotHeight * 0.6, (duration / SLOT_MINUTES) * slotHeight)
       serviceItems.forEach((serviceItem: any, idx: number) => {
@@ -1364,7 +1431,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       (map[col._id] || []).sort((a, b) => a.top - b.top)
     })
     return map
-  }, [columns, effectiveWalkInSales, extendedStartMinutes, slotHeight])
+  }, [columns, combinedWalkInSales, extendedStartMinutes, slotHeight])
 
   const blockTimesByColumn = useMemo(() => {
     const map: Record<string, Array<{ block: BlockTime; top: number; height: number }>> = {}
@@ -3040,11 +3107,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                     .filter((e): e is Extract<CalendarStackLayoutItem, { kind: "sale" }> => e.kind === "sale")
                     .map(({ sale, serviceItem, top, height, startM, endM, left, width }) => {
                     const serviceName = serviceItem?.name || "Service"
+                    const isWalkInApt = (sale as any)?.__isWalkInAppointment === true
+                    const billNo = sale?.billNo
                     return (
                       <div
                         data-sale-card
                         key={`${sale._id}-${serviceName}-${col._id}-${startM}`}
-                        className="group absolute overflow-hidden text-left flex flex-col z-10 pointer-events-auto cursor-pointer animate-appointment-card-enter transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
+                        className={`group absolute overflow-hidden text-left flex flex-col z-10 pointer-events-auto animate-appointment-card-enter transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${billNo ? "cursor-pointer" : "cursor-default"}`}
                         style={{
                           top,
                           left: `${left}%`,
@@ -3054,8 +3123,14 @@ export const AppointmentsCalendarGrid = forwardRef<
                         }}
                         onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 6px 16px rgba(0,0,0,0.08)" }}
                         onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)" }}
-                        onClick={() => void openSaleInvoicePreview(sale.billNo)}
-                        title={`Bill #${sale.billNo} • Click to preview invoice`}
+                        onClick={billNo ? () => void openSaleInvoicePreview(billNo) : undefined}
+                        title={
+                          billNo
+                            ? `Bill #${billNo} • Click to preview invoice`
+                            : isWalkInApt
+                            ? "Walk-in service added during checkout"
+                            : "Walk-in service"
+                        }
                       >
                         <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-400 shrink-0" aria-hidden />
                         <div className="pl-[14px] pr-3 pt-4 pb-3 flex-1 min-h-0 overflow-hidden bg-white border border-slate-200/60">
@@ -3070,7 +3145,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                             {formatAppointmentTime(slotMinutesToTimeString(startM))} – {formatAppointmentTime(slotMinutesToTimeString(endM))}
                           </div>
                           <span className="inline-block mt-2 px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-600 bg-slate-100/80">
-                            Bill #{sale.billNo}
+                            {billNo ? `Bill #${billNo}` : "Walk-in"}
                           </span>
                         </div>
                       </div>
