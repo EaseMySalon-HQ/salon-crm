@@ -112,6 +112,41 @@ export function StaffTable() {
     fetchStaff()
   }, [])
 
+  // Belt-and-suspenders: when every dialog on this page is closed, ensure the
+  // <body> has not been left with `pointer-events: none` by a Radix Dialog /
+  // Toast cleanup race. Without this, the staff directory occasionally became
+  // unresponsive after a successful save/delete and required a full refresh.
+  useEffect(() => {
+    const anyDialogOpen =
+      isAddDialogOpen ||
+      isEditDialogOpen ||
+      isDeleteDialogOpen ||
+      isPermissionsDialogOpen ||
+      isAccessControlDialogOpen ||
+      isPasswordDialogOpen ||
+      isPasswordSetupDialogOpen ||
+      isEmailPreferencesDialogOpen
+    if (anyDialogOpen) return
+    if (typeof document === "undefined") return
+    const id = window.setTimeout(() => {
+      const body = document.body
+      if (!body) return
+      if (body.style.pointerEvents === "none") {
+        body.style.pointerEvents = ""
+      }
+    }, 350)
+    return () => window.clearTimeout(id)
+  }, [
+    isAddDialogOpen,
+    isEditDialogOpen,
+    isDeleteDialogOpen,
+    isPermissionsDialogOpen,
+    isAccessControlDialogOpen,
+    isPasswordDialogOpen,
+    isPasswordSetupDialogOpen,
+    isEmailPreferencesDialogOpen,
+  ])
+
   const fetchStaff = async () => {
     try {
       setLoading(true)
@@ -469,7 +504,11 @@ export function StaffTable() {
       })
       fetchStaff()
       setIsDeleteDialogOpen(false)
-      setSelectedStaff(null)
+      // Defer selectedStaff reset so the dialog can complete its close
+      // animation and Radix can cleanly restore body pointer-events. Resetting
+      // synchronously rerenders the dialog content (which reads
+      // `selectedStaff?.name`) mid-close and was leaving the page unresponsive.
+      window.setTimeout(() => setSelectedStaff(null), 250)
     } catch (error) {
       console.error('Error deleting staff:', error)
       toast({
@@ -810,7 +849,12 @@ export function StaffTable() {
       <Dialog open={isAddDialogOpen || isEditDialogOpen} onOpenChange={(open) => {
         setIsAddDialogOpen(open)
         setIsEditDialogOpen(open)
-        if (!open) setSelectedStaff(null)
+        // Defer staff reset until after Radix finishes its close animation and
+        // restores body styles. Synchronously nulling `selectedStaff` causes
+        // `<StaffForm staff={...} />` to remount with new props mid-close,
+        // which can leave the body with `pointer-events: none` from Radix and
+        // freeze the page until refresh.
+        if (!open) window.setTimeout(() => setSelectedStaff(null), 250)
       }}>
         <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
           <DialogHeader className="shrink-0">
@@ -828,7 +872,7 @@ export function StaffTable() {
               fetchStaff()
               setIsAddDialogOpen(false)
               setIsEditDialogOpen(false)
-              setSelectedStaff(null)
+              window.setTimeout(() => setSelectedStaff(null), 250)
             }}
             onResetPassword={selectedStaff?.hasLoginAccess ? () => {
               setIsAddDialogOpen(false)
@@ -1010,12 +1054,12 @@ export function StaffTable() {
             staff={selectedStaff}
             onSuccess={() => {
               setIsPasswordSetupDialogOpen(false)
-              setSelectedStaff(null)
+              window.setTimeout(() => setSelectedStaff(null), 250)
               fetchStaff()
             }}
             onCancel={() => {
               setIsPasswordSetupDialogOpen(false)
-              setSelectedStaff(null)
+              window.setTimeout(() => setSelectedStaff(null), 250)
               // Reset the toggle since password setup was cancelled
               fetchStaff()
             }}

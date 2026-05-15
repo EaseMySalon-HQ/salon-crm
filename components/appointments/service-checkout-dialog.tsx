@@ -2203,18 +2203,29 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         lines.length > 0 &&
         typeof ensureAppointmentBookingBeforeCheckout === "function"
       ) {
-        const linkResult = await ensureAppointmentBookingBeforeCheckout({
-          lines,
-          customer: customer!,
-          appointmentDate,
-          appointmentTime,
-          notes,
-        })
-        if (!linkResult) {
-          setNavigating(false)
-          return
+        // Only book the services that were on the cart when the checkout
+        // dialog opened. Services added inside the dialog should flow into the
+        // Sale only (annotated `lineSource: walk_in` server-side), not become
+        // Appointment documents — keeps post-checkout adds out of calendar
+        // bookings and the dashboard "Appointment Value" metric.
+        const bookedSnapshotIds = new Set(
+          (snapshotRef.current || []).map((l) => l.id)
+        )
+        const bookedLines = lines.filter((l) => bookedSnapshotIds.has(l.id))
+        if (bookedLines.length > 0) {
+          const linkResult = await ensureAppointmentBookingBeforeCheckout({
+            lines: bookedLines,
+            customer: customer!,
+            appointmentDate,
+            appointmentTime,
+            notes,
+          })
+          if (!linkResult) {
+            setNavigating(false)
+            return
+          }
+          ensuredBooking = linkResult
         }
-        ensuredBooking = linkResult
       }
 
       const saleData: Record<string, unknown> = {

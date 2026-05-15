@@ -431,6 +431,9 @@ async function buildAnalyticsServicesTab({ branchId, businessModels, query = {} 
           branchId: bid,
           date: { $gte: dateFromStr, $lte: dateToStr },
           status: { $nin: ['cancelled', 'missed'] },
+          // Exclude walk-in cards (services added during checkout) — they are
+          // billing artifacts, not real bookings.
+          leadSource: { $ne: 'Walk-in' },
         },
       },
       {
