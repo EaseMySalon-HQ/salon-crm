@@ -1852,8 +1852,11 @@ export class ReportsAPI {
 }
 
 export class DashboardAPI {
-  static async getInit(): Promise<ApiResponse<any>> {
-    const response = await apiClient.get("/dashboard/init")
+  static async getInit(params?: {
+    chartRange?: "year" | "last7days" | "last30days"
+    metricsRange?: "today" | "last7days"
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.get("/dashboard/init", { params })
     return response.data
   }
 }

@@ -9,11 +9,13 @@ import { buildLoginRedirectHref } from "@/lib/auth-utils"
 
 interface ProtectedRouteProps {
   children: React.ReactNode
-  /** Permission module to check. Access granted only when user has view permission. */
+  /** Permission module to check. Access granted only when user has the required feature on this module. */
   requiredModule?: string
+  /** Feature within the module to require. Defaults to "view" for page-level access. */
+  requiredFeature?: string
 }
 
-export function ProtectedRoute({ children, requiredModule }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, requiredModule, requiredFeature = "view" }: ProtectedRouteProps) {
   const { user, isLoading, hasPermission } = useAuth()
   const router = useRouter()
 
@@ -27,12 +29,12 @@ export function ProtectedRoute({ children, requiredModule }: ProtectedRouteProps
         router.replace("/account-suspended")
         return
       }
-      if (requiredModule && !hasPermission(requiredModule, "view")) {
+      if (requiredModule && !hasPermission(requiredModule, requiredFeature)) {
         router.replace("/unauthorized")
         return
       }
     }
-  }, [user, isLoading, router, requiredModule, hasPermission])
+  }, [user, isLoading, router, requiredModule, requiredFeature, hasPermission])
 
   // Show loading spinner while checking authentication
   if (isLoading) {
@@ -70,7 +72,7 @@ export function ProtectedRoute({ children, requiredModule }: ProtectedRouteProps
   }
 
   // Permission check in render - if we have permission, render immediately (avoids effect race)
-  if (requiredModule && !hasPermission(requiredModule, "view")) {
+  if (requiredModule && !hasPermission(requiredModule, requiredFeature)) {
     return null // Effect will redirect to /unauthorized
   }
 

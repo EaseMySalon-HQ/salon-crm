@@ -7,11 +7,15 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
-import { Receipt, Settings } from "lucide-react"
+import { Receipt, Settings, Lock } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 
 export function POSSettings() {
+  const { hasPermission } = useAuth()
+  const canEdit = hasPermission("pos_settings", "edit")
+  const canManage = hasPermission("pos_settings", "manage")
   const { toast } = useToast()
   const [invoicePrefix, setInvoicePrefix] = useState("INV")
   const [autoReset, setAutoReset] = useState(false)
@@ -197,10 +201,11 @@ export function POSSettings() {
                   Instantly reset the invoice sequence number to 1.
                 </p>
               </div>
-              <Button 
+              <Button
                 onClick={handleResetSequence}
-                disabled={isResetting}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+                disabled={isResetting || !canManage}
+                title={!canManage ? "You don't have permission to reset the invoice sequence" : undefined}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium disabled:opacity-60"
               >
                 {isResetting ? "Resetting..." : "Reset Now"}
               </Button>
@@ -219,6 +224,7 @@ export function POSSettings() {
               <Switch
                 checked={autoReset}
                 onCheckedChange={handleAutoResetChange}
+                disabled={!canEdit}
               />
             </div>
           </div>
@@ -246,19 +252,27 @@ export function POSSettings() {
                 value={invoicePrefix}
                 onChange={(e) => setInvoicePrefix(e.target.value)}
                 placeholder="Enter invoice prefix"
+                disabled={!canEdit}
                 className="max-w-md border-slate-200 focus:border-blue-500 focus:ring-blue-500"
               />
               <p className="text-sm text-slate-600">
                 Example: Using "{invoicePrefix}" as the prefix will display as "{invoicePrefix}-000001" for the first receipt.
               </p>
             </div>
-            <Button 
-              onClick={handleSavePrefix} 
-              disabled={isSaving}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
-            >
-              {isSaving ? "Saving..." : "Save"}
-            </Button>
+            <div className="flex items-center gap-3">
+              {!canEdit && (
+                <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+                  <Lock className="h-3 w-3" /> You don't have permission to edit POS settings
+                </span>
+              )}
+              <Button
+                onClick={handleSavePrefix}
+                disabled={isSaving || !canEdit}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium disabled:opacity-60"
+              >
+                {isSaving ? "Saving..." : "Save"}
+              </Button>
+            </div>
           </div>
         </div>
       </div>

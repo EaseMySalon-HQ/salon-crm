@@ -7,9 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
-import { Settings } from "lucide-react"
+import { useAuth } from "@/lib/auth-context"
+import { Settings, Lock } from "lucide-react"
 
 export function GeneralSettings() {
+  const { hasPermission } = useAuth()
+  const canEdit = hasPermission("general_settings", "edit")
   const [settings, setSettings] = useState({
     language: "en",
     timezone: "America/New_York",
@@ -200,11 +203,16 @@ export function GeneralSettings() {
       </div>
 
       {/* Save Button */}
-      <div className="flex justify-end">
-        <Button 
-          onClick={handleSave} 
-          disabled={isLoading}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+      <div className="flex justify-end items-center gap-3">
+        {!canEdit && (
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            <Lock className="h-3 w-3" /> You don't have permission to edit general settings
+          </span>
+        )}
+        <Button
+          onClick={handleSave}
+          disabled={isLoading || !canEdit}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium disabled:opacity-60"
         >
           {isLoading ? "Saving..." : "Save Changes"}
         </Button>

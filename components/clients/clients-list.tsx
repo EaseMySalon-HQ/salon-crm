@@ -11,6 +11,7 @@ import { clientStore, type Client } from "@/lib/client-store"
 import { ClientsAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
+import { useAuth } from "@/lib/auth-context"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -20,6 +21,8 @@ import { format } from "date-fns"
 export function ClientsListPage() {
   const { toast } = useToast()
   const { hasAccess: canExport } = useFeature("data_export")
+  const { hasPermission } = useAuth()
+  const canCreateClient = hasPermission("clients", "create")
   const [searchQuery, setSearchQuery] = useState("")
   const [clients, setClients] = useState<Client[]>([])
   const [filteredClients, setFilteredClients] = useState<Client[]>([])
@@ -259,12 +262,14 @@ export function ClientsListPage() {
                       </Button>
                     )}
                     
-                    <Button asChild className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-medium">
-                      <Link href="/clients/new">
-                        <PlusCircle className="mr-2 h-5 w-5" />
-                        New Client
-                      </Link>
-                    </Button>
+                    {canCreateClient && (
+                      <Button asChild className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-medium">
+                        <Link href="/clients/new">
+                          <PlusCircle className="mr-2 h-5 w-5" />
+                          New Client
+                        </Link>
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>

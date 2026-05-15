@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { EmailNotificationsAPI } from "@/lib/api"
-import { Mail, Users, TestTube, CheckCircle2, XCircle, MessageCircle } from "lucide-react"
+import { Mail, Users, TestTube, CheckCircle2, XCircle, MessageCircle, Lock } from "lucide-react"
 import { StaffEmailPreferencesModal } from "./staff-email-preferences-modal"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WhatsAppBusinessSettings } from "./whatsapp-business-settings"
@@ -41,7 +41,8 @@ function idInRecipientList(staffId: string, recipientStaffIds: string[]) {
 }
 
 export function NotificationSettings() {
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
+  const canEdit = hasPermission("notification_settings", "edit")
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(false)
   const [isLoadingStaff, setIsLoadingStaff] = useState(false)
@@ -453,11 +454,16 @@ export function NotificationSettings() {
 
 
       {/* Save Button */}
-      <div className="flex justify-end gap-2">
+      <div className="flex justify-end items-center gap-3">
+        {!canEdit && (
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            <Lock className="h-3 w-3" /> You don't have permission to edit notification settings
+          </span>
+        )}
         <Button
           onClick={handleSave}
-          disabled={isLoading}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+          disabled={isLoading || !canEdit}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium disabled:opacity-60"
         >
           {isLoading ? "Saving..." : "Save Changes"}
         </Button>

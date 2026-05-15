@@ -10,7 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI } from "@/lib/api"
 import { useInvalidatePaymentSettings } from "@/lib/queries/payment-settings"
-import { DollarSign } from "lucide-react"
+import { useAuth } from "@/lib/auth-context"
+import { DollarSign, Lock } from "lucide-react"
 
 const CURRENCY_OPTIONS = [
   { value: "USD", label: "USD ($)", symbol: "$" },
@@ -71,6 +72,8 @@ const CURRENCY_OPTIONS = [
 ]
 
 export function CurrencySettings() {
+  const { hasPermission } = useAuth()
+  const canEdit = hasPermission("currency_settings", "edit")
   const [settings, setSettings] = useState({
     currency: "INR",
     enableCurrency: true,
@@ -206,11 +209,16 @@ export function CurrencySettings() {
         </div>
       </div>
 
-      <div className="flex justify-end">
-        <Button 
-          onClick={handleSave} 
-          disabled={isSaving}
-          className="px-8"
+      <div className="flex justify-end items-center gap-3">
+        {!canEdit && (
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            <Lock className="h-3 w-3" /> You don't have permission to edit currency settings
+          </span>
+        )}
+        <Button
+          onClick={handleSave}
+          disabled={isSaving || !canEdit}
+          className="px-8 disabled:opacity-60"
         >
           {isSaving ? "Saving..." : "Save Currency Settings"}
         </Button>

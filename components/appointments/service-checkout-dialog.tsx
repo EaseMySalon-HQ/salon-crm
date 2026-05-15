@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react"
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, type ComponentType } from "react"
 import { useRouter } from "next/navigation"
 import {
   Search,
@@ -20,6 +20,8 @@ import {
   Coins,
   MoreVertical,
   AlertTriangle,
+  ArrowLeft,
+  X,
 } from "lucide-react"
 import { format } from "date-fns"
 
@@ -34,13 +36,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Sheet,
-  SheetContent,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -109,6 +104,11 @@ import {
   type CheckoutPaymentMethodChoice,
   type ServiceCheckoutTenderSplit,
 } from "@/lib/complete-service-checkout-inline"
+import {
+  PINNED_CHECKOUT_SERVICES_EVENT,
+  readPinnedServiceIds,
+  writePinnedServiceIds,
+} from "@/lib/pinned-checkout-services"
 
 export type CheckoutTipLine = {
   id: string
@@ -629,9 +629,18 @@ export interface ServiceCheckoutDialogProps {
   ) => Promise<EnsureAppointmentBookingResult | null>
   /** Called after bill is saved inline (e.g. close parent appointment drawer and return to calendar). */
   onSuccessfulCheckout?: () => void
+  /** Called when the payment step (vs catalog) toggles — drawer host can mirror title in sheet header. */
+  onPaymentStepChange?: (inPaymentStep: boolean) => void
 }
 
-export function ServiceCheckoutDialog({
+export type ServiceCheckoutDialogHandle = {
+  /** Leave payment step and return to catalog (wallet/payment fields stay loaded). */
+  closePaymentStep: () => void
+}
+
+export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, ServiceCheckoutDialogProps>(
+  function ServiceCheckoutDialog(
+    {
   variant = "dialog",
   open,
   onOpenChange,
@@ -651,12 +660,19 @@ export function ServiceCheckoutDialog({
   onCustomerChange,
   ensureAppointmentBookingBeforeCheckout,
   onSuccessfulCheckout,
-}: ServiceCheckoutDialogProps) {
+  onPaymentStepChange,
+}: ServiceCheckoutDialogProps,
+  ref
+) {
   const router = useRouter()
   const { toast } = useToast()
   const [lines, setLines] = useState<ServiceCheckoutLine[]>([])
   const [search, setSearch] = useState("")
   const [category, setCategory] = useState<ServiceCheckoutCategory>("services")
+  /** Quick-access "favorite" services the user has pinned beside the default Top 10. */
+  const [pinnedServiceIds, setPinnedServiceIds] = useState<string[]>([])
+  const [pinPickerOpen, setPinPickerOpen] = useState(false)
+  const [pinPickerSearch, setPinPickerSearch] = useState("")
   const [navigating, setNavigating] = useState(false)
   const snapshotRef = useRef<ServiceCheckoutLine[]>([])
   const productSnapshotRef = useRef<ServiceCheckoutProductLine[]>([])
@@ -703,7 +719,7 @@ export function ServiceCheckoutDialog({
   const [checkoutMembershipData, setCheckoutMembershipData] =
     useState<ServiceCheckoutMembershipSnapshot>(null)
   /** Payment breakdown (Subtotal / Tax / Total); To pay stays visible when collapsed. */
-  const [cartBreakdownOpen, setCartBreakdownOpen] = useState(true)
+  const [cartBreakdownOpen, setCartBreakdownOpen] = useState(false)
   const [checkoutTipLines, setCheckoutTipLines] = useState<CheckoutTipLine[]>([])
   const [checkoutCartDiscountType, setCheckoutCartDiscountType] =
     useState<CheckoutCartDiscountMode>("fixed")
@@ -823,7 +839,11 @@ export function ServiceCheckoutDialog({
   }, [open, checkoutMembershipData, catalogServices, serviceLinesMembershipSignature])
 
   useEffect(() => {
-    if (!open) setCartBreakdownOpen(true)
+    if (!open) {
+      setCartBreakdownOpen(false)
+      setPaymentMethodDialogOpen(false)
+      setShowCreditChangeConfirm(false)
+    }
   }, [open])
 
   useEffect(() => {
@@ -1052,6 +1072,79 @@ export function ServiceCheckoutDialog({
       return name.includes(q)
     })
   }, [catalogServices, search])
+
+  /** Hydrate pinned IDs from localStorage on mount and keep tabs in sync. */
+  useEffect(() => {
+    setPinnedServiceIds(readPinnedServiceIds())
+    if (typeof window === "undefined") return
+    const refresh = () => setPinnedServiceIds(readPinnedServiceIds())
+    window.addEventListener(PINNED_CHECKOUT_SERVICES_EVENT, refresh)
+    window.addEventListener("storage", refresh)
+    return () => {
+      window.removeEventListener(PINNED_CHECKOUT_SERVICES_EVENT, refresh)
+      window.removeEventListener("storage", refresh)
+    }
+  }, [])
+
+  /** Default quick-access set when no search query: first 10 catalog services. */
+  const topTenServices = useMemo(
+    () => (catalogServices || []).slice(0, 10),
+    [catalogServices]
+  )
+
+  const topTenServiceIdSet = useMemo(
+    () => new Set(topTenServices.map((s: any) => String(s._id || s.id))),
+    [topTenServices]
+  )
+
+  /** Resolve pinned IDs against the live catalog (skip removed/disabled), excluding ones already in the Top 10. */
+  const pinnedServices = useMemo(() => {
+    const out: any[] = []
+    for (const id of pinnedServiceIds) {
+      if (topTenServiceIdSet.has(id)) continue
+      const svc = (catalogServices || []).find((s: any) => String(s._id || s.id) === id)
+      if (svc) out.push(svc)
+    }
+    return out
+  }, [pinnedServiceIds, catalogServices, topTenServiceIdSet])
+
+  /** Services available to pin: everything in the catalog that isn't already shown by default. */
+  const pinPickerCandidates = useMemo(() => {
+    const alreadyShown = new Set<string>(topTenServiceIdSet)
+    for (const svc of pinnedServices) alreadyShown.add(String(svc._id || svc.id))
+    const q = pinPickerSearch.trim().toLowerCase()
+    if (!q) return []
+    return (catalogServices || [])
+      .filter((s: any) => {
+        const id = String(s._id || s.id)
+        if (alreadyShown.has(id)) return false
+        return (s.name || "").toLowerCase().includes(q)
+      })
+      .sort((a: any, b: any) => {
+        const aName = String(a?.name || "")
+        const bName = String(b?.name || "")
+        return aName.localeCompare(bName, "en", { sensitivity: "base" })
+      })
+  }, [catalogServices, topTenServiceIdSet, pinnedServices, pinPickerSearch])
+
+  const addPinnedService = useCallback((serviceId: string) => {
+    if (!serviceId) return
+    setPinnedServiceIds((prev) => {
+      if (prev.includes(serviceId)) return prev
+      const next = [...prev, serviceId]
+      writePinnedServiceIds(next)
+      return next
+    })
+  }, [])
+
+  const removePinnedService = useCallback((serviceId: string) => {
+    if (!serviceId) return
+    setPinnedServiceIds((prev) => {
+      const next = prev.filter((id) => id !== serviceId)
+      writePinnedServiceIds(next)
+      return next
+    })
+  }, [])
 
   const filteredProducts = useMemo(() => {
     const q = productSearch.trim().toLowerCase()
@@ -1418,6 +1511,10 @@ export function ServiceCheckoutDialog({
   const paymentTotalTenderEntered = useMemo(
     () => payCash + payCard + payOnline + payWallet,
     [payCash, payCard, payOnline, payWallet]
+  )
+  const paymentRemainingDue = useMemo(
+    () => Math.max(0, paymentDueAfterLoyalty - paymentTotalTenderEntered),
+    [paymentDueAfterLoyalty, paymentTotalTenderEntered]
   )
 
   const formatCheckoutInr = (amount: number) =>
@@ -1910,6 +2007,26 @@ export function ServiceCheckoutDialog({
     if (!validateCheckoutBeforePayment()) return
     setPaymentMethodDialogOpen(true)
   }
+
+  const closePaymentStep = useCallback(() => {
+    if (navigating) return
+    setShowCreditChangeConfirm(false)
+    setPaymentMethodDialogOpen(false)
+  }, [navigating])
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      closePaymentStep: () => {
+        closePaymentStep()
+      },
+    }),
+    [closePaymentStep]
+  )
+
+  useEffect(() => {
+    onPaymentStepChange?.(paymentMethodDialogOpen)
+  }, [paymentMethodDialogOpen, onPaymentStepChange])
 
   async function confirmPaymentMethodAndContinue(opts?: {
     skipPartialConfirm?: boolean
@@ -2567,11 +2684,289 @@ export function ServiceCheckoutDialog({
     variant === "drawer" && "z-[110]"
   )
   const draftDropdownContentClass = cn(variant === "drawer" && "z-[110]")
-  /** Payment sheet (z-220) — poppers must clear the sheet panel and overlay (z-210). */
+  /** Select Payment step (inside checkout panel) — poppers must stack above drawer z-[100]. */
   const paymentSheetSelectContentClass = "z-[225]"
   /** Dialogs in checkout extras (tip, etc.) use z-[200]; Radix Select popper copies inner computed z-index onto its wrapper — must exceed dialog. */
   const checkoutModalSelectContentClass = "!z-[9999]"
 
+  const serviceCheckoutPaymentFormFields = (
+    <div className="space-y-4 px-5 py-4">
+
+            {paymentDialogShowWallet && paymentDialogWalletsRaw.length > 1 ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Wallet</Label>
+                <Select
+                  value={paySelectedWalletId || undefined}
+                  onValueChange={(v) => {
+                    setPaySelectedWalletId(v)
+                    setPayWallet(0)
+                  }}
+                >
+                  <SelectTrigger className="h-9 rounded-lg">
+                    <SelectValue placeholder="Select wallet" />
+                  </SelectTrigger>
+                  <SelectContent position="popper" className={paymentSheetSelectContentClass}>
+                    {paymentDialogWalletsRaw.map((w: any) => (
+                      <SelectItem key={String(w._id)} value={String(w._id)}>
+                        {(w.planSnapshot && w.planSnapshot.planName) || "Wallet"} — ₹
+                        {Number(w.remainingBalance || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}{" "}
+                        left
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+
+            {paymentDialogShowWallet || paymentDialogShowReward ? (
+              <div className="flex flex-row flex-nowrap items-stretch gap-3">
+                {paymentDialogShowWallet && paySelectedWalletId ? (
+                  <div
+                    role="button"
+                    tabIndex={paymentWalletRedemptionTileDisabled ? -1 : 0}
+                    onClick={() => {
+                      if (paymentWalletRedemptionTileDisabled) return
+                      const w = paymentSelectedWalletRow
+                      if (!w) return
+                      setPayWallet(
+                        Math.min(
+                          Number(w.remainingBalance) || 0,
+                          Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
+                        )
+                      )
+                    }}
+                    onKeyDown={(e) => {
+                      if (paymentWalletRedemptionTileDisabled) return
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        const w = paymentSelectedWalletRow
+                        if (!w) return
+                        setPayWallet(
+                          Math.min(
+                            Number(w.remainingBalance) || 0,
+                            Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
+                          )
+                        )
+                      }
+                    }}
+                    className={cn(
+                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
+                      paymentWalletRedemptionTileDisabled
+                        ? "cursor-not-allowed border-cyan-200/55 bg-cyan-50/15 opacity-50"
+                        : cn(
+                            "cursor-pointer",
+                            payWallet > 0
+                              ? "border-cyan-300/70 bg-cyan-50/35 hover:bg-cyan-50/50"
+                              : "border-cyan-200/65 bg-cyan-50/20 hover:bg-cyan-50/35"
+                          )
+                    )}
+                  >
+                    <span className="text-sm font-semibold text-cyan-800">Wallet (₹)</span>
+                    {paymentDialogWalletBalanceText ? (
+                      <span className="text-[11px] text-cyan-900/80">{paymentDialogWalletBalanceText}</span>
+                    ) : null}
+                    <Input
+                      type="number"
+                      value={payWallet || ""}
+                      onChange={(e) => setPayWallet(Math.max(0, Number(e.target.value) || 0))}
+                      onFocus={(e) => e.target.select()}
+                      onClick={(e) => e.stopPropagation()}
+                      min={0}
+                      disabled={paymentWalletRedemptionTileDisabled}
+                      className="h-8 w-full rounded-lg border-cyan-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-cyan-400/85 focus:ring-cyan-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      style={{ textAlign: "center" }}
+                      placeholder="0"
+                    />
+                  </div>
+                ) : null}
+                {paymentDialogShowReward && paymentDialogRewardSettings ? (
+                  <div
+                    className={cn(
+                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
+                      paymentDialogPayCfg.rewardPointRedemption.enabled === false
+                        ? "border-rose-200/55 bg-rose-50/15 opacity-50"
+                        : payLoyaltyPoints > 0
+                          ? "border-rose-300/70 bg-rose-50/35 hover:bg-rose-50/45"
+                          : "border-rose-200/65 bg-rose-50/20 hover:bg-rose-50/32"
+                    )}
+                  >
+                    <span className="text-sm font-semibold text-rose-800">Points</span>
+                    {paymentDialogLoyaltyBalance >= (paymentDialogRewardSettings.minRedeemPoints || 0) ? (
+                      paymentDialogRewardBalanceText ? (
+                        <span className="text-[11px] text-rose-900/80">{paymentDialogRewardBalanceText}</span>
+                      ) : null
+                    ) : (
+                      <span className="px-1 text-center text-[11px] leading-snug text-rose-900/80">
+                        Need {paymentDialogRewardSettings.minRedeemPoints || 0}+ pts (have{" "}
+                        {paymentDialogLoyaltyBalance})
+                      </span>
+                    )}
+                    {paymentDialogLoyaltyBalance >= (paymentDialogRewardSettings.minRedeemPoints || 0) ? (
+                      <Input
+                        type="number"
+                        min={0}
+                        step={paymentDialogRewardSettings.redeemPointsStep || 1}
+                        value={payLoyaltyPoints || ""}
+                        onChange={(e) =>
+                          setPayLoyaltyPoints(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                        }
+                        onFocus={(e) => e.target.select()}
+                        className="h-8 w-full rounded-lg border-rose-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-rose-400/85 focus:ring-rose-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        style={{ textAlign: "center" }}
+                        placeholder="0"
+                        title={`Balance ${paymentDialogLoyaltyBalance}, step ${paymentDialogRewardSettings.redeemPointsStep || 1}`}
+                        aria-label={`Reward points to redeem. Balance ${paymentDialogLoyaltyBalance}`}
+                        disabled={paymentDialogPayCfg.rewardPointRedemption.enabled === false}
+                      />
+                    ) : null}
+                    {!paymentLoyaltyPreview.ok && payLoyaltyPoints > 0 && paymentLoyaltyPreview.error ? (
+                      <p className="text-center text-xs text-red-600">{paymentLoyaltyPreview.error}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-3 gap-3">
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayCash(paymentPayableAfterWallet)
+                  setPayCard(0)
+                  setPayOnline(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayCash(paymentPayableAfterWallet)
+                    setPayCard(0)
+                    setPayOnline(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payCash > 0
+                    ? "border-green-400 bg-green-200 hover:bg-green-300"
+                    : "border-green-200 bg-green-50/50 hover:bg-green-50"
+                )}
+              >
+                <span className="text-sm font-medium text-green-700">Cash</span>
+                <Input
+                  type="number"
+                  value={payCash || ""}
+                  onChange={(e) => setPayCash(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-green-300 text-center text-sm [appearance:textfield] focus:border-green-400 focus:ring-green-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayCard(paymentPayableAfterWallet)
+                  setPayCash(0)
+                  setPayOnline(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayCard(paymentPayableAfterWallet)
+                    setPayCash(0)
+                    setPayOnline(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payCard > 0
+                    ? "border-blue-400 bg-blue-200 hover:bg-blue-300"
+                    : "border-blue-200 bg-blue-50/50 hover:bg-blue-50"
+                )}
+              >
+                <span className="text-sm font-medium text-blue-700">Card</span>
+                <Input
+                  type="number"
+                  value={payCard || ""}
+                  onChange={(e) => setPayCard(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-blue-300 text-center text-sm [appearance:textfield] focus:border-blue-400 focus:ring-blue-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayOnline(paymentPayableAfterWallet)
+                  setPayCash(0)
+                  setPayCard(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayOnline(paymentPayableAfterWallet)
+                    setPayCash(0)
+                    setPayCard(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payOnline > 0
+                    ? "border-purple-400 bg-purple-200 hover:bg-purple-300"
+                    : "border-purple-200 bg-purple-50/50 hover:bg-purple-50"
+                )}
+              >
+                <span className="text-sm font-medium text-purple-700">Online</span>
+                <Input
+                  type="number"
+                  value={payOnline || ""}
+                  onChange={(e) => setPayOnline(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-purple-300 text-center text-sm [appearance:textfield] focus:border-purple-400 focus:ring-purple-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-emerald-800">Total paid</span>
+                <span className="font-bold tabular-nums text-emerald-700">
+                  ₹{formatCheckoutInr(paymentTotalTenderEntered)}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-800/90">
+                <span>vs amount due</span>
+                <span className="tabular-nums">₹{formatCheckoutInr(paymentDueAfterLoyalty)}</span>
+              </div>
+              {paymentDueAfterLoyalty > 0.01 ? (
+                <p className="mt-1.5 text-xs text-emerald-900/80">
+                  {paymentTotalTenderEntered > paymentDueAfterLoyalty + 0.05
+                    ? `Over by ₹${formatCheckoutInr(paymentTotalTenderEntered - paymentDueAfterLoyalty)}`
+                    : paymentTotalTenderEntered + 0.02 < paymentDueAfterLoyalty
+                      ? `Partial payment: ₹${formatCheckoutInr(
+                          paymentDueAfterLoyalty - paymentTotalTenderEntered
+                        )} will stay due on the bill.`
+                      : "Full amount collected for this bill."}
+                </p>
+              ) : (
+                <p className="mt-1.5 text-xs text-emerald-900/80">
+                  No cash tender needed if reward covers the full amount due.
+                </p>
+              )}
+            </div>
+    </div>
+  )
   const mainColumns = (
         <div
           className={cn(
@@ -2587,6 +2982,8 @@ export function ServiceCheckoutDialog({
                 : "border-b md:border-b-0 md:border-r"
             )}
           >
+            {!paymentMethodDialogOpen ? (
+              <>
             <div className="p-5 pb-4 space-y-4 shrink-0">
               {category === "services" ? (
                 <div className="relative">
@@ -2674,48 +3071,139 @@ export function ServiceCheckoutDialog({
               <div className="p-5 pt-0 pb-6 space-y-4">
                 {category === "services" && (
                   <>
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-foreground">Quick sale</h3>
-                      <button
-                        type="button"
-                        className="text-xs font-medium text-violet-600 hover:text-violet-700 underline-offset-2 hover:underline"
-                        onClick={restoreBookingLines}
-                      >
-                        Restore booking
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {filteredCatalog.length === 0 ? (
-                        <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
-                          No services match your search.
-                        </p>
-                      ) : (
-                        filteredCatalog.map((svc: any) => {
-                          const sid = String(svc._id || svc.id)
-                          const price = Number(svc.price) || 0
-                          return (
+                    {search.trim().length === 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {topTenServices.length === 0 ? (
+                          <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
+                            No services available yet.
+                          </p>
+                        ) : (
+                          <>
+                            {topTenServices.map((svc: any) => {
+                              const sid = String(svc._id || svc.id)
+                              const price = Number(svc.price) || 0
+                              return (
+                                <button
+                                  key={`top-${sid}`}
+                                  type="button"
+                                  onClick={() => addCatalogService(svc)}
+                                  className={cn(
+                                    "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
+                                    "hover:border-violet-300/80 hover:bg-violet-50/40 transition-colors"
+                                  )}
+                                >
+                                  <span
+                                    className="w-1 self-stretch rounded-full bg-sky-400 shrink-0"
+                                    aria-hidden
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium text-foreground truncate">{svc.name || "Service"}</div>
+                                    <div className="text-sm text-muted-foreground">₹{price}</div>
+                                  </div>
+                                </button>
+                              )
+                            })}
+                            {pinnedServices.map((svc: any) => {
+                              const sid = String(svc._id || svc.id)
+                              const price = Number(svc.price) || 0
+                              return (
+                                <div key={`pinned-${sid}`} className="relative group">
+                                  <button
+                                    type="button"
+                                    onClick={() => addCatalogService(svc)}
+                                    className={cn(
+                                      "flex w-full gap-3 rounded-xl border border-violet-200 bg-violet-50/40 p-3 pr-8 text-left",
+                                      "hover:border-violet-300/80 hover:bg-violet-50 transition-colors"
+                                    )}
+                                  >
+                                    <span
+                                      className="w-1 self-stretch rounded-full bg-violet-500 shrink-0"
+                                      aria-hidden
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="font-medium text-foreground truncate">{svc.name || "Service"}</div>
+                                      <div className="text-sm text-muted-foreground">₹{price}</div>
+                                    </div>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    aria-label={`Unpin ${svc.name || "service"}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      removePinnedService(sid)
+                                    }}
+                                    className={cn(
+                                      "absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-md",
+                                      "text-muted-foreground hover:bg-violet-100 hover:text-foreground transition-colors",
+                                      "opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                    )}
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              )
+                            })}
                             <button
-                              key={sid}
                               type="button"
-                              onClick={() => addCatalogService(svc)}
+                              onClick={() => {
+                                setPinPickerSearch("")
+                                setPinPickerOpen(true)
+                              }}
                               className={cn(
-                                "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
-                                "hover:border-violet-300/80 hover:bg-violet-50/40 transition-colors"
+                                "flex gap-3 rounded-xl border border-dashed border-border bg-background/40 p-3 text-left text-muted-foreground",
+                                "hover:border-violet-300 hover:bg-violet-50/40 hover:text-foreground transition-colors"
                               )}
                             >
                               <span
-                                className="w-1 self-stretch rounded-full bg-sky-400 shrink-0"
+                                className="flex h-full w-7 shrink-0 items-center justify-center self-stretch rounded-full bg-violet-100 text-violet-600"
                                 aria-hidden
-                              />
+                              >
+                                <Plus className="h-4 w-4" />
+                              </span>
                               <div className="min-w-0 flex-1">
-                                <div className="font-medium text-foreground truncate">{svc.name || "Service"}</div>
-                                <div className="text-sm text-muted-foreground">₹{price}</div>
+                                <div className="font-medium leading-snug">Add service</div>
+                                <div className="text-xs leading-snug">
+                                  Pin a service for quick access
+                                </div>
                               </div>
                             </button>
-                          )
-                        })
-                      )}
-                    </div>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {filteredCatalog.length === 0 ? (
+                          <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
+                            No services match your search.
+                          </p>
+                        ) : (
+                          filteredCatalog.map((svc: any) => {
+                            const sid = String(svc._id || svc.id)
+                            const price = Number(svc.price) || 0
+                            return (
+                              <button
+                                key={sid}
+                                type="button"
+                                onClick={() => addCatalogService(svc)}
+                                className={cn(
+                                  "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
+                                  "hover:border-violet-300/80 hover:bg-violet-50/40 transition-colors"
+                                )}
+                              >
+                                <span
+                                  className="w-1 self-stretch rounded-full bg-sky-400 shrink-0"
+                                  aria-hidden
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-medium text-foreground truncate">{svc.name || "Service"}</div>
+                                  <div className="text-sm text-muted-foreground">₹{price}</div>
+                                </div>
+                              </button>
+                            )
+                          })
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -2954,6 +3442,35 @@ export function ServiceCheckoutDialog({
                 )}
               </div>
             </ScrollArea>
+              </>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                {!(variant === "drawer" && onPaymentStepChange) ? (
+                  <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-3 py-3 sm:px-5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={closePaymentStep}
+                      disabled={navigating}
+                      aria-label="Back to services and products"
+                    >
+                      <ArrowLeft className="h-4 w-4" aria-hidden />
+                    </Button>
+                    <h2 className="text-base font-semibold tracking-tight">Select Payment</h2>
+                  </div>
+                ) : null}
+                {paymentMethodLoading ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 py-10 text-sm text-muted-foreground">
+                    <Loader2 className="h-8 w-8 animate-spin shrink-0" aria-hidden />
+                    Loading payment options…
+                  </div>
+                ) : (
+                  <ScrollArea className="min-h-0 flex-1">{serviceCheckoutPaymentFormFields}</ScrollArea>
+                )}
+              </div>
+            )}
           </div>
 
           <div
@@ -3743,6 +4260,14 @@ export function ServiceCheckoutDialog({
                           </span>
                         </div>
                       ) : null}
+                      {paymentMethodDialogOpen ? (
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Amount Received</span>
+                          <span className="tabular-nums text-muted-foreground">
+                            ₹{formatCheckoutInr(paymentTotalTenderEntered)}
+                          </span>
+                        </div>
+                      ) : null}
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-2 rounded-md text-left text-base font-bold text-foreground outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
@@ -3757,7 +4282,12 @@ export function ServiceCheckoutDialog({
                             aria-hidden
                           />
                         </span>
-                        <span className="tabular-nums">₹{formatCheckoutInr(cartToPayIncludingTips)}</span>
+                        <span className="tabular-nums">
+                          ₹
+                          {formatCheckoutInr(
+                            paymentMethodDialogOpen ? paymentRemainingDue : cartToPayIncludingTips
+                          )}
+                        </span>
                       </button>
                     </>
                   ) : null}
@@ -3832,15 +4362,57 @@ export function ServiceCheckoutDialog({
 
                   {cartBreakdownOpen ? (
                     <div className="border-t border-border/60 pt-2">
+                      {paymentMethodDialogOpen ? (
+                        <div className="mb-1 flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Amount Received</span>
+                          <span className="tabular-nums text-muted-foreground">
+                            ₹{formatCheckoutInr(paymentTotalTenderEntered)}
+                          </span>
+                        </div>
+                      ) : null}
                       <div className="flex items-center justify-between text-base font-bold text-foreground">
                         <span>To pay</span>
-                        <span className="tabular-nums">₹{formatCheckoutInr(cartToPayIncludingTips)}</span>
+                        <span className="tabular-nums">
+                          ₹
+                          {formatCheckoutInr(
+                            paymentMethodDialogOpen ? paymentRemainingDue : cartToPayIncludingTips
+                          )}
+                        </span>
                       </div>
                     </div>
                   ) : null}
                 </div>
               </Collapsible>
               <div className="flex items-center gap-2">
+                {paymentMethodDialogOpen ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-11 flex-1 min-w-0 rounded-lg font-semibold"
+                      onClick={closePaymentStep}
+                      disabled={navigating}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      className="h-11 flex-1 min-w-0 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-semibold"
+                      disabled={navigating || paymentMethodLoading}
+                      onClick={() => void confirmPaymentMethodAndContinue()}
+                    >
+                      {navigating ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" aria-hidden />
+                          Saving…
+                        </>
+                      ) : (
+                        paymentRemainingDue <= 0.01 ? "Complete billing" : "Save Part-Paid"
+                      )}
+                    </Button>
+                  </>
+                ) : (
+                  <>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -3938,6 +4510,8 @@ export function ServiceCheckoutDialog({
                     "Continue to payment"
                   )}
                 </Button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -4050,337 +4624,85 @@ export function ServiceCheckoutDialog({
     </Dialog>
   )
 
-  const paymentMethodDialog = (
-    <Sheet
-      open={paymentMethodDialogOpen}
+  const pinServicePickerDialog = (
+    <Dialog
+      open={pinPickerOpen}
       onOpenChange={(next) => {
-        if (navigating) return
-        if (!next) setShowCreditChangeConfirm(false)
-        setPaymentMethodDialogOpen(next)
+        setPinPickerOpen(next)
+        if (!next) setPinPickerSearch("")
       }}
     >
-      <SheetContent
-        side="right"
-        overlayClassName="z-[210]"
-        className={cn(
-          "flex h-full w-full max-h-[100dvh] flex-col gap-0 border-l border-border/70 p-0 shadow-xl",
-          "z-[220] overflow-hidden sm:max-w-lg",
-          variant === "drawer" && "rounded-none"
-        )}
+      <DialogContent
+        className="z-[200] gap-4 sm:max-w-xl h-[min(85vh,520px)] overflow-hidden flex flex-col"
+        overlayClassName="z-[190]"
         aria-describedby={undefined}
       >
-        <SheetHeader className="shrink-0 space-y-0 border-b border-border/60 px-6 py-4 pr-14 text-left">
-          <SheetTitle className="text-base font-semibold tracking-tight">Payment Method</SheetTitle>
-        </SheetHeader>
-        {paymentMethodLoading ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-sm text-muted-foreground">
-            <Loader2 className="h-8 w-8 animate-spin shrink-0" aria-hidden />
-            Loading payment options…
+        <DialogHeader>
+          <DialogTitle className="text-base font-semibold tracking-tight">Add a quick-access service</DialogTitle>
+          <DialogDescription>
+            Pin frequently-sold services so they appear beside the Top 10 next time.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex min-h-0 flex-1 flex-col space-y-3">
+          <div className="relative shrink-0">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <Input
+              className="rounded-lg pl-9"
+              placeholder="Search services…"
+              value={pinPickerSearch}
+              onChange={(e) => setPinPickerSearch(e.target.value)}
+              autoFocus
+            />
           </div>
-        ) : (
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="space-y-4 px-6 py-4">
-            {paymentDialogShowWallet && paymentDialogWalletsRaw.length > 1 ? (
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Wallet</Label>
-                <Select
-                  value={paySelectedWalletId || undefined}
-                  onValueChange={(v) => {
-                    setPaySelectedWalletId(v)
-                    setPayWallet(0)
-                  }}
-                >
-                  <SelectTrigger className="h-9 rounded-lg">
-                    <SelectValue placeholder="Select wallet" />
-                  </SelectTrigger>
-                  <SelectContent position="popper" className={paymentSheetSelectContentClass}>
-                    {paymentDialogWalletsRaw.map((w: any) => (
-                      <SelectItem key={String(w._id)} value={String(w._id)}>
-                        {(w.planSnapshot && w.planSnapshot.planName) || "Wallet"} — ₹
-                        {Number(w.remainingBalance || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}{" "}
-                        left
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : null}
-
-            {paymentDialogShowWallet || paymentDialogShowReward ? (
-              <div className="flex flex-row flex-nowrap items-stretch gap-3">
-                {paymentDialogShowWallet && paySelectedWalletId ? (
-                  <div
-                    role="button"
-                    tabIndex={paymentWalletRedemptionTileDisabled ? -1 : 0}
-                    onClick={() => {
-                      if (paymentWalletRedemptionTileDisabled) return
-                      const w = paymentSelectedWalletRow
-                      if (!w) return
-                      setPayWallet(
-                        Math.min(
-                          Number(w.remainingBalance) || 0,
-                          Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
-                        )
-                      )
-                    }}
-                    onKeyDown={(e) => {
-                      if (paymentWalletRedemptionTileDisabled) return
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault()
-                        const w = paymentSelectedWalletRow
-                        if (!w) return
-                        setPayWallet(
-                          Math.min(
-                            Number(w.remainingBalance) || 0,
-                            Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
-                          )
-                        )
-                      }
-                    }}
-                    className={cn(
-                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
-                      paymentWalletRedemptionTileDisabled
-                        ? "cursor-not-allowed border-cyan-200/55 bg-cyan-50/15 opacity-50"
-                        : cn(
-                            "cursor-pointer",
-                            payWallet > 0
-                              ? "border-cyan-300/70 bg-cyan-50/35 hover:bg-cyan-50/50"
-                              : "border-cyan-200/65 bg-cyan-50/20 hover:bg-cyan-50/35"
-                          )
-                    )}
-                  >
-                    <span className="text-sm font-semibold text-cyan-800">Wallet (₹)</span>
-                    {paymentDialogWalletBalanceText ? (
-                      <span className="text-[11px] text-cyan-900/80">{paymentDialogWalletBalanceText}</span>
-                    ) : null}
-                    <Input
-                      type="number"
-                      value={payWallet || ""}
-                      onChange={(e) => setPayWallet(Math.max(0, Number(e.target.value) || 0))}
-                      onFocus={(e) => e.target.select()}
-                      onClick={(e) => e.stopPropagation()}
-                      min={0}
-                      disabled={paymentWalletRedemptionTileDisabled}
-                      className="h-8 w-full rounded-lg border-cyan-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-cyan-400/85 focus:ring-cyan-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                      style={{ textAlign: "center" }}
-                      placeholder="0"
-                    />
-                  </div>
-                ) : null}
-                {paymentDialogShowReward && paymentDialogRewardSettings ? (
-                  <div
-                    className={cn(
-                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
-                      paymentDialogPayCfg.rewardPointRedemption.enabled === false
-                        ? "border-rose-200/55 bg-rose-50/15 opacity-50"
-                        : payLoyaltyPoints > 0
-                          ? "border-rose-300/70 bg-rose-50/35 hover:bg-rose-50/45"
-                          : "border-rose-200/65 bg-rose-50/20 hover:bg-rose-50/32"
-                    )}
-                  >
-                    <span className="text-sm font-semibold text-slate-900">Points</span>
-                    {paymentDialogLoyaltyBalance >= (paymentDialogRewardSettings.minRedeemPoints || 0) ? (
-                      <Input
-                        type="number"
-                        min={0}
-                        step={paymentDialogRewardSettings.redeemPointsStep || 1}
-                        value={payLoyaltyPoints || ""}
-                        onChange={(e) =>
-                          setPayLoyaltyPoints(Math.max(0, Math.floor(Number(e.target.value) || 0)))
-                        }
-                        onFocus={(e) => e.target.select()}
-                        className="h-8 w-full rounded-lg border-rose-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-rose-400/85 focus:ring-rose-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        style={{ textAlign: "center" }}
-                        placeholder="0"
-                        title={`Balance ${paymentDialogLoyaltyBalance}, step ${paymentDialogRewardSettings.redeemPointsStep || 1}`}
-                        aria-label={`Reward points to redeem. Balance ${paymentDialogLoyaltyBalance}`}
-                        disabled={paymentDialogPayCfg.rewardPointRedemption.enabled === false}
-                      />
-                    ) : (
-                      <p className="px-1 text-center text-xs leading-snug text-muted-foreground">
-                        Need {paymentDialogRewardSettings.minRedeemPoints || 0}+ pts (have{" "}
-                        {paymentDialogLoyaltyBalance})
-                      </p>
-                    )}
-                    {paymentDialogRewardBalanceText ? (
-                      <span className="text-[11px] text-rose-900/80">{paymentDialogRewardBalanceText}</span>
-                    ) : null}
-                    {!paymentLoyaltyPreview.ok && payLoyaltyPoints > 0 && paymentLoyaltyPreview.error ? (
-                      <p className="text-center text-xs text-red-600">{paymentLoyaltyPreview.error}</p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-3 gap-3">
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setPayCash(paymentPayableAfterWallet)
-                  setPayCard(0)
-                  setPayOnline(0)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    setPayCash(paymentPayableAfterWallet)
-                    setPayCard(0)
-                    setPayOnline(0)
-                  }
-                }}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
-                  payCash > 0
-                    ? "border-green-400 bg-green-200 hover:bg-green-300"
-                    : "border-green-200 bg-green-50/50 hover:bg-green-50"
-                )}
-              >
-                <span className="text-sm font-medium text-green-700">Cash</span>
-                <Input
-                  type="number"
-                  value={payCash || ""}
-                  onChange={(e) => setPayCash(Math.max(0, Number(e.target.value) || 0))}
-                  onFocus={(e) => e.target.select()}
-                  onClick={(e) => e.stopPropagation()}
-                  min={0}
-                  className="h-8 w-full rounded-lg border-green-300 text-center text-sm [appearance:textfield] focus:border-green-400 focus:ring-green-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  style={{ textAlign: "center" }}
-                  placeholder="0"
-                />
-              </div>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setPayCard(paymentPayableAfterWallet)
-                  setPayCash(0)
-                  setPayOnline(0)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    setPayCard(paymentPayableAfterWallet)
-                    setPayCash(0)
-                    setPayOnline(0)
-                  }
-                }}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
-                  payCard > 0
-                    ? "border-blue-400 bg-blue-200 hover:bg-blue-300"
-                    : "border-blue-200 bg-blue-50/50 hover:bg-blue-50"
-                )}
-              >
-                <span className="text-sm font-medium text-blue-700">Card</span>
-                <Input
-                  type="number"
-                  value={payCard || ""}
-                  onChange={(e) => setPayCard(Math.max(0, Number(e.target.value) || 0))}
-                  onFocus={(e) => e.target.select()}
-                  onClick={(e) => e.stopPropagation()}
-                  min={0}
-                  className="h-8 w-full rounded-lg border-blue-300 text-center text-sm [appearance:textfield] focus:border-blue-400 focus:ring-blue-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  style={{ textAlign: "center" }}
-                  placeholder="0"
-                />
-              </div>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setPayOnline(paymentPayableAfterWallet)
-                  setPayCash(0)
-                  setPayCard(0)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    setPayOnline(paymentPayableAfterWallet)
-                    setPayCash(0)
-                    setPayCard(0)
-                  }
-                }}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
-                  payOnline > 0
-                    ? "border-purple-400 bg-purple-200 hover:bg-purple-300"
-                    : "border-purple-200 bg-purple-50/50 hover:bg-purple-50"
-                )}
-              >
-                <span className="text-sm font-medium text-purple-700">Online</span>
-                <Input
-                  type="number"
-                  value={payOnline || ""}
-                  onChange={(e) => setPayOnline(Math.max(0, Number(e.target.value) || 0))}
-                  onFocus={(e) => e.target.select()}
-                  onClick={(e) => e.stopPropagation()}
-                  min={0}
-                  className="h-8 w-full rounded-lg border-purple-300 text-center text-sm [appearance:textfield] focus:border-purple-400 focus:ring-purple-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  style={{ textAlign: "center" }}
-                  placeholder="0"
-                />
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 text-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-emerald-800">Total paid</span>
-                <span className="font-bold tabular-nums text-emerald-700">
-                  ₹{formatCheckoutInr(paymentTotalTenderEntered)}
-                </span>
-              </div>
-              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-800/90">
-                <span>vs amount due</span>
-                <span className="tabular-nums">₹{formatCheckoutInr(paymentDueAfterLoyalty)}</span>
-              </div>
-              {paymentDueAfterLoyalty > 0.01 ? (
-                <p className="mt-1.5 text-xs text-emerald-900/80">
-                  {paymentTotalTenderEntered > paymentDueAfterLoyalty + 0.05
-                    ? `Over by ₹${formatCheckoutInr(paymentTotalTenderEntered - paymentDueAfterLoyalty)}`
-                    : paymentTotalTenderEntered + 0.02 < paymentDueAfterLoyalty
-                      ? `Partial payment: ₹${formatCheckoutInr(
-                          paymentDueAfterLoyalty - paymentTotalTenderEntered
-                        )} will stay due on the bill.`
-                      : "Full amount collected for this bill."}
+          <ScrollArea className="flex-1 min-h-0 rounded-lg border border-border/70">
+            <div className="py-1 pl-1 pr-4">
+              {pinPickerCandidates.length === 0 ? (
+                <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  {pinPickerSearch.trim()
+                    ? "No services match your search."
+                    : "Start typing to see services."}
                 </p>
               ) : (
-                <p className="mt-1.5 text-xs text-emerald-900/80">
-                  No cash tender needed if reward covers the full amount due.
-                </p>
+                pinPickerCandidates.map((svc: any) => {
+                  const sid = String(svc._id || svc.id)
+                  const price = Number(svc.price) || 0
+                  return (
+                    <button
+                      key={sid}
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 rounded-md py-2.5 pl-3 pr-3 text-left text-sm transition-colors hover:bg-muted/80"
+                      onClick={() => {
+                        addPinnedService(sid)
+                        setPinPickerOpen(false)
+                        setPinPickerSearch("")
+                      }}
+                    >
+                      <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                        {svc.name || "Service"}
+                      </span>
+                      {price > 0 ? (
+                        <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
+                          ₹{price.toLocaleString("en-IN")}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                          No price
+                        </span>
+                      )}
+                    </button>
+                  )
+                })
               )}
             </div>
-            </div>
           </ScrollArea>
-        )}
-        <SheetFooter className="shrink-0 gap-2 border-t border-border/60 px-6 py-4 sm:flex-row sm:justify-end">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setPaymentMethodDialogOpen(false)}
-            disabled={navigating}
-          >
-            Cancel
+        </div>
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button type="button" variant="outline" onClick={() => setPinPickerOpen(false)}>
+            Close
           </Button>
-          <Button
-            type="button"
-            className="bg-violet-600 hover:bg-violet-700 text-white"
-            disabled={navigating || paymentMethodLoading}
-            onClick={() => void confirmPaymentMethodAndContinue()}
-          >
-            {navigating ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" aria-hidden />
-                Saving…
-              </>
-            ) : (
-              "Complete billing"
-            )}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 
   const checkoutPartialPaymentConfirmDialog = (
@@ -4821,8 +5143,8 @@ export function ServiceCheckoutDialog({
         </div>
         {serviceLineEditDialog}
         {changeClientDialog}
+        {pinServicePickerDialog}
         {cancelDraftConfirmDialog}
-        {paymentMethodDialog}
         {checkoutPartialPaymentConfirmDialog}
         {checkoutCreditChangeConfirmDialog}
         {checkoutExtrasDialogs}
@@ -4856,8 +5178,8 @@ export function ServiceCheckoutDialog({
       </Dialog>
       {serviceLineEditDialog}
       {changeClientDialog}
+      {pinServicePickerDialog}
       {cancelDraftConfirmDialog}
-      {paymentMethodDialog}
       {checkoutPartialPaymentConfirmDialog}
       {checkoutCreditChangeConfirmDialog}
       {checkoutExtrasDialogs}
@@ -4869,4 +5191,6 @@ export function ServiceCheckoutDialog({
       />
     </>
   )
-}
+})
+
+ServiceCheckoutDialog.displayName = "ServiceCheckoutDialog"

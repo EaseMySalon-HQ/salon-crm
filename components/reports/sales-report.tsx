@@ -26,6 +26,7 @@ import { ServiceFilterCombobox } from "@/components/reports/service-filter-combo
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
+import { useAuth } from "@/lib/auth-context"
 
 /** Sale.time is typically "HH:mm" (24h). Returns "hh:mm AM/PM" with zero-padded hour. */
 function formatBillTimeStringTo12h(time24: string | undefined | null): string | null {
@@ -188,6 +189,9 @@ export function SalesReport() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const { hasAccess: canExport } = useFeature("data_export")
+  const { hasPermission } = useAuth()
+  const canEditSale = hasPermission("sales", "edit")
+  const canDeleteSale = hasPermission("sales", "delete")
   const [reportType, setReportTypeState] = useState("sales")
 
   useEffect(() => {
@@ -3340,25 +3344,29 @@ export function SalesReport() {
                               <Eye className="mr-2 h-4 w-4 text-blue-600" />
                               <span className="text-slate-700">View Bill Details</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleEditBill(sale)} className="hover:bg-amber-50">
-                              <Edit className="mr-2 h-4 w-4 text-amber-600" />
-                              <span className="text-slate-700">Edit Bill</span>
-                            </DropdownMenuItem>
-                            {sale.items && sale.items.some((item: any) => item.type === 'product') && (
+                            {canEditSale && (
+                              <DropdownMenuItem onClick={() => handleEditBill(sale)} className="hover:bg-amber-50">
+                                <Edit className="mr-2 h-4 w-4 text-amber-600" />
+                                <span className="text-slate-700">Edit Bill</span>
+                              </DropdownMenuItem>
+                            )}
+                            {canEditSale && sale.items && sale.items.some((item: any) => item.type === 'product') && (
                               <DropdownMenuItem onClick={() => handleExchangeBill(sale)} className="hover:bg-blue-50">
                                 <RefreshCw className="mr-2 h-4 w-4 text-blue-600" />
                                 <span className="text-slate-700">Exchange Products</span>
                               </DropdownMenuItem>
                             )}
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                setTimeout(() => handleDeleteSale(sale), 0)
-                              }}
-                              className="text-red-600 hover:bg-red-50"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </DropdownMenuItem>
+                            {canDeleteSale && (
+                              <DropdownMenuItem
+                                onSelect={() => {
+                                  setTimeout(() => handleDeleteSale(sale), 0)
+                                }}
+                                className="text-red-600 hover:bg-red-50"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                     </TableCell>

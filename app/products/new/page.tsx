@@ -17,8 +17,8 @@ export default function NewProductPage() {
   }
 
   return (
-    <ProtectedRoute requiredModule="products">
-      <ProtectedLayout>
+    <ProtectedRoute requiredModule="products" requiredFeature="create">
+      <ProtectedLayout requiredModule="products" requiredFeature="create">
         <div className="flex flex-col space-y-6">
               <div className="flex items-center gap-4">
                 <Button asChild variant="outline" size="icon">

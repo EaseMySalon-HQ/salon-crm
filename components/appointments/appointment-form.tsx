@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback, useRef, useReducer, type ReactNode } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef, useReducer, type ReactNode, type MutableRefObject } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -66,7 +66,7 @@ import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDire
 import type { Receipt as InvoiceReceipt } from "@/lib/data"
 import { isHiddenAppointment, getAppointmentStatusPillClass, getAppointmentEditAppearanceStatus } from "@/lib/appointment-calendar-helpers"
 import { readServiceCheckoutDraftByRef } from "@/lib/service-checkout-draft-storage"
-import { ServiceCheckoutDialog, type ServiceCheckoutLine, type EnsureAppointmentBookingResult } from "@/components/appointments/service-checkout-dialog"
+import { ServiceCheckoutDialog, type ServiceCheckoutLine, type EnsureAppointmentBookingResult, type ServiceCheckoutDialogHandle } from "@/components/appointments/service-checkout-dialog"
 import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
@@ -465,6 +465,10 @@ export interface AppointmentFormProps {
   onDrawerSelectedServiceCountChange?: (count: number) => void
   /** Drawer edit: unsaved field/service changes (for blocking dismiss while editing). */
   onEditAppointmentDirtyChange?: (dirty: boolean) => void
+  /** Drawer: checkout payment step active (for sheet title / back behavior). */
+  onServiceCheckoutPaymentStepChange?: (inPaymentStep: boolean) => void
+  /** Drawer: assign a function that exits payment-only step back to catalog. */
+  serviceCheckoutPaymentBackRef?: MutableRefObject<(() => void) | null>
 }
 
 export function AppointmentForm({
@@ -485,6 +489,8 @@ export function AppointmentForm({
   onDrawerHeaderStatusToneChange,
   onDrawerSelectedServiceCountChange,
   onEditAppointmentDirtyChange,
+  onServiceCheckoutPaymentStepChange,
+  serviceCheckoutPaymentBackRef,
 }: AppointmentFormProps = {}) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -610,6 +616,18 @@ export function AppointmentForm({
     },
     [serviceCheckoutControlled, onServiceCheckoutOpenChange]
   )
+
+  const serviceCheckoutRef = useRef<ServiceCheckoutDialogHandle>(null)
+
+  useEffect(() => {
+    if (!serviceCheckoutPaymentBackRef) return
+    serviceCheckoutPaymentBackRef.current = () => {
+      serviceCheckoutRef.current?.closePaymentStep()
+    }
+    return () => {
+      serviceCheckoutPaymentBackRef.current = null
+    }
+  }, [serviceCheckoutPaymentBackRef])
 
   const resumeCheckoutDraftRef = useRef(false)
   const consumeResumeDraftIntent = useCallback(() => {
@@ -3369,6 +3387,7 @@ export function AppointmentForm({
             {footerButtons}
           </div>
           <ServiceCheckoutDialog
+            ref={serviceCheckoutRef}
             variant="drawer"
             open={serviceCheckoutOpen}
             onOpenChange={setServiceCheckoutOpen}
@@ -3390,6 +3409,7 @@ export function AppointmentForm({
               isEditMode ? undefined : ensureAppointmentBookingBeforeCheckout
             }
             onSuccessfulCheckout={onSuccess}
+            onPaymentStepChange={onServiceCheckoutPaymentStepChange}
           />
         </div>
       ) : (

@@ -32,9 +32,12 @@ export function ServicesTable() {
   const [selectedService, setSelectedService] = useState<any>(null)
   const [services, setServices] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
 
-  const canManageServices = user?.role === "admin" || user?.role === "manager"
+  const canCreateService = hasPermission("services", "create")
+  const canEditService = hasPermission("services", "edit")
+  const canDeleteService = hasPermission("services", "delete")
+  const canShowActions = canEditService || canDeleteService
 
   const fetchServices = async () => {
     try {
@@ -231,7 +234,7 @@ export function ServicesTable() {
             </Button>
           )}
           
-          {canManageServices && (
+          {canCreateService && (
             <>
               <Button 
                 onClick={() => setIsImportDialogOpen(true)}
@@ -301,13 +304,13 @@ export function ServicesTable() {
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Duration</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Price</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Description</TableHead>
-                {canManageServices && <TableHead className="px-4 py-3 text-center font-semibold text-gray-700 w-[100px]">Actions</TableHead>}
+                {canShowActions && <TableHead className="px-4 py-3 text-center font-semibold text-gray-700 w-[100px]">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={canManageServices ? 6 : 5} className="text-center py-8">
+                  <TableCell colSpan={canShowActions ? 6 : 5} className="text-center py-8">
                     <div className="flex flex-col items-center space-y-2">
                       <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
                       <p className="text-gray-600 text-sm">Loading services...</p>
@@ -316,7 +319,7 @@ export function ServicesTable() {
                 </TableRow>
               ) : filteredServices.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={canManageServices ? 6 : 5} className="text-center py-8">
+                  <TableCell colSpan={canShowActions ? 6 : 5} className="text-center py-8">
                     <div className="flex flex-col items-center space-y-2">
                       <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
                         <Scissors className="h-6 w-6 text-gray-400" />
@@ -388,25 +391,29 @@ export function ServicesTable() {
                         )}
                       </div>
                     </TableCell>
-                    {canManageServices && (
+                    {canShowActions && (
                       <TableCell className="px-4 py-3">
                         <div className="flex items-center justify-center space-x-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEditService(service)}
-                            className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteService(service._id || service.id)}
-                            className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-600 transition-colors duration-200"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {canEditService && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditService(service)}
+                              className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {canDeleteService && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteService(service._id || service.id)}
+                              className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-600 transition-colors duration-200"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     )}
@@ -420,7 +427,7 @@ export function ServicesTable() {
       </div>
 
       {/* Edit Service Dialog */}
-      {canManageServices && (
+      {canEditService && (
         <Dialog open={isEditServiceOpen} onOpenChange={setIsEditServiceOpen}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>

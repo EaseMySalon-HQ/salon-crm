@@ -522,6 +522,7 @@ const initializeBusinessSettings = async () => {
 };
 // Import authentication middleware
 const { authenticateToken, requireAdmin, requireManager, requireStaff } = require('./middleware/auth');
+const { requirePermission } = require('./middleware/permissions');
 
 // Granular permission middleware
 const checkPermission = (module, feature) => {
@@ -2128,7 +2129,7 @@ app.get('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requ
 });
 
 // Update user permissions
-app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requirePermission('staff', 'manage'), async (req, res) => {
   try {
     const { permissions } = req.body;
     const { User } = req.mainModels;
@@ -2410,8 +2411,8 @@ app.get('/api/clients/:id', authenticateToken, setupBusinessDatabase, async (req
 app.post(
   '/api/clients',
   authenticateToken,
-  requireManager,
   setupBusinessDatabase,
+  requirePermission('clients', 'create'),
   validate(createClientBodySchema),
   async (req, res) => {
   try {
@@ -2484,7 +2485,7 @@ app.put(
   '/api/clients/:id',
   authenticateToken,
   setupBusinessDatabase,
-  requireManager,
+  requirePermission('clients', 'edit'),
   validateAll(
     [
       { schema: mongoIdParamSchema, source: 'params' },
@@ -2570,7 +2571,7 @@ app.delete(
   '/api/clients/:id',
   authenticateToken,
   setupBusinessDatabase,
-  requireAdmin,
+  requirePermission('clients', 'delete'),
   validate(mongoIdParamSchema, 'params'),
   async (req, res) => {
   try {
@@ -2796,7 +2797,7 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
 });
 
 // Import clients from Excel/CSV
-app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requirePermission('clients', 'create'), async (req, res) => {
   try {
     const { Client } = req.businessModels;
     const { clients, mapping, updateExisting } = req.body;
@@ -3883,7 +3884,7 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
   }
 });
 
-app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/services', authenticateToken, setupBusinessDatabase, requirePermission('services', 'create'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const body = req.body || {};
@@ -3980,7 +3981,7 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
   }
 });
 
-app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requirePermission('services', 'edit'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const body = req.body || {};
@@ -4123,7 +4124,7 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireMa
   }
 });
 
-app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requirePermission('services', 'delete'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const refBundle = await serviceBundle.findBundleReferencingService(
@@ -4160,7 +4161,7 @@ app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requir
 });
 
 // Bulk update tax applicable for all services
-app.patch('/api/services/tax-applicable', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.patch('/api/services/tax-applicable', authenticateToken, setupBusinessDatabase, requirePermission('services', 'edit'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const { taxApplicable } = req.body;
@@ -4190,7 +4191,7 @@ app.patch('/api/services/tax-applicable', authenticateToken, setupBusinessDataba
 });
 
 // Bulk delete services
-app.delete('/api/services', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/services', authenticateToken, setupBusinessDatabase, requirePermission('services', 'delete'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     
@@ -4214,7 +4215,7 @@ app.delete('/api/services', authenticateToken, setupBusinessDatabase, requireAdm
 });
 
 // Import services from Excel/CSV
-app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requirePermission('services', 'create'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const { services, mapping } = req.body;
@@ -4476,7 +4477,7 @@ app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabas
   }
 });
 
-app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), async (req, res) => {
   try {
     const { MembershipPlan, Service } = req.businessModels;
     const { planName, price, durationInDays, discountPercentage = 0, includedServices = [], isActive = true } = req.body;
@@ -4538,7 +4539,7 @@ app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'edit'), async (req, res) => {
   try {
     const { MembershipPlan, Service } = req.businessModels;
     const planId = req.params.id;
@@ -4603,7 +4604,7 @@ app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, r
   }
 });
 
-app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'edit'), async (req, res) => {
   try {
     const { MembershipPlan } = req.businessModels;
     const planId = req.params.id;
@@ -4628,7 +4629,7 @@ app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDa
 });
 
 // Subscription APIs
-app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), async (req, res) => {
   try {
     const { MembershipPlan, MembershipSubscription, Client } = req.businessModels;
     const { customerId, planId } = req.body;
@@ -4966,7 +4967,7 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
   }
 });
 
-app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/products', authenticateToken, setupBusinessDatabase, requirePermission('products', 'create'), async (req, res) => {
   try {
     const { Product, InventoryTransaction } = req.businessModels;
     const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit, imageUrl } = req.body;
@@ -5047,7 +5048,7 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
   }
 });
 
-app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requirePermission('products', 'edit'), async (req, res) => {
   try {
     
     const { Product, InventoryTransaction } = req.businessModels;
@@ -5174,7 +5175,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
 });
 
 // Bulk delete all products
-app.delete('/api/products', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/products', authenticateToken, setupBusinessDatabase, requirePermission('products', 'delete'), async (req, res) => {
   try {
     const { Product } = req.businessModels;
     
@@ -5197,7 +5198,7 @@ app.delete('/api/products', authenticateToken, setupBusinessDatabase, requireAdm
   }
 });
 
-app.delete('/api/products/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/products/:id', authenticateToken, setupBusinessDatabase, requirePermission('products', 'delete'), async (req, res) => {
   try {
     const { Product } = req.businessModels;
     const deletedProduct = await Product.findByIdAndDelete(req.params.id);
@@ -5223,7 +5224,7 @@ app.delete('/api/products/:id', authenticateToken, setupBusinessDatabase, requir
 });
 
 // Import products from Excel/CSV data
-app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requirePermission('products', 'create'), async (req, res) => {
   try {
     const { Product, InventoryTransaction } = req.businessModels;
     const { products, mapping } = req.body;
@@ -5800,7 +5801,7 @@ app.post(
 );
 
 // Create a new supplier
-app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requirePermission('products', 'create'), async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
     const { name, contactPerson, phone, whatsapp, email, address, gstNumber, paymentTerms, bankDetails, categories, notes } = req.body;
@@ -5859,7 +5860,7 @@ app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaf
 });
 
 // Update a supplier
-app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requirePermission('products', 'edit'), async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
     const { name, contactPerson, phone, whatsapp, email, address, gstNumber, paymentTerms, bankDetails, categories, notes, isActive } = req.body;
@@ -5929,7 +5930,7 @@ app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireS
 });
 
 // Delete a supplier
-app.delete('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requirePermission('products', 'delete'), async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
     const deletedSupplier = await Supplier.findByIdAndDelete(req.params.id);
@@ -7059,7 +7060,7 @@ app.get('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
 });
 
 // Create a new category
-app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/categories', authenticateToken, setupBusinessDatabase, requirePermission('services', 'create'), async (req, res) => {
   try {
     const { Category } = req.businessModels;
     const { name, description, type: typeParam } = req.body;
@@ -7118,7 +7119,7 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
 });
 
 // Update a category
-app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, requirePermission('services', 'edit'), async (req, res) => {
   try {
     const { Category } = req.businessModels;
     const { name, description, isActive } = req.body;
@@ -7177,7 +7178,7 @@ app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
 });
 
 // Delete a category
-app.delete('/api/categories/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/categories/:id', authenticateToken, setupBusinessDatabase, requirePermission('services', 'delete'), async (req, res) => {
   try {
     const { Category } = req.businessModels;
     const deletedCategory = await Category.findByIdAndDelete(req.params.id);
@@ -7203,7 +7204,7 @@ app.delete('/api/categories/:id', authenticateToken, setupBusinessDatabase, requ
 });
 
 // Update product stock
-app.patch('/api/products/:id/stock', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.patch('/api/products/:id/stock', authenticateToken, setupBusinessDatabase, requirePermission('products', 'edit'), async (req, res) => {
   try {
     const { Product } = req.businessModels;
     const { id } = req.params;
@@ -7431,7 +7432,7 @@ app.post(
   '/api/staff',
   authenticateToken,
   setupBusinessDatabase,
-  requireAdmin,
+  requirePermission('staff', 'create'),
   validate(createStaffBodySchema),
   async (req, res) => {
   try {
@@ -7529,6 +7530,7 @@ app.put(
   '/api/staff/:id',
   authenticateToken,
   setupBusinessDatabase,
+  requirePermission('staff', 'edit'),
   validateAll(
     [
       { schema: mongoIdParamSchema, source: 'params' },
@@ -7790,7 +7792,7 @@ app.delete(
   '/api/staff/:id',
   authenticateToken,
   setupBusinessDatabase,
-  requireAdmin,
+  requirePermission('staff', 'delete'),
   validate(mongoIdParamSchema, 'params'),
   async (req, res) => {
   try {
@@ -7848,7 +7850,7 @@ app.post(
   '/api/staff/:id/change-password',
   authenticateToken,
   setupBusinessDatabase,
-  requireManager,
+  requirePermission('staff', 'edit'),
   validateAll(
     [
       { schema: mongoIdParamSchema, source: 'params' },
@@ -9055,7 +9057,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
   }
 });
 
-app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requirePermission('appointments', 'create'), async (req, res) => {
   try {
     const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
     const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel } = req.body;
@@ -10652,7 +10654,7 @@ app.post('/api/appointments/finalize-for-billing', authenticateToken, setupBusin
 });
 
 // Update appointment
-app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requirePermission('appointments', 'edit'), async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = { ...req.body };
@@ -11089,7 +11091,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
 });
 
 // Delete appointment
-app.delete('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.delete('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requirePermission('appointments', 'delete'), async (req, res) => {
   try {
     const { id } = req.params;
     const { Appointment } = req.businessModels;
@@ -11218,7 +11220,13 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
 // reflected immediately.
 app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const cached = getDashboardCache(req.user.branchId);
+    const chartRangeRaw = typeof req.query.chartRange === 'string' ? req.query.chartRange.trim() : '';
+    const chartRange =
+      chartRangeRaw === 'last7days' || chartRangeRaw === 'last30days' ? chartRangeRaw : 'year';
+    const metricsRangeRaw = typeof req.query.metricsRange === 'string' ? req.query.metricsRange.trim() : '';
+    const metricsRange = metricsRangeRaw === 'last7days' ? 'last7days' : 'today';
+    const cacheVariant = `chart:${chartRange}|metrics:${metricsRange}`;
+    const cached = getDashboardCache(req.user.branchId, cacheVariant);
     if (cached) {
       markCache(res, 'HIT');
       return res.json(cached);
@@ -11227,8 +11235,10 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
       branchId: req.user.branchId,
       businessModels: req.businessModels,
       user: req.user,
+      chartRange,
+      metricsRange,
     });
-    setDashboardCache(req.user.branchId, payload);
+    setDashboardCache(req.user.branchId, payload, undefined, cacheVariant);
     markCache(res, 'MISS');
     res.json(payload);
   } catch (error) {
@@ -11617,7 +11627,7 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
   }
 });
 
-app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermission('sales', 'create'), async (req, res) => {
   try {
     if (process.env.DEBUG_SALES) {
       logger.debug('🔍 Sales POST request received');
@@ -12587,7 +12597,7 @@ app.get('/api/sales/:id', authenticateToken, setupBusinessDatabase, async (req, 
   }
 });
 
-app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermission('sales', 'edit'), async (req, res) => {
     const { Sale } = req.businessModels;
   
   // For standalone MongoDB, transactions are not supported
@@ -14385,7 +14395,7 @@ app.get("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
   }
 });
 
-app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, requirePermission('general_settings', 'edit'), async (req, res) => {
   try {
     logger.debug('📝 Business settings update request received for user:', req.user?.email, 'branchId:', req.user?.branchId);
     logger.debug('📊 Request body size:', JSON.stringify(req.body).length, 'characters');
@@ -14759,7 +14769,7 @@ app.get("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
   }
 });
 
-app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, requirePermission('pos_settings', 'edit'), async (req, res) => {
   try {
     const { invoicePrefix, autoResetReceipt } = req.body;
 
@@ -14810,7 +14820,7 @@ app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
   }
 });
 
-app.post("/api/settings/pos/reset-sequence", authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.post("/api/settings/pos/reset-sequence", authenticateToken, setupBusinessDatabase, requirePermission('pos_settings', 'manage'), async (req, res) => {
   try {
     const { BusinessSettings } = req.businessModels;
     let settings = await BusinessSettings.findOne();
@@ -14985,7 +14995,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
   }
 });
 
-app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, requirePermission('payment_settings', 'edit'), async (req, res) => {
   try {
     const { 
       currency, 
@@ -15076,7 +15086,7 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
   }
 });
 
-app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermission('sales', 'delete'), async (req, res) => {
   // For standalone MongoDB, transactions are not supported
   // We'll proceed without transactions - operations will still work
   // All operations will execute individually without atomic rollback
@@ -15592,7 +15602,7 @@ app.get('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
   }
 });
 
-app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'create'), async (req, res) => {
   try {
     const { CashRegistry, Sale, Expense } = req.businessModels;
     const {
@@ -15765,7 +15775,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
   }
 });
 
-app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'edit'), async (req, res) => {
   try {
     const {
       denominations,
@@ -15851,7 +15861,7 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
   }
 });
 
-app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'edit'), async (req, res) => {
   try {
     const { CashRegistry } = req.businessModels;
     const { type, reason, note } = req.body;
@@ -15890,7 +15900,7 @@ app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBu
   }
 });
 
-app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'manage'), async (req, res) => {
   try {
     const { CashRegistry, Sale, Expense } = req.businessModels;
     const { verificationNotes, balanceDifferenceReason, balanceDifferenceNote, onlineCashDifferenceReason, onlineCashDifferenceNote } = req.body;
@@ -16019,7 +16029,7 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
   }
 });
 
-app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'delete'), async (req, res) => {
   try {
     const { CashRegistry } = req.businessModels;
     const cashRegistry = await CashRegistry.findById(req.params.id);
