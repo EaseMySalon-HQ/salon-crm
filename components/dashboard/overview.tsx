@@ -1,6 +1,6 @@
 "use client"
 
-import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis } from "recharts"
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { useCurrency } from "@/hooks/use-currency"
 import { useDashboardInit } from "@/lib/queries/dashboard"
 
@@ -10,9 +10,13 @@ interface ChartData {
   revenue: number
 }
 
-export function Overview() {
+type OverviewProps = {
+  chartRange?: "year" | "last7days" | "last30days"
+}
+
+export function Overview({ chartRange = "year" }: OverviewProps) {
   const { getSymbol } = useCurrency()
-  const { data, isPending, isError } = useDashboardInit()
+  const { data, isPending, isError } = useDashboardInit({ chartRange })
 
   const chartRows: ChartData[] =
     data?.chart?.map((c: { name: string; appointments?: number; revenue?: number }) => ({
@@ -39,23 +43,15 @@ export function Overview() {
 
   return (
     <ResponsiveContainer width="100%" height={350}>
-      <BarChart data={chartRows}>
-        <defs>
-          <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.8} />
-            <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.6} />
-          </linearGradient>
-          <linearGradient id="appointmentsGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#10b981" stopOpacity={0.8} />
-            <stop offset="100%" stopColor="#059669" stopOpacity={0.6} />
-          </linearGradient>
-        </defs>
+      <LineChart data={chartRows} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="4 4" stroke="rgba(100, 116, 139, 0.25)" vertical horizontal />
         <XAxis
           dataKey="name"
           stroke="#64748b"
           fontSize={12}
           tickLine={false}
           axisLine={false}
+          tickMargin={8}
           tick={{ fill: "#64748b", fontWeight: 500 }}
         />
         <YAxis
@@ -66,19 +62,48 @@ export function Overview() {
           tickFormatter={(value) => `${getSymbol()}${value}`}
           tick={{ fill: "#64748b", fontWeight: 500 }}
         />
-        <Bar
+        <Tooltip
+          cursor={{ stroke: "rgba(59, 130, 246, 0.35)", strokeWidth: 1.5 }}
+          labelStyle={{ color: "#0f172a", fontWeight: 600 }}
+          formatter={(value: number, seriesName: string) => {
+            if (seriesName === "Appointment Value") {
+              return [`${getSymbol()}${Number(value || 0).toLocaleString("en-IN")}`, "Appointment Value"]
+            }
+            return [`${getSymbol()}${Number(value || 0).toLocaleString("en-IN")}`, "Revenue"]
+          }}
+          contentStyle={{
+            borderRadius: 10,
+            border: "1px solid rgba(148, 163, 184, 0.35)",
+            boxShadow: "0 8px 24px rgba(15, 23, 42, 0.08)",
+          }}
+        />
+        <Legend
+          verticalAlign="top"
+          align="right"
+          iconType="circle"
+          wrapperStyle={{ paddingBottom: 12, fontSize: 12 }}
+        />
+        <Line
           dataKey="revenue"
-          fill="url(#revenueGradient)"
-          radius={[6, 6, 0, 0]}
-          className="animate-in slide-in-from-bottom-2 duration-1000"
+          name="Revenue"
+          type="monotone"
+          stroke="#6366f1"
+          strokeWidth={3}
+          dot={{ r: 4, fill: "#6366f1", stroke: "#ffffff", strokeWidth: 2 }}
+          activeDot={{ r: 6, fill: "#4f46e5", stroke: "#ffffff", strokeWidth: 2 }}
+          className="animate-in slide-in-from-bottom-2 duration-700"
         />
-        <Bar
+        <Line
           dataKey="appointments"
-          fill="url(#appointmentsGradient)"
-          radius={[6, 6, 0, 0]}
-          className="animate-in slide-in-from-bottom-2 duration-1000 delay-200"
+          name="Appointment Value"
+          type="monotone"
+          stroke="#0f766e"
+          strokeWidth={2.5}
+          dot={{ r: 3.5, fill: "#0f766e", stroke: "#ffffff", strokeWidth: 2 }}
+          activeDot={{ r: 5.5, fill: "#115e59", stroke: "#ffffff", strokeWidth: 2 }}
+          className="animate-in slide-in-from-bottom-2 duration-700 delay-150"
         />
-      </BarChart>
+      </LineChart>
     </ResponsiveContainer>
   )
 }

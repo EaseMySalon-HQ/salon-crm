@@ -8,7 +8,7 @@ import { AppointmentForm } from "@/components/appointments/appointment-form"
 import { ClientDetailPanel } from "@/components/appointments/client-detail-panel"
 import { getAppointmentStatusSheetHeaderClass } from "@/lib/appointment-calendar-helpers"
 import { useToast } from "@/hooks/use-toast"
-import { useState, useCallback, useEffect, type ReactNode } from "react"
+import { useState, useCallback, useEffect, useRef, type ReactNode } from "react"
 import type { Client } from "@/lib/client-store"
 
 export interface AppointmentFormDrawerProps {
@@ -44,6 +44,8 @@ export function AppointmentFormDrawer({
   const [panelVisible, setPanelVisible] = useState(false)
   const [formOpenKey, setFormOpenKey] = useState(0)
   const [serviceCheckoutOpen, setServiceCheckoutOpen] = useState(false)
+  const [checkoutPaymentStep, setCheckoutPaymentStep] = useState(false)
+  const serviceCheckoutPaymentBackRef = useRef<(() => void) | null>(null)
   const [drawerHeaderEnd, setDrawerHeaderEnd] = useState<ReactNode>(null)
   const [drawerHeaderStatusTone, setDrawerHeaderStatusTone] = useState<string | null>(null)
   const [drawerSelectedServiceCount, setDrawerSelectedServiceCount] = useState(1)
@@ -55,11 +57,16 @@ export function AppointmentFormDrawer({
   useEffect(() => {
     if (!open) {
       setServiceCheckoutOpen(false)
+      setCheckoutPaymentStep(false)
       setDrawerHeaderStatusTone(null)
       setDrawerSelectedServiceCount(1)
       setEditAppointmentDirty(false)
     }
   }, [open])
+
+  useEffect(() => {
+    if (!serviceCheckoutOpen) setCheckoutPaymentStep(false)
+  }, [serviceCheckoutOpen])
 
   useEffect(() => {
     if (!appointmentId) {
@@ -161,13 +168,19 @@ export function AppointmentFormDrawer({
                     variant="ghost"
                     size="icon"
                     className="h-9 w-9 shrink-0 -ml-1 text-foreground"
-                    onClick={() => setServiceCheckoutOpen(false)}
-                    aria-label="Back to appointment"
+                    onClick={() => {
+                      if (checkoutPaymentStep && serviceCheckoutPaymentBackRef.current) {
+                        serviceCheckoutPaymentBackRef.current()
+                        return
+                      }
+                      setServiceCheckoutOpen(false)
+                    }}
+                    aria-label={checkoutPaymentStep ? "Back to cart items" : "Back to appointment"}
                   >
                     <ArrowLeft className="h-4 w-4" />
                   </Button>
                   <SheetTitle className="text-base font-semibold tracking-tight">
-                    Add to Cart
+                    {checkoutPaymentStep ? "Select Payment" : "Add to Cart"}
                   </SheetTitle>
                 </div>
               ) : (
@@ -202,6 +215,8 @@ export function AppointmentFormDrawer({
                 onCancel={handleCancel}
                 serviceCheckoutOpen={serviceCheckoutOpen}
                 onServiceCheckoutOpenChange={setServiceCheckoutOpen}
+                onServiceCheckoutPaymentStepChange={setCheckoutPaymentStep}
+                serviceCheckoutPaymentBackRef={serviceCheckoutPaymentBackRef}
                 initialClientIdForPrefill={initialClientId}
                 resumeServiceCheckoutDraft={resumeServiceCheckoutDraft}
                 resumeSavedDraftToken={resumeSavedDraftToken}

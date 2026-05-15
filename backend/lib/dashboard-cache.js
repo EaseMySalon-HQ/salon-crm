@@ -21,14 +21,14 @@ const MAX_ENTRIES = 5000;
 
 const store = new Map();
 
-function makeKey(branchId) {
+function makeKey(branchId, variant = 'default') {
   const day = toDateStringIST(new Date());
-  return `${String(branchId)}::${day}`;
+  return `${String(branchId)}::${day}::${String(variant || 'default')}`;
 }
 
-function getDashboardCache(branchId) {
+function getDashboardCache(branchId, variant = 'default') {
   if (!branchId) return null;
-  const key = makeKey(branchId);
+  const key = makeKey(branchId, variant);
   const entry = store.get(key);
   if (!entry) return null;
   if (entry.expiresAt < Date.now()) {
@@ -38,14 +38,14 @@ function getDashboardCache(branchId) {
   return entry.payload;
 }
 
-function setDashboardCache(branchId, payload, ttlMs = DEFAULT_TTL_MS) {
+function setDashboardCache(branchId, payload, ttlMs = DEFAULT_TTL_MS, variant = 'default') {
   if (!branchId || !payload) return;
   if (store.size >= MAX_ENTRIES) {
     /** Drop the oldest entry rather than refuse new writes — bound memory under load. */
     const firstKey = store.keys().next().value;
     if (firstKey) store.delete(firstKey);
   }
-  const key = makeKey(branchId);
+  const key = makeKey(branchId, variant);
   store.set(key, { payload, expiresAt: Date.now() + ttlMs });
 }
 

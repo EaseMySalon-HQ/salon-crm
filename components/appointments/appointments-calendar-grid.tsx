@@ -2556,7 +2556,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           draggingApt && (draggingApt.mode === "move" || draggingApt.mode === "resize-top")
                             ? ""
                             : "transition-colors duration-150 hover:transition-colors"
-                        } bg-transparent pointer-events-none ${
+                        } bg-transparent pointer-events-auto ${
                           isDragHighlightValid
                             ? "ring-2 ring-violet-700/80 ring-inset"
                             : isInDragHighlight && !isDragHighlightValid
@@ -2579,81 +2579,8 @@ export const AppointmentsCalendarGrid = forwardRef<
             {columns.length > 0 && (
               <div
                 ref={blocksContainerRef}
-                className={`absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] ${CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS} pointer-events-auto`}
+                className={`absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] ${CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS} pointer-events-none`}
                 style={{ height: totalSlotsWithSales * slotHeight }}
-                onMouseMove={(e) => {
-                  if (draggingApt || slotActionDialog) return
-                  const el = e.target as HTMLElement
-                  if (
-                    el.closest("[data-calendar-appt-slot]") ||
-                    el.closest("[data-appointment-card]") ||
-                    el.closest("[data-sale-card]") ||
-                    el.closest("[data-block-time]")
-                  ) {
-                    hideSlotHoverTip()
-                    return
-                  }
-                  const rect = blocksContainerRef.current?.getBoundingClientRect()
-                  if (!rect) return
-                  const relX = e.clientX - rect.left
-                  const relY = e.clientY - rect.top
-                  if (relY < 0 || relX < 0 || relX > rect.width || relY > rect.height) {
-                    hideSlotHoverTip()
-                    return
-                  }
-                  const slotIndex = Math.floor(relY / slotHeight)
-                  const slotM = extendedStartMinutes + slotIndex * SLOT_MINUTES
-                  if (slotM < extendedStartMinutes || slotM >= extendedEndMinutes) {
-                    hideSlotHoverTip()
-                    return
-                  }
-                  const colIx = Math.floor(relX / (rect.width / Math.max(1, columns.length)))
-                  const col = columns[colIx]
-                  if (!col) {
-                    hideSlotHoverTip()
-                    return
-                  }
-                  const windowForStaff = staffWindowsById[col._id]
-                  const inWin =
-                    !windowForStaff ||
-                    (windowForStaff.enabled && slotM >= windowForStaff.start && slotM < windowForStaff.end)
-                  const tip = inWin
-                    ? `New appointment with ${col.name} at ${slotMinutesToTimeString(slotM)}`
-                    : `Unavailable at ${slotMinutesToTimeString(slotM)} (outside working hours)`
-                  setSlotHoverTip({ text: tip, clientX: e.clientX, clientY: e.clientY })
-                }}
-                onMouseLeave={hideSlotHoverTip}
-                onClick={(e) => {
-                  if (justDraggedRef.current) return
-                  const target = e.target as HTMLElement
-                  if (
-                    target.closest("[data-calendar-appt-slot]") ||
-                    target.closest("[data-appointment-card]") ||
-                    target.closest("[data-sale-card]") ||
-                    target.closest("[data-block-time]")
-                  )
-                    return
-                  e.stopPropagation()
-                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                  const relY = e.clientY - rect.top
-                  const slotIndex = Math.floor(relY / slotHeight)
-                  const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
-                  if (slotMinutes < extendedStartMinutes || slotMinutes >= extendedEndMinutes) return
-                  const colIndex = Math.floor((e.clientX - rect.left) / (rect.width / columns.length))
-                  const col = columns[colIndex]
-                  if (!col) return
-                  const windowForStaff = staffWindowsById[col._id]
-                  const inWorkWindow = !windowForStaff || (windowForStaff.enabled && slotMinutes >= windowForStaff.start && slotMinutes < windowForStaff.end)
-                  if (!inWorkWindow) return
-                  setSlotActionDialog({
-                    date: selectedDate,
-                    time: slotMinutesToTimeString(slotMinutes),
-                    staffId: col._id,
-                    staffName: col.name,
-                    clientX: e.clientX,
-                    clientY: e.clientY,
-                  })
-                }}
               >
               {columns.map((col, colIndex) => {
                 return (

@@ -11220,7 +11220,13 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
 // reflected immediately.
 app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const cached = getDashboardCache(req.user.branchId);
+    const chartRangeRaw = typeof req.query.chartRange === 'string' ? req.query.chartRange.trim() : '';
+    const chartRange =
+      chartRangeRaw === 'last7days' || chartRangeRaw === 'last30days' ? chartRangeRaw : 'year';
+    const metricsRangeRaw = typeof req.query.metricsRange === 'string' ? req.query.metricsRange.trim() : '';
+    const metricsRange = metricsRangeRaw === 'last7days' ? 'last7days' : 'today';
+    const cacheVariant = `chart:${chartRange}|metrics:${metricsRange}`;
+    const cached = getDashboardCache(req.user.branchId, cacheVariant);
     if (cached) {
       markCache(res, 'HIT');
       return res.json(cached);
@@ -11229,8 +11235,10 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
       branchId: req.user.branchId,
       businessModels: req.businessModels,
       user: req.user,
+      chartRange,
+      metricsRange,
     });
-    setDashboardCache(req.user.branchId, payload);
+    setDashboardCache(req.user.branchId, payload, undefined, cacheVariant);
     markCache(res, 'MISS');
     res.json(payload);
   } catch (error) {

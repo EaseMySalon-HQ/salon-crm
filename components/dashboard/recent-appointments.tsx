@@ -11,6 +11,7 @@ interface RecentItem {
   name: string
   avatar?: string
   service: string
+  staffName: string
   timeLabel: string
   price: number
   status: string
@@ -64,6 +65,7 @@ export function RecentAppointments() {
       name: a?.clientId?.name || "Client",
       avatar: "/placeholder.svg",
       service: a?.serviceId?.name || "Service",
+      staffName: String(a?.staffName || "").trim(),
       timeLabel,
       price: Number(a?.price || a?.serviceId?.price || 0),
       status: a?.status || "scheduled",
@@ -72,7 +74,7 @@ export function RecentAppointments() {
   })
 
   const scrollClass =
-    "max-h-[min(32rem,55vh)] overflow-y-auto overflow-x-hidden overscroll-contain space-y-4 pr-1 [-webkit-overflow-scrolling:touch]"
+    "h-full overflow-y-auto overflow-x-hidden overscroll-contain space-y-4 pr-1 [-webkit-overflow-scrolling:touch]"
 
   if (isPending) {
     return (
@@ -102,10 +104,30 @@ export function RecentAppointments() {
             label: "Cancelled",
             amount: "text-rose-500 group-hover:text-rose-600 line-through",
           },
+          cancelled_at_billing: {
+            badge: "bg-rose-100 text-rose-700",
+            label: "Cancelled",
+            amount: "text-rose-500 group-hover:text-rose-600 line-through",
+          },
+          missed: {
+            badge: "bg-slate-200 text-slate-700",
+            label: "Missed",
+            amount: "text-slate-500 group-hover:text-slate-600",
+          },
           confirmed: {
             badge: "bg-blue-100 text-blue-700",
             label: "Confirmed",
             amount: "text-blue-600 group-hover:text-blue-700",
+          },
+          arrived: {
+            badge: "bg-violet-100 text-violet-700",
+            label: "Arrived",
+            amount: "text-violet-600 group-hover:text-violet-700",
+          },
+          service_started: {
+            badge: "bg-cyan-100 text-cyan-700",
+            label: "Service started",
+            amount: "text-cyan-600 group-hover:text-cyan-700",
           },
           scheduled: {
             badge: "bg-amber-100 text-amber-700",
@@ -114,7 +136,8 @@ export function RecentAppointments() {
           },
         }
 
-        const status = statusStyles[appointment.status] || statusStyles["scheduled"]
+        const statusKey = String(appointment.status || "scheduled").trim().toLowerCase()
+        const status = statusStyles[statusKey] || statusStyles["scheduled"]
 
         return (
           <button
@@ -143,7 +166,7 @@ export function RecentAppointments() {
                   <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${status.badge}`}>{status.label}</span>
                 </div>
                 <p className="text-sm text-gray-600 group-hover:text-blue-600 transition-colors duration-300">
-                  {appointment.service}
+                  {appointment.service} with {appointment.staffName || "Unassigned Staff"}
                 </p>
                 <p className="text-xs text-gray-500 group-hover:text-gray-700 transition-colors duration-300">
                   {appointment.timeLabel}

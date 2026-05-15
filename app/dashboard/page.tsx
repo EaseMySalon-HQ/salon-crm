@@ -1,75 +1,99 @@
-import Link from "next/link"
-import { Receipt, TrendingUp, Calendar, Users, BarChart3, Package, CreditCard } from "lucide-react"
+"use client"
+
+import { useState } from "react"
+import { TrendingUp, Calendar, BarChart3, MoreVertical, ChevronDown } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Overview } from "@/components/dashboard/overview"
 import { RecentAppointments } from "@/components/dashboard/recent-appointments"
-import { DashboardStatsCards, MembershipStatsCards, ServiceStatsCards } from "@/components/dashboard/stats-cards"
-import { ProductStatsCards } from "@/components/dashboard/stats-cards"
+import { DashboardStatsCards, DashboardTopPerformersCards } from "@/components/dashboard/stats-cards"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { DashboardGate } from "@/components/dashboard/dashboard-gate"
 
 export default function DashboardPage() {
+  const [salesOverviewRange, setSalesOverviewRange] = useState<"last7days" | "last30days">("last7days")
+  const [keyMetricsRange, setKeyMetricsRange] = useState<"today" | "last7days">("today")
+
   return (
     <ProtectedLayout requiredModule="dashboard">
       <DashboardGate>
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
-        <div className="mb-8 animate-in fade-in" style={{ animationDelay: "200ms" }}>
-          <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 rounded-2xl p-8 text-white shadow-2xl hover:shadow-3xl transition-all duration-500 transform hover:scale-[1.01]">
-            <div className="flex items-center justify-between">
-              <div className="space-y-2">
-                <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-100">
-                  Welcome to EaseMySalon
-                </h1>
-                <p className="text-indigo-100 text-lg">Manage your salon operations with ease and efficiency</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <Button asChild className="bg-white/20 hover:bg-white/30 backdrop-blur-sm border-white/30 transform hover:scale-105 transition-all duration-300">
-                  <Link prefetch={false} href="/appointments/new">
-                    <Calendar className="mr-2 h-4 w-4" />
-                    New Appointment
-                  </Link>
-                </Button>
-                <Button
-                  asChild
-                  variant="secondary"
-                  className="bg-white text-indigo-600 hover:bg-gray-100 transform hover:scale-105 transition-all duration-300"
-                >
-                  <Link prefetch={false} href="/quick-sale">
-                    <Receipt className="mr-2 h-4 w-4" />
-                    Quick Sale
-                  </Link>
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div className="mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "400ms" }}>
-          <div className="flex items-center gap-3 mb-6">
-            <TrendingUp className="h-6 w-6 text-indigo-600" />
-            <h2 className="text-2xl font-semibold text-gray-800">Key Metrics</h2>
+          <div className="mb-6 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <TrendingUp className="h-6 w-6 text-indigo-600" />
+              <h2 className="text-2xl font-semibold text-gray-800">Key Metrics</h2>
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" size="sm" className="h-9 rounded-md">
+                  {keyMetricsRange === "today" ? "Today" : "Last 7 days"}
+                  <ChevronDown className="h-4 w-4 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem onClick={() => setKeyMetricsRange("today")}>
+                  {keyMetricsRange === "today" ? "✓ " : ""}Today
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setKeyMetricsRange("last7days")}>
+                  {keyMetricsRange === "last7days" ? "✓ " : ""}Last 7 days
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-          <DashboardStatsCards />
+          <DashboardStatsCards metricsRange={keyMetricsRange} />
         </div>
 
         <div className="grid gap-8 mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "600ms" }}>
-          <div className="grid items-start gap-6 md:grid-cols-2 lg:grid-cols-7">
-            <Card className="col-span-4 transform hover:scale-[1.02] transition-all duration-300 shadow-lg hover:shadow-xl border-0 bg-white/80 backdrop-blur-sm">
-              <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-lg border-b border-blue-100">
-                <CardTitle className="flex items-center gap-2 text-blue-800">
-                  <BarChart3 className="h-5 w-5" />
-                  Monthly Overview
-                </CardTitle>
-                <CardDescription className="text-blue-600">Appointments and revenue trends for the current month</CardDescription>
+          <div className="grid items-stretch gap-6 md:grid-cols-2 lg:grid-cols-7">
+            <Card className="col-span-4 h-full shadow-lg border-0 bg-white/80 backdrop-blur-sm">
+              <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-lg border-b border-blue-100 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-blue-800">
+                      <BarChart3 className="h-5 w-5" />
+                      Sales Overview
+                    </CardTitle>
+                    <CardDescription className="text-blue-600">
+                      Sales and revenue trends for the selected range
+                    </CardDescription>
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 rounded-md border border-blue-200 bg-white/85 text-blue-800 hover:bg-blue-50"
+                        aria-label="Sales range options"
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44">
+                      <DropdownMenuItem onClick={() => setSalesOverviewRange("last7days")}>
+                        {salesOverviewRange === "last7days" ? "✓ " : ""}Last 7 days
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setSalesOverviewRange("last30days")}>
+                        {salesOverviewRange === "last30days" ? "✓ " : ""}Last 30 days
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </CardHeader>
               <CardContent className="p-6">
-                <Overview />
+                <Overview chartRange={salesOverviewRange} />
               </CardContent>
             </Card>
 
-            <Card className="col-span-3 transform hover:scale-[1.02] transition-all duration-300 shadow-lg hover:shadow-xl border-0 bg-white/80 backdrop-blur-sm">
+            <Card className="col-span-3 h-full shadow-lg border-0 bg-white/80 backdrop-blur-sm">
               <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-t-lg border-b border-green-100">
                 <CardTitle className="flex items-center gap-2 text-green-800">
                   <Calendar className="h-5 w-5" />
@@ -77,7 +101,7 @@ export default function DashboardPage() {
                 </CardTitle>
                 <CardDescription className="text-green-600">Latest scheduled appointments and activities</CardDescription>
               </CardHeader>
-              <CardContent className="p-6">
+              <CardContent className="p-6 h-[350px]">
                 <RecentAppointments />
               </CardContent>
             </Card>
@@ -85,28 +109,9 @@ export default function DashboardPage() {
         </div>
 
         <div className="mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "700ms" }}>
-          <div className="flex items-center gap-3 mb-6">
-            <CreditCard className="h-6 w-6 text-violet-600" />
-            <h2 className="text-2xl font-semibold text-gray-800">Membership</h2>
-          </div>
-          <MembershipStatsCards />
+          <DashboardTopPerformersCards />
         </div>
 
-        <div className="mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "800ms" }}>
-          <div className="flex items-center gap-3 mb-6">
-            <Users className="h-6 w-6 text-emerald-600" />
-            <h2 className="text-2xl font-semibold text-gray-800">Service Analytics</h2>
-          </div>
-          <ServiceStatsCards />
-        </div>
-
-        <div className="mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "1000ms" }}>
-          <div className="flex items-center gap-3 mb-6">
-            <Package className="h-6 w-6 text-orange-600" />
-            <h2 className="text-2xl font-semibold text-gray-800">Inventory Overview</h2>
-          </div>
-          <ProductStatsCards />
-        </div>
       </div>
       </DashboardGate>
     </ProtectedLayout>
