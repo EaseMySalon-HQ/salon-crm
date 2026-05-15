@@ -9,14 +9,12 @@ import {
   Gift,
   ShoppingBag,
   Wallet,
-  Layers,
   Plus,
   Minus,
   Trash2,
   ChevronDown,
   ChevronRight,
   Loader2,
-  Package,
   Pencil,
   Percent,
   Coins,
@@ -81,7 +79,6 @@ import {
   ClientWalletAPI,
   ClientsAPI,
   MembershipAPI,
-  PackagesAPI,
   ProductsAPI,
   RewardPointsAPI,
   SettingsAPI,
@@ -178,18 +175,6 @@ export type ServiceCheckoutMembershipLine = {
   planName: string
   price: number
   durationInDays: number
-  quantity: number
-  discountValue?: number
-  discountIsPercent?: boolean
-}
-
-export type ServiceCheckoutPackageLine = {
-  id: string
-  packageId: string
-  staffId: string
-  packageName: string
-  totalSittings: number
-  price: number
   quantity: number
   discountValue?: number
   discountIsPercent?: boolean
@@ -552,10 +537,6 @@ function cloneMembershipLines(
   return lines.map((l) => ({ ...l }))
 }
 
-function clonePackageLines(lines: ServiceCheckoutPackageLine[]): ServiceCheckoutPackageLine[] {
-  return lines.map((l) => ({ ...l }))
-}
-
 function clonePrepaidLines(lines: ServiceCheckoutPrepaidLine[]): ServiceCheckoutPrepaidLine[] {
   return lines.map((l) => ({ ...l }))
 }
@@ -564,7 +545,6 @@ type ServiceCheckoutCategory =
   | "services"
   | "products"
   | "memberships"
-  | "package"
   | "prepaidPlans"
   | "giftVoucher"
 
@@ -577,7 +557,6 @@ const CATEGORY_TILES: Array<{
   { id: "services", label: "Services", Icon: CalendarDays },
   { id: "products", label: "Products", Icon: ShoppingBag },
   { id: "memberships", label: "Memberships", Icon: CreditCard },
-  { id: "package", label: "Package", Icon: Layers },
   { id: "prepaidPlans", label: "Prepaid Plans", Icon: Wallet },
   { id: "giftVoucher", label: "Gift Voucher", Icon: Gift, comingSoon: true },
 ]
@@ -598,7 +577,7 @@ function CheckoutProductThumb({ imageUrl }: { imageUrl?: string | null }) {
         className="flex aspect-square w-full items-center justify-center rounded-lg bg-muted ring-1 ring-border/50"
         aria-hidden
       >
-        <Package className="h-10 w-10 text-muted-foreground" />
+        <ShoppingBag className="h-10 w-10 text-muted-foreground" />
       </div>
     )
   }
@@ -682,7 +661,6 @@ export function ServiceCheckoutDialog({
   const snapshotRef = useRef<ServiceCheckoutLine[]>([])
   const productSnapshotRef = useRef<ServiceCheckoutProductLine[]>([])
   const membershipSnapshotRef = useRef<ServiceCheckoutMembershipLine[]>([])
-  const packageSnapshotRef = useRef<ServiceCheckoutPackageLine[]>([])
   const prepaidSnapshotRef = useRef<ServiceCheckoutPrepaidLine[]>([])
   const wasOpenRef = useRef(false)
   /** Latest save / resume token for this checkout session (clear on continue or cancel draft). */
@@ -696,11 +674,6 @@ export function ServiceCheckoutDialog({
   const [membershipSearch, setMembershipSearch] = useState("")
   const [catalogMembershipPlans, setCatalogMembershipPlans] = useState<any[]>([])
   const [loadingMemberships, setLoadingMemberships] = useState(false)
-
-  const [packageLines, setPackageLines] = useState<ServiceCheckoutPackageLine[]>([])
-  const [packageSearch, setPackageSearch] = useState("")
-  const [catalogPackages, setCatalogPackages] = useState<any[]>([])
-  const [loadingPackages, setLoadingPackages] = useState(false)
 
   const [prepaidLines, setPrepaidLines] = useState<ServiceCheckoutPrepaidLine[]>([])
   const [prepaidSearch, setPrepaidSearch] = useState("")
@@ -895,12 +868,10 @@ export function ServiceCheckoutDialog({
           snapshotRef.current = cloneLines(draft.bookingSnapshot)
           productSnapshotRef.current = []
           membershipSnapshotRef.current = []
-          packageSnapshotRef.current = []
           prepaidSnapshotRef.current = []
           setLines(cloneLines(draft.lines))
           setProductLines(cloneProductLines(draft.productLines))
           setMembershipLines(cloneMembershipLines(draft.membershipLines))
-          setPackageLines(clonePackageLines(draft.packageLines))
           setPrepaidLines(clonePrepaidLines(draft.prepaidLines))
           if (Array.isArray(draft.checkoutTipLines) && draft.checkoutTipLines.length > 0) {
             setCheckoutTipLines(cloneCheckoutTipLines(draft.checkoutTipLines as CheckoutTipLine[]))
@@ -929,7 +900,6 @@ export function ServiceCheckoutDialog({
           setCategory("services")
           setProductSearch("")
           setMembershipSearch("")
-          setPackageSearch("")
           setPrepaidSearch("")
           setHasPersistedDraft(true)
           wasOpenRef.current = open
@@ -953,9 +923,6 @@ export function ServiceCheckoutDialog({
       membershipSnapshotRef.current = []
       setMembershipLines([])
       setMembershipSearch("")
-      packageSnapshotRef.current = []
-      setPackageLines([])
-      setPackageSearch("")
       prepaidSnapshotRef.current = []
       setPrepaidLines([])
       setPrepaidSearch("")
@@ -1017,29 +984,6 @@ export function ServiceCheckoutDialog({
       })
       .finally(() => {
         if (!cancelled) setLoadingMemberships(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    setLoadingPackages(true)
-    PackagesAPI.getAll({ status: "ACTIVE", limit: 500 })
-      .then((res) => {
-        if (cancelled || !res?.success) {
-          if (!cancelled) setCatalogPackages([])
-          return
-        }
-        if (!cancelled) setCatalogPackages(res.data?.packages || [])
-      })
-      .catch(() => {
-        if (!cancelled) setCatalogPackages([])
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingPackages(false)
       })
     return () => {
       cancelled = true
@@ -1130,15 +1074,6 @@ export function ServiceCheckoutDialog({
     })
   }, [catalogMembershipPlans, membershipSearch])
 
-  const filteredPackages = useMemo(() => {
-    const q = packageSearch.trim().toLowerCase()
-    return (catalogPackages || []).filter((pkg: any) => {
-      if (!q) return true
-      const name = (pkg.name || "").toLowerCase()
-      return name.includes(q)
-    })
-  }, [catalogPackages, packageSearch])
-
   const filteredPrepaidPlans = useMemo(() => {
     const q = prepaidSearch.trim().toLowerCase()
     return (catalogPrepaidPlans || []).filter((plan: any) => {
@@ -1154,7 +1089,6 @@ export function ServiceCheckoutDialog({
     const inclusive = ts?.priceInclusiveOfTax !== false
     const sRate = ts?.serviceTaxRate ?? 5
     const mRate = ts?.membershipTaxRate ?? sRate
-    const pRate = ts?.packageTaxRate ?? sRate
     const prRate = ts?.prepaidWalletTaxRate ?? sRate
 
     let lineNetSum = 0
@@ -1252,12 +1186,6 @@ export function ServiceCheckoutDialog({
       addLine(net, net, mRate, true)
     })
 
-    packageLines.forEach((l) => {
-      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
-      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
-      addLine(net, net, pRate, true)
-    })
-
     prepaidLines.forEach((l) => {
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
       const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
@@ -1277,7 +1205,6 @@ export function ServiceCheckoutDialog({
     lines,
     productLines,
     membershipLines,
-    packageLines,
     prepaidLines,
     checkoutTaxSettings,
     catalogServices,
@@ -1337,7 +1264,6 @@ export function ServiceCheckoutDialog({
     const factor = toPay > 1e-9 ? afterPay / toPay : 0
     const sRate = ts.serviceTaxRate ?? 5
     const mRate = ts.membershipTaxRate ?? sRate
-    const pRate = ts.packageTaxRate ?? sRate
     const prRate = ts.prepaidWalletTaxRate ?? sRate
 
     for (const l of lines) {
@@ -1391,13 +1317,6 @@ export function ServiceCheckoutDialog({
       const gross = lineGrossPayableForCheckout(net, mRate, true, ts)
       out.push({ type: "membership", total: gross * factor })
     }
-    for (const l of packageLines) {
-      if (!l.packageId) continue
-      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
-      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
-      const gross = lineGrossPayableForCheckout(net, pRate, true, ts)
-      out.push({ type: "package", total: gross * factor })
-    }
     for (const l of prepaidLines) {
       if (!l.planId) continue
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
@@ -1414,7 +1333,6 @@ export function ServiceCheckoutDialog({
     lines,
     productLines,
     membershipLines,
-    packageLines,
     prepaidLines,
     catalogServices,
     catalogProducts,
@@ -1526,7 +1444,6 @@ export function ServiceCheckoutDialog({
     lines.length > 0 ||
     productLines.length > 0 ||
     membershipLines.length > 0 ||
-    packageLines.length > 0 ||
     prepaidLines.length > 0
 
   const clientInitial =
@@ -1538,7 +1455,6 @@ export function ServiceCheckoutDialog({
     setLines(cloneLines(snapshotRef.current))
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
-    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
     toast({
       title: "Cart restored",
@@ -1551,7 +1467,6 @@ export function ServiceCheckoutDialog({
       lines.find((l) => l.staffId)?.staffId ||
       productLines.find((l) => l.staffId)?.staffId ||
       membershipLines.find((l) => l.staffId)?.staffId ||
-      packageLines.find((l) => l.staffId)?.staffId ||
       prepaidLines.find((l) => l.staffId)?.staffId ||
       staffOptions[0]?.id ||
       ""
@@ -1758,10 +1673,6 @@ export function ServiceCheckoutDialog({
     setMembershipLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
   }
 
-  function patchPackageLine(lineId: string, patch: Partial<ServiceCheckoutPackageLine>) {
-    setPackageLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
-  }
-
   function patchPrepaidLine(lineId: string, patch: Partial<ServiceCheckoutPrepaidLine>) {
     setPrepaidLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
   }
@@ -1799,44 +1710,6 @@ export function ServiceCheckoutDialog({
 
   function setMembershipLineStaff(lineId: string, staffId: string) {
     setMembershipLines((prev) =>
-      prev.map((l) => (l.id === lineId ? { ...l, staffId } : l))
-    )
-  }
-
-  function addCatalogPackage(pkg: any) {
-    const packageId = String(pkg._id || pkg.id || "")
-    if (!packageId) return
-    const defaultStaffId = defaultStaffAcrossCart()
-    const price = Number(pkg.total_price) || 0
-    setPackageLines((prev) => [
-      ...prev,
-      {
-        id: `pkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        packageId,
-        staffId: defaultStaffId,
-        packageName: pkg.name || "Package",
-        totalSittings: Number(pkg.total_sittings) || 0,
-        price,
-        quantity: 1,
-        discountValue: 0,
-        discountIsPercent: true,
-      },
-    ])
-  }
-
-  function removePackageLine(id: string) {
-    setPackageLines((prev) => prev.filter((l) => l.id !== id))
-  }
-
-  function setPackageQuantity(lineId: string, quantity: number) {
-    const q = Math.max(1, Math.floor(quantity) || 1)
-    setPackageLines((prev) =>
-      prev.map((l) => (l.id === lineId ? { ...l, quantity: q } : l))
-    )
-  }
-
-  function setPackageLineStaff(lineId: string, staffId: string) {
-    setPackageLines((prev) =>
       prev.map((l) => (l.id === lineId ? { ...l, staffId } : l))
     )
   }
@@ -1888,7 +1761,6 @@ export function ServiceCheckoutDialog({
     const hasExtras =
       productLines.length > 0 ||
       membershipLines.length > 0 ||
-      packageLines.length > 0 ||
       prepaidLines.length > 0
     if (lines.length === 0 && !hasExtras) {
       toast({
@@ -1914,14 +1786,6 @@ export function ServiceCheckoutDialog({
       toast({
         title: "Assign staff",
         description: "Every membership line needs a staff member.",
-        variant: "destructive",
-      })
-      return false
-    }
-    if (packageLines.length > 0 && packageLines.some((l) => l.packageId && !l.staffId)) {
-      toast({
-        title: "Assign staff",
-        description: "Every package line needs a staff member.",
         variant: "destructive",
       })
       return false
@@ -2295,22 +2159,6 @@ export function ServiceCheckoutDialog({
               }),
             }
           : {}),
-        ...(packageLines.length > 0
-          ? {
-              packages: packageLines.map((p) => {
-                const q = Math.max(1, Math.floor(Number(p.quantity) || 1))
-                return {
-                  packageId: p.packageId,
-                  staffId: p.staffId || "",
-                  packageName: p.packageName,
-                  totalSittings: p.totalSittings,
-                  price: p.price,
-                  quantity: q,
-                  discount: lineDiscountAsPayloadPercent(p.price, q, p.discountValue, p.discountIsPercent),
-                }
-              }),
-            }
-          : {}),
         ...(prepaidLines.length > 0
           ? {
               prepaidPlans: prepaidLines.map((pr) => {
@@ -2392,7 +2240,6 @@ export function ServiceCheckoutDialog({
         catalogServices,
         catalogProducts,
         catalogMembershipPlans,
-        catalogPackages,
         catalogPrepaidPlans,
         checkoutTaxSettings,
         checkoutPaymentConfiguration,
@@ -2452,7 +2299,6 @@ export function ServiceCheckoutDialog({
         lines: cloneLines(lines),
         productLines: cloneProductLines(productLines),
         membershipLines: cloneMembershipLines(membershipLines),
-        packageLines: clonePackageLines(packageLines),
         prepaidLines: clonePrepaidLines(prepaidLines),
         checkoutTipLines: cloneCheckoutTipLines(checkoutTipLines),
         checkoutCartDiscountType,
@@ -2486,7 +2332,6 @@ export function ServiceCheckoutDialog({
     setLines(cloneLines(snapshotRef.current))
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
-    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
     clearCheckoutExtras()
     setCancelDraftDialogOpen(false)
@@ -2506,7 +2351,6 @@ export function ServiceCheckoutDialog({
     setLines(cloneLines(snapshotRef.current))
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
-    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
     clearCheckoutExtras()
     setCancelSaleDialogOpen(false)
@@ -2774,16 +2618,6 @@ export function ServiceCheckoutDialog({
                     className="pl-9 rounded-lg bg-background"
                   />
                 </div>
-              ) : category === "package" ? (
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search packages"
-                    value={packageSearch}
-                    onChange={(e) => setPackageSearch(e.target.value)}
-                    className="pl-9 rounded-lg bg-background"
-                  />
-                </div>
               ) : category === "prepaidPlans" ? (
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -3027,64 +2861,6 @@ export function ServiceCheckoutDialog({
                                     ₹{price}
                                     {days ? ` · ${days} days` : ""}
                                   </div>
-                                </div>
-                              </button>
-                            )
-                          })
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {category === "package" && (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-foreground">Service packages</h3>
-                      <button
-                        type="button"
-                        className="text-xs font-medium text-violet-600 hover:text-violet-700 underline-offset-2 hover:underline"
-                        onClick={() =>
-                          setPackageLines(clonePackageLines(packageSnapshotRef.current))
-                        }
-                      >
-                        Clear packages
-                      </button>
-                    </div>
-                    {loadingPackages ? (
-                      <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading packages…
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {filteredPackages.length === 0 ? (
-                          <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
-                            No packages match your search.
-                          </p>
-                        ) : (
-                          filteredPackages.map((pkg: any) => {
-                            const id = String(pkg._id || pkg.id)
-                            const price = Number(pkg.total_price) || 0
-                            return (
-                              <button
-                                key={id}
-                                type="button"
-                                onClick={() => addCatalogPackage(pkg)}
-                                className={cn(
-                                  "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
-                                  "hover:border-emerald-300/90 hover:bg-emerald-50/45 transition-colors"
-                                )}
-                              >
-                                <span
-                                  className="w-1 self-stretch rounded-full bg-emerald-500 shrink-0"
-                                  aria-hidden
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <div className="font-medium text-foreground truncate">
-                                    {pkg.name || "Package"}
-                                  </div>
-                                  <div className="text-sm text-muted-foreground">₹{price}</div>
                                 </div>
                               </button>
                             )
@@ -3738,160 +3514,6 @@ export function ServiceCheckoutDialog({
                     </div>
                   )
                 })}
-                {packageLines.map((line) => {
-                  const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
-                  const qty = Math.max(1, Math.floor(Number(line.quantity) || 1))
-                  const unit = Number(line.price) || 0
-                  const discVal = Number(line.discountValue) || 0
-                  const discIsPct = line.discountIsPercent !== false
-                  const lineTotal = lineNetAfterLineDiscount(unit, qty, discVal, discIsPct)
-                  const staffTriggerId = `cart-package-staff-${line.id}`
-                  return (
-                    <div
-                      key={line.id}
-                      className={cn(
-                        "group flex gap-2.5 rounded-xl border border-border/70 bg-muted/15 p-3 shadow-sm",
-                        "transition-shadow hover:border-border hover:shadow-md"
-                      )}
-                    >
-                      <span className="w-1 self-stretch shrink-0 rounded-full bg-emerald-500" aria-hidden />
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <div className="flex min-w-0 items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium leading-snug text-foreground">
-                              {line.packageName}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              Package · ₹
-                              {unit.toLocaleString("en-IN", { maximumFractionDigits: 2 })} each · {staffName}
-                              {qty > 1 ? ` · ×${qty}` : ""}
-                            </p>
-                          </div>
-                          <div className="relative flex min-h-8 min-w-[4.5rem] shrink-0 items-center justify-end gap-0.5">
-                            <p
-                              className={cn(
-                                "text-sm font-semibold tabular-nums text-foreground transition-opacity duration-150",
-                                "max-md:opacity-100",
-                                "md:opacity-100 md:group-hover:opacity-0 md:group-hover:invisible",
-                                "md:group-focus-within:opacity-0 md:group-focus-within:invisible"
-                              )}
-                            >
-                              ₹{lineTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                            </p>
-                            <div
-                              className={cn(
-                                "flex shrink-0 items-center gap-0.5 transition-opacity duration-150",
-                                "max-md:opacity-100",
-                                "md:pointer-events-none md:absolute md:right-0 md:top-1/2 md:-translate-y-1/2",
-                                "md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100",
-                                "md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
-                              )}
-                            >
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  document.getElementById(staffTriggerId)?.focus()
-                                }}
-                                aria-label="Focus staff for this line"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-destructive hover:text-destructive"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  removePackageLine(line.id)
-                                }}
-                                aria-label="Remove package"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                          <div className="flex items-center gap-2">
-                            <div className="flex h-8 items-center gap-0.5 rounded-lg border border-border/80 bg-background">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 shrink-0 rounded-md p-0"
-                                onClick={() => setPackageQuantity(line.id, qty - 1)}
-                                disabled={qty <= 1}
-                                aria-label="Decrease quantity"
-                              >
-                                <Minus className="h-3.5 w-3.5" />
-                              </Button>
-                              <span className="w-8 text-center text-sm font-semibold tabular-nums">{qty}</span>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 shrink-0 rounded-md p-0"
-                                onClick={() => setPackageQuantity(line.id, qty + 1)}
-                                aria-label="Increase quantity"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                            <CheckoutLineDiscountRow
-                              discountValue={discVal}
-                              discountIsPercent={discIsPct}
-                              onDiscountValueChange={(v) =>
-                                patchPackageLine(line.id, { discountValue: v })
-                              }
-                              onSetPercentMode={() =>
-                                patchPackageLine(line.id, {
-                                  discountIsPercent: true,
-                                  discountValue: 0,
-                                })
-                              }
-                              onSetFixedMode={() =>
-                                patchPackageLine(line.id, {
-                                  discountIsPercent: false,
-                                  discountValue: 0,
-                                })
-                              }
-                            />
-                            {staffOptions.length > 0 ? (
-                              <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
-                                <Select
-                                  value={line.staffId || undefined}
-                                  onValueChange={(v) => setPackageLineStaff(line.id, v)}
-                                >
-                                  <SelectTrigger
-                                    id={staffTriggerId}
-                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
-                                  >
-                                    <SelectValue placeholder="Staff" />
-                                  </SelectTrigger>
-                                  <SelectContent position="popper" className={cartSelectContentClass}>
-                                    {staffOptions.map((s) => (
-                                      <SelectItem key={s.id} value={s.id}>
-                                        {s.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
                 {prepaidLines.map((line) => {
                   const staffName =
                     staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
@@ -4302,7 +3924,6 @@ export function ServiceCheckoutDialog({
                     (lines.length > 0 &&
                       (lines.some((l) => l.serviceId && !l.staffId) || lines.some((l) => !l.serviceId))) ||
                     (membershipLines.length > 0 && membershipLines.some((l) => !l.staffId)) ||
-                    (packageLines.length > 0 && packageLines.some((l) => !l.staffId)) ||
                     (prepaidLines.length > 0 && prepaidLines.some((l) => !l.staffId)) ||
                     (productLines.length > 0 && productLines.some((l) => !l.staffId))
                   }

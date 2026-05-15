@@ -28,7 +28,6 @@ import {
   BarChart3,
   Layers,
   LineChart,
-  Package,
   Scissors,
   ShoppingBag,
   Trophy,
@@ -57,7 +56,6 @@ const SEGMENTS: {
   { value: "service", label: "Services", Icon: Scissors },
   { value: "product", label: "Products", Icon: ShoppingBag },
   { value: "membership", label: "Memberships", Icon: Users },
-  { value: "package", label: "Packages", Icon: Package },
 ]
 
 const LINE_LABELS: Record<StaffAnalyticsLineType, { leaderboard: string; allStaff: string }> = {
@@ -76,10 +74,6 @@ const LINE_LABELS: Record<StaffAnalyticsLineType, { leaderboard: string; allStaf
   membership: {
     leaderboard: "Leaderboard (memberships)",
     allStaff: "Membership lines only — revenue and attributed units",
-  },
-  package: {
-    leaderboard: "Leaderboard (packages)",
-    allStaff: "Package lines only — revenue and attributed units",
   },
 }
 

@@ -14,7 +14,7 @@ type Props = {
 const BREAKDOWN_ROWS: {
   key: keyof Pick<
     AnalyticsRevenueTabData["revenue"]["breakdown"],
-    "service" | "product" | "membership" | "package" | "other"
+    "service" | "product" | "membership" | "other"
   >
   label: string
   fill: string
@@ -22,7 +22,6 @@ const BREAKDOWN_ROWS: {
   { key: "service", label: "Services", fill: "#8b5cf6" },
   { key: "product", label: "Products", fill: "#0ea5e9" },
   { key: "membership", label: "Membership", fill: "#d946ef" },
-  { key: "package", label: "Packages", fill: "#f59e0b" },
   { key: "other", label: "Other", fill: "#94a3b8" },
 ]
 
@@ -41,7 +40,7 @@ export function AnalyticsRevenueExtras({ data, isPending }: Props) {
   if (!data) return null
 
   const { revenue } = data
-  const rb = revenue.breakdown ?? {
+  const rbIn = revenue.breakdown ?? {
     service: 0,
     product: 0,
     membership: 0,
@@ -49,9 +48,13 @@ export function AnalyticsRevenueExtras({ data, isPending }: Props) {
     other: 0,
     lineItemsTotal: 0,
   }
+  const rb = {
+    ...rbIn,
+    other: (rbIn.other ?? 0) + (rbIn.package ?? 0),
+  }
   const lineTotal =
     rb.lineItemsTotal ||
-    rb.service + rb.product + rb.membership + rb.package + rb.other ||
+    rb.service + rb.product + rb.membership + rb.other ||
     1
 
   const rows = BREAKDOWN_ROWS.map((row) => ({

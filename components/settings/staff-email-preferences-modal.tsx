@@ -26,6 +26,7 @@ interface StaffMember {
       exportAlerts?: boolean
       systemAlerts?: boolean
       lowInventory?: boolean
+      allowReportsDelivery?: boolean
     }
   }
 }
@@ -47,6 +48,7 @@ export function StaffEmailPreferencesModal({
   const [isLoading, setIsLoading] = useState(false)
   const [preferences, setPreferences] = useState({
     enabled: false,
+    allowReportsDelivery: false,
     dailySummary: false,
     weeklySummary: false,
     appointmentAlerts: false,
@@ -60,6 +62,7 @@ export function StaffEmailPreferencesModal({
     if (staff?.emailNotifications) {
       setPreferences({
         enabled: staff.emailNotifications.enabled || false,
+        allowReportsDelivery: staff.emailNotifications.preferences?.allowReportsDelivery || false,
         dailySummary: staff.emailNotifications.preferences?.dailySummary || false,
         weeklySummary: staff.emailNotifications.preferences?.weeklySummary || false,
         appointmentAlerts: staff.emailNotifications.preferences?.appointmentAlerts || false,
@@ -71,6 +74,7 @@ export function StaffEmailPreferencesModal({
     } else {
       setPreferences({
         enabled: false,
+        allowReportsDelivery: false,
         dailySummary: false,
         weeklySummary: false,
         appointmentAlerts: false,
@@ -96,7 +100,8 @@ export function StaffEmailPreferencesModal({
           receiptAlerts: preferences.receiptAlerts,
           exportAlerts: preferences.exportAlerts,
           systemAlerts: preferences.systemAlerts,
-          lowInventory: preferences.lowInventory
+          lowInventory: preferences.lowInventory,
+          allowReportsDelivery: preferences.allowReportsDelivery,
         }
       })
 
@@ -165,10 +170,34 @@ export function StaffEmailPreferencesModal({
             <Switch
               checked={preferences.enabled}
               onCheckedChange={(checked) =>
-                setPreferences(prev => ({ ...prev, enabled: checked }))
+                setPreferences(prev => ({
+                  ...prev,
+                  enabled: checked,
+                  ...(checked ? {} : { allowReportsDelivery: false }),
+                }))
               }
             />
           </div>
+
+          {staff.role !== "admin" && (
+            <div
+              className={`flex items-center justify-between p-4 border rounded-lg ${!preferences.enabled ? "opacity-60" : ""}`}
+            >
+              <div>
+                <Label className="text-base font-semibold">Allow Reports Delivery</Label>
+                <p className="text-sm text-slate-600">
+                  Receive exported reports (Excel/PDF) by email when a user runs a report export
+                </p>
+              </div>
+              <Switch
+                checked={preferences.allowReportsDelivery}
+                disabled={!preferences.enabled}
+                onCheckedChange={(checked) =>
+                  setPreferences((prev) => ({ ...prev, allowReportsDelivery: checked }))
+                }
+              />
+            </div>
+          )}
 
           {preferences.enabled && (
             <div className="space-y-4">

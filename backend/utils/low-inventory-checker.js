@@ -19,7 +19,13 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
       logger.debug(`⚠️  Business not found: ${businessId}`);
       return;
     }
-    
+
+    const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
+    if (isPlatformEmailDisabled(business)) {
+      logger.debug(`⏭️  Low inventory skipped — platform email disabled for ${business.name}`);
+      return;
+    }
+
     const emailSettings = business.settings?.emailNotificationSettings;
     
     // Check if low inventory alerts are enabled

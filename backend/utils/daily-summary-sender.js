@@ -23,6 +23,11 @@ async function sendDailySummaryForDate(businessId, branchId, targetDate) {
       return { sent: 0, skipped: true, error: 'Business not found' };
     }
 
+    const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
+    if (isPlatformEmailDisabled(business)) {
+      return { sent: 0, skipped: true, error: 'Email disabled by platform for this business' };
+    }
+
     const settings = business.settings?.emailNotificationSettings;
     if (!settings?.dailySummary?.enabled) {
       return { sent: 0, skipped: true };

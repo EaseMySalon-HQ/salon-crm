@@ -381,6 +381,8 @@ function getEmailSettingsWithDefaults(emailSettings) {
   return merged;
 }
 
+const { isPlatformEmailDisabled } = require('./lib/business-email-policy');
+
 // Register Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/settings', require('./routes/admin-settings'));
@@ -396,7 +398,6 @@ app.use('/api/client-wallet', require('./routes/client-wallet'));
 app.use('/api/reward-points', require('./routes/reward-points'));
 app.use('/api/plan', require('./routes/plan-checkout'));
 app.use('/api/campaigns', require('./routes/campaigns'));
-app.use('/api/packages', require('./routes/packages'));
 app.use('/api/purchase-invoices', purchaseInvoicesRoutes);
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/public/feedback', require('./routes/public-feedback'));
@@ -9402,11 +9403,12 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         
         if (!business) {
           logger.error('❌ Business not found for branchId:', req.user.branchId);
+        } else if (isPlatformEmailDisabled(business)) {
+          logger.info('📧 Skipping appointment emails — platform policy (tenant email disabled)');
         } else {
           logger.debug('✅ Business found:', business.name);
-        }
-        
-        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+
+        const rawEmailSettings = business.settings?.emailNotificationSettings;
         
         // Apply defaults to email settings (similar to WhatsApp)
         const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
@@ -9753,6 +9755,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         } else {
           logger.debug('⚠️ Staff appointment notifications are disabled in business settings');
         }
+        }
       }
       }
     } catch (emailError) {
@@ -10004,7 +10007,12 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         
         const { Staff, Client } = req.businessModels;
         const business = await Business.findById(req.user.branchId);
-        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+        if (!business) {
+          logger.error('📧 Business not found for receipt email, branchId:', req.user.branchId);
+        } else if (isPlatformEmailDisabled(business)) {
+          logger.info('📧 Skipping receipt emails — platform policy');
+        } else {
+        const rawEmailSettings = business.settings?.emailNotificationSettings;
         
         // Apply defaults to email settings (similar to WhatsApp)
         const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
@@ -10136,6 +10144,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
               }
             }
           }
+        }
         }
       }
       }
@@ -10816,9 +10825,10 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           
           if (!business) {
             logger.error('❌ Business not found for branchId:', req.user.branchId);
-          }
-          
-          const emailSettings = business?.settings?.emailNotificationSettings;
+          } else if (isPlatformEmailDisabled(business)) {
+            logger.info('📧 Skipping cancellation emails — platform policy');
+          } else {
+          const emailSettings = business.settings?.emailNotificationSettings;
           // Default to enabled unless explicitly disabled AND recipient list exists (meaning it was configured)
           const hasRecipientList = emailSettings?.appointmentNotifications?.recipientStaffIds?.length > 0;
           const explicitlyDisabledCancellations = emailSettings?.appointmentNotifications?.cancellations === false;
@@ -11036,6 +11046,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
               }
             }
           }
+        }
         }
       } catch (emailError) {
         logger.error('Error sending cancellation emails:', emailError);
@@ -12084,7 +12095,13 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         const Business = mainConnection.model('Business', require('./models/Business').schema);
         
         const business = await Business.findById(req.user.branchId);
-        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+        if (!business) {
+          emailStatus.error = 'Business not found';
+        } else if (isPlatformEmailDisabled(business)) {
+          logger.info('📧 Skipping sale receipt email — platform policy');
+          emailStatus.error = 'Email disabled by platform for this business';
+        } else {
+        const rawEmailSettings = business.settings?.emailNotificationSettings;
         
         // Apply defaults to email settings (similar to WhatsApp)
         const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
@@ -12202,6 +12219,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           } else {
             emailStatus.error = !sendToClients ? 'Send to clients disabled' : 'No customer email';
           }
+        }
         }
       }
     } catch (emailError) {
@@ -16185,6 +16203,21 @@ app.get('/api/inventory-transactions', authenticateToken, setupBusinessDatabase,
 
 // ==================== Report Export Endpoints ====================
 
+function respondReportExportError(res, error, fallbackMessage, logLabel) {
+  if (error && error.code === 'PLATFORM_EMAIL_DISABLED') {
+    return res.status(403).json({
+      success: false,
+      error: error.message || 'Operational emails are disabled for this business by the platform.',
+      code: 'PLATFORM_EMAIL_DISABLED',
+    });
+  }
+  logger.error(logLabel, error);
+  return res.status(500).json({
+    success: false,
+    error: error?.message || fallbackMessage,
+  });
+}
+
 // Export products report (emailed to admin)
 app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
@@ -16202,11 +16235,12 @@ app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabas
       message: result.message || 'Products report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting products report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export products report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export products report',
+      'Error exporting products report:',
+    );
   }
 });
 
@@ -16227,11 +16261,12 @@ app.post('/api/reports/export/services', authenticateToken, setupBusinessDatabas
       message: result.message || 'Services report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting services catalog report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export services report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export services report',
+      'Error exporting services catalog report:',
+    );
   }
 });
 
@@ -16252,11 +16287,12 @@ app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, 
       message: result.message || 'Sales report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting sales report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export sales report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export sales report',
+      'Error exporting sales report:',
+    );
   }
 });
 
@@ -16275,11 +16311,12 @@ app.post('/api/reports/export/summary', authenticateToken, setupBusinessDatabase
       message: result.message || 'Summary report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting summary report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export summary report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export summary report',
+      'Error exporting summary report:',
+    );
   }
 });
 
@@ -16299,11 +16336,12 @@ app.post('/api/reports/export/staff-performance', authenticateToken, setupBusine
       message: result.message || 'Staff performance report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting staff performance report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export staff performance report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export staff performance report',
+      'Error exporting staff performance report:',
+    );
   }
 });
 
@@ -16322,11 +16360,12 @@ app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDat
       message: result.message || 'Service list report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting service list report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export service list report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export service list report',
+      'Error exporting service list report:',
+    );
   }
 });
 
@@ -16345,11 +16384,12 @@ app.post('/api/reports/export/product-list', authenticateToken, setupBusinessDat
       message: result.message || 'Product list report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting product list report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export product list report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export product list report',
+      'Error exporting product list report:',
+    );
   }
 });
 
@@ -16563,11 +16603,12 @@ app.post('/api/reports/export/unpaid-part-paid', authenticateToken, setupBusines
       message: result.message || 'Unpaid/Part-Paid report has been sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting unpaid/part-paid report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export unpaid/part-paid report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export unpaid/part-paid report',
+      'Error exporting unpaid/part-paid report:',
+    );
   }
 });
 
@@ -16586,11 +16627,12 @@ app.post('/api/reports/export/deleted-invoices', authenticateToken, setupBusines
       message: result.message || 'Deleted invoice report has been sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting deleted invoice report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export deleted invoice report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export deleted invoice report',
+      'Error exporting deleted invoice report:',
+    );
   }
 });
 
@@ -16609,11 +16651,12 @@ app.post('/api/reports/export/appointment-list', authenticateToken, setupBusines
       message: result.message || 'Appointment list report has been sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting appointment list report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export appointment list report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export appointment list report',
+      'Error exporting appointment list report:',
+    );
   }
 });
 
@@ -16789,7 +16832,16 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
         const mainConnection = await databaseManager.getMainConnection();
         const Business = mainConnection.model('Business', require('./models/Business').schema);
         const business = await Business.findById(req.user.branchId);
-        const emailSettings = business?.settings?.emailNotificationSettings;
+        if (!business) {
+          return res.status(400).json({ success: false, error: 'Business not found' });
+        }
+        if (isPlatformEmailDisabled(business)) {
+          return res.status(403).json({
+            success: false,
+            error: 'Email notifications are disabled for this business by the platform administrator.'
+          });
+        }
+        const emailSettings = business.settings?.emailNotificationSettings;
         
         // Generate JSON file from export data
         const exportFileName = `export-${user.name || user.email || userId}-${new Date().toISOString().split('T')[0]}.json`;
@@ -17136,6 +17188,17 @@ app.use('*', (req, res) => {
 // Start server
 
 const server = app.listen(PORT, '0.0.0.0', async () => {
+  // Stamp default-on email policy for existing businesses (one-time per DB)
+  try {
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+    const { migrateBusinessEmailDefaultsV1 } = require('./lib/migrate-business-email-defaults-v1');
+    await migrateBusinessEmailDefaultsV1(Business);
+  } catch (migrateErr) {
+    logger.error('Business email defaults migration failed:', migrateErr);
+  }
+
   logger.debug(`🚀 EaseMySalon Backend running on port ${PORT}`);
   logger.debug(`📊 Health check: http://localhost:${PORT}/health / http://localhost:${PORT}/api/health (also /api/v1/health)`);
   logger.debug(`🔐 API base: http://localhost:${PORT}/api — versioned alias: http://localhost:${PORT}/api/v1`);
@@ -17150,10 +17213,6 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   // Setup email scheduler jobs
   const { setupEmailScheduler } = require('./jobs/email-scheduler');
   setupEmailScheduler();
-
-  // Setup package expiry cron job (daily midnight UTC)
-  const { startExpiryJob } = require('./services/package-expiry-job');
-  startExpiryJob();
 
   const { startClientWalletExpiryJob } = require('./jobs/client-wallet-expiry-job');
   startClientWalletExpiryJob();

@@ -9,7 +9,6 @@ import {
   ClientWalletAPI,
   ClientsAPI,
   MembershipAPI,
-  PackagesAPI,
   ProductsAPI,
   RewardPointsAPI,
   SalesAPI,
@@ -18,7 +17,6 @@ import {
 import type { Client } from "@/lib/client-store"
 import { addReceipt } from "@/lib/data"
 import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
-import { computePackageLineTotal } from "@/lib/package-tax"
 import { mergePaymentConfiguration, eligibleRedemptionSubtotal } from "@/lib/payment-redemption-eligibility"
 import { previewRedemptionLive } from "@/lib/reward-points-preview"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
@@ -343,14 +341,12 @@ async function buildSaleLinesFromAppointmentPayload(
   products: any[],
   staff: any[],
   membershipPlans: any[],
-  packages: any[],
   prepaidPlans: any[],
   ts: ServiceCheckoutTaxSettings
 ): Promise<{
   serviceItems: any[]
   productItems: any[]
   membershipItems: any[]
-  packageItems: any[]
   prepaidPlanItems: any[]
   tip: number
   tipStaffId: string | null
@@ -526,36 +522,6 @@ async function buildSaleLinesFromAppointmentPayload(
     }
   }
 
-  const packageItemsToAdd: any[] = []
-  if (Array.isArray(appointmentData.packages) && appointmentData.packages.length > 0) {
-    for (const pData of appointmentData.packages as any[]) {
-      const pkg = packages.find((p) => String(p._id || p.id) === String(pData.packageId))
-      if (!pkg) continue
-      const unitPrice = Number(pData.price) || Number(pkg.total_price) || 0
-      const qty = Math.max(1, Math.floor(Number(pData.quantity) || 1))
-      const discPct = Math.min(100, Math.max(0, Number(pData.discount) || 0))
-      const base = addonLineTaxableBase(unitPrice, qty, discPct)
-      const pRate = ts.packageTaxRate ?? ts.serviceTaxRate ?? 5
-      const { total } = computePackageLineTotal(base, {
-        packageTaxRate: pRate,
-        enableTax: taxOn,
-        priceInclusiveOfTax: priceInclusive,
-      })
-      packageItemsToAdd.push({
-        id: `${Date.now()}-${Math.random()}`,
-        packageId: String(pkg._id || pkg.id),
-        packageName: pData.packageName || pkg.name || "Package",
-        totalSittings: Number(pkg.total_sittings) || Number(pData.totalSittings) || 0,
-        price: unitPrice,
-        quantity: qty,
-        total,
-        staffId: pData.staffId || "",
-        discount: discPct,
-        appointmentLineLocked: true,
-      })
-    }
-  }
-
   const prepaidPlanItemsToAdd: any[] = []
   if (Array.isArray(appointmentData.prepaidPlans) && appointmentData.prepaidPlans.length > 0) {
     for (const prData of appointmentData.prepaidPlans as any[]) {
@@ -628,7 +594,6 @@ async function buildSaleLinesFromAppointmentPayload(
     serviceItems: s,
     productItems: p,
     membershipItems: membershipItemsToAdd,
-    packageItems: packageItemsToAdd,
     prepaidPlanItems: prepaidPlanItemsToAdd,
     tip,
     tipStaffId,
@@ -661,7 +626,6 @@ export async function completeServiceCheckoutInline(opts: {
   catalogServices: any[]
   catalogProducts: any[]
   catalogMembershipPlans: any[]
-  catalogPackages: any[]
   catalogPrepaidPlans: any[]
   checkoutTaxSettings: ServiceCheckoutTaxSettings
   checkoutPaymentConfiguration: unknown
@@ -677,7 +641,6 @@ export async function completeServiceCheckoutInline(opts: {
     catalogServices: services,
     catalogProducts: products,
     catalogMembershipPlans,
-    catalogPackages,
     catalogPrepaidPlans,
     checkoutTaxSettings: ts,
     checkoutPaymentConfiguration: payRaw,
@@ -694,13 +657,6 @@ export async function completeServiceCheckoutInline(opts: {
         membershipPlans = plansRes.data.filter((p: any) => p.isActive !== false)
       }
     }
-    let packages = catalogPackages
-    if (Array.isArray(appointmentData.packages) && appointmentData.packages.length > 0 && packages.length === 0) {
-      const pkgRes = await PackagesAPI.getAll({ status: "ACTIVE", limit: 500 })
-      if (pkgRes.success) {
-        packages = pkgRes.data?.packages || []
-      }
-    }
     let prepaidPlans = catalogPrepaidPlans
     if (Array.isArray(appointmentData.prepaidPlans) && appointmentData.prepaidPlans.length > 0 && prepaidPlans.length === 0) {
       const pwRes = await ClientWalletAPI.listPlans({ status: "active" })
@@ -715,7 +671,6 @@ export async function completeServiceCheckoutInline(opts: {
       products,
       staff,
       membershipPlans,
-      packages,
       prepaidPlans,
       ts
     )
@@ -723,7 +678,6 @@ export async function completeServiceCheckoutInline(opts: {
     const serviceItems = built.serviceItems
     const productItems = built.productItems
     const membershipItems = built.membershipItems
-    const packageItems = built.packageItems
     const prepaidPlanItems = built.prepaidPlanItems
     const tip = built.tip
     const tipStaffId = built.tipStaffId
@@ -733,14 +687,12 @@ export async function completeServiceCheckoutInline(opts: {
 
     const validServiceItems = serviceItems.filter((item) => item.serviceId)
     const validProductItems = productItems.filter((item) => item.productId)
-    const validPackageItems = packageItems.filter((p) => p.packageId)
     const validPrepaidPlanItems = prepaidPlanItems.filter((p) => p.planId)
 
     if (
       validServiceItems.length === 0 &&
       validProductItems.length === 0 &&
       membershipItems.filter((m) => m.planId).length === 0 &&
-      validPackageItems.length === 0 &&
       validPrepaidPlanItems.length === 0
     ) {
       return { ok: false, error: "No billable lines" }
@@ -760,9 +712,8 @@ export async function completeServiceCheckoutInline(opts: {
     const productTotal = productItems.reduce((sum, item) => sum + item.total, 0)
     const subtotal = serviceTotal + productTotal
     const membershipTotal = membershipItems.reduce((sum, item) => sum + item.total, 0)
-    const packageTotal = packageItems.reduce((sum, item) => sum + item.total, 0)
     const prepaidPlanTotal = prepaidPlanItems.reduce((sum, item) => sum + item.total, 0)
-    const baseTotalForSale = subtotal + membershipTotal + packageTotal + prepaidPlanTotal
+    const baseTotalForSale = subtotal + membershipTotal + prepaidPlanTotal
     const roundedBaseTotalForSale = Math.round(baseTotalForSale)
     const roundOff = roundedBaseTotalForSale - baseTotalForSale
 
@@ -781,10 +732,6 @@ export async function completeServiceCheckoutInline(opts: {
     for (const it of membershipItems) {
       if (!it.planId) continue
       redemptionLineItems.push({ type: "membership", total: Number(it.total) || 0 })
-    }
-    for (const it of packageItems) {
-      if (!it.packageId) continue
-      redemptionLineItems.push({ type: "package", total: Number(it.total) || 0 })
     }
     for (const it of prepaidPlanItems) {
       if (!it.planId) continue
@@ -1110,7 +1057,7 @@ export async function completeServiceCheckoutInline(opts: {
         })),
         extraProducts: validProductItems.length,
         extraMemberships: membershipItems.filter((m) => m.planId).length,
-        extraPackages: validPackageItems.length,
+        extraPackages: 0,
         extraPrepaid: validPrepaidPlanItems.length,
       })
     }
@@ -1132,7 +1079,7 @@ export async function completeServiceCheckoutInline(opts: {
       })),
       extraProducts: validProductItems.length,
       extraMemberships: membershipLineCountCheckout,
-      extraPackages: validPackageItems.length,
+      extraPackages: 0,
       extraPrepaid: validPrepaidPlanItems.length,
     })
 
@@ -1227,22 +1174,7 @@ export async function completeServiceCheckoutInline(opts: {
           }, 0)
       : 0
 
-    const packageTaxCheckout = taxOn
-      ? packageItems
-          .filter((p) => p.packageId)
-          .reduce((sum, p) => {
-            const baseAmount = p.price * p.quantity
-            const packageTaxRate = ts.packageTaxRate ?? ts.serviceTaxRate ?? 5
-            const { taxAmount } = computeLineTotalAndTax(
-              baseAmount,
-              p.discount ?? 0,
-              packageTaxRate,
-              packageTaxRate > 0,
-              priceInclusive
-            )
-            return sum + taxAmount
-          }, 0)
-      : 0
+    const packageTaxCheckout = 0
 
     const prepaidTaxCheckout = taxOn
       ? prepaidPlanItems
@@ -1401,25 +1333,6 @@ export async function completeServiceCheckoutInline(opts: {
           sgst: 0,
           totalWithTax: m.total,
         })),
-      ...packageItems
-        .filter((p) => p.packageId)
-        .map((p) => ({
-          id: p.id,
-          name: `${p.packageName} (${p.totalSittings} sittings)`,
-          type: "package" as const,
-          quantity: p.quantity,
-          price: p.price,
-          discount: 0,
-          discountType: "percentage" as const,
-          hsnSacCode: "",
-          staffId: p.staffId || staff[0]?._id || staff[0]?.id || "",
-          staffName: (p.staffId ? staff.find((s) => (s._id || s.id) === p.staffId)?.name : null) || staff[0]?.name || "Unassigned Staff",
-          total: p.total,
-          taxAmount: 0,
-          cgst: 0,
-          sgst: 0,
-          totalWithTax: p.total,
-        })),
       ...prepaidPlanItems
         .filter((p) => p.planId)
         .map((p) => ({
@@ -1453,17 +1366,6 @@ export async function completeServiceCheckoutInline(opts: {
         item.totalWithTax = item.total
         item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
         ;(item as any).taxRate = applyTax ? membershipTaxRate : 0
-      } else if (item.type === "package") {
-        const packageTaxRate = ts.packageTaxRate ?? ts.serviceTaxRate ?? 5
-        const applyTax = taxOn && packageTaxRate > 0
-        const baseAmount = item.price * item.quantity
-        const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, applyTax, priceInclusive)
-        item.taxAmount = taxAmount
-        item.cgst = taxAmount / 2
-        item.sgst = taxAmount / 2
-        item.totalWithTax = item.total
-        item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
-        ;(item as any).taxRate = applyTax ? packageTaxRate : 0
       } else if (item.type === "prepaid_wallet") {
         const prepaidTaxRate = ts.prepaidWalletTaxRate ?? ts.serviceTaxRate ?? 5
         const applyTax = taxOn && prepaidTaxRate > 0
@@ -1562,27 +1464,6 @@ export async function completeServiceCheckoutInline(opts: {
               taxRate: (receiptItem as any)?.taxRate ?? 0,
             }
           }),
-        ...validPackageItems.map((p) => {
-          const receiptItem = receiptItems.find((r) => r.id === p.id)
-          const itemTax = receiptItem?.taxAmount ?? 0
-          const staffMember = staff.find((s) => s._id === p.staffId || s.id === p.staffId)
-          return {
-            serviceId: null,
-            productId: null,
-            name: `${p.packageName} (${p.totalSittings} sittings)`,
-            type: "package" as const,
-            quantity: p.quantity,
-            price: p.price,
-            priceExcludingGST: (p.total - itemTax) / (p.quantity || 1),
-            total: p.total,
-            discount: 0,
-            staffId: p.staffId || "",
-            staffName: staffMember?.name || staff[0]?.name || "",
-            staffContributions: [],
-            hsnSacCode: "",
-            taxRate: (receiptItem as any)?.taxRate ?? 0,
-          }
-        }),
         ...validPrepaidPlanItems.map((p) => {
           const receiptItem = receiptItems.find((r) => r.id === p.id)
           const itemTax = receiptItem?.taxAmount ?? 0
@@ -1745,26 +1626,6 @@ export async function completeServiceCheckoutInline(opts: {
         }
       } catch (e) {
         console.warn("[inline-checkout] prepaid issue", e)
-      }
-    }
-
-    if (validPackageItems.length > 0 && isLikelyMongoObjectId(cid || undefined)) {
-      const paidForBill = Math.min(recordedPaidTotal, calculatedTotal)
-      try {
-        for (const row of validPackageItems) {
-          const qty = Math.max(1, Math.floor(row.quantity || 1))
-          const unitTotal = qty > 0 ? row.total / qty : row.total
-          for (let q = 0; q < qty; q++) {
-            const ap = calculatedTotal > 0 ? (unitTotal / calculatedTotal) * paidForBill : 0
-            await PackagesAPI.sell(row.packageId, {
-              client_id: cid!,
-              amount_paid: Math.round(ap * 100) / 100,
-              ...(row.staffId ? { sold_by_staff_id: String(row.staffId) } : {}),
-            })
-          }
-        }
-      } catch (e) {
-        console.warn("[inline-checkout] package sell", e)
       }
     }
 

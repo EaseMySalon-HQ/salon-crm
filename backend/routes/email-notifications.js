@@ -1111,7 +1111,8 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
           receiptAlerts: false,
           exportAlerts: false,
           systemAlerts: false,
-          lowInventory: false
+          lowInventory: false,
+          allowReportsDelivery: false
         },
         managedBy: 'admin'
       })
