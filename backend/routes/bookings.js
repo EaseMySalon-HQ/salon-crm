@@ -42,24 +42,29 @@ router.post('/', auth, validate(bookingCreateBodySchema), async (req, res) => {
     const result = await bookingService.createBooking(req.businessModels, businessDoc, payload, {
       skipHoldConflict: true
     });
-    try {
-      const { Appointment } = req.businessModels;
-      const populated = await Appointment.find({ _id: { $in: result.appointmentIds } })
-        .populate('clientId', 'name phone email')
-        .populate('serviceId', 'name price duration')
-        .populate('staffId', 'name role')
-        .populate('staffAssignments.staffId', 'name role');
-      await sendAppointmentWhatsAppAfterCreate(req, populated);
-    } catch (waErr) {
-      logger.error('[bookings] appointment WhatsApp after create', waErr);
-    }
-    return res.status(201).json({
+    // Respond immediately — WhatsApp notification is sent in the background
+    res.status(201).json({
       success: true,
       data: {
         bookingId: result.booking._id,
         appointmentIds: result.appointmentIds,
         bookingGroupId: result.booking.bookingGroupId,
         timezone: 'Asia/Kolkata'
+      }
+    });
+
+    // Fire-and-forget: populate appointments and send WhatsApp after the response is flushed
+    setImmediate(async () => {
+      try {
+        const { Appointment } = req.businessModels;
+        const populated = await Appointment.find({ _id: { $in: result.appointmentIds } })
+          .populate('clientId', 'name phone email')
+          .populate('serviceId', 'name price duration')
+          .populate('staffId', 'name role')
+          .populate('staffAssignments.staffId', 'name role');
+        await sendAppointmentWhatsAppAfterCreate(req, populated);
+      } catch (waErr) {
+        logger.error('[bookings] appointment WhatsApp after create', waErr);
       }
     });
   } catch (e) {
