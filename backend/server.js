@@ -10686,11 +10686,46 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
       ((updateData.date && updateData.date !== appointment.date) ||
        (updateData.time && updateData.time !== appointment.time));
 
+    // Detect primary-staff reassignment (e.g. calendar drag-drop to another column). When this
+    // happens — even at the same wall-clock time — we still need to recompute startAt/endAt for
+    // the new staff, re-run conflict detection on the destination, and refresh slotKey (the
+    // pre('save') hook does not run on findOneAndUpdate, so a stale key would block future writes
+    // for the source staff and let the destination double-book).
+    const currentPrimaryStaffId = (() => {
+      const sid = appointment.staffId;
+      if (sid) {
+        const raw = typeof sid === 'object' && sid?._id ? sid._id : sid;
+        return String(raw);
+      }
+      if (Array.isArray(appointment.staffAssignments) && appointment.staffAssignments[0]?.staffId) {
+        const asid = appointment.staffAssignments[0].staffId;
+        const raw = typeof asid === 'object' && asid?._id ? asid._id : asid;
+        return String(raw);
+      }
+      return null;
+    })();
+    const incomingPrimaryStaffId = (() => {
+      if (updateData.staffId) return String(updateData.staffId);
+      if (Array.isArray(updateData.staffAssignments) && updateData.staffAssignments[0]?.staffId) {
+        return String(updateData.staffAssignments[0].staffId);
+      }
+      return null;
+    })();
+    const staffIsChanging = !!(
+      incomingPrimaryStaffId &&
+      (!currentPrimaryStaffId || incomingPrimaryStaffId !== currentPrimaryStaffId)
+    );
+
     // When the time changes for a single appointment doc (per-service edit), refetch duration
     // from the Service catalog as source of truth, recompute startAt/endAt, and pre-check staff conflict.
     const timeIsChanging = updateData.time && updateData.time !== appointment.time;
     const dateIsChanging = updateData.date && updateData.date !== appointment.date;
-    if ((timeIsChanging || dateIsChanging) && updateData.status !== 'cancelled') {
+    let scheduleStartAt = null;
+    let scheduleEndAt = null;
+    let scheduleDurationMinutes = appointment.duration || 60;
+    let scheduleStartMinutes = null;
+    let scheduleTimeString = null;
+    if ((timeIsChanging || dateIsChanging || staffIsChanging) && updateData.status !== 'cancelled') {
       const newTime = updateData.time || appointment.time;
       const newDate = updateData.date || appointment.date;
       if (!/^\d{1,2}:\d{2}/.test(String(newTime || ''))) {
@@ -10714,7 +10749,11 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
           });
         }
         durationForWindow = catalogDuration;
-        updateData.duration = catalogDuration;
+        // Only force-write duration when the schedule actually changes; staff-only moves keep
+        // the existing sequential total for multi-service rows.
+        if (timeIsChanging || dateIsChanging) {
+          updateData.duration = catalogDuration;
+        }
       }
 
       const dayStart = parseDateIST(newDate);
@@ -10723,21 +10762,15 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
       const endAt = new Date(startAt.getTime() + durationForWindow * 60 * 1000);
       updateData.startAt = startAt;
       updateData.endAt = endAt;
+      scheduleStartAt = startAt;
+      scheduleEndAt = endAt;
+      scheduleDurationMinutes = durationForWindow;
+      scheduleStartMinutes = startMinutes;
+      scheduleTimeString = newTime;
 
-      // Conflict detection (skip if newly cancelled).
-      const primaryStaffId = (() => {
-        if (updateData.staffId) return String(updateData.staffId);
-        if (Array.isArray(updateData.staffAssignments) && updateData.staffAssignments[0]?.staffId) {
-          return String(updateData.staffAssignments[0].staffId);
-        }
-        if (appointment.staffId) {
-          return String(appointment.staffId._id || appointment.staffId);
-        }
-        if (Array.isArray(appointment.staffAssignments) && appointment.staffAssignments[0]?.staffId) {
-          return String(appointment.staffAssignments[0].staffId);
-        }
-        return null;
-      })();
+      // Conflict detection runs against the destination staff (drag-drop to a different stylist
+      // must verify that stylist is free at this window, even if the wall-clock time is unchanged).
+      const primaryStaffId = incomingPrimaryStaffId || currentPrimaryStaffId;
       if (primaryStaffId && !allowParallelBooking) {
         const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
         const result = await detectStaffConflict(
@@ -10766,6 +10799,16 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
             error: `Staff is already booked from ${formatTimeForError(newTime)} to ${formatTimeForError(endStr)}`
           });
         }
+      }
+
+      // Refresh slotKey for the new (staff, window) combination. findByIdAndUpdate does not
+      // trigger pre('save'), so without this the unique-slot index would still point at the
+      // old staff and silently allow double-booking on the destination column.
+      const activeForSlot = ['scheduled', 'confirmed', 'arrived', 'service_started'];
+      const finalStatus = updateData.status || appointment.status;
+      if (primaryStaffId && activeForSlot.includes(finalStatus)) {
+        const base = `${String(req.user.branchId)}:${String(primaryStaffId)}:${startAt.toISOString()}:${endAt.toISOString()}`;
+        updateData.slotKey = allowParallelBooking ? `${base}:${require('crypto').randomUUID()}` : base;
       }
     }
 

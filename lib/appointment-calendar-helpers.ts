@@ -23,6 +23,28 @@ export function isHiddenAppointment(apt: { status?: string } | null | undefined)
 }
 
 /**
+ * Normalizes `_id` values from API responses for URLs and comparisons.
+ * Occasionally nested `{ _id }` objects or BSON-like `.toString()` ids slip through —
+ * mismatches broke calendar → edit-drawer hydrate (wrong "edit-service" row / wrong GET URL).
+ */
+export function toMongoIdString(raw: unknown): string {
+  if (raw == null) return ""
+  if (typeof raw === "string") return raw.trim()
+  if (typeof raw === "object" && raw !== null && "_id" in (raw as Record<string, unknown>)) {
+    const inner = (raw as { _id: unknown })._id
+    return inner !== undefined && inner !== raw ? toMongoIdString(inner) : ""
+  }
+  if (typeof raw === "object" && raw !== null && typeof (raw as { toString?: () => unknown }).toString === "function") {
+    try {
+      return String((raw as { toString: () => unknown }).toString()).trim()
+    } catch {
+      return ""
+    }
+  }
+  return String(raw).trim()
+}
+
+/**
  * Compact pill styling for appointment status (e.g. edit drawer header).
  * Background/border tones align with calendar grid card fills.
  */
@@ -156,29 +178,19 @@ export function getAppointmentCalendarOpenIntent(
 ): AppointmentCalendarOpenIntent {
   const visual = getCalendarCardVisualStatus(apt, partialPaymentIds)
   if (visual === "partial_payment") {
-    const rawId = apt._id
-    const appointmentId =
-      rawId != null
-        ? typeof rawId === "object" && rawId !== null && "_id" in rawId && (rawId as { _id?: unknown })._id != null
-          ? String((rawId as { _id: unknown })._id)
-          : String(rawId)
-        : ""
+    const appointmentId = toMongoIdString(apt._id)
     if (appointmentId) return { type: "edit_form", appointmentId }
     return { type: "details" }
   }
   if (apt.status === "completed") {
-    const rawId = apt._id
-    const appointmentId =
-      rawId != null
-        ? typeof rawId === "object" && rawId !== null && "_id" in rawId && (rawId as { _id?: unknown })._id != null
-          ? String((rawId as { _id: unknown })._id)
-          : String(rawId)
-        : ""
+    const appointmentId = toMongoIdString(apt._id)
     if (appointmentId) return { type: "edit_form", appointmentId }
     return { type: "details" }
   }
   if (APPOINTMENT_EDITABLE_STATUSES.has(apt.status)) {
-    return { type: "edit_form", appointmentId: apt._id }
+    const appointmentId = toMongoIdString(apt._id)
+    if (appointmentId) return { type: "edit_form", appointmentId }
+    return { type: "details" }
   }
   return { type: "details" }
 }

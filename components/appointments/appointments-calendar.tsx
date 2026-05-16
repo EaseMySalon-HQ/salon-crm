@@ -33,6 +33,7 @@ import {
   collectPartialPaymentAppointmentIdsFromSales,
   getCalendarCardVisualStatus,
   getAppointmentCalendarOpenIntent,
+  toMongoIdString,
 } from "@/lib/appointment-calendar-helpers"
 import {
   RaiseSaleConfirmationModal,
@@ -115,13 +116,19 @@ function getPrimaryStaffName(apt: Appointment): string {
 
 function getPrimaryStaffId(apt: Appointment): string | null {
   const a = apt as any
-  if (a.staffId?._id) return a.staffId._id
-  if (typeof a.staffId === "string") return a.staffId
+  if (a.staffId) {
+    const raw = typeof a.staffId === "object" && a.staffId?._id != null ? a.staffId._id : a.staffId
+    const sid = raw != null ? toMongoIdString(raw) : ""
+    if (sid) return sid
+  }
   if (a.staffAssignments?.length) {
     const primary = a.staffAssignments.find((s: any) => s.role === "primary")
     const first = a.staffAssignments[0]
     const assignment = primary || first
-    return assignment?.staffId?._id ?? assignment?.staffId ?? null
+    const s = assignment?.staffId
+    const raw = typeof s === "object" && s?._id != null ? s._id : s
+    const sid = raw != null ? toMongoIdString(raw) : ""
+    return sid || null
   }
   return null
 }

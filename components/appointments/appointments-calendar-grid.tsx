@@ -1843,73 +1843,137 @@ export const AppointmentsCalendarGrid = forwardRef<
       }
 
       const applyDrop = async (payload: { mode: "staff" | "move" | "resize-top" | "resize-bottom"; newStaffId?: string; newTime?: string; newDuration?: number }) => {
-        let snapshot: Appointment | null = null
-        setAppointments((prev) => {
-          const idx = prev.findIndex((a) => a._id === current.id)
-          if (idx < 0) return prev
-          snapshot = JSON.parse(JSON.stringify(prev[idx])) as Appointment
-          const a = prev[idx]
-          const aAny = a as any
-          let next: Appointment
-          if (payload.mode === "staff" && payload.newStaffId) {
-            const newStaff = columns.find((c) => c._id === payload.newStaffId)
-            next = {
-              ...a,
-              staffId: newStaff ? { _id: newStaff._id, name: newStaff.name, role: newStaff.role } : aAny.staffId,
-              staffAssignments: [
-                { staffId: { _id: payload.newStaffId!, name: newStaff?.name ?? "Staff" }, role: "primary" },
-              ],
-              ...(payload.newTime ? { time: payload.newTime, startAt: undefined, endAt: undefined } : {}),
-            } as Appointment
-          } else if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
-            next = {
-              ...a,
-              time: payload.newTime,
-              startAt: undefined,
-              endAt: undefined,
-            } as Appointment
-          } else if (payload.mode === "resize-bottom" && payload.newDuration != null) {
-            next = {
-              ...a,
-              duration: payload.newDuration,
-              startAt: undefined,
-              endAt: undefined,
-            } as Appointment
-          } else {
-            return prev
-          }
-          return prev.map((x, i) => (i === idx ? next : x))
-        })
-
-        if (!snapshot) {
+        // React 18 batches functional updaters in event handlers, so reading any
+        // closure side-effect right after `setAppointments(...)` returns reads it
+        // BEFORE the updater runs. Capture the snapshot synchronously from the
+        // closure here so the rollback path always has the pre-drop state to
+        // restore from, regardless of how soon the API request resolves.
+        const closureRow = appointments.find((a) => a._id === current.id) ?? null
+        if (!closureRow) {
           clearAppointmentDragUi()
           return
         }
 
+        const snapshot = JSON.parse(JSON.stringify(closureRow)) as Appointment
+        const aAny = closureRow as any
+        let next: Appointment
+        if (payload.mode === "staff" && payload.newStaffId) {
+          const newStaff = columns.find((c) => c._id === payload.newStaffId)
+          next = {
+            ...closureRow,
+            staffId: newStaff
+              ? { _id: newStaff._id, name: newStaff.name, role: newStaff.role }
+              : aAny.staffId,
+            staffAssignments: [
+              { staffId: { _id: payload.newStaffId!, name: newStaff?.name ?? "Staff" }, role: "primary" },
+            ],
+            ...(payload.newTime ? { time: payload.newTime, startAt: undefined, endAt: undefined } : {}),
+          } as Appointment
+        } else if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
+          next = {
+            ...closureRow,
+            time: payload.newTime,
+            startAt: undefined,
+            endAt: undefined,
+          } as Appointment
+        } else if (payload.mode === "resize-bottom" && payload.newDuration != null) {
+          next = {
+            ...closureRow,
+            duration: payload.newDuration,
+            startAt: undefined,
+            endAt: undefined,
+          } as Appointment
+        } else {
+          clearAppointmentDragUi()
+          return
+        }
+
+        setAppointments((prev) => {
+          const idx = prev.findIndex((a) => a._id === current.id)
+          if (idx < 0) return prev
+          return prev.map((x, i) => (i === idx ? next : x))
+        })
+
         clearAppointmentDragUi()
+        setUpdatingTimeForId(current.id)
 
         try {
-          let res: { success?: boolean } | null = null
+          let res: { success?: boolean; error?: string; data?: any } | null = null
           if (payload.mode === "staff" && payload.newStaffId) {
-            const updatePayload: { staffId: string; staffAssignments: any[]; time?: string } = {
+            const updatePayload: { staffId: string; staffAssignments: any[]; time?: string; allowParallelBooking: boolean } = {
               staffId: payload.newStaffId,
               staffAssignments: [{ staffId: payload.newStaffId, percentage: 100, role: "primary" }],
+              allowParallelBooking: true,
             }
             if (payload.newTime) updatePayload.time = payload.newTime
-            res = await AppointmentsAPI.update(current.id, updatePayload)
+            res = (await AppointmentsAPI.update(current.id, updatePayload)) as {
+              success?: boolean
+              error?: string
+              data?: any
+            }
           } else if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
-            res = await AppointmentsAPI.update(current.id, { time: payload.newTime })
+            res = (await AppointmentsAPI.update(current.id, {
+              time: payload.newTime,
+              allowParallelBooking: true,
+            })) as {
+              success?: boolean
+              error?: string
+              data?: any
+            }
           } else if (payload.mode === "resize-bottom" && payload.newDuration != null) {
-            res = await AppointmentsAPI.update(current.id, { duration: payload.newDuration })
+            res = (await AppointmentsAPI.update(current.id, {
+              duration: payload.newDuration,
+              allowParallelBooking: true,
+            })) as {
+              success?: boolean
+              error?: string
+              data?: any
+            }
           }
           if (!res?.success) {
-            setAppointments((prev) => prev.map((x) => (x._id === current.id ? snapshot! : x)))
-            alert("Failed to update appointment.")
+            setAppointments((prev) =>
+              prev.map((x) => (x._id === current.id ? snapshot : x))
+            )
+            toast({
+              title: "Couldn't move appointment",
+              description: res?.error || "Please try a different slot.",
+              variant: "destructive",
+            })
+          } else {
+            const successDescription = (() => {
+              if (payload.mode === "staff" && payload.newStaffId) {
+                const target = columns.find((c) => c._id === payload.newStaffId)
+                const staffName = target?.name || "selected staff"
+                if (payload.newTime) {
+                  return `Reassigned to ${staffName} at ${formatAppointmentTime(payload.newTime)}.`
+                }
+                return `Reassigned to ${staffName}.`
+              }
+              if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
+                return `Start time updated to ${formatAppointmentTime(payload.newTime)}.`
+              }
+              if (payload.mode === "resize-bottom" && payload.newDuration != null) {
+                return `Duration updated to ${payload.newDuration} min.`
+              }
+              return undefined
+            })()
+            toast({ title: "Appointment updated", description: successDescription })
+            // Resync with the server so populated client/service/staff fields refresh after the optimistic merge.
+            void fetchAppointments()
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("appointments-refresh"))
+            }
           }
         } catch (err) {
           console.error(err)
-          setAppointments((prev) => prev.map((x) => (x._id === current.id ? snapshot! : x)))
-          alert("Failed to update appointment.")
+          setAppointments((prev) =>
+            prev.map((x) => (x._id === current.id ? snapshot : x))
+          )
+          toast({
+            title: "Couldn't move appointment",
+            description: "Network error. Please try again.",
+            variant: "destructive",
+          })
         } finally {
           setUpdatingTimeForId(null)
         }
@@ -2114,9 +2178,10 @@ export const AppointmentsCalendarGrid = forwardRef<
       let res: { success?: boolean; error?: string } | null = null
       if (pending.mode === "staff") {
         if (!pending.newStaffId) return
-        const updatePayload: { staffId: string; staffAssignments: any[]; time?: string } = {
+        const updatePayload: { staffId: string; staffAssignments: any[]; time?: string; allowParallelBooking: boolean } = {
           staffId: pending.newStaffId,
           staffAssignments: [{ staffId: pending.newStaffId, percentage: 100, role: "primary" }],
+          allowParallelBooking: true,
         }
         if (pending.newTime) updatePayload.time = pending.newTime
         res = await AppointmentsAPI.update(pending.id, updatePayload)
@@ -2141,7 +2206,10 @@ export const AppointmentsCalendarGrid = forwardRef<
         }
       } else if (pending.mode === "move" || pending.mode === "resize-top") {
         if (!pending.newTime) return
-        res = await AppointmentsAPI.update(pending.id, { time: pending.newTime })
+        res = await AppointmentsAPI.update(pending.id, {
+          time: pending.newTime,
+          allowParallelBooking: true,
+        })
         if (res?.success) {
           setAppointments((prev) =>
             prev.map((a) =>
@@ -2154,7 +2222,10 @@ export const AppointmentsCalendarGrid = forwardRef<
         }
       } else if (pending.mode === "resize-bottom") {
         if (pending.newDuration == null) return
-        res = await AppointmentsAPI.update(pending.id, { duration: pending.newDuration })
+        res = await AppointmentsAPI.update(pending.id, {
+          duration: pending.newDuration,
+          allowParallelBooking: true,
+        })
         if (res?.success) {
           setAppointments((prev) =>
             prev.map((a) =>
@@ -2710,7 +2781,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                       })
                       timeRangeStr = formatTimeRangeFromSlotMinutes(previewStart, previewStart + dur)
                       displayDurationMinutes = dur
-                    } else if (isDragging && draggingApt?.id === apt._id && draggingApt.mode === "resize-bottom") {
+                    } else if (isDragging && draggingApt && draggingApt.id === apt._id && draggingApt.mode === "resize-bottom") {
                       const previewDur = previewDurationForResizeBottomDrag({
                         startTimeMinutes: draggingApt.startTimeMinutes,
                         baselineDuration: draggingApt.duration,
