@@ -35,31 +35,37 @@ router.patch('/:id/reschedule', auth, async (req, res) => {
       { scope, startAt, endAt, skipAvailability: !!skipAvailability }
     );
 
-    try {
-      const { Appointment } = req.businessModels;
-      /** booking-service returns `updated` as a count, not an array; use `updatedAppointmentIds` when present */
-      const idList =
-        Array.isArray(out.updatedAppointmentIds) && out.updatedAppointmentIds.length > 0
-          ? out.updatedAppointmentIds
-          : typeof out.updated === 'number' && out.updated > 0
-            ? [req.params.id]
-            : [];
-      for (const rawId of idList) {
-        const apptId = rawId && (rawId._id || rawId.id || rawId);
-        if (!apptId) continue;
-        const populated = await Appointment.findById(apptId)
-          .populate('clientId', 'name phone email')
-          .populate('serviceId', 'name price duration')
-          .populate('staffId', 'name role');
-        if (populated) {
-          await sendAppointmentRescheduleWhatsApp(req, populated);
-        }
-      }
-    } catch (whatsappErr) {
-      logger.error('Error sending reschedule WhatsApp:', whatsappErr);
-    }
+    // Respond immediately — WhatsApp notification is sent in the background
+    res.json({ success: true, data: out });
 
-    return res.json({ success: true, data: out });
+    // Fire-and-forget: send reschedule WhatsApp after the response is flushed
+    setImmediate(async () => {
+      try {
+        const { Appointment } = req.businessModels;
+        /** booking-service returns `updated` as a count, not an array; use `updatedAppointmentIds` when present */
+        const idList =
+          Array.isArray(out.updatedAppointmentIds) && out.updatedAppointmentIds.length > 0
+            ? out.updatedAppointmentIds
+            : typeof out.updated === 'number' && out.updated > 0
+              ? [req.params.id]
+              : [];
+        for (const rawId of idList) {
+          const apptId = rawId && (rawId._id || rawId.id || rawId);
+          if (!apptId) continue;
+          const populated = await Appointment.findById(apptId)
+            .populate('clientId', 'name phone email')
+            .populate('serviceId', 'name price duration')
+            .populate('staffId', 'name role');
+          if (populated) {
+            await sendAppointmentRescheduleWhatsApp(req, populated);
+          }
+        }
+      } catch (whatsappErr) {
+        logger.error('Error sending reschedule WhatsApp:', whatsappErr);
+      }
+    });
+
+    return;
   } catch (e) {
     logger.error('[appointments] reschedule', e);
     const code = e.code || 'ERROR';
@@ -80,32 +86,38 @@ router.patch('/:id/cancel', auth, async (req, res) => {
     const preCancel = await Appointment.findById(req.params.id).select('parentBookingId').lean();
     const out = await bookingService.cancelAppointment(req.businessModels, req.params.id, { scope, reason });
 
-    try {
-      if (scope === 'this' || !preCancel?.parentBookingId) {
-        const populated = await Appointment.findById(req.params.id)
-          .populate('clientId', 'name phone email')
-          .populate('serviceId', 'name price duration')
-          .populate('staffId', 'name role');
-        if (populated) {
-          await sendAppointmentCancellationWhatsApp(req, populated, reason);
-        }
-      } else {
-        const cancelled = await Appointment.find({
-          parentBookingId: preCancel.parentBookingId,
-          status: 'cancelled'
-        })
-          .populate('clientId', 'name phone email')
-          .populate('serviceId', 'name price duration')
-          .populate('staffId', 'name role');
-        for (const apt of cancelled) {
-          await sendAppointmentCancellationWhatsApp(req, apt, reason);
-        }
-      }
-    } catch (whatsappErr) {
-      logger.error('Error sending cancellation WhatsApp:', whatsappErr);
-    }
+    // Respond immediately — WhatsApp notification is sent in the background
+    res.json({ success: true, data: out });
 
-    return res.json({ success: true, data: out });
+    // Fire-and-forget: send cancellation WhatsApp after the response is flushed
+    setImmediate(async () => {
+      try {
+        if (scope === 'this' || !preCancel?.parentBookingId) {
+          const populated = await Appointment.findById(req.params.id)
+            .populate('clientId', 'name phone email')
+            .populate('serviceId', 'name price duration')
+            .populate('staffId', 'name role');
+          if (populated) {
+            await sendAppointmentCancellationWhatsApp(req, populated, reason);
+          }
+        } else {
+          const cancelled = await Appointment.find({
+            parentBookingId: preCancel.parentBookingId,
+            status: 'cancelled'
+          })
+            .populate('clientId', 'name phone email')
+            .populate('serviceId', 'name price duration')
+            .populate('staffId', 'name role');
+          for (const apt of cancelled) {
+            await sendAppointmentCancellationWhatsApp(req, apt, reason);
+          }
+        }
+      } catch (whatsappErr) {
+        logger.error('Error sending cancellation WhatsApp:', whatsappErr);
+      }
+    });
+
+    return;
   } catch (e) {
     logger.error('[appointments] cancel', e);
     const status = e.code === 'NOT_FOUND' ? 404 : 500;

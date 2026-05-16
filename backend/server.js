@@ -9374,6 +9374,17 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
       }
     }
 
+    // Respond immediately — notifications are sent in the background
+    res.status(201).json({
+      success: true,
+      data: createdAppointments,
+      message: 'Appointments created successfully'
+    });
+
+    // Fire-and-forget: send all notifications after the response has been flushed.
+    // Errors here must never propagate to the request handler.
+    setImmediate(async () => {
+
     // Send email notifications if enabled
     try {
       const emailService = require('./services/email-service');
@@ -9860,11 +9871,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
       logger.error('Error sending appointment confirmation SMS:', smsErr);
     }
 
-    res.status(201).json({
-      success: true,
-      data: createdAppointments,
-      message: 'Appointments created successfully'
-    });
+    }); // end setImmediate (background notifications)
+
   } catch (error) {
     if (error.code === 11000 || error.codeName === 'DuplicateKey' || /duplicate key/i.test(String(error.message || ''))) {
       logger.warn('Appointment slot conflict (duplicate slotKey):', error.message);
