@@ -22,6 +22,7 @@ import {
   FileText,
   Copy,
   Check,
+  Mail,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -75,6 +76,7 @@ interface Business {
   invoicesCount?: number
   revenue?: number
   nextBillingDate?: string | null
+  settings?: { platformEmailDisabled?: boolean }
 }
 
 interface Stats {
@@ -399,6 +401,43 @@ export function BusinessManagement() {
     }
   }
 
+  const handlePlatformEmailToggle = async (business: Business, platformEmailDisabled: boolean) => {
+    if (
+      !confirm(
+        platformEmailDisabled
+          ? `Turn off operational emails (summaries, appointment and receipt emails, export mail, system alerts) for "${business.name}"? SMS and WhatsApp are not affected.`
+          : `Turn operational emails back on for "${business.name}"?`
+      )
+    ) {
+      return
+    }
+    try {
+      const res = await fetch(`${API_URL}/admin/businesses/${business._id}/platform-email`, {
+        method: "PATCH",
+        headers: adminRequestHeaders({ "Content-Type": "application/json" }),
+        credentials: "include",
+        body: JSON.stringify({ platformEmailDisabled }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Update failed")
+      }
+      toast({
+        title: platformEmailDisabled ? "Operational emails disabled" : "Operational emails enabled",
+        description:
+          (data as { message?: string }).message ||
+          `Platform email delivery is now ${platformEmailDisabled ? "off" : "on"} for this business.`,
+      })
+      fetchBusinesses()
+    } catch (e: unknown) {
+      toast({
+        title: "Error",
+        description: e instanceof Error ? e.message : "Update failed",
+        variant: "destructive",
+      })
+    }
+  }
+
   const viewActivityLogs = (business: Business) => {
     setActivityLogsBusiness(business)
     setIsActivityLogsOpen(true)
@@ -646,7 +685,14 @@ export function BusinessManagement() {
                         </TableCell>
                         <TableCell>
                           <div>
-                            <p className="font-medium text-slate-900">{b.name}</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium text-slate-900">{b.name}</p>
+                              {b.settings?.platformEmailDisabled ? (
+                                <Badge variant="outline" className="text-xs font-normal text-amber-800 border-amber-200 bg-amber-500/10">
+                                  Email off
+                                </Badge>
+                              ) : null}
+                            </div>
                             <p className="text-xs text-slate-500">#{b.code}</p>
                             <p className="text-xs text-slate-400">{location(b)}</p>
                           </div>
@@ -715,6 +761,24 @@ export function BusinessManagement() {
                                 <CreditCard className="h-4 w-4 mr-2" />
                                 Manage Plan
                               </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              {!b.settings?.platformEmailDisabled ? (
+                                <DropdownMenuItem
+                                  onClick={() => handlePlatformEmailToggle(b, true)}
+                                  className="text-amber-700"
+                                >
+                                  <Mail className="h-4 w-4 mr-2" />
+                                  Disable operational emails
+                                </DropdownMenuItem>
+                              ) : (
+                                <DropdownMenuItem
+                                  onClick={() => handlePlatformEmailToggle(b, false)}
+                                  className="text-emerald-700"
+                                >
+                                  <Mail className="h-4 w-4 mr-2" />
+                                  Enable operational emails
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuSeparator />
                               {b.status === "active" && (
                                 <DropdownMenuItem onClick={() => handleStatusChange(b._id, "suspended")} className="text-amber-600">

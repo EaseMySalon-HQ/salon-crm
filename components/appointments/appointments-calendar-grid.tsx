@@ -1025,6 +1025,12 @@ export const AppointmentsCalendarGrid = forwardRef<
       const norm = dateNorm(apt.date)
       if (norm !== selectedDate) return false
       if (isHiddenAppointment(apt)) return false
+      // Services added inside the checkout dialog become Appointment docs with
+      // leadSource: 'Walk-in' (created by markAppointmentCompleted on the
+      // server). They are not real bookings — render them through the walk-in
+      // sale card path below so they look distinct from scheduled appointments
+      // and follow the "Show Walk-in" toggle.
+      if (String(apt.leadSource || "").trim().toLowerCase() === "walk-in") return false
       if (staffFilter) {
         const primaryId = getPrimaryStaffId(apt)
         return primaryId === staffFilter
@@ -1315,6 +1321,9 @@ export const AppointmentsCalendarGrid = forwardRef<
     appointments.forEach((apt) => {
       const gid = (apt as Appointment).bookingGroupId
       if (!gid) return
+      // Walk-in cards (created post-checkout) render via the sale stream and
+      // shouldn't influence the booking group accent count.
+      if (String(apt.leadSource || "").trim().toLowerCase() === "walk-in") return
       counts.set(gid, (counts.get(gid) || 0) + 1)
     })
     const colorByGroup = new Map<string, string>()
@@ -1330,23 +1339,81 @@ export const AppointmentsCalendarGrid = forwardRef<
 
   const WALK_IN_SALE_DURATION = 30
 
+  /**
+   * Walk-in Appointment docs (services added during checkout) — rendered as
+   * walk-in cards instead of scheduled-appointment cards, gated by the same
+   * "Show Walk-in" toggle. Filtered out of `filteredAppointments` above.
+   */
+  const walkInAppointmentSales = useMemo(() => {
+    if (!showWalkInCards) return [] as any[]
+    return appointments
+      .filter((apt) => {
+        if (String(apt.leadSource || "").trim().toLowerCase() !== "walk-in") return false
+        if (dateNorm(apt.date) !== selectedDate) return false
+        if (isHiddenAppointment(apt)) return false
+        if (staffFilter) {
+          const primaryId = getPrimaryStaffId(apt)
+          if (primaryId !== staffFilter) return false
+        }
+        return true
+      })
+      .map((apt) => {
+        const primaryStaffId = getPrimaryStaffId(apt)
+        const serviceName = apt.serviceId?.name || "Service"
+        return {
+          // Synthetic sale-shaped object so it flows through the same walk-in
+          // card render path as standalone walk-in sales below.
+          _id: `walkin-apt-${apt._id}`,
+          _walkInAppointmentId: apt._id,
+          customerName: apt.clientId?.name || "Walk-in",
+          billNo: null,
+          date: apt.date,
+          time: apt.time,
+          items: [
+            {
+              type: "service",
+              name: serviceName,
+              staffId: primaryStaffId,
+              price: apt.price,
+            },
+          ],
+          __isWalkInAppointment: true as const,
+          __walkInAppointmentDuration: Math.max(15, Number(apt.duration) || 60),
+          __walkInAppointmentStartM: parseTimeToMinutes(apt.time),
+        }
+      })
+  }, [appointments, showWalkInCards, selectedDate, staffFilter])
+
+  const combinedWalkInSales = useMemo(
+    () => [...effectiveWalkInSales, ...walkInAppointmentSales],
+    [effectiveWalkInSales, walkInAppointmentSales]
+  )
+
   const salesByColumn = useMemo(() => {
     const map: Record<string, Array<{ sale: any; serviceItem: any; itemKey: string; top: number; height: number; startM: number; endM: number }>> = {}
     columns.forEach((col) => {
       map[col._id] = []
     })
-    effectiveWalkInSales.forEach((sale) => {
+    combinedWalkInSales.forEach((sale) => {
       const serviceItems = (sale.items || []).filter((i: any) => i.type === "service")
       if (serviceItems.length === 0) return
-      let timeStr = sale.time
-      if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
-        const d = sale.date ? new Date(sale.date) : new Date()
-        if (!Number.isNaN(d.getTime())) timeStr = format(d, "HH:mm")
+      const isWalkInApt = (sale as any).__isWalkInAppointment === true
+      let startM: number
+      let endM: number
+      if (isWalkInApt) {
+        startM = (sale as any).__walkInAppointmentStartM ?? parseTimeToMinutes(sale.time || "09:00")
+        endM = startM + ((sale as any).__walkInAppointmentDuration || WALK_IN_SALE_DURATION)
+      } else {
+        let timeStr = sale.time
+        if (!timeStr || parseTimeToMinutes(timeStr) > 24 * 60) {
+          const d = sale.date ? new Date(sale.date) : new Date()
+          if (!Number.isNaN(d.getTime())) timeStr = format(d, "HH:mm")
+        }
+        const checkoutEndM = parseTimeToMinutes(timeStr || "9:00")
+        endM = checkoutEndM
+        startM = endM - WALK_IN_SALE_DURATION
       }
-      const checkoutEndM = parseTimeToMinutes(timeStr || "9:00")
-      const duration = WALK_IN_SALE_DURATION
-      const endM = checkoutEndM
-      const startM = endM - duration
+      const duration = endM - startM
       const top = ((startM - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
       const height = Math.max(slotHeight * 0.6, (duration / SLOT_MINUTES) * slotHeight)
       serviceItems.forEach((serviceItem: any, idx: number) => {
@@ -1364,7 +1431,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       (map[col._id] || []).sort((a, b) => a.top - b.top)
     })
     return map
-  }, [columns, effectiveWalkInSales, extendedStartMinutes, slotHeight])
+  }, [columns, combinedWalkInSales, extendedStartMinutes, slotHeight])
 
   const blockTimesByColumn = useMemo(() => {
     const map: Record<string, Array<{ block: BlockTime; top: number; height: number }>> = {}
@@ -1776,73 +1843,137 @@ export const AppointmentsCalendarGrid = forwardRef<
       }
 
       const applyDrop = async (payload: { mode: "staff" | "move" | "resize-top" | "resize-bottom"; newStaffId?: string; newTime?: string; newDuration?: number }) => {
-        let snapshot: Appointment | null = null
-        setAppointments((prev) => {
-          const idx = prev.findIndex((a) => a._id === current.id)
-          if (idx < 0) return prev
-          snapshot = JSON.parse(JSON.stringify(prev[idx])) as Appointment
-          const a = prev[idx]
-          const aAny = a as any
-          let next: Appointment
-          if (payload.mode === "staff" && payload.newStaffId) {
-            const newStaff = columns.find((c) => c._id === payload.newStaffId)
-            next = {
-              ...a,
-              staffId: newStaff ? { _id: newStaff._id, name: newStaff.name, role: newStaff.role } : aAny.staffId,
-              staffAssignments: [
-                { staffId: { _id: payload.newStaffId!, name: newStaff?.name ?? "Staff" }, role: "primary" },
-              ],
-              ...(payload.newTime ? { time: payload.newTime, startAt: undefined, endAt: undefined } : {}),
-            } as Appointment
-          } else if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
-            next = {
-              ...a,
-              time: payload.newTime,
-              startAt: undefined,
-              endAt: undefined,
-            } as Appointment
-          } else if (payload.mode === "resize-bottom" && payload.newDuration != null) {
-            next = {
-              ...a,
-              duration: payload.newDuration,
-              startAt: undefined,
-              endAt: undefined,
-            } as Appointment
-          } else {
-            return prev
-          }
-          return prev.map((x, i) => (i === idx ? next : x))
-        })
-
-        if (!snapshot) {
+        // React 18 batches functional updaters in event handlers, so reading any
+        // closure side-effect right after `setAppointments(...)` returns reads it
+        // BEFORE the updater runs. Capture the snapshot synchronously from the
+        // closure here so the rollback path always has the pre-drop state to
+        // restore from, regardless of how soon the API request resolves.
+        const closureRow = appointments.find((a) => a._id === current.id) ?? null
+        if (!closureRow) {
           clearAppointmentDragUi()
           return
         }
 
+        const snapshot = JSON.parse(JSON.stringify(closureRow)) as Appointment
+        const aAny = closureRow as any
+        let next: Appointment
+        if (payload.mode === "staff" && payload.newStaffId) {
+          const newStaff = columns.find((c) => c._id === payload.newStaffId)
+          next = {
+            ...closureRow,
+            staffId: newStaff
+              ? { _id: newStaff._id, name: newStaff.name, role: newStaff.role }
+              : aAny.staffId,
+            staffAssignments: [
+              { staffId: { _id: payload.newStaffId!, name: newStaff?.name ?? "Staff" }, role: "primary" },
+            ],
+            ...(payload.newTime ? { time: payload.newTime, startAt: undefined, endAt: undefined } : {}),
+          } as Appointment
+        } else if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
+          next = {
+            ...closureRow,
+            time: payload.newTime,
+            startAt: undefined,
+            endAt: undefined,
+          } as Appointment
+        } else if (payload.mode === "resize-bottom" && payload.newDuration != null) {
+          next = {
+            ...closureRow,
+            duration: payload.newDuration,
+            startAt: undefined,
+            endAt: undefined,
+          } as Appointment
+        } else {
+          clearAppointmentDragUi()
+          return
+        }
+
+        setAppointments((prev) => {
+          const idx = prev.findIndex((a) => a._id === current.id)
+          if (idx < 0) return prev
+          return prev.map((x, i) => (i === idx ? next : x))
+        })
+
         clearAppointmentDragUi()
+        setUpdatingTimeForId(current.id)
 
         try {
-          let res: { success?: boolean } | null = null
+          let res: { success?: boolean; error?: string; data?: any } | null = null
           if (payload.mode === "staff" && payload.newStaffId) {
-            const updatePayload: { staffId: string; staffAssignments: any[]; time?: string } = {
+            const updatePayload: { staffId: string; staffAssignments: any[]; time?: string; allowParallelBooking: boolean } = {
               staffId: payload.newStaffId,
               staffAssignments: [{ staffId: payload.newStaffId, percentage: 100, role: "primary" }],
+              allowParallelBooking: true,
             }
             if (payload.newTime) updatePayload.time = payload.newTime
-            res = await AppointmentsAPI.update(current.id, updatePayload)
+            res = (await AppointmentsAPI.update(current.id, updatePayload)) as {
+              success?: boolean
+              error?: string
+              data?: any
+            }
           } else if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
-            res = await AppointmentsAPI.update(current.id, { time: payload.newTime })
+            res = (await AppointmentsAPI.update(current.id, {
+              time: payload.newTime,
+              allowParallelBooking: true,
+            })) as {
+              success?: boolean
+              error?: string
+              data?: any
+            }
           } else if (payload.mode === "resize-bottom" && payload.newDuration != null) {
-            res = await AppointmentsAPI.update(current.id, { duration: payload.newDuration })
+            res = (await AppointmentsAPI.update(current.id, {
+              duration: payload.newDuration,
+              allowParallelBooking: true,
+            })) as {
+              success?: boolean
+              error?: string
+              data?: any
+            }
           }
           if (!res?.success) {
-            setAppointments((prev) => prev.map((x) => (x._id === current.id ? snapshot! : x)))
-            alert("Failed to update appointment.")
+            setAppointments((prev) =>
+              prev.map((x) => (x._id === current.id ? snapshot : x))
+            )
+            toast({
+              title: "Couldn't move appointment",
+              description: res?.error || "Please try a different slot.",
+              variant: "destructive",
+            })
+          } else {
+            const successDescription = (() => {
+              if (payload.mode === "staff" && payload.newStaffId) {
+                const target = columns.find((c) => c._id === payload.newStaffId)
+                const staffName = target?.name || "selected staff"
+                if (payload.newTime) {
+                  return `Reassigned to ${staffName} at ${formatAppointmentTime(payload.newTime)}.`
+                }
+                return `Reassigned to ${staffName}.`
+              }
+              if ((payload.mode === "move" || payload.mode === "resize-top") && payload.newTime) {
+                return `Start time updated to ${formatAppointmentTime(payload.newTime)}.`
+              }
+              if (payload.mode === "resize-bottom" && payload.newDuration != null) {
+                return `Duration updated to ${payload.newDuration} min.`
+              }
+              return undefined
+            })()
+            toast({ title: "Appointment updated", description: successDescription })
+            // Resync with the server so populated client/service/staff fields refresh after the optimistic merge.
+            void fetchAppointments()
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("appointments-refresh"))
+            }
           }
         } catch (err) {
           console.error(err)
-          setAppointments((prev) => prev.map((x) => (x._id === current.id ? snapshot! : x)))
-          alert("Failed to update appointment.")
+          setAppointments((prev) =>
+            prev.map((x) => (x._id === current.id ? snapshot : x))
+          )
+          toast({
+            title: "Couldn't move appointment",
+            description: "Network error. Please try again.",
+            variant: "destructive",
+          })
         } finally {
           setUpdatingTimeForId(null)
         }
@@ -2047,9 +2178,10 @@ export const AppointmentsCalendarGrid = forwardRef<
       let res: { success?: boolean; error?: string } | null = null
       if (pending.mode === "staff") {
         if (!pending.newStaffId) return
-        const updatePayload: { staffId: string; staffAssignments: any[]; time?: string } = {
+        const updatePayload: { staffId: string; staffAssignments: any[]; time?: string; allowParallelBooking: boolean } = {
           staffId: pending.newStaffId,
           staffAssignments: [{ staffId: pending.newStaffId, percentage: 100, role: "primary" }],
+          allowParallelBooking: true,
         }
         if (pending.newTime) updatePayload.time = pending.newTime
         res = await AppointmentsAPI.update(pending.id, updatePayload)
@@ -2074,7 +2206,10 @@ export const AppointmentsCalendarGrid = forwardRef<
         }
       } else if (pending.mode === "move" || pending.mode === "resize-top") {
         if (!pending.newTime) return
-        res = await AppointmentsAPI.update(pending.id, { time: pending.newTime })
+        res = await AppointmentsAPI.update(pending.id, {
+          time: pending.newTime,
+          allowParallelBooking: true,
+        })
         if (res?.success) {
           setAppointments((prev) =>
             prev.map((a) =>
@@ -2087,7 +2222,10 @@ export const AppointmentsCalendarGrid = forwardRef<
         }
       } else if (pending.mode === "resize-bottom") {
         if (pending.newDuration == null) return
-        res = await AppointmentsAPI.update(pending.id, { duration: pending.newDuration })
+        res = await AppointmentsAPI.update(pending.id, {
+          duration: pending.newDuration,
+          allowParallelBooking: true,
+        })
         if (res?.success) {
           setAppointments((prev) =>
             prev.map((a) =>
@@ -2556,7 +2694,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           draggingApt && (draggingApt.mode === "move" || draggingApt.mode === "resize-top")
                             ? ""
                             : "transition-colors duration-150 hover:transition-colors"
-                        } bg-transparent pointer-events-none ${
+                        } bg-transparent pointer-events-auto ${
                           isDragHighlightValid
                             ? "ring-2 ring-violet-700/80 ring-inset"
                             : isInDragHighlight && !isDragHighlightValid
@@ -2579,81 +2717,8 @@ export const AppointmentsCalendarGrid = forwardRef<
             {columns.length > 0 && (
               <div
                 ref={blocksContainerRef}
-                className={`absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] ${CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS} pointer-events-auto`}
+                className={`absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] ${CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS} pointer-events-none`}
                 style={{ height: totalSlotsWithSales * slotHeight }}
-                onMouseMove={(e) => {
-                  if (draggingApt || slotActionDialog) return
-                  const el = e.target as HTMLElement
-                  if (
-                    el.closest("[data-calendar-appt-slot]") ||
-                    el.closest("[data-appointment-card]") ||
-                    el.closest("[data-sale-card]") ||
-                    el.closest("[data-block-time]")
-                  ) {
-                    hideSlotHoverTip()
-                    return
-                  }
-                  const rect = blocksContainerRef.current?.getBoundingClientRect()
-                  if (!rect) return
-                  const relX = e.clientX - rect.left
-                  const relY = e.clientY - rect.top
-                  if (relY < 0 || relX < 0 || relX > rect.width || relY > rect.height) {
-                    hideSlotHoverTip()
-                    return
-                  }
-                  const slotIndex = Math.floor(relY / slotHeight)
-                  const slotM = extendedStartMinutes + slotIndex * SLOT_MINUTES
-                  if (slotM < extendedStartMinutes || slotM >= extendedEndMinutes) {
-                    hideSlotHoverTip()
-                    return
-                  }
-                  const colIx = Math.floor(relX / (rect.width / Math.max(1, columns.length)))
-                  const col = columns[colIx]
-                  if (!col) {
-                    hideSlotHoverTip()
-                    return
-                  }
-                  const windowForStaff = staffWindowsById[col._id]
-                  const inWin =
-                    !windowForStaff ||
-                    (windowForStaff.enabled && slotM >= windowForStaff.start && slotM < windowForStaff.end)
-                  const tip = inWin
-                    ? `New appointment with ${col.name} at ${slotMinutesToTimeString(slotM)}`
-                    : `Unavailable at ${slotMinutesToTimeString(slotM)} (outside working hours)`
-                  setSlotHoverTip({ text: tip, clientX: e.clientX, clientY: e.clientY })
-                }}
-                onMouseLeave={hideSlotHoverTip}
-                onClick={(e) => {
-                  if (justDraggedRef.current) return
-                  const target = e.target as HTMLElement
-                  if (
-                    target.closest("[data-calendar-appt-slot]") ||
-                    target.closest("[data-appointment-card]") ||
-                    target.closest("[data-sale-card]") ||
-                    target.closest("[data-block-time]")
-                  )
-                    return
-                  e.stopPropagation()
-                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                  const relY = e.clientY - rect.top
-                  const slotIndex = Math.floor(relY / slotHeight)
-                  const slotMinutes = extendedStartMinutes + slotIndex * SLOT_MINUTES
-                  if (slotMinutes < extendedStartMinutes || slotMinutes >= extendedEndMinutes) return
-                  const colIndex = Math.floor((e.clientX - rect.left) / (rect.width / columns.length))
-                  const col = columns[colIndex]
-                  if (!col) return
-                  const windowForStaff = staffWindowsById[col._id]
-                  const inWorkWindow = !windowForStaff || (windowForStaff.enabled && slotMinutes >= windowForStaff.start && slotMinutes < windowForStaff.end)
-                  if (!inWorkWindow) return
-                  setSlotActionDialog({
-                    date: selectedDate,
-                    time: slotMinutesToTimeString(slotMinutes),
-                    staffId: col._id,
-                    staffName: col.name,
-                    clientX: e.clientX,
-                    clientY: e.clientY,
-                  })
-                }}
               >
               {columns.map((col, colIndex) => {
                 return (
@@ -2716,7 +2781,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                       })
                       timeRangeStr = formatTimeRangeFromSlotMinutes(previewStart, previewStart + dur)
                       displayDurationMinutes = dur
-                    } else if (isDragging && draggingApt?.id === apt._id && draggingApt.mode === "resize-bottom") {
+                    } else if (isDragging && draggingApt && draggingApt.id === apt._id && draggingApt.mode === "resize-bottom") {
                       const previewDur = previewDurationForResizeBottomDrag({
                         startTimeMinutes: draggingApt.startTimeMinutes,
                         baselineDuration: draggingApt.duration,
@@ -3113,11 +3178,13 @@ export const AppointmentsCalendarGrid = forwardRef<
                     .filter((e): e is Extract<CalendarStackLayoutItem, { kind: "sale" }> => e.kind === "sale")
                     .map(({ sale, serviceItem, top, height, startM, endM, left, width }) => {
                     const serviceName = serviceItem?.name || "Service"
+                    const isWalkInApt = (sale as any)?.__isWalkInAppointment === true
+                    const billNo = sale?.billNo
                     return (
                       <div
                         data-sale-card
                         key={`${sale._id}-${serviceName}-${col._id}-${startM}`}
-                        className="group absolute overflow-hidden text-left flex flex-col z-10 pointer-events-auto cursor-pointer animate-appointment-card-enter transition-all duration-[180ms] ease-out hover:-translate-y-0.5"
+                        className={`group absolute overflow-hidden text-left flex flex-col z-10 pointer-events-auto animate-appointment-card-enter transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${billNo ? "cursor-pointer" : "cursor-default"}`}
                         style={{
                           top,
                           left: `${left}%`,
@@ -3127,8 +3194,14 @@ export const AppointmentsCalendarGrid = forwardRef<
                         }}
                         onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 6px 16px rgba(0,0,0,0.08)" }}
                         onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)" }}
-                        onClick={() => void openSaleInvoicePreview(sale.billNo)}
-                        title={`Bill #${sale.billNo} • Click to preview invoice`}
+                        onClick={billNo ? () => void openSaleInvoicePreview(billNo) : undefined}
+                        title={
+                          billNo
+                            ? `Bill #${billNo} • Click to preview invoice`
+                            : isWalkInApt
+                            ? "Walk-in service added during checkout"
+                            : "Walk-in service"
+                        }
                       >
                         <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-400 shrink-0" aria-hidden />
                         <div className="pl-[14px] pr-3 pt-4 pb-3 flex-1 min-h-0 overflow-hidden bg-white border border-slate-200/60">
@@ -3143,7 +3216,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                             {formatAppointmentTime(slotMinutesToTimeString(startM))} – {formatAppointmentTime(slotMinutesToTimeString(endM))}
                           </div>
                           <span className="inline-block mt-2 px-2 py-0.5 rounded-md text-[11px] font-medium text-slate-600 bg-slate-100/80">
-                            Bill #{sale.billNo}
+                            {billNo ? `Bill #${billNo}` : "Walk-in"}
                           </span>
                         </div>
                       </div>

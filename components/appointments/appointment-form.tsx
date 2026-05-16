@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback, useRef, useReducer, type ReactNode } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef, useReducer, type ReactNode, type MutableRefObject } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -62,11 +62,11 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
-import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI, SettingsAPI } from "@/lib/api"
+import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI, SettingsAPI, type ApiResponse } from "@/lib/api"
 import type { Receipt as InvoiceReceipt } from "@/lib/data"
-import { isHiddenAppointment, getAppointmentStatusPillClass, getAppointmentEditAppearanceStatus } from "@/lib/appointment-calendar-helpers"
+import { isHiddenAppointment, getAppointmentStatusPillClass, getAppointmentEditAppearanceStatus, toMongoIdString } from "@/lib/appointment-calendar-helpers"
 import { readServiceCheckoutDraftByRef } from "@/lib/service-checkout-draft-storage"
-import { ServiceCheckoutDialog, type ServiceCheckoutLine, type EnsureAppointmentBookingResult } from "@/components/appointments/service-checkout-dialog"
+import { ServiceCheckoutDialog, type ServiceCheckoutLine, type EnsureAppointmentBookingResult, type ServiceCheckoutDialogHandle } from "@/components/appointments/service-checkout-dialog"
 import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
@@ -465,6 +465,10 @@ export interface AppointmentFormProps {
   onDrawerSelectedServiceCountChange?: (count: number) => void
   /** Drawer edit: unsaved field/service changes (for blocking dismiss while editing). */
   onEditAppointmentDirtyChange?: (dirty: boolean) => void
+  /** Drawer: checkout payment step active (for sheet title / back behavior). */
+  onServiceCheckoutPaymentStepChange?: (inPaymentStep: boolean) => void
+  /** Drawer: assign a function that exits payment-only step back to catalog. */
+  serviceCheckoutPaymentBackRef?: MutableRefObject<(() => void) | null>
 }
 
 export function AppointmentForm({
@@ -485,10 +489,14 @@ export function AppointmentForm({
   onDrawerHeaderStatusToneChange,
   onDrawerSelectedServiceCountChange,
   onEditAppointmentDirtyChange,
+  onServiceCheckoutPaymentStepChange,
+  serviceCheckoutPaymentBackRef,
 }: AppointmentFormProps = {}) {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const appointmentId = appointmentIdProp ?? searchParams?.get("edit") ?? undefined
+  const appointmentIdRaw = appointmentIdProp ?? searchParams?.get("edit") ?? undefined
+  const appointmentId =
+    appointmentIdRaw != null && appointmentIdRaw !== "" ? toMongoIdString(appointmentIdRaw) : undefined
   const isEditMode = !!appointmentId
   const prefillClientId = searchParams?.get("clientId") ?? initialClientIdForPrefill ?? undefined
   const { toast } = useToast()
@@ -610,6 +618,18 @@ export function AppointmentForm({
     },
     [serviceCheckoutControlled, onServiceCheckoutOpenChange]
   )
+
+  const serviceCheckoutRef = useRef<ServiceCheckoutDialogHandle>(null)
+
+  useEffect(() => {
+    if (!serviceCheckoutPaymentBackRef) return
+    serviceCheckoutPaymentBackRef.current = () => {
+      serviceCheckoutRef.current?.closePaymentStep()
+    }
+    return () => {
+      serviceCheckoutPaymentBackRef.current = null
+    }
+  }, [serviceCheckoutPaymentBackRef])
 
   const resumeCheckoutDraftRef = useRef(false)
   const consumeResumeDraftIntent = useCallback(() => {
@@ -747,30 +767,9 @@ export function AppointmentForm({
     }
   }, [appointmentId, isEditMode])
 
-  const syncAppointmentStatusFromServer = useCallback(async () => {
-    if (!appointmentId || !isEditMode) return
-    try {
-      const res = await AppointmentsAPI.getById(appointmentId)
-      if (!res?.success || !res?.data) return
-      const a = res.data as { status?: string }
-      if (typeof a.status === "string") setEditedAppointmentStatus(a.status)
-    } catch {
-      /* ignore */
-    }
-  }, [appointmentId, isEditMode])
-
   useEffect(() => {
     void refreshLinkedSaleForStatus()
   }, [refreshLinkedSaleForStatus])
-
-  useEffect(() => {
-    const onRefresh = () => {
-      void refreshLinkedSaleForStatus()
-      void syncAppointmentStatusFromServer()
-    }
-    window.addEventListener("appointments-refresh", onRefresh)
-    return () => window.removeEventListener("appointments-refresh", onRefresh)
-  }, [refreshLinkedSaleForStatus, syncAppointmentStatusFromServer])
 
   const openLinkedInvoicePreview = useCallback(async () => {
     const link = linkedSaleForStatus as { billNo?: string; receiptNumber?: string; _id?: unknown } | null | undefined
@@ -951,6 +950,190 @@ export function AppointmentForm({
     },
     []
   )
+
+  /** Full form + service rows sync from GET /appointments/:id (used by initial load and calendar edits). */
+  const hydrateEditAppointmentFromResponse = useCallback(
+    (res: ApiResponse<any> & { relatedAppointments?: any[] }) => {
+      if (!res?.success || !res?.data || !appointmentId) return
+      const a = res.data as any
+      const client = a.clientId
+      if (client) {
+        const clientData: Client = {
+          _id: client._id,
+          id: client._id,
+          name: client.name || "",
+          phone: client.phone || "",
+          email: client.email,
+          status: "active",
+        }
+        setSelectedCustomer(clientData)
+        setCustomerSearch(clientData.name)
+        onClientSelect?.(clientData)
+      }
+      const svc = a.serviceId
+      const staffIdVal = a.staffId?._id || a.staffId || (a.staffAssignments?.[0]?.staffId?._id ?? a.staffAssignments?.[0]?.staffId)
+
+      let servicesToShow: Array<{
+        id: string
+        serviceId: string
+        staffId: string
+        name: string
+        duration: number
+        price: number
+        staffLocked?: boolean
+        startTime?: string
+      }> = []
+      const related = res.relatedAppointments as any[] | undefined
+
+      const nonCancelledRelated = (related ?? []).filter((r: any) => !isHiddenAppointment(r))
+      const groupIsCustom =
+        a.schedulingMode === "custom" ||
+        nonCancelledRelated.some((r: any) => r.schedulingMode === "custom")
+
+      const timeStringTo24h = (t: string): string => {
+        const m = parseTimeToMinutes(t)
+        const h = Math.floor(m / 60) % 24
+        const min = m % 60
+        return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`
+      }
+
+      if (nonCancelledRelated.length > 0) {
+        const allApts = [{ ...a, _id: a._id }, ...nonCancelledRelated.map((r: any) => ({ ...r, _id: r._id }))]
+        const byTime = [...allApts].sort((x, y) => {
+          const xm = parseTimeToMinutes(x.time || "")
+          const ym = parseTimeToMinutes(y.time || "")
+          return xm - ym
+        })
+        servicesToShow = byTime.map((apt: any) => {
+          const s = apt.serviceId
+          const sid = apt.staffId?._id || apt.staffId || (apt.staffAssignments?.[0]?.staffId?._id ?? apt.staffAssignments?.[0]?.staffId)
+          const rowId =
+            toMongoIdString(apt._id) === appointmentId ? "edit-service" : `related-${toMongoIdString(apt._id)}`
+          return {
+            id: rowId,
+            serviceId: s?._id || s,
+            staffId: sid || "",
+            name: (typeof s === "object" && s?.name) || "Service",
+            duration: apt.duration ?? (typeof s === "object" && s?.duration) ?? 60,
+            price: apt.price ?? (typeof s === "object" && s?.price) ?? 0,
+            staffLocked: !!apt.staffLocked,
+            ...(groupIsCustom ? { startTime: timeStringTo24h(apt.time || "") } : {}),
+          }
+        })
+      } else if (a.additionalServices && a.additionalServices.length > 0) {
+        const additionalPrices = (a.additionalServices as any[]).map((s: any) => s?.price ?? 0)
+        const additionalTotal = additionalPrices.reduce((sum, p) => sum + p, 0)
+        const primaryPrice = Math.max(0, (a.price ?? 0) - additionalTotal)
+        const primary = {
+          id: "edit-service",
+          serviceId: svc?._id || svc,
+          staffId: staffIdVal || "",
+          name: (typeof svc === "object" && svc?.name) || "Service",
+          duration: (typeof svc === "object" && svc?.duration) ?? a.duration ?? 60,
+          price: primaryPrice || ((typeof svc === "object" && svc?.price) ?? 0),
+          staffLocked: !!a.staffLocked,
+        }
+        const additional = (a.additionalServices as any[]).map((s: any, idx: number) => ({
+          id: `additional-${idx}`,
+          serviceId: s._id || s,
+          staffId: staffIdVal || "",
+          name: s?.name || "Service",
+          duration: s?.duration ?? 60,
+          price: s?.price ?? 0,
+          staffLocked: !!a.staffLocked,
+        }))
+        servicesToShow = [primary, ...additional]
+      } else {
+        servicesToShow = [
+          {
+            id: "edit-service",
+            serviceId: svc?._id || svc,
+            staffId: staffIdVal || "",
+            name: (typeof svc === "object" && svc?.name) || "Service",
+            duration: a.duration ?? (typeof svc === "object" && svc?.duration) ?? 60,
+            price: a.price ?? (typeof svc === "object" && svc?.price) ?? 0,
+            staffLocked: !!a.staffLocked,
+          },
+        ]
+      }
+
+      setSelectedServices(servicesToShow as SelectedService[])
+      setExistingBookingGroupId(a.bookingGroupId || null)
+      lastLoadedRecurrenceRef.current =
+        a.recurrence && typeof a.recurrence === "object" ? { ...a.recurrence } : null
+      setEditedAppointmentStatus(typeof a.status === "string" ? a.status : "scheduled")
+      setExistingGroupAppointmentIds(
+        nonCancelledRelated.length > 0
+          ? [
+              toMongoIdString(a._id),
+              ...nonCancelledRelated.map((r: any) => toMongoIdString(r._id)),
+            ].filter((id) => id.length > 0)
+          : []
+      )
+      if (a.date) {
+        const parts = a.date.split("-").map(Number)
+        if (parts.length >= 3) {
+          let apiTime = a.time || ""
+          if (nonCancelledRelated.length > 0) {
+            const allApts = [a, ...nonCancelledRelated]
+            const sorted = [...allApts].sort(
+              (x, y) => parseTimeToMinutes(x.time || "") - parseTimeToMinutes(y.time || "")
+            )
+            apiTime = sorted[0]?.time || apiTime
+          }
+          const minutes = parseTimeToMinutes(apiTime)
+          const slot = apiTime ? timeSlots.find((t) => parseTimeToMinutes(t) === minutes) : ""
+          form.reset({
+            ...form.getValues(),
+            date: new Date(parts[0], parts[1] - 1, parts[2]),
+            time: slot ?? apiTime ?? "",
+            notes: a.notes || "",
+          })
+        }
+      }
+      if (a.time) {
+        let apiTime = a.time
+        if (nonCancelledRelated.length > 0) {
+          const allApts = [a, ...nonCancelledRelated]
+          const sorted = [...allApts].sort(
+            (x, y) => parseTimeToMinutes(x.time || "") - parseTimeToMinutes(y.time || "")
+          )
+          apiTime = sorted[0]?.time || apiTime
+        }
+        const minutes = parseTimeToMinutes(apiTime)
+        const match = timeSlots.find((t) => parseTimeToMinutes(t) === minutes)
+        form.setValue("time", match ?? apiTime)
+      }
+      form.setValue("notes", a.notes || "")
+      const ls = a.leadSource || ""
+      if (ls.startsWith("Referral:")) {
+        form.setValue("leadSource", "Referral")
+        form.setValue("leadSourceDetail", ls.replace(/^Referral:\s*/, ""))
+      } else if (ls.startsWith("Other:")) {
+        form.setValue("leadSource", "Other")
+        form.setValue("leadSourceDetail", ls.replace(/^Other:\s*/, ""))
+      } else {
+        form.setValue("leadSource", ls || "")
+        form.setValue("leadSourceDetail", "")
+      }
+      queueMicrotask(() => {
+        commitEditBaseline(form.getValues(), servicesToShow as SelectedService[])
+      })
+    },
+    [appointmentId, commitEditBaseline, form, onClientSelect]
+  )
+
+  useEffect(() => {
+    const onRefresh = () => {
+      void refreshLinkedSaleForStatus()
+      if (!appointmentId) return
+      void AppointmentsAPI.getById(appointmentId).then((res) => {
+        hydrateEditAppointmentFromResponse(res as ApiResponse<any> & { relatedAppointments?: any[] })
+      })
+    }
+    window.addEventListener("appointments-refresh", onRefresh as EventListener)
+    return () => window.removeEventListener("appointments-refresh", onRefresh as EventListener)
+  }, [refreshLinkedSaleForStatus, appointmentId, hydrateEditAppointmentFromResponse])
 
   const revertEditAppointmentToBaseline = useCallback(() => {
     const snap = editBaselineSnapshotRef.current
@@ -1347,168 +1530,8 @@ export function AppointmentForm({
     setLoadingAppointment(true)
     AppointmentsAPI.getById(appointmentId)
       .then((res) => {
-        if (cancelled || !res?.success || !res?.data) return
-        const a = res.data as any
-        const client = a.clientId
-        if (client) {
-          const clientData: Client = {
-            _id: client._id,
-            id: client._id,
-            name: client.name || "",
-            phone: client.phone || "",
-            email: client.email,
-            status: "active",
-          }
-          setSelectedCustomer(clientData)
-          setCustomerSearch(clientData.name)
-          onClientSelect?.(clientData)
-        }
-        const svc = a.serviceId
-        const staffIdVal = a.staffId?._id || a.staffId || (a.staffAssignments?.[0]?.staffId?._id ?? a.staffAssignments?.[0]?.staffId)
-
-        // Build selectedServices: multi-staff group OR primary+additional (same staff)
-        let servicesToShow: Array<{
-          id: string
-          serviceId: string
-          staffId: string
-          name: string
-          duration: number
-          price: number
-          staffLocked?: boolean
-        }> = []
-        const related = (res as any).relatedAppointments as any[] | undefined
-
-        const nonCancelledRelated = (related ?? []).filter((r: any) => !isHiddenAppointment(r))
-        // Detect custom scheduling mode from the loaded booking. When custom, each service
-        // gets an explicit startTime below — that alone causes the derived schedulingMode to be "custom".
-        const groupIsCustom =
-          a.schedulingMode === "custom" ||
-          nonCancelledRelated.some((r: any) => r.schedulingMode === "custom")
-
-        const timeStringTo24h = (t: string): string => {
-          const m = parseTimeToMinutes(t)
-          const h = Math.floor(m / 60) % 24
-          const min = m % 60
-          return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`
-        }
-
-        if (nonCancelledRelated.length > 0) {
-          // Multi-staff: merge main + related, sort by time. Exclude cancelled (should not appear when editing).
-          const allApts = [{ ...a, _id: a._id }, ...nonCancelledRelated.map((r: any) => ({ ...r, _id: r._id }))]
-          const byTime = [...allApts].sort((x, y) => {
-            const xm = parseTimeToMinutes(x.time || "")
-            const ym = parseTimeToMinutes(y.time || "")
-            return xm - ym
-          })
-          servicesToShow = byTime.map((apt: any, idx: number) => {
-            const s = apt.serviceId
-            const sid = apt.staffId?._id || apt.staffId || (apt.staffAssignments?.[0]?.staffId?._id ?? apt.staffAssignments?.[0]?.staffId)
-            return {
-              id: apt._id === appointmentId ? "edit-service" : `related-${apt._id}`,
-              serviceId: s?._id || s,
-              staffId: sid || "",
-              name: (typeof s === "object" && s?.name) || "Service",
-              duration: apt.duration ?? (typeof s === "object" && s?.duration) ?? 60,
-              price: apt.price ?? (typeof s === "object" && s?.price) ?? 0,
-              staffLocked: !!apt.staffLocked,
-              ...(groupIsCustom ? { startTime: timeStringTo24h(apt.time || "") } : {}),
-            }
-          })
-        } else if (a.additionalServices && a.additionalServices.length > 0) {
-          // Same staff, multiple services: primary + additional
-          // Use primary service's duration from catalog (a.duration is TOTAL when there are additional services)
-          // Use primary price = total - sum(additional); a.price is the stored TOTAL for primary+additional
-          const additionalPrices = (a.additionalServices as any[]).map((s: any) => s?.price ?? 0)
-          const additionalTotal = additionalPrices.reduce((sum, p) => sum + p, 0)
-          const primaryPrice = Math.max(0, (a.price ?? 0) - additionalTotal)
-          const primary = {
-            id: "edit-service",
-            serviceId: svc?._id || svc,
-            staffId: staffIdVal || "",
-            name: (typeof svc === "object" && svc?.name) || "Service",
-            duration: (typeof svc === "object" && svc?.duration) ?? a.duration ?? 60,
-            price: primaryPrice || ((typeof svc === "object" && svc?.price) ?? 0),
-            staffLocked: !!a.staffLocked,
-          }
-          const additional = (a.additionalServices as any[]).map((s: any, idx: number) => ({
-            id: `additional-${idx}`,
-            serviceId: s._id || s,
-            staffId: staffIdVal || "",
-            name: s?.name || "Service",
-            duration: s?.duration ?? 60,
-            price: s?.price ?? 0,
-            staffLocked: !!a.staffLocked,
-          }))
-          servicesToShow = [primary, ...additional]
-        } else {
-          servicesToShow = [{
-            id: "edit-service",
-            serviceId: svc?._id || svc,
-            staffId: staffIdVal || "",
-            name: (typeof svc === "object" && svc?.name) || "Service",
-            duration: a.duration ?? (typeof svc === "object" && svc?.duration) ?? 60,
-            price: a.price ?? (typeof svc === "object" && svc?.price) ?? 0,
-            staffLocked: !!a.staffLocked,
-          }]
-        }
-
-        setSelectedServices(servicesToShow)
-        setExistingBookingGroupId(a.bookingGroupId || null)
-        lastLoadedRecurrenceRef.current =
-          a.recurrence && typeof a.recurrence === "object" ? { ...a.recurrence } : null
-        setEditedAppointmentStatus(typeof a.status === "string" ? a.status : "scheduled")
-        setExistingGroupAppointmentIds(
-          nonCancelledRelated.length > 0
-            ? [String(a._id), ...nonCancelledRelated.map((r: any) => String(r._id))]
-            : []
-        )
-        if (a.date) {
-          const parts = a.date.split("-").map(Number)
-          if (parts.length >= 3) {
-            // Use earliest time when multiple appointments (first service start)
-            let apiTime = a.time || ""
-            if (nonCancelledRelated.length > 0) {
-              const allApts = [a, ...nonCancelledRelated]
-              const sorted = [...allApts].sort((x, y) => parseTimeToMinutes(x.time || "") - parseTimeToMinutes(y.time || ""))
-              apiTime = sorted[0]?.time || apiTime
-            }
-            const minutes = parseTimeToMinutes(apiTime)
-            const slot = apiTime ? timeSlots.find((t) => parseTimeToMinutes(t) === minutes) : ""
-            form.reset({
-              ...form.getValues(),
-              date: new Date(parts[0], parts[1] - 1, parts[2]),
-              time: slot ?? apiTime ?? "",
-              notes: a.notes || "",
-            })
-          }
-        }
-        if (a.time) {
-          let apiTime = a.time
-          if (nonCancelledRelated.length > 0) {
-            const allApts = [a, ...nonCancelledRelated]
-            const sorted = [...allApts].sort((x, y) => parseTimeToMinutes(x.time || "") - parseTimeToMinutes(y.time || ""))
-            apiTime = sorted[0]?.time || apiTime
-          }
-          const minutes = parseTimeToMinutes(apiTime)
-          const match = timeSlots.find((t) => parseTimeToMinutes(t) === minutes)
-          form.setValue("time", match ?? apiTime)
-        }
-        form.setValue("notes", a.notes || "")
-        const ls = a.leadSource || ""
-        if (ls.startsWith("Referral:")) {
-          form.setValue("leadSource", "Referral")
-          form.setValue("leadSourceDetail", ls.replace(/^Referral:\s*/, ""))
-        } else if (ls.startsWith("Other:")) {
-          form.setValue("leadSource", "Other")
-          form.setValue("leadSourceDetail", ls.replace(/^Other:\s*/, ""))
-        } else {
-          form.setValue("leadSource", ls || "")
-          form.setValue("leadSourceDetail", "")
-        }
-        queueMicrotask(() => {
-          if (cancelled) return
-          commitEditBaseline(form.getValues(), servicesToShow as SelectedService[])
-        })
+        if (cancelled) return
+        hydrateEditAppointmentFromResponse(res as ApiResponse<any> & { relatedAppointments?: any[] })
       })
       .catch(() => {
         if (!cancelled) toast({ title: "Error", description: "Failed to load appointment", variant: "destructive" })
@@ -1516,8 +1539,10 @@ export function AppointmentForm({
       .finally(() => {
         if (!cancelled) setLoadingAppointment(false)
       })
-    return () => { cancelled = true }
-  }, [appointmentId])
+    return () => {
+      cancelled = true
+    }
+  }, [appointmentId, hydrateEditAppointmentFromResponse, toast])
 
   // After creating a new client via dialog, refresh search results
   useEffect(() => {
@@ -3369,6 +3394,7 @@ export function AppointmentForm({
             {footerButtons}
           </div>
           <ServiceCheckoutDialog
+            ref={serviceCheckoutRef}
             variant="drawer"
             open={serviceCheckoutOpen}
             onOpenChange={setServiceCheckoutOpen}
@@ -3390,6 +3416,7 @@ export function AppointmentForm({
               isEditMode ? undefined : ensureAppointmentBookingBeforeCheckout
             }
             onSuccessfulCheckout={onSuccess}
+            onPaymentStepChange={onServiceCheckoutPaymentStepChange}
           />
         </div>
       ) : (

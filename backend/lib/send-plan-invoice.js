@@ -301,6 +301,14 @@ async function sendPlanRenewalInvoice({ transactionId, triggeredByEmail } = {}) 
     }
     const { pdfBuffer, invoiceNumber, context, business, txDoc } = built;
 
+    const { isPlatformEmailDisabled } = require('./business-email-policy');
+    if (isPlatformEmailDisabled(business)) {
+      logger.info(
+        `[plan-invoice] Skipping invoice email — platform policy for business ${business._id}`
+      );
+      return { success: true, skippedEmail: true, invoiceNumber };
+    }
+
     const recipients = Array.from(
       new Set(
         [business?.contact?.email, triggeredByEmail]

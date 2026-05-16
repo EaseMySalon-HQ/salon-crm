@@ -1852,8 +1852,11 @@ export class ReportsAPI {
 }
 
 export class DashboardAPI {
-  static async getInit(): Promise<ApiResponse<any>> {
-    const response = await apiClient.get("/dashboard/init")
+  static async getInit(params?: {
+    chartRange?: "year" | "last7days" | "last30days"
+    metricsRange?: "today" | "last7days"
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.get("/dashboard/init", { params })
     return response.data
   }
 }
@@ -1920,7 +1923,7 @@ export class AnalyticsAPI {
     dateFrom?: string
     dateTo?: string
     bucket?: "day" | "week" | "month"
-    lineType?: "all" | "service" | "product" | "membership" | "package"
+    lineType?: "all" | "service" | "product" | "membership"
   }): Promise<ApiResponse<AnalyticsStaffTabData>> {
     const response = await apiClient.get("/analytics/staff", { params })
     return response.data
@@ -1932,7 +1935,7 @@ export class AnalyticsAPI {
       dateFrom?: string
       dateTo?: string
       bucket?: "day" | "week" | "month"
-      lineType?: "all" | "service" | "product" | "membership" | "package"
+      lineType?: "all" | "service" | "product" | "membership"
     }
   ): Promise<ApiResponse<AnalyticsStaffDrillDownData>> {
     const response = await apiClient.get(`/analytics/staff/${encodeURIComponent(staffId)}/trends`, { params })
@@ -2321,6 +2324,7 @@ export class EmailNotificationsAPI {
       exportAlerts?: boolean;
       systemAlerts?: boolean;
       lowInventory?: boolean;
+      allowReportsDelivery?: boolean;
     };
   }): Promise<ApiResponse<any>> {
     const response = await apiClient.put(`/email-notifications/staff/${staffId}`, data)
@@ -3180,118 +3184,6 @@ export class PlanCheckoutAPI {
     a.remove()
     URL.revokeObjectURL(url)
     return filename
-  }
-}
-
-// ── Packages API ─────────────────────────────────────────────────────────────
-
-export class PackagesAPI {
-  // Package CRUD
-  static async getAll(params?: { type?: string; status?: string; search?: string; page?: number; limit?: number }): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/packages', { params })
-    return response.data
-  }
-
-  static async getById(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/packages/${id}`)
-    return response.data
-  }
-
-  static async create(data: {
-    name: string
-    type: 'FIXED' | 'CUSTOMIZED'
-    total_price: number
-    total_sittings: number
-    services: Array<{ service_id: string; is_optional?: boolean; tag?: string }>
-    description?: string
-    image_url?: string
-    discount_amount?: number
-    discount_type?: 'FLAT' | 'PERCENT'
-    min_service_count?: number
-    max_service_count?: number
-    validity_days?: number | null
-    branch_ids?: string[]
-    cross_branch_redemption?: boolean
-  }): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/packages', data)
-    return response.data
-  }
-
-  static async update(id: string, data: Partial<Parameters<typeof PackagesAPI.create>[0]>): Promise<ApiResponse<any>> {
-    const response = await apiClient.put(`/packages/${id}`, data)
-    return response.data
-  }
-
-  static async updateStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED'): Promise<ApiResponse<any>> {
-    const response = await apiClient.patch(`/packages/${id}/status`, { status })
-    return response.data
-  }
-
-  static async delete(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.delete(`/packages/${id}`)
-    return response.data
-  }
-
-  // Sales
-  static async sell(packageId: string, data: {
-    client_id: string
-    amount_paid?: number
-    purchased_at_branch_id?: string
-    /** Staff who sold the package (defaults server-side from session if omitted). */
-    sold_by_staff_id?: string
-  }): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`/packages/${packageId}/sell`, data)
-    return response.data
-  }
-
-  static async getClientPackages(clientId: string): Promise<ApiResponse<any[]>> {
-    const response = await apiClient.get(`/packages/client/${clientId}`)
-    return response.data
-  }
-
-  static async extendExpiry(clientPackageId: string, data: { new_expiry_date: string; reason: string }): Promise<ApiResponse<any>> {
-    const response = await apiClient.patch(`/packages/client-packages/${clientPackageId}/extend`, data)
-    return response.data
-  }
-
-  // Redemption
-  static async redeem(clientPackageId: string, data: {
-    services: Array<{ service_id: string }>
-    redeemed_at_branch_id?: string
-  }): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`/packages/client-packages/${clientPackageId}/redeem`, data)
-    return response.data
-  }
-
-  static async reverseRedemption(redemptionId: string, reason: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`/packages/redemptions/${redemptionId}/reverse`, { reason })
-    return response.data
-  }
-
-  static async getRedemptionHistory(clientPackageId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/packages/client-packages/${clientPackageId}/history`)
-    return response.data
-  }
-
-  // Reports
-  static async getSalesReport(params?: { from?: string; to?: string; package_id?: string }): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/packages/reports/sales', { params })
-    return response.data
-  }
-
-  static async getUtilizationReport(): Promise<ApiResponse<any[]>> {
-    const response = await apiClient.get('/packages/reports/utilization')
-    return response.data
-  }
-
-  static async getExpiringReport(days?: number): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/packages/reports/expiring', { params: { days } })
-    return response.data
-  }
-
-  static async exportReport(data: { format: 'excel' | 'pdf'; reportType?: string; from?: string; to?: string }): Promise<Blob> {
-    const response = await apiClient.post('/packages/reports/export', data, { responseType: 'blob' })
-    return response.data
   }
 }
 

@@ -11,7 +11,7 @@ const mongoose = require('mongoose');
  * @returns {Promise<{ success: true, data: { items: object[] } }>}
  */
 async function buildNotificationsFeed({ branchId, businessModels }) {
-  const { Product, MembershipSubscription, ClientPackage } = businessModels;
+  const { Product, MembershipSubscription } = businessModels;
 
   const bid =
     branchId instanceof mongoose.Types.ObjectId
@@ -20,8 +20,6 @@ async function buildNotificationsFeed({ branchId, businessModels }) {
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const in7 = new Date(today);
-  in7.setDate(in7.getDate() + 7);
   const in30 = new Date(today);
   in30.setDate(in30.getDate() + 30);
 
@@ -35,7 +33,7 @@ async function buildNotificationsFeed({ branchId, businessModels }) {
     },
   };
 
-  const [lowStockDocs, membersExpiringCount, packagesExpiringCount] = await Promise.all([
+  const [lowStockDocs, membersExpiringCount] = await Promise.all([
     Product.find(lowStockMatch)
       .select('name stock minimumStock')
       .sort({ name: 1 })
@@ -45,11 +43,6 @@ async function buildNotificationsFeed({ branchId, businessModels }) {
       branchId: bid,
       status: 'ACTIVE',
       expiryDate: { $gte: today, $lte: in30 },
-    }),
-    ClientPackage.countDocuments({
-      branchId: bid,
-      status: 'ACTIVE',
-      expiry_date: { $ne: null, $gte: today, $lte: in7 },
     }),
   ]);
 
@@ -83,21 +76,6 @@ async function buildNotificationsFeed({ branchId, businessModels }) {
       } expiring within 30 days.`,
       fingerprint: `members-exp-30d:${membersExpiringCount}`,
       href: '/membership',
-      severity: 'info',
-      at: ts,
-    });
-  }
-
-  if (packagesExpiringCount > 0) {
-    items.push({
-      id: 'packages-expiring-7d',
-      type: 'package_expiry',
-      title: 'Client packages expiring',
-      body: `${packagesExpiringCount} package${
-        packagesExpiringCount === 1 ? '' : 's'
-      } expiring within 7 days.`,
-      fingerprint: `client-pkg-exp-7d:${packagesExpiringCount}`,
-      href: '/packages/reports',
       severity: 'info',
       at: ts,
     });

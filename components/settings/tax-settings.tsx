@@ -13,7 +13,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI, ServicesAPI } from "@/lib/api"
 import { useInvalidatePaymentSettings } from "@/lib/queries/payment-settings"
-import { Receipt, Plus, Pencil, Trash2 } from "lucide-react"
+import { useAuth } from "@/lib/auth-context"
+import { Receipt, Plus, Pencil, Trash2, Lock } from "lucide-react"
 
 const TAX_TYPES = [
   { value: "gst", label: "GST (Goods & Services Tax)" },
@@ -35,6 +36,8 @@ interface TaxCategory {
 }
 
 export function TaxSettings() {
+  const { hasPermission } = useAuth()
+  const canEdit = hasPermission("tax_settings", "edit")
   const [settings, setSettings] = useState({
     enableTax: true,
     taxType: "gst",
@@ -553,11 +556,16 @@ export function TaxSettings() {
         </div>
       </div>
 
-      <div className="flex justify-end">
-        <Button 
-          onClick={handleSave} 
-          disabled={isSaving}
-          className="px-8"
+      <div className="flex justify-end items-center gap-3">
+        {!canEdit && (
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            <Lock className="h-3 w-3" /> You don't have permission to edit tax settings
+          </span>
+        )}
+        <Button
+          onClick={handleSave}
+          disabled={isSaving || !canEdit}
+          className="px-8 disabled:opacity-60"
         >
           {isSaving ? "Saving..." : "Save Tax Settings"}
         </Button>

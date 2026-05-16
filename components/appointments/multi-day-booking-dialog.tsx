@@ -17,11 +17,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
-import { BookingsAPI, PackagesAPI, ServicesAPI, StaffDirectoryAPI } from "@/lib/api"
+import { BookingsAPI, ServicesAPI, StaffDirectoryAPI } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
 import { cn } from "@/lib/utils"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Checkbox } from "@/components/ui/checkbox"
 
 function todayYmdIST(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -30,17 +28,6 @@ function todayYmdIST(): string {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date())
-}
-
-function addDaysToYmd(ymd: string, days: number): string {
-  const [y, m, d] = ymd.split("-").map((n) => parseInt(n, 10))
-  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return ymd
-  const dt = new Date(y, m - 1, d)
-  dt.setDate(dt.getDate() + days)
-  const yy = dt.getFullYear()
-  const mm = String(dt.getMonth() + 1).padStart(2, "0")
-  const dd = String(dt.getDate()).padStart(2, "0")
-  return `${yy}-${mm}-${dd}`
 }
 
 /** Build IST wall-time ISO strings for API (matches backend `+05:30` expectation). */
@@ -78,8 +65,6 @@ type UnitRow = {
   staffId: string
 }
 
-type CatalogPackageRow = { _id: string; name: string; service_count?: number }
-
 function newRow(): UnitRow {
   return {
     id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -105,11 +90,6 @@ export function MultiDayBookingDialog({ open, onOpenChange, onSuccess }: MultiDa
   const [services, setServices] = useState<ServiceOption[]>([])
   const [staff, setStaff] = useState<StaffOption[]>([])
   const [rows, setRows] = useState<UnitRow[]>(() => [newRow(), newRow()])
-  const [bookingMode, setBookingMode] = useState<"service" | "package">("service")
-  const [packagesCatalog, setPackagesCatalog] = useState<CatalogPackageRow[]>([])
-  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null)
-  const [packagePaymentDone, setPackagePaymentDone] = useState(false)
-  const [loadingPackageDetail, setLoadingPackageDetail] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loadingData, setLoadingData] = useState(false)
 
@@ -131,14 +111,12 @@ export function MultiDayBookingDialog({ open, onOpenChange, onSuccess }: MultiDa
         await clientStore.loadClients()
         if (cancelled) return
         refreshClients()
-        const [svcRes, staffRes, pkgRes] = await Promise.all([
+        const [svcRes, staffRes] = await Promise.all([
           ServicesAPI.getAll({ limit: 500 }),
           StaffDirectoryAPI.getAll(),
-          PackagesAPI.getAll({ status: "ACTIVE", limit: 200 }),
         ])
         if (cancelled) return
         if (svcRes.success && svcRes.data) setServices(svcRes.data as ServiceOption[])
-        if (pkgRes.success && pkgRes.data?.packages) setPackagesCatalog(pkgRes.data.packages as CatalogPackageRow[])
         if (staffRes.success && staffRes.data) {
           const list = (staffRes.data as StaffOption[]).filter(
             (u) =>
@@ -167,15 +145,11 @@ export function MultiDayBookingDialog({ open, onOpenChange, onSuccess }: MultiDa
       setCustomerSearch("")
       setShowCustomerDropdown(false)
       setRows([newRow(), newRow()])
-      setBookingMode("service")
-      setSelectedPackageId(null)
-      setPackagePaymentDone(false)
     }
   }, [open])
 
   const phoneDigits = useMemo(() => customerSearch.replace(/\D/g, ""), [customerSearch])
 
-  /** Only show suggestions after at least 3 phone digits (no default full list on focus). */
   const filteredCustomers = useMemo(() => {
     if (phoneDigits.length < 3) return []
     return clients.filter((c) => c.phone.replace(/\D/g, "").includes(phoneDigits))
@@ -197,66 +171,6 @@ export function MultiDayBookingDialog({ open, onOpenChange, onSuccess }: MultiDa
   const addRow = () => setRows((prev) => [...prev, newRow()])
   const removeRow = (rowId: string) => setRows((prev) => (prev.length <= 1 ? prev : prev.filter((r) => r.id !== rowId)))
 
-  const applyPackageToVisits = async (packageId: string) => {
-    if (!packageId) return
-    setLoadingPackageDetail(true)
-    try {
-      const res = await PackagesAPI.getById(packageId)
-      if (!res.success || !res.data) {
-        toast({ title: "Could not load package", variant: "destructive" })
-        return
-      }
-      const pkg = res.data as {
-        services?: Array<{ service_id?: { _id?: string; name?: string } | string }>
-      }
-      const pkgServices = Array.isArray(pkg.services) ? pkg.services : []
-      if (pkgServices.length === 0) {
-        toast({ title: "This package has no services", variant: "destructive" })
-        return
-      }
-      const catalogIds = new Set(services.map((s) => String(s._id || s.id)))
-      const baseStart = "10:00"
-      const baseDate = todayYmdIST()
-      const newRows: UnitRow[] = []
-      let dayOffset = 0
-      for (let i = 0; i < pkgServices.length; i++) {
-        const ps = pkgServices[i]
-        const raw = ps.service_id
-        const sid =
-          typeof raw === "object" && raw != null
-            ? String((raw as { _id?: string })._id || "")
-            : String(raw || "")
-        if (!sid || !catalogIds.has(sid)) continue
-        newRows.push({
-          id: `row-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`,
-          date: addDaysToYmd(baseDate, dayOffset),
-          startTime: baseStart,
-          serviceId: sid,
-          staffId: "",
-        })
-        dayOffset += 1
-      }
-      if (newRows.length === 0) {
-        toast({
-          title: "No matching services",
-          description: "Package services were not found in your service catalog.",
-          variant: "destructive",
-        })
-        return
-      }
-      setRows(newRows)
-      toast({
-        title: "Visits filled from package",
-        description: `${newRows.length} visit row(s) — one per day starting today (IST). Adjust dates as needed.`,
-      })
-    } catch (e) {
-      console.error(e)
-      toast({ title: "Failed to load package", variant: "destructive" })
-    } finally {
-      setLoadingPackageDetail(false)
-    }
-  }
-
   const handleSubmit = async () => {
     const clientId = selectedCustomer?._id || selectedCustomer?.id
     if (!clientId) {
@@ -265,7 +179,11 @@ export function MultiDayBookingDialog({ open, onOpenChange, onSuccess }: MultiDa
     }
     for (const r of rows) {
       if (!r.serviceId || !r.staffId || !r.date || !r.startTime) {
-        toast({ title: "Complete each row", description: "Date, time, service, and staff are required for every visit.", variant: "destructive" })
+        toast({
+          title: "Complete each row",
+          description: "Date, time, service, and staff are required for every visit.",
+          variant: "destructive",
+        })
         return
       }
     }
@@ -286,13 +204,10 @@ export function MultiDayBookingDialog({ open, onOpenChange, onSuccess }: MultiDa
 
     setLoading(true)
     try {
-      const paymentMode =
-        bookingMode === "package" ? "full_upfront" : "per_appointment"
       const res = await BookingsAPI.create({
         clientId: String(clientId),
         type: "multi_day",
-        paymentMode,
-        ...(bookingMode === "package" && packagePaymentDone ? { packagePaymentCollected: true } : {}),
+        paymentMode: "per_appointment",
         units,
       })
       if (!res.success) {
@@ -385,75 +300,6 @@ export function MultiDayBookingDialog({ open, onOpenChange, onSuccess }: MultiDa
                 <p className="text-xs text-slate-500">
                   Selected: {selectedCustomer.name} · {selectedCustomer.phone}
                 </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Booking type</Label>
-              <RadioGroup
-                value={bookingMode}
-                onValueChange={(v) => {
-                  const mode = v as "service" | "package"
-                  setBookingMode(mode)
-                  setSelectedPackageId(null)
-                  setPackagePaymentDone(false)
-                  if (mode === "service") {
-                    setRows([newRow(), newRow()])
-                  }
-                }}
-                className="flex flex-wrap items-center gap-x-6 gap-y-2"
-              >
-                <div className="flex items-center gap-2">
-                  <RadioGroupItem value="service" id="mdb-service" />
-                  <Label htmlFor="mdb-service" className="font-normal cursor-pointer">
-                    Service
-                  </Label>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                  <div className="flex items-center gap-2 shrink-0">
-                    <RadioGroupItem value="package" id="mdb-package" />
-                    <Label htmlFor="mdb-package" className="font-normal cursor-pointer">
-                      Package
-                    </Label>
-                  </div>
-                  {bookingMode === "package" && (
-                    <div className="flex items-center gap-2 min-w-0 flex-1 sm:max-w-md">
-                      <Select
-                        value={selectedPackageId ?? undefined}
-                        onValueChange={(id) => {
-                          setSelectedPackageId(id)
-                          void applyPackageToVisits(id)
-                        }}
-                        disabled={loadingData || packagesCatalog.length === 0}
-                      >
-                        <SelectTrigger className="h-11 w-full min-w-[12rem] bg-white">
-                          <SelectValue placeholder={packagesCatalog.length === 0 ? "No packages available" : "Choose a package…"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {packagesCatalog.map((p) => (
-                            <SelectItem key={p._id} value={p._id}>
-                              {p.name}
-                              {p.service_count != null ? ` (${p.service_count} services)` : ""}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {loadingPackageDetail && <Loader2 className="h-5 w-5 shrink-0 animate-spin text-violet-600" />}
-                    </div>
-                  )}
-                </div>
-              </RadioGroup>
-              {bookingMode === "package" && (
-                <div className="flex items-center gap-2 pt-1">
-                  <Checkbox
-                    id="mdb-payment-done"
-                    checked={packagePaymentDone}
-                    onCheckedChange={(c) => setPackagePaymentDone(c === true)}
-                  />
-                  <Label htmlFor="mdb-payment-done" className="font-normal cursor-pointer text-sm text-slate-700">
-                    Payment Done
-                  </Label>
-                </div>
               )}
             </div>
 

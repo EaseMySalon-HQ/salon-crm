@@ -2,6 +2,7 @@ const express = require('express');
 const { logger } = require('../utils/logger');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/permissions');
 const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/business-db');
 const whatsappService = require('../services/whatsapp-service');
 const databaseManager = require('../config/database-manager');
@@ -85,7 +86,7 @@ async function getRecipientsForCampaign(campaign, businessId, businessModels) {
  * POST /api/campaigns
  * Create a new campaign
  */
-router.post('/', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+router.post('/', authenticateToken, setupMainDatabase, setupBusinessDatabase, requirePermission('campaigns', 'create'), async (req, res) => {
   try {
     const businessId = req.user?.branchId;
     
@@ -352,7 +353,7 @@ router.get('/:campaignId/recipients', authenticateToken, setupMainDatabase, setu
  * POST /api/campaigns/:campaignId/send
  * Send a campaign
  */
-router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusinessDatabase, requirePermission('campaigns', 'manage'), async (req, res) => {
   try {
     const businessId = req.user?.branchId;
     const { campaignId } = req.params;
@@ -600,7 +601,7 @@ router.get('/:campaignId/stats', authenticateToken, setupMainDatabase, setupBusi
  * PUT /api/campaigns/:campaignId/cancel
  * Cancel a campaign
  */
-router.put('/:campaignId/cancel', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+router.put('/:campaignId/cancel', authenticateToken, setupMainDatabase, setupBusinessDatabase, requirePermission('campaigns', 'edit'), async (req, res) => {
   try {
     const businessId = req.user?.branchId;
     const { campaignId } = req.params;

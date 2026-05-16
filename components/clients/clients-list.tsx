@@ -8,9 +8,9 @@ import { Input } from "@/components/ui/input"
 import { ClientsTable } from "@/components/clients/clients-table"
 import { ClientStatsCards } from "@/components/clients/client-stats-cards"
 import { clientStore, type Client } from "@/lib/client-store"
-import { ClientsAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
+import { useAuth } from "@/lib/auth-context"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
@@ -20,11 +20,12 @@ import { format } from "date-fns"
 export function ClientsListPage() {
   const { toast } = useToast()
   const { hasAccess: canExport } = useFeature("data_export")
+  const { hasPermission } = useAuth()
+  const canCreateClient = hasPermission("clients", "create")
   const [searchQuery, setSearchQuery] = useState("")
   const [clients, setClients] = useState<Client[]>([])
   const [filteredClients, setFilteredClients] = useState<Client[]>([])
   const [statsFilter, setStatsFilter] = useState<"all" | "active" | "inactive">("all")
-  const [enrichedClientsForStats, setEnrichedClientsForStats] = useState<Client[]>([])
 
   // Subscribe to client store changes and force reload on mount
   useEffect(() => {
@@ -39,38 +40,6 @@ export function ClientsListPage() {
     return unsubscribe
   }, [])
 
-  // Enrich clients with lastVisit from bulk stats (single API call for all clients)
-  useEffect(() => {
-    if (clients.length === 0) return
-
-    // Immediately show clients with whatever lastVisit they already have
-    setEnrichedClientsForStats(clients)
-
-    const fetchBulkStats = async () => {
-      try {
-        const clientIds = clients.map(c => (c as any)._id || (c as any).id).filter(Boolean)
-        if (clientIds.length === 0) return
-
-        const response = await ClientsAPI.getBulkStats(clientIds)
-        if (response.success && response.data) {
-          const statsMap = response.data
-          setEnrichedClientsForStats(clients.map(client => {
-            const cId = (client as any)._id || (client as any).id || ''
-            const stats = statsMap[cId]
-            return {
-              ...client,
-              realLastVisit: stats?.lastVisit || client.lastVisit
-            }
-          }))
-        }
-      } catch (error) {
-        console.error('Error fetching bulk stats for cards:', error)
-      }
-    }
-
-    fetchBulkStats()
-  }, [clients])
-
   // Stats are calculated by ClientStatsCards component from the clients array
 
   // Calculate date 3 months ago for status calculation (same as table and stats cards)
@@ -82,11 +51,7 @@ export function ClientsListPage() {
   }, [])
 
   // Filter clients based on stats filter and search query
-  // Use enrichedClientsForStats when available to match stats cards calculation
   const displayClients = useMemo(() => {
-    // Use enriched clients (with realLastVisit) for filtering to match stats cards
-    const clientsToFilter = enrichedClientsForStats.length > 0 ? enrichedClientsForStats : clients
-    
     const isClientActive = (client: Client) => {
       // Calculate active status based ONLY on last visit date (within 3 months)
       // This matches what the table shows - ignore status field completely
@@ -104,13 +69,13 @@ export function ClientsListPage() {
       return false // No last visit or invalid date = inactive
     }
 
-    let filtered = clientsToFilter
+    let filtered = clients
 
     // Apply stats filter (all/active/inactive) using same logic as stats cards
     if (statsFilter === "active") {
-      filtered = clientsToFilter.filter((client) => isClientActive(client))
+      filtered = clients.filter((client) => isClientActive(client))
     } else if (statsFilter === "inactive") {
-      filtered = clientsToFilter.filter((client) => !isClientActive(client))
+      filtered = clients.filter((client) => !isClientActive(client))
     }
 
     // Apply search query
@@ -125,7 +90,7 @@ export function ClientsListPage() {
     }
 
     return filtered
-  }, [clients, enrichedClientsForStats, statsFilter, searchQuery, threeMonthsAgo])
+  }, [clients, statsFilter, searchQuery, threeMonthsAgo])
 
   // Update filtered clients when displayClients changes
   useEffect(() => {
@@ -259,12 +224,14 @@ export function ClientsListPage() {
                       </Button>
                     )}
                     
-                    <Button asChild className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-medium">
-                      <Link href="/clients/new">
-                        <PlusCircle className="mr-2 h-5 w-5" />
-                        New Client
-                      </Link>
-                    </Button>
+                    {canCreateClient && (
+                      <Button asChild className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-xl font-medium">
+                        <Link href="/clients/new">
+                          <PlusCircle className="mr-2 h-5 w-5" />
+                          New Client
+                        </Link>
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -290,7 +257,7 @@ export function ClientsListPage() {
 
             {/* Stats Cards with Filters */}
             <ClientStatsCards 
-              clients={enrichedClientsForStats.length > 0 ? enrichedClientsForStats : clients}
+              clients={clients}
               activeFilter={statsFilter}
               onFilterChange={handleFilterChange}
             />

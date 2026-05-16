@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react"
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, type ComponentType } from "react"
 import { useRouter } from "next/navigation"
 import {
   Search,
@@ -9,19 +9,19 @@ import {
   Gift,
   ShoppingBag,
   Wallet,
-  Layers,
   Plus,
   Minus,
   Trash2,
   ChevronDown,
   ChevronRight,
   Loader2,
-  Package,
   Pencil,
   Percent,
   Coins,
   MoreVertical,
   AlertTriangle,
+  ArrowLeft,
+  X,
 } from "lucide-react"
 import { format } from "date-fns"
 
@@ -36,13 +36,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Sheet,
-  SheetContent,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -81,7 +74,6 @@ import {
   ClientWalletAPI,
   ClientsAPI,
   MembershipAPI,
-  PackagesAPI,
   ProductsAPI,
   RewardPointsAPI,
   SettingsAPI,
@@ -112,6 +104,11 @@ import {
   type CheckoutPaymentMethodChoice,
   type ServiceCheckoutTenderSplit,
 } from "@/lib/complete-service-checkout-inline"
+import {
+  PINNED_CHECKOUT_SERVICES_EVENT,
+  readPinnedServiceIds,
+  writePinnedServiceIds,
+} from "@/lib/pinned-checkout-services"
 
 export type CheckoutTipLine = {
   id: string
@@ -178,18 +175,6 @@ export type ServiceCheckoutMembershipLine = {
   planName: string
   price: number
   durationInDays: number
-  quantity: number
-  discountValue?: number
-  discountIsPercent?: boolean
-}
-
-export type ServiceCheckoutPackageLine = {
-  id: string
-  packageId: string
-  staffId: string
-  packageName: string
-  totalSittings: number
-  price: number
   quantity: number
   discountValue?: number
   discountIsPercent?: boolean
@@ -552,10 +537,6 @@ function cloneMembershipLines(
   return lines.map((l) => ({ ...l }))
 }
 
-function clonePackageLines(lines: ServiceCheckoutPackageLine[]): ServiceCheckoutPackageLine[] {
-  return lines.map((l) => ({ ...l }))
-}
-
 function clonePrepaidLines(lines: ServiceCheckoutPrepaidLine[]): ServiceCheckoutPrepaidLine[] {
   return lines.map((l) => ({ ...l }))
 }
@@ -564,7 +545,6 @@ type ServiceCheckoutCategory =
   | "services"
   | "products"
   | "memberships"
-  | "package"
   | "prepaidPlans"
   | "giftVoucher"
 
@@ -577,7 +557,6 @@ const CATEGORY_TILES: Array<{
   { id: "services", label: "Services", Icon: CalendarDays },
   { id: "products", label: "Products", Icon: ShoppingBag },
   { id: "memberships", label: "Memberships", Icon: CreditCard },
-  { id: "package", label: "Package", Icon: Layers },
   { id: "prepaidPlans", label: "Prepaid Plans", Icon: Wallet },
   { id: "giftVoucher", label: "Gift Voucher", Icon: Gift, comingSoon: true },
 ]
@@ -598,7 +577,7 @@ function CheckoutProductThumb({ imageUrl }: { imageUrl?: string | null }) {
         className="flex aspect-square w-full items-center justify-center rounded-lg bg-muted ring-1 ring-border/50"
         aria-hidden
       >
-        <Package className="h-10 w-10 text-muted-foreground" />
+        <ShoppingBag className="h-10 w-10 text-muted-foreground" />
       </div>
     )
   }
@@ -650,9 +629,18 @@ export interface ServiceCheckoutDialogProps {
   ) => Promise<EnsureAppointmentBookingResult | null>
   /** Called after bill is saved inline (e.g. close parent appointment drawer and return to calendar). */
   onSuccessfulCheckout?: () => void
+  /** Called when the payment step (vs catalog) toggles — drawer host can mirror title in sheet header. */
+  onPaymentStepChange?: (inPaymentStep: boolean) => void
 }
 
-export function ServiceCheckoutDialog({
+export type ServiceCheckoutDialogHandle = {
+  /** Leave payment step and return to catalog (wallet/payment fields stay loaded). */
+  closePaymentStep: () => void
+}
+
+export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, ServiceCheckoutDialogProps>(
+  function ServiceCheckoutDialog(
+    {
   variant = "dialog",
   open,
   onOpenChange,
@@ -672,17 +660,23 @@ export function ServiceCheckoutDialog({
   onCustomerChange,
   ensureAppointmentBookingBeforeCheckout,
   onSuccessfulCheckout,
-}: ServiceCheckoutDialogProps) {
+  onPaymentStepChange,
+}: ServiceCheckoutDialogProps,
+  ref
+) {
   const router = useRouter()
   const { toast } = useToast()
   const [lines, setLines] = useState<ServiceCheckoutLine[]>([])
   const [search, setSearch] = useState("")
   const [category, setCategory] = useState<ServiceCheckoutCategory>("services")
+  /** Quick-access "favorite" services the user has pinned beside the default Top 10. */
+  const [pinnedServiceIds, setPinnedServiceIds] = useState<string[]>([])
+  const [pinPickerOpen, setPinPickerOpen] = useState(false)
+  const [pinPickerSearch, setPinPickerSearch] = useState("")
   const [navigating, setNavigating] = useState(false)
   const snapshotRef = useRef<ServiceCheckoutLine[]>([])
   const productSnapshotRef = useRef<ServiceCheckoutProductLine[]>([])
   const membershipSnapshotRef = useRef<ServiceCheckoutMembershipLine[]>([])
-  const packageSnapshotRef = useRef<ServiceCheckoutPackageLine[]>([])
   const prepaidSnapshotRef = useRef<ServiceCheckoutPrepaidLine[]>([])
   const wasOpenRef = useRef(false)
   /** Latest save / resume token for this checkout session (clear on continue or cancel draft). */
@@ -696,11 +690,6 @@ export function ServiceCheckoutDialog({
   const [membershipSearch, setMembershipSearch] = useState("")
   const [catalogMembershipPlans, setCatalogMembershipPlans] = useState<any[]>([])
   const [loadingMemberships, setLoadingMemberships] = useState(false)
-
-  const [packageLines, setPackageLines] = useState<ServiceCheckoutPackageLine[]>([])
-  const [packageSearch, setPackageSearch] = useState("")
-  const [catalogPackages, setCatalogPackages] = useState<any[]>([])
-  const [loadingPackages, setLoadingPackages] = useState(false)
 
   const [prepaidLines, setPrepaidLines] = useState<ServiceCheckoutPrepaidLine[]>([])
   const [prepaidSearch, setPrepaidSearch] = useState("")
@@ -730,7 +719,7 @@ export function ServiceCheckoutDialog({
   const [checkoutMembershipData, setCheckoutMembershipData] =
     useState<ServiceCheckoutMembershipSnapshot>(null)
   /** Payment breakdown (Subtotal / Tax / Total); To pay stays visible when collapsed. */
-  const [cartBreakdownOpen, setCartBreakdownOpen] = useState(true)
+  const [cartBreakdownOpen, setCartBreakdownOpen] = useState(false)
   const [checkoutTipLines, setCheckoutTipLines] = useState<CheckoutTipLine[]>([])
   const [checkoutCartDiscountType, setCheckoutCartDiscountType] =
     useState<CheckoutCartDiscountMode>("fixed")
@@ -850,7 +839,11 @@ export function ServiceCheckoutDialog({
   }, [open, checkoutMembershipData, catalogServices, serviceLinesMembershipSignature])
 
   useEffect(() => {
-    if (!open) setCartBreakdownOpen(true)
+    if (!open) {
+      setCartBreakdownOpen(false)
+      setPaymentMethodDialogOpen(false)
+      setShowCreditChangeConfirm(false)
+    }
   }, [open])
 
   useEffect(() => {
@@ -895,12 +888,10 @@ export function ServiceCheckoutDialog({
           snapshotRef.current = cloneLines(draft.bookingSnapshot)
           productSnapshotRef.current = []
           membershipSnapshotRef.current = []
-          packageSnapshotRef.current = []
           prepaidSnapshotRef.current = []
           setLines(cloneLines(draft.lines))
           setProductLines(cloneProductLines(draft.productLines))
           setMembershipLines(cloneMembershipLines(draft.membershipLines))
-          setPackageLines(clonePackageLines(draft.packageLines))
           setPrepaidLines(clonePrepaidLines(draft.prepaidLines))
           if (Array.isArray(draft.checkoutTipLines) && draft.checkoutTipLines.length > 0) {
             setCheckoutTipLines(cloneCheckoutTipLines(draft.checkoutTipLines as CheckoutTipLine[]))
@@ -929,7 +920,6 @@ export function ServiceCheckoutDialog({
           setCategory("services")
           setProductSearch("")
           setMembershipSearch("")
-          setPackageSearch("")
           setPrepaidSearch("")
           setHasPersistedDraft(true)
           wasOpenRef.current = open
@@ -953,9 +943,6 @@ export function ServiceCheckoutDialog({
       membershipSnapshotRef.current = []
       setMembershipLines([])
       setMembershipSearch("")
-      packageSnapshotRef.current = []
-      setPackageLines([])
-      setPackageSearch("")
       prepaidSnapshotRef.current = []
       setPrepaidLines([])
       setPrepaidSearch("")
@@ -1026,29 +1013,6 @@ export function ServiceCheckoutDialog({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    setLoadingPackages(true)
-    PackagesAPI.getAll({ status: "ACTIVE", limit: 500 })
-      .then((res) => {
-        if (cancelled || !res?.success) {
-          if (!cancelled) setCatalogPackages([])
-          return
-        }
-        if (!cancelled) setCatalogPackages(res.data?.packages || [])
-      })
-      .catch(() => {
-        if (!cancelled) setCatalogPackages([])
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingPackages(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
     setLoadingPrepaidCatalog(true)
     ClientWalletAPI.listPlans({ status: "active" })
       .then((res) => {
@@ -1109,6 +1073,79 @@ export function ServiceCheckoutDialog({
     })
   }, [catalogServices, search])
 
+  /** Hydrate pinned IDs from localStorage on mount and keep tabs in sync. */
+  useEffect(() => {
+    setPinnedServiceIds(readPinnedServiceIds())
+    if (typeof window === "undefined") return
+    const refresh = () => setPinnedServiceIds(readPinnedServiceIds())
+    window.addEventListener(PINNED_CHECKOUT_SERVICES_EVENT, refresh)
+    window.addEventListener("storage", refresh)
+    return () => {
+      window.removeEventListener(PINNED_CHECKOUT_SERVICES_EVENT, refresh)
+      window.removeEventListener("storage", refresh)
+    }
+  }, [])
+
+  /** Default quick-access set when no search query: first 10 catalog services. */
+  const topTenServices = useMemo(
+    () => (catalogServices || []).slice(0, 10),
+    [catalogServices]
+  )
+
+  const topTenServiceIdSet = useMemo(
+    () => new Set(topTenServices.map((s: any) => String(s._id || s.id))),
+    [topTenServices]
+  )
+
+  /** Resolve pinned IDs against the live catalog (skip removed/disabled), excluding ones already in the Top 10. */
+  const pinnedServices = useMemo(() => {
+    const out: any[] = []
+    for (const id of pinnedServiceIds) {
+      if (topTenServiceIdSet.has(id)) continue
+      const svc = (catalogServices || []).find((s: any) => String(s._id || s.id) === id)
+      if (svc) out.push(svc)
+    }
+    return out
+  }, [pinnedServiceIds, catalogServices, topTenServiceIdSet])
+
+  /** Services available to pin: everything in the catalog that isn't already shown by default. */
+  const pinPickerCandidates = useMemo(() => {
+    const alreadyShown = new Set<string>(topTenServiceIdSet)
+    for (const svc of pinnedServices) alreadyShown.add(String(svc._id || svc.id))
+    const q = pinPickerSearch.trim().toLowerCase()
+    if (!q) return []
+    return (catalogServices || [])
+      .filter((s: any) => {
+        const id = String(s._id || s.id)
+        if (alreadyShown.has(id)) return false
+        return (s.name || "").toLowerCase().includes(q)
+      })
+      .sort((a: any, b: any) => {
+        const aName = String(a?.name || "")
+        const bName = String(b?.name || "")
+        return aName.localeCompare(bName, "en", { sensitivity: "base" })
+      })
+  }, [catalogServices, topTenServiceIdSet, pinnedServices, pinPickerSearch])
+
+  const addPinnedService = useCallback((serviceId: string) => {
+    if (!serviceId) return
+    setPinnedServiceIds((prev) => {
+      if (prev.includes(serviceId)) return prev
+      const next = [...prev, serviceId]
+      writePinnedServiceIds(next)
+      return next
+    })
+  }, [])
+
+  const removePinnedService = useCallback((serviceId: string) => {
+    if (!serviceId) return
+    setPinnedServiceIds((prev) => {
+      const next = prev.filter((id) => id !== serviceId)
+      writePinnedServiceIds(next)
+      return next
+    })
+  }, [])
+
   const filteredProducts = useMemo(() => {
     const q = productSearch.trim().toLowerCase()
     return (catalogProducts || []).filter((p: any) => {
@@ -1130,15 +1167,6 @@ export function ServiceCheckoutDialog({
     })
   }, [catalogMembershipPlans, membershipSearch])
 
-  const filteredPackages = useMemo(() => {
-    const q = packageSearch.trim().toLowerCase()
-    return (catalogPackages || []).filter((pkg: any) => {
-      if (!q) return true
-      const name = (pkg.name || "").toLowerCase()
-      return name.includes(q)
-    })
-  }, [catalogPackages, packageSearch])
-
   const filteredPrepaidPlans = useMemo(() => {
     const q = prepaidSearch.trim().toLowerCase()
     return (catalogPrepaidPlans || []).filter((plan: any) => {
@@ -1154,7 +1182,6 @@ export function ServiceCheckoutDialog({
     const inclusive = ts?.priceInclusiveOfTax !== false
     const sRate = ts?.serviceTaxRate ?? 5
     const mRate = ts?.membershipTaxRate ?? sRate
-    const pRate = ts?.packageTaxRate ?? sRate
     const prRate = ts?.prepaidWalletTaxRate ?? sRate
 
     let lineNetSum = 0
@@ -1252,12 +1279,6 @@ export function ServiceCheckoutDialog({
       addLine(net, net, mRate, true)
     })
 
-    packageLines.forEach((l) => {
-      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
-      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
-      addLine(net, net, pRate, true)
-    })
-
     prepaidLines.forEach((l) => {
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
       const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
@@ -1277,7 +1298,6 @@ export function ServiceCheckoutDialog({
     lines,
     productLines,
     membershipLines,
-    packageLines,
     prepaidLines,
     checkoutTaxSettings,
     catalogServices,
@@ -1337,7 +1357,6 @@ export function ServiceCheckoutDialog({
     const factor = toPay > 1e-9 ? afterPay / toPay : 0
     const sRate = ts.serviceTaxRate ?? 5
     const mRate = ts.membershipTaxRate ?? sRate
-    const pRate = ts.packageTaxRate ?? sRate
     const prRate = ts.prepaidWalletTaxRate ?? sRate
 
     for (const l of lines) {
@@ -1391,13 +1410,6 @@ export function ServiceCheckoutDialog({
       const gross = lineGrossPayableForCheckout(net, mRate, true, ts)
       out.push({ type: "membership", total: gross * factor })
     }
-    for (const l of packageLines) {
-      if (!l.packageId) continue
-      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
-      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
-      const gross = lineGrossPayableForCheckout(net, pRate, true, ts)
-      out.push({ type: "package", total: gross * factor })
-    }
     for (const l of prepaidLines) {
       if (!l.planId) continue
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
@@ -1414,7 +1426,6 @@ export function ServiceCheckoutDialog({
     lines,
     productLines,
     membershipLines,
-    packageLines,
     prepaidLines,
     catalogServices,
     catalogProducts,
@@ -1501,6 +1512,10 @@ export function ServiceCheckoutDialog({
     () => payCash + payCard + payOnline + payWallet,
     [payCash, payCard, payOnline, payWallet]
   )
+  const paymentRemainingDue = useMemo(
+    () => Math.max(0, paymentDueAfterLoyalty - paymentTotalTenderEntered),
+    [paymentDueAfterLoyalty, paymentTotalTenderEntered]
+  )
 
   const formatCheckoutInr = (amount: number) =>
     amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })
@@ -1526,7 +1541,6 @@ export function ServiceCheckoutDialog({
     lines.length > 0 ||
     productLines.length > 0 ||
     membershipLines.length > 0 ||
-    packageLines.length > 0 ||
     prepaidLines.length > 0
 
   const clientInitial =
@@ -1538,7 +1552,6 @@ export function ServiceCheckoutDialog({
     setLines(cloneLines(snapshotRef.current))
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
-    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
     toast({
       title: "Cart restored",
@@ -1551,7 +1564,6 @@ export function ServiceCheckoutDialog({
       lines.find((l) => l.staffId)?.staffId ||
       productLines.find((l) => l.staffId)?.staffId ||
       membershipLines.find((l) => l.staffId)?.staffId ||
-      packageLines.find((l) => l.staffId)?.staffId ||
       prepaidLines.find((l) => l.staffId)?.staffId ||
       staffOptions[0]?.id ||
       ""
@@ -1758,10 +1770,6 @@ export function ServiceCheckoutDialog({
     setMembershipLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
   }
 
-  function patchPackageLine(lineId: string, patch: Partial<ServiceCheckoutPackageLine>) {
-    setPackageLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
-  }
-
   function patchPrepaidLine(lineId: string, patch: Partial<ServiceCheckoutPrepaidLine>) {
     setPrepaidLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
   }
@@ -1799,44 +1807,6 @@ export function ServiceCheckoutDialog({
 
   function setMembershipLineStaff(lineId: string, staffId: string) {
     setMembershipLines((prev) =>
-      prev.map((l) => (l.id === lineId ? { ...l, staffId } : l))
-    )
-  }
-
-  function addCatalogPackage(pkg: any) {
-    const packageId = String(pkg._id || pkg.id || "")
-    if (!packageId) return
-    const defaultStaffId = defaultStaffAcrossCart()
-    const price = Number(pkg.total_price) || 0
-    setPackageLines((prev) => [
-      ...prev,
-      {
-        id: `pkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        packageId,
-        staffId: defaultStaffId,
-        packageName: pkg.name || "Package",
-        totalSittings: Number(pkg.total_sittings) || 0,
-        price,
-        quantity: 1,
-        discountValue: 0,
-        discountIsPercent: true,
-      },
-    ])
-  }
-
-  function removePackageLine(id: string) {
-    setPackageLines((prev) => prev.filter((l) => l.id !== id))
-  }
-
-  function setPackageQuantity(lineId: string, quantity: number) {
-    const q = Math.max(1, Math.floor(quantity) || 1)
-    setPackageLines((prev) =>
-      prev.map((l) => (l.id === lineId ? { ...l, quantity: q } : l))
-    )
-  }
-
-  function setPackageLineStaff(lineId: string, staffId: string) {
-    setPackageLines((prev) =>
       prev.map((l) => (l.id === lineId ? { ...l, staffId } : l))
     )
   }
@@ -1888,7 +1858,6 @@ export function ServiceCheckoutDialog({
     const hasExtras =
       productLines.length > 0 ||
       membershipLines.length > 0 ||
-      packageLines.length > 0 ||
       prepaidLines.length > 0
     if (lines.length === 0 && !hasExtras) {
       toast({
@@ -1914,14 +1883,6 @@ export function ServiceCheckoutDialog({
       toast({
         title: "Assign staff",
         description: "Every membership line needs a staff member.",
-        variant: "destructive",
-      })
-      return false
-    }
-    if (packageLines.length > 0 && packageLines.some((l) => l.packageId && !l.staffId)) {
-      toast({
-        title: "Assign staff",
-        description: "Every package line needs a staff member.",
         variant: "destructive",
       })
       return false
@@ -2046,6 +2007,26 @@ export function ServiceCheckoutDialog({
     if (!validateCheckoutBeforePayment()) return
     setPaymentMethodDialogOpen(true)
   }
+
+  const closePaymentStep = useCallback(() => {
+    if (navigating) return
+    setShowCreditChangeConfirm(false)
+    setPaymentMethodDialogOpen(false)
+  }, [navigating])
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      closePaymentStep: () => {
+        closePaymentStep()
+      },
+    }),
+    [closePaymentStep]
+  )
+
+  useEffect(() => {
+    onPaymentStepChange?.(paymentMethodDialogOpen)
+  }, [paymentMethodDialogOpen, onPaymentStepChange])
 
   async function confirmPaymentMethodAndContinue(opts?: {
     skipPartialConfirm?: boolean
@@ -2222,18 +2203,29 @@ export function ServiceCheckoutDialog({
         lines.length > 0 &&
         typeof ensureAppointmentBookingBeforeCheckout === "function"
       ) {
-        const linkResult = await ensureAppointmentBookingBeforeCheckout({
-          lines,
-          customer: customer!,
-          appointmentDate,
-          appointmentTime,
-          notes,
-        })
-        if (!linkResult) {
-          setNavigating(false)
-          return
+        // Only book the services that were on the cart when the checkout
+        // dialog opened. Services added inside the dialog should flow into the
+        // Sale only (annotated `lineSource: walk_in` server-side), not become
+        // Appointment documents — keeps post-checkout adds out of calendar
+        // bookings and the dashboard "Appointment Value" metric.
+        const bookedSnapshotIds = new Set(
+          (snapshotRef.current || []).map((l) => l.id)
+        )
+        const bookedLines = lines.filter((l) => bookedSnapshotIds.has(l.id))
+        if (bookedLines.length > 0) {
+          const linkResult = await ensureAppointmentBookingBeforeCheckout({
+            lines: bookedLines,
+            customer: customer!,
+            appointmentDate,
+            appointmentTime,
+            notes,
+          })
+          if (!linkResult) {
+            setNavigating(false)
+            return
+          }
+          ensuredBooking = linkResult
         }
-        ensuredBooking = linkResult
       }
 
       const saleData: Record<string, unknown> = {
@@ -2291,22 +2283,6 @@ export function ServiceCheckoutDialog({
                   durationInDays: m.durationInDays,
                   quantity: q,
                   discount: lineDiscountAsPayloadPercent(m.price, q, m.discountValue, m.discountIsPercent),
-                }
-              }),
-            }
-          : {}),
-        ...(packageLines.length > 0
-          ? {
-              packages: packageLines.map((p) => {
-                const q = Math.max(1, Math.floor(Number(p.quantity) || 1))
-                return {
-                  packageId: p.packageId,
-                  staffId: p.staffId || "",
-                  packageName: p.packageName,
-                  totalSittings: p.totalSittings,
-                  price: p.price,
-                  quantity: q,
-                  discount: lineDiscountAsPayloadPercent(p.price, q, p.discountValue, p.discountIsPercent),
                 }
               }),
             }
@@ -2392,7 +2368,6 @@ export function ServiceCheckoutDialog({
         catalogServices,
         catalogProducts,
         catalogMembershipPlans,
-        catalogPackages,
         catalogPrepaidPlans,
         checkoutTaxSettings,
         checkoutPaymentConfiguration,
@@ -2452,7 +2427,6 @@ export function ServiceCheckoutDialog({
         lines: cloneLines(lines),
         productLines: cloneProductLines(productLines),
         membershipLines: cloneMembershipLines(membershipLines),
-        packageLines: clonePackageLines(packageLines),
         prepaidLines: clonePrepaidLines(prepaidLines),
         checkoutTipLines: cloneCheckoutTipLines(checkoutTipLines),
         checkoutCartDiscountType,
@@ -2486,7 +2460,6 @@ export function ServiceCheckoutDialog({
     setLines(cloneLines(snapshotRef.current))
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
-    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
     clearCheckoutExtras()
     setCancelDraftDialogOpen(false)
@@ -2506,7 +2479,6 @@ export function ServiceCheckoutDialog({
     setLines(cloneLines(snapshotRef.current))
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
-    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
     clearCheckoutExtras()
     setCancelSaleDialogOpen(false)
@@ -2723,11 +2695,289 @@ export function ServiceCheckoutDialog({
     variant === "drawer" && "z-[110]"
   )
   const draftDropdownContentClass = cn(variant === "drawer" && "z-[110]")
-  /** Payment sheet (z-220) — poppers must clear the sheet panel and overlay (z-210). */
+  /** Select Payment step (inside checkout panel) — poppers must stack above drawer z-[100]. */
   const paymentSheetSelectContentClass = "z-[225]"
   /** Dialogs in checkout extras (tip, etc.) use z-[200]; Radix Select popper copies inner computed z-index onto its wrapper — must exceed dialog. */
   const checkoutModalSelectContentClass = "!z-[9999]"
 
+  const serviceCheckoutPaymentFormFields = (
+    <div className="space-y-4 px-5 py-4">
+
+            {paymentDialogShowWallet && paymentDialogWalletsRaw.length > 1 ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Wallet</Label>
+                <Select
+                  value={paySelectedWalletId || undefined}
+                  onValueChange={(v) => {
+                    setPaySelectedWalletId(v)
+                    setPayWallet(0)
+                  }}
+                >
+                  <SelectTrigger className="h-9 rounded-lg">
+                    <SelectValue placeholder="Select wallet" />
+                  </SelectTrigger>
+                  <SelectContent position="popper" className={paymentSheetSelectContentClass}>
+                    {paymentDialogWalletsRaw.map((w: any) => (
+                      <SelectItem key={String(w._id)} value={String(w._id)}>
+                        {(w.planSnapshot && w.planSnapshot.planName) || "Wallet"} — ₹
+                        {Number(w.remainingBalance || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}{" "}
+                        left
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+
+            {paymentDialogShowWallet || paymentDialogShowReward ? (
+              <div className="flex flex-row flex-nowrap items-stretch gap-3">
+                {paymentDialogShowWallet && paySelectedWalletId ? (
+                  <div
+                    role="button"
+                    tabIndex={paymentWalletRedemptionTileDisabled ? -1 : 0}
+                    onClick={() => {
+                      if (paymentWalletRedemptionTileDisabled) return
+                      const w = paymentSelectedWalletRow
+                      if (!w) return
+                      setPayWallet(
+                        Math.min(
+                          Number(w.remainingBalance) || 0,
+                          Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
+                        )
+                      )
+                    }}
+                    onKeyDown={(e) => {
+                      if (paymentWalletRedemptionTileDisabled) return
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        const w = paymentSelectedWalletRow
+                        if (!w) return
+                        setPayWallet(
+                          Math.min(
+                            Number(w.remainingBalance) || 0,
+                            Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
+                          )
+                        )
+                      }
+                    }}
+                    className={cn(
+                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
+                      paymentWalletRedemptionTileDisabled
+                        ? "cursor-not-allowed border-cyan-200/55 bg-cyan-50/15 opacity-50"
+                        : cn(
+                            "cursor-pointer",
+                            payWallet > 0
+                              ? "border-cyan-300/70 bg-cyan-50/35 hover:bg-cyan-50/50"
+                              : "border-cyan-200/65 bg-cyan-50/20 hover:bg-cyan-50/35"
+                          )
+                    )}
+                  >
+                    <span className="text-sm font-semibold text-cyan-800">Wallet (₹)</span>
+                    {paymentDialogWalletBalanceText ? (
+                      <span className="text-[11px] text-cyan-900/80">{paymentDialogWalletBalanceText}</span>
+                    ) : null}
+                    <Input
+                      type="number"
+                      value={payWallet || ""}
+                      onChange={(e) => setPayWallet(Math.max(0, Number(e.target.value) || 0))}
+                      onFocus={(e) => e.target.select()}
+                      onClick={(e) => e.stopPropagation()}
+                      min={0}
+                      disabled={paymentWalletRedemptionTileDisabled}
+                      className="h-8 w-full rounded-lg border-cyan-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-cyan-400/85 focus:ring-cyan-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                      style={{ textAlign: "center" }}
+                      placeholder="0"
+                    />
+                  </div>
+                ) : null}
+                {paymentDialogShowReward && paymentDialogRewardSettings ? (
+                  <div
+                    className={cn(
+                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
+                      paymentDialogPayCfg.rewardPointRedemption.enabled === false
+                        ? "border-rose-200/55 bg-rose-50/15 opacity-50"
+                        : payLoyaltyPoints > 0
+                          ? "border-rose-300/70 bg-rose-50/35 hover:bg-rose-50/45"
+                          : "border-rose-200/65 bg-rose-50/20 hover:bg-rose-50/32"
+                    )}
+                  >
+                    <span className="text-sm font-semibold text-rose-800">Points</span>
+                    {paymentDialogLoyaltyBalance >= (paymentDialogRewardSettings.minRedeemPoints || 0) ? (
+                      paymentDialogRewardBalanceText ? (
+                        <span className="text-[11px] text-rose-900/80">{paymentDialogRewardBalanceText}</span>
+                      ) : null
+                    ) : (
+                      <span className="px-1 text-center text-[11px] leading-snug text-rose-900/80">
+                        Need {paymentDialogRewardSettings.minRedeemPoints || 0}+ pts (have{" "}
+                        {paymentDialogLoyaltyBalance})
+                      </span>
+                    )}
+                    {paymentDialogLoyaltyBalance >= (paymentDialogRewardSettings.minRedeemPoints || 0) ? (
+                      <Input
+                        type="number"
+                        min={0}
+                        step={paymentDialogRewardSettings.redeemPointsStep || 1}
+                        value={payLoyaltyPoints || ""}
+                        onChange={(e) =>
+                          setPayLoyaltyPoints(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                        }
+                        onFocus={(e) => e.target.select()}
+                        className="h-8 w-full rounded-lg border-rose-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-rose-400/85 focus:ring-rose-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        style={{ textAlign: "center" }}
+                        placeholder="0"
+                        title={`Balance ${paymentDialogLoyaltyBalance}, step ${paymentDialogRewardSettings.redeemPointsStep || 1}`}
+                        aria-label={`Reward points to redeem. Balance ${paymentDialogLoyaltyBalance}`}
+                        disabled={paymentDialogPayCfg.rewardPointRedemption.enabled === false}
+                      />
+                    ) : null}
+                    {!paymentLoyaltyPreview.ok && payLoyaltyPoints > 0 && paymentLoyaltyPreview.error ? (
+                      <p className="text-center text-xs text-red-600">{paymentLoyaltyPreview.error}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-3 gap-3">
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayCash(paymentPayableAfterWallet)
+                  setPayCard(0)
+                  setPayOnline(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayCash(paymentPayableAfterWallet)
+                    setPayCard(0)
+                    setPayOnline(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payCash > 0
+                    ? "border-green-400 bg-green-200 hover:bg-green-300"
+                    : "border-green-200 bg-green-50/50 hover:bg-green-50"
+                )}
+              >
+                <span className="text-sm font-medium text-green-700">Cash</span>
+                <Input
+                  type="number"
+                  value={payCash || ""}
+                  onChange={(e) => setPayCash(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-green-300 text-center text-sm [appearance:textfield] focus:border-green-400 focus:ring-green-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayCard(paymentPayableAfterWallet)
+                  setPayCash(0)
+                  setPayOnline(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayCard(paymentPayableAfterWallet)
+                    setPayCash(0)
+                    setPayOnline(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payCard > 0
+                    ? "border-blue-400 bg-blue-200 hover:bg-blue-300"
+                    : "border-blue-200 bg-blue-50/50 hover:bg-blue-50"
+                )}
+              >
+                <span className="text-sm font-medium text-blue-700">Card</span>
+                <Input
+                  type="number"
+                  value={payCard || ""}
+                  onChange={(e) => setPayCard(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-blue-300 text-center text-sm [appearance:textfield] focus:border-blue-400 focus:ring-blue-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setPayOnline(paymentPayableAfterWallet)
+                  setPayCash(0)
+                  setPayCard(0)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    setPayOnline(paymentPayableAfterWallet)
+                    setPayCash(0)
+                    setPayCard(0)
+                  }
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
+                  payOnline > 0
+                    ? "border-purple-400 bg-purple-200 hover:bg-purple-300"
+                    : "border-purple-200 bg-purple-50/50 hover:bg-purple-50"
+                )}
+              >
+                <span className="text-sm font-medium text-purple-700">Online</span>
+                <Input
+                  type="number"
+                  value={payOnline || ""}
+                  onChange={(e) => setPayOnline(Math.max(0, Number(e.target.value) || 0))}
+                  onFocus={(e) => e.target.select()}
+                  onClick={(e) => e.stopPropagation()}
+                  min={0}
+                  className="h-8 w-full rounded-lg border-purple-300 text-center text-sm [appearance:textfield] focus:border-purple-400 focus:ring-purple-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  style={{ textAlign: "center" }}
+                  placeholder="0"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-emerald-800">Total paid</span>
+                <span className="font-bold tabular-nums text-emerald-700">
+                  ₹{formatCheckoutInr(paymentTotalTenderEntered)}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-800/90">
+                <span>vs amount due</span>
+                <span className="tabular-nums">₹{formatCheckoutInr(paymentDueAfterLoyalty)}</span>
+              </div>
+              {paymentDueAfterLoyalty > 0.01 ? (
+                <p className="mt-1.5 text-xs text-emerald-900/80">
+                  {paymentTotalTenderEntered > paymentDueAfterLoyalty + 0.05
+                    ? `Over by ₹${formatCheckoutInr(paymentTotalTenderEntered - paymentDueAfterLoyalty)}`
+                    : paymentTotalTenderEntered + 0.02 < paymentDueAfterLoyalty
+                      ? `Partial payment: ₹${formatCheckoutInr(
+                          paymentDueAfterLoyalty - paymentTotalTenderEntered
+                        )} will stay due on the bill.`
+                      : "Full amount collected for this bill."}
+                </p>
+              ) : (
+                <p className="mt-1.5 text-xs text-emerald-900/80">
+                  No cash tender needed if reward covers the full amount due.
+                </p>
+              )}
+            </div>
+    </div>
+  )
   const mainColumns = (
         <div
           className={cn(
@@ -2743,6 +2993,8 @@ export function ServiceCheckoutDialog({
                 : "border-b md:border-b-0 md:border-r"
             )}
           >
+            {!paymentMethodDialogOpen ? (
+              <>
             <div className="p-5 pb-4 space-y-4 shrink-0">
               {category === "services" ? (
                 <div className="relative">
@@ -2771,16 +3023,6 @@ export function ServiceCheckoutDialog({
                     placeholder="Search membership plans"
                     value={membershipSearch}
                     onChange={(e) => setMembershipSearch(e.target.value)}
-                    className="pl-9 rounded-lg bg-background"
-                  />
-                </div>
-              ) : category === "package" ? (
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search packages"
-                    value={packageSearch}
-                    onChange={(e) => setPackageSearch(e.target.value)}
                     className="pl-9 rounded-lg bg-background"
                   />
                 </div>
@@ -2840,48 +3082,139 @@ export function ServiceCheckoutDialog({
               <div className="p-5 pt-0 pb-6 space-y-4">
                 {category === "services" && (
                   <>
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-foreground">Quick sale</h3>
-                      <button
-                        type="button"
-                        className="text-xs font-medium text-violet-600 hover:text-violet-700 underline-offset-2 hover:underline"
-                        onClick={restoreBookingLines}
-                      >
-                        Restore booking
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {filteredCatalog.length === 0 ? (
-                        <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
-                          No services match your search.
-                        </p>
-                      ) : (
-                        filteredCatalog.map((svc: any) => {
-                          const sid = String(svc._id || svc.id)
-                          const price = Number(svc.price) || 0
-                          return (
+                    {search.trim().length === 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {topTenServices.length === 0 ? (
+                          <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
+                            No services available yet.
+                          </p>
+                        ) : (
+                          <>
+                            {topTenServices.map((svc: any) => {
+                              const sid = String(svc._id || svc.id)
+                              const price = Number(svc.price) || 0
+                              return (
+                                <button
+                                  key={`top-${sid}`}
+                                  type="button"
+                                  onClick={() => addCatalogService(svc)}
+                                  className={cn(
+                                    "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
+                                    "hover:border-violet-300/80 hover:bg-violet-50/40 transition-colors"
+                                  )}
+                                >
+                                  <span
+                                    className="w-1 self-stretch rounded-full bg-sky-400 shrink-0"
+                                    aria-hidden
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium text-foreground truncate">{svc.name || "Service"}</div>
+                                    <div className="text-sm text-muted-foreground">₹{price}</div>
+                                  </div>
+                                </button>
+                              )
+                            })}
+                            {pinnedServices.map((svc: any) => {
+                              const sid = String(svc._id || svc.id)
+                              const price = Number(svc.price) || 0
+                              return (
+                                <div key={`pinned-${sid}`} className="relative group">
+                                  <button
+                                    type="button"
+                                    onClick={() => addCatalogService(svc)}
+                                    className={cn(
+                                      "flex w-full gap-3 rounded-xl border border-violet-200 bg-violet-50/40 p-3 pr-8 text-left",
+                                      "hover:border-violet-300/80 hover:bg-violet-50 transition-colors"
+                                    )}
+                                  >
+                                    <span
+                                      className="w-1 self-stretch rounded-full bg-violet-500 shrink-0"
+                                      aria-hidden
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="font-medium text-foreground truncate">{svc.name || "Service"}</div>
+                                      <div className="text-sm text-muted-foreground">₹{price}</div>
+                                    </div>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    aria-label={`Unpin ${svc.name || "service"}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      removePinnedService(sid)
+                                    }}
+                                    className={cn(
+                                      "absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center rounded-md",
+                                      "text-muted-foreground hover:bg-violet-100 hover:text-foreground transition-colors",
+                                      "opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                    )}
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              )
+                            })}
                             <button
-                              key={sid}
                               type="button"
-                              onClick={() => addCatalogService(svc)}
+                              onClick={() => {
+                                setPinPickerSearch("")
+                                setPinPickerOpen(true)
+                              }}
                               className={cn(
-                                "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
-                                "hover:border-violet-300/80 hover:bg-violet-50/40 transition-colors"
+                                "flex gap-3 rounded-xl border border-dashed border-border bg-background/40 p-3 text-left text-muted-foreground",
+                                "hover:border-violet-300 hover:bg-violet-50/40 hover:text-foreground transition-colors"
                               )}
                             >
                               <span
-                                className="w-1 self-stretch rounded-full bg-sky-400 shrink-0"
+                                className="flex h-full w-7 shrink-0 items-center justify-center self-stretch rounded-full bg-violet-100 text-violet-600"
                                 aria-hidden
-                              />
+                              >
+                                <Plus className="h-4 w-4" />
+                              </span>
                               <div className="min-w-0 flex-1">
-                                <div className="font-medium text-foreground truncate">{svc.name || "Service"}</div>
-                                <div className="text-sm text-muted-foreground">₹{price}</div>
+                                <div className="font-medium leading-snug">Add service</div>
+                                <div className="text-xs leading-snug">
+                                  Pin a service for quick access
+                                </div>
                               </div>
                             </button>
-                          )
-                        })
-                      )}
-                    </div>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {filteredCatalog.length === 0 ? (
+                          <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
+                            No services match your search.
+                          </p>
+                        ) : (
+                          filteredCatalog.map((svc: any) => {
+                            const sid = String(svc._id || svc.id)
+                            const price = Number(svc.price) || 0
+                            return (
+                              <button
+                                key={sid}
+                                type="button"
+                                onClick={() => addCatalogService(svc)}
+                                className={cn(
+                                  "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
+                                  "hover:border-violet-300/80 hover:bg-violet-50/40 transition-colors"
+                                )}
+                              >
+                                <span
+                                  className="w-1 self-stretch rounded-full bg-sky-400 shrink-0"
+                                  aria-hidden
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-medium text-foreground truncate">{svc.name || "Service"}</div>
+                                  <div className="text-sm text-muted-foreground">₹{price}</div>
+                                </div>
+                              </button>
+                            )
+                          })
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -3037,64 +3370,6 @@ export function ServiceCheckoutDialog({
                   </>
                 )}
 
-                {category === "package" && (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-foreground">Service packages</h3>
-                      <button
-                        type="button"
-                        className="text-xs font-medium text-violet-600 hover:text-violet-700 underline-offset-2 hover:underline"
-                        onClick={() =>
-                          setPackageLines(clonePackageLines(packageSnapshotRef.current))
-                        }
-                      >
-                        Clear packages
-                      </button>
-                    </div>
-                    {loadingPackages ? (
-                      <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading packages…
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {filteredPackages.length === 0 ? (
-                          <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
-                            No packages match your search.
-                          </p>
-                        ) : (
-                          filteredPackages.map((pkg: any) => {
-                            const id = String(pkg._id || pkg.id)
-                            const price = Number(pkg.total_price) || 0
-                            return (
-                              <button
-                                key={id}
-                                type="button"
-                                onClick={() => addCatalogPackage(pkg)}
-                                className={cn(
-                                  "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
-                                  "hover:border-emerald-300/90 hover:bg-emerald-50/45 transition-colors"
-                                )}
-                              >
-                                <span
-                                  className="w-1 self-stretch rounded-full bg-emerald-500 shrink-0"
-                                  aria-hidden
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <div className="font-medium text-foreground truncate">
-                                    {pkg.name || "Package"}
-                                  </div>
-                                  <div className="text-sm text-muted-foreground">₹{price}</div>
-                                </div>
-                              </button>
-                            )
-                          })
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-
                 {category === "prepaidPlans" && (
                   <>
                     <div className="flex items-center justify-between gap-2">
@@ -3178,6 +3453,35 @@ export function ServiceCheckoutDialog({
                 )}
               </div>
             </ScrollArea>
+              </>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                {!(variant === "drawer" && onPaymentStepChange) ? (
+                  <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-3 py-3 sm:px-5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={closePaymentStep}
+                      disabled={navigating}
+                      aria-label="Back to services and products"
+                    >
+                      <ArrowLeft className="h-4 w-4" aria-hidden />
+                    </Button>
+                    <h2 className="text-base font-semibold tracking-tight">Select Payment</h2>
+                  </div>
+                ) : null}
+                {paymentMethodLoading ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 py-10 text-sm text-muted-foreground">
+                    <Loader2 className="h-8 w-8 animate-spin shrink-0" aria-hidden />
+                    Loading payment options…
+                  </div>
+                ) : (
+                  <ScrollArea className="min-h-0 flex-1">{serviceCheckoutPaymentFormFields}</ScrollArea>
+                )}
+              </div>
+            )}
           </div>
 
           <div
@@ -3738,160 +4042,6 @@ export function ServiceCheckoutDialog({
                     </div>
                   )
                 })}
-                {packageLines.map((line) => {
-                  const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
-                  const qty = Math.max(1, Math.floor(Number(line.quantity) || 1))
-                  const unit = Number(line.price) || 0
-                  const discVal = Number(line.discountValue) || 0
-                  const discIsPct = line.discountIsPercent !== false
-                  const lineTotal = lineNetAfterLineDiscount(unit, qty, discVal, discIsPct)
-                  const staffTriggerId = `cart-package-staff-${line.id}`
-                  return (
-                    <div
-                      key={line.id}
-                      className={cn(
-                        "group flex gap-2.5 rounded-xl border border-border/70 bg-muted/15 p-3 shadow-sm",
-                        "transition-shadow hover:border-border hover:shadow-md"
-                      )}
-                    >
-                      <span className="w-1 self-stretch shrink-0 rounded-full bg-emerald-500" aria-hidden />
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <div className="flex min-w-0 items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium leading-snug text-foreground">
-                              {line.packageName}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              Package · ₹
-                              {unit.toLocaleString("en-IN", { maximumFractionDigits: 2 })} each · {staffName}
-                              {qty > 1 ? ` · ×${qty}` : ""}
-                            </p>
-                          </div>
-                          <div className="relative flex min-h-8 min-w-[4.5rem] shrink-0 items-center justify-end gap-0.5">
-                            <p
-                              className={cn(
-                                "text-sm font-semibold tabular-nums text-foreground transition-opacity duration-150",
-                                "max-md:opacity-100",
-                                "md:opacity-100 md:group-hover:opacity-0 md:group-hover:invisible",
-                                "md:group-focus-within:opacity-0 md:group-focus-within:invisible"
-                              )}
-                            >
-                              ₹{lineTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                            </p>
-                            <div
-                              className={cn(
-                                "flex shrink-0 items-center gap-0.5 transition-opacity duration-150",
-                                "max-md:opacity-100",
-                                "md:pointer-events-none md:absolute md:right-0 md:top-1/2 md:-translate-y-1/2",
-                                "md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100",
-                                "md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
-                              )}
-                            >
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  document.getElementById(staffTriggerId)?.focus()
-                                }}
-                                aria-label="Focus staff for this line"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-destructive hover:text-destructive"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  removePackageLine(line.id)
-                                }}
-                                aria-label="Remove package"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                          <div className="flex items-center gap-2">
-                            <div className="flex h-8 items-center gap-0.5 rounded-lg border border-border/80 bg-background">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 shrink-0 rounded-md p-0"
-                                onClick={() => setPackageQuantity(line.id, qty - 1)}
-                                disabled={qty <= 1}
-                                aria-label="Decrease quantity"
-                              >
-                                <Minus className="h-3.5 w-3.5" />
-                              </Button>
-                              <span className="w-8 text-center text-sm font-semibold tabular-nums">{qty}</span>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 shrink-0 rounded-md p-0"
-                                onClick={() => setPackageQuantity(line.id, qty + 1)}
-                                aria-label="Increase quantity"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                            <CheckoutLineDiscountRow
-                              discountValue={discVal}
-                              discountIsPercent={discIsPct}
-                              onDiscountValueChange={(v) =>
-                                patchPackageLine(line.id, { discountValue: v })
-                              }
-                              onSetPercentMode={() =>
-                                patchPackageLine(line.id, {
-                                  discountIsPercent: true,
-                                  discountValue: 0,
-                                })
-                              }
-                              onSetFixedMode={() =>
-                                patchPackageLine(line.id, {
-                                  discountIsPercent: false,
-                                  discountValue: 0,
-                                })
-                              }
-                            />
-                            {staffOptions.length > 0 ? (
-                              <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
-                                <Select
-                                  value={line.staffId || undefined}
-                                  onValueChange={(v) => setPackageLineStaff(line.id, v)}
-                                >
-                                  <SelectTrigger
-                                    id={staffTriggerId}
-                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
-                                  >
-                                    <SelectValue placeholder="Staff" />
-                                  </SelectTrigger>
-                                  <SelectContent position="popper" className={cartSelectContentClass}>
-                                    {staffOptions.map((s) => (
-                                      <SelectItem key={s.id} value={s.id}>
-                                        {s.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
                 {prepaidLines.map((line) => {
                   const staffName =
                     staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
@@ -4121,6 +4271,14 @@ export function ServiceCheckoutDialog({
                           </span>
                         </div>
                       ) : null}
+                      {paymentMethodDialogOpen ? (
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Amount Received</span>
+                          <span className="tabular-nums text-muted-foreground">
+                            ₹{formatCheckoutInr(paymentTotalTenderEntered)}
+                          </span>
+                        </div>
+                      ) : null}
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-2 rounded-md text-left text-base font-bold text-foreground outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
@@ -4135,7 +4293,12 @@ export function ServiceCheckoutDialog({
                             aria-hidden
                           />
                         </span>
-                        <span className="tabular-nums">₹{formatCheckoutInr(cartToPayIncludingTips)}</span>
+                        <span className="tabular-nums">
+                          ₹
+                          {formatCheckoutInr(
+                            paymentMethodDialogOpen ? paymentRemainingDue : cartToPayIncludingTips
+                          )}
+                        </span>
                       </button>
                     </>
                   ) : null}
@@ -4210,15 +4373,57 @@ export function ServiceCheckoutDialog({
 
                   {cartBreakdownOpen ? (
                     <div className="border-t border-border/60 pt-2">
+                      {paymentMethodDialogOpen ? (
+                        <div className="mb-1 flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Amount Received</span>
+                          <span className="tabular-nums text-muted-foreground">
+                            ₹{formatCheckoutInr(paymentTotalTenderEntered)}
+                          </span>
+                        </div>
+                      ) : null}
                       <div className="flex items-center justify-between text-base font-bold text-foreground">
                         <span>To pay</span>
-                        <span className="tabular-nums">₹{formatCheckoutInr(cartToPayIncludingTips)}</span>
+                        <span className="tabular-nums">
+                          ₹
+                          {formatCheckoutInr(
+                            paymentMethodDialogOpen ? paymentRemainingDue : cartToPayIncludingTips
+                          )}
+                        </span>
                       </div>
                     </div>
                   ) : null}
                 </div>
               </Collapsible>
               <div className="flex items-center gap-2">
+                {paymentMethodDialogOpen ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-11 flex-1 min-w-0 rounded-lg font-semibold"
+                      onClick={closePaymentStep}
+                      disabled={navigating}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      className="h-11 flex-1 min-w-0 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-semibold"
+                      disabled={navigating || paymentMethodLoading}
+                      onClick={() => void confirmPaymentMethodAndContinue()}
+                    >
+                      {navigating ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" aria-hidden />
+                          Saving…
+                        </>
+                      ) : (
+                        paymentRemainingDue <= 0.01 ? "Complete billing" : "Save Part-Paid"
+                      )}
+                    </Button>
+                  </>
+                ) : (
+                  <>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -4302,7 +4507,6 @@ export function ServiceCheckoutDialog({
                     (lines.length > 0 &&
                       (lines.some((l) => l.serviceId && !l.staffId) || lines.some((l) => !l.serviceId))) ||
                     (membershipLines.length > 0 && membershipLines.some((l) => !l.staffId)) ||
-                    (packageLines.length > 0 && packageLines.some((l) => !l.staffId)) ||
                     (prepaidLines.length > 0 && prepaidLines.some((l) => !l.staffId)) ||
                     (productLines.length > 0 && productLines.some((l) => !l.staffId))
                   }
@@ -4317,6 +4521,8 @@ export function ServiceCheckoutDialog({
                     "Continue to payment"
                   )}
                 </Button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -4429,337 +4635,85 @@ export function ServiceCheckoutDialog({
     </Dialog>
   )
 
-  const paymentMethodDialog = (
-    <Sheet
-      open={paymentMethodDialogOpen}
+  const pinServicePickerDialog = (
+    <Dialog
+      open={pinPickerOpen}
       onOpenChange={(next) => {
-        if (navigating) return
-        if (!next) setShowCreditChangeConfirm(false)
-        setPaymentMethodDialogOpen(next)
+        setPinPickerOpen(next)
+        if (!next) setPinPickerSearch("")
       }}
     >
-      <SheetContent
-        side="right"
-        overlayClassName="z-[210]"
-        className={cn(
-          "flex h-full w-full max-h-[100dvh] flex-col gap-0 border-l border-border/70 p-0 shadow-xl",
-          "z-[220] overflow-hidden sm:max-w-lg",
-          variant === "drawer" && "rounded-none"
-        )}
+      <DialogContent
+        className="z-[200] gap-4 sm:max-w-xl h-[min(85vh,520px)] overflow-hidden flex flex-col"
+        overlayClassName="z-[190]"
         aria-describedby={undefined}
       >
-        <SheetHeader className="shrink-0 space-y-0 border-b border-border/60 px-6 py-4 pr-14 text-left">
-          <SheetTitle className="text-base font-semibold tracking-tight">Payment Method</SheetTitle>
-        </SheetHeader>
-        {paymentMethodLoading ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-sm text-muted-foreground">
-            <Loader2 className="h-8 w-8 animate-spin shrink-0" aria-hidden />
-            Loading payment options…
+        <DialogHeader>
+          <DialogTitle className="text-base font-semibold tracking-tight">Add a quick-access service</DialogTitle>
+          <DialogDescription>
+            Pin frequently-sold services so they appear beside the Top 10 next time.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex min-h-0 flex-1 flex-col space-y-3">
+          <div className="relative shrink-0">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <Input
+              className="rounded-lg pl-9"
+              placeholder="Search services…"
+              value={pinPickerSearch}
+              onChange={(e) => setPinPickerSearch(e.target.value)}
+              autoFocus
+            />
           </div>
-        ) : (
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="space-y-4 px-6 py-4">
-            {paymentDialogShowWallet && paymentDialogWalletsRaw.length > 1 ? (
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Wallet</Label>
-                <Select
-                  value={paySelectedWalletId || undefined}
-                  onValueChange={(v) => {
-                    setPaySelectedWalletId(v)
-                    setPayWallet(0)
-                  }}
-                >
-                  <SelectTrigger className="h-9 rounded-lg">
-                    <SelectValue placeholder="Select wallet" />
-                  </SelectTrigger>
-                  <SelectContent position="popper" className={paymentSheetSelectContentClass}>
-                    {paymentDialogWalletsRaw.map((w: any) => (
-                      <SelectItem key={String(w._id)} value={String(w._id)}>
-                        {(w.planSnapshot && w.planSnapshot.planName) || "Wallet"} — ₹
-                        {Number(w.remainingBalance || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}{" "}
-                        left
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : null}
-
-            {paymentDialogShowWallet || paymentDialogShowReward ? (
-              <div className="flex flex-row flex-nowrap items-stretch gap-3">
-                {paymentDialogShowWallet && paySelectedWalletId ? (
-                  <div
-                    role="button"
-                    tabIndex={paymentWalletRedemptionTileDisabled ? -1 : 0}
-                    onClick={() => {
-                      if (paymentWalletRedemptionTileDisabled) return
-                      const w = paymentSelectedWalletRow
-                      if (!w) return
-                      setPayWallet(
-                        Math.min(
-                          Number(w.remainingBalance) || 0,
-                          Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
-                        )
-                      )
-                    }}
-                    onKeyDown={(e) => {
-                      if (paymentWalletRedemptionTileDisabled) return
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault()
-                        const w = paymentSelectedWalletRow
-                        if (!w) return
-                        setPayWallet(
-                          Math.min(
-                            Number(w.remainingBalance) || 0,
-                            Math.max(0, Math.min(paymentDueAfterLoyalty, paymentEligibleWalletSub))
-                          )
-                        )
-                      }
-                    }}
-                    className={cn(
-                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
-                      paymentWalletRedemptionTileDisabled
-                        ? "cursor-not-allowed border-cyan-200/55 bg-cyan-50/15 opacity-50"
-                        : cn(
-                            "cursor-pointer",
-                            payWallet > 0
-                              ? "border-cyan-300/70 bg-cyan-50/35 hover:bg-cyan-50/50"
-                              : "border-cyan-200/65 bg-cyan-50/20 hover:bg-cyan-50/35"
-                          )
-                    )}
-                  >
-                    <span className="text-sm font-semibold text-cyan-800">Wallet (₹)</span>
-                    {paymentDialogWalletBalanceText ? (
-                      <span className="text-[11px] text-cyan-900/80">{paymentDialogWalletBalanceText}</span>
-                    ) : null}
-                    <Input
-                      type="number"
-                      value={payWallet || ""}
-                      onChange={(e) => setPayWallet(Math.max(0, Number(e.target.value) || 0))}
-                      onFocus={(e) => e.target.select()}
-                      onClick={(e) => e.stopPropagation()}
-                      min={0}
-                      disabled={paymentWalletRedemptionTileDisabled}
-                      className="h-8 w-full rounded-lg border-cyan-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-cyan-400/85 focus:ring-cyan-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                      style={{ textAlign: "center" }}
-                      placeholder="0"
-                    />
-                  </div>
-                ) : null}
-                {paymentDialogShowReward && paymentDialogRewardSettings ? (
-                  <div
-                    className={cn(
-                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border p-2 transition-colors",
-                      paymentDialogPayCfg.rewardPointRedemption.enabled === false
-                        ? "border-rose-200/55 bg-rose-50/15 opacity-50"
-                        : payLoyaltyPoints > 0
-                          ? "border-rose-300/70 bg-rose-50/35 hover:bg-rose-50/45"
-                          : "border-rose-200/65 bg-rose-50/20 hover:bg-rose-50/32"
-                    )}
-                  >
-                    <span className="text-sm font-semibold text-slate-900">Points</span>
-                    {paymentDialogLoyaltyBalance >= (paymentDialogRewardSettings.minRedeemPoints || 0) ? (
-                      <Input
-                        type="number"
-                        min={0}
-                        step={paymentDialogRewardSettings.redeemPointsStep || 1}
-                        value={payLoyaltyPoints || ""}
-                        onChange={(e) =>
-                          setPayLoyaltyPoints(Math.max(0, Math.floor(Number(e.target.value) || 0)))
-                        }
-                        onFocus={(e) => e.target.select()}
-                        className="h-8 w-full rounded-lg border-rose-200/90 bg-white text-center text-sm font-medium text-slate-900 [appearance:textfield] placeholder:text-slate-400 focus:border-rose-400/85 focus:ring-rose-100/80 disabled:opacity-60 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        style={{ textAlign: "center" }}
-                        placeholder="0"
-                        title={`Balance ${paymentDialogLoyaltyBalance}, step ${paymentDialogRewardSettings.redeemPointsStep || 1}`}
-                        aria-label={`Reward points to redeem. Balance ${paymentDialogLoyaltyBalance}`}
-                        disabled={paymentDialogPayCfg.rewardPointRedemption.enabled === false}
-                      />
-                    ) : (
-                      <p className="px-1 text-center text-xs leading-snug text-muted-foreground">
-                        Need {paymentDialogRewardSettings.minRedeemPoints || 0}+ pts (have{" "}
-                        {paymentDialogLoyaltyBalance})
-                      </p>
-                    )}
-                    {paymentDialogRewardBalanceText ? (
-                      <span className="text-[11px] text-rose-900/80">{paymentDialogRewardBalanceText}</span>
-                    ) : null}
-                    {!paymentLoyaltyPreview.ok && payLoyaltyPoints > 0 && paymentLoyaltyPreview.error ? (
-                      <p className="text-center text-xs text-red-600">{paymentLoyaltyPreview.error}</p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-3 gap-3">
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setPayCash(paymentPayableAfterWallet)
-                  setPayCard(0)
-                  setPayOnline(0)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    setPayCash(paymentPayableAfterWallet)
-                    setPayCard(0)
-                    setPayOnline(0)
-                  }
-                }}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
-                  payCash > 0
-                    ? "border-green-400 bg-green-200 hover:bg-green-300"
-                    : "border-green-200 bg-green-50/50 hover:bg-green-50"
-                )}
-              >
-                <span className="text-sm font-medium text-green-700">Cash</span>
-                <Input
-                  type="number"
-                  value={payCash || ""}
-                  onChange={(e) => setPayCash(Math.max(0, Number(e.target.value) || 0))}
-                  onFocus={(e) => e.target.select()}
-                  onClick={(e) => e.stopPropagation()}
-                  min={0}
-                  className="h-8 w-full rounded-lg border-green-300 text-center text-sm [appearance:textfield] focus:border-green-400 focus:ring-green-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  style={{ textAlign: "center" }}
-                  placeholder="0"
-                />
-              </div>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setPayCard(paymentPayableAfterWallet)
-                  setPayCash(0)
-                  setPayOnline(0)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    setPayCard(paymentPayableAfterWallet)
-                    setPayCash(0)
-                    setPayOnline(0)
-                  }
-                }}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
-                  payCard > 0
-                    ? "border-blue-400 bg-blue-200 hover:bg-blue-300"
-                    : "border-blue-200 bg-blue-50/50 hover:bg-blue-50"
-                )}
-              >
-                <span className="text-sm font-medium text-blue-700">Card</span>
-                <Input
-                  type="number"
-                  value={payCard || ""}
-                  onChange={(e) => setPayCard(Math.max(0, Number(e.target.value) || 0))}
-                  onFocus={(e) => e.target.select()}
-                  onClick={(e) => e.stopPropagation()}
-                  min={0}
-                  className="h-8 w-full rounded-lg border-blue-300 text-center text-sm [appearance:textfield] focus:border-blue-400 focus:ring-blue-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  style={{ textAlign: "center" }}
-                  placeholder="0"
-                />
-              </div>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setPayOnline(paymentPayableAfterWallet)
-                  setPayCash(0)
-                  setPayCard(0)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    setPayOnline(paymentPayableAfterWallet)
-                    setPayCash(0)
-                    setPayCard(0)
-                  }
-                }}
-                className={cn(
-                  "flex flex-col items-center gap-1 rounded-xl border p-2 transition-colors cursor-pointer",
-                  payOnline > 0
-                    ? "border-purple-400 bg-purple-200 hover:bg-purple-300"
-                    : "border-purple-200 bg-purple-50/50 hover:bg-purple-50"
-                )}
-              >
-                <span className="text-sm font-medium text-purple-700">Online</span>
-                <Input
-                  type="number"
-                  value={payOnline || ""}
-                  onChange={(e) => setPayOnline(Math.max(0, Number(e.target.value) || 0))}
-                  onFocus={(e) => e.target.select()}
-                  onClick={(e) => e.stopPropagation()}
-                  min={0}
-                  className="h-8 w-full rounded-lg border-purple-300 text-center text-sm [appearance:textfield] focus:border-purple-400 focus:ring-purple-200 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  style={{ textAlign: "center" }}
-                  placeholder="0"
-                />
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 text-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-emerald-800">Total paid</span>
-                <span className="font-bold tabular-nums text-emerald-700">
-                  ₹{formatCheckoutInr(paymentTotalTenderEntered)}
-                </span>
-              </div>
-              <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-800/90">
-                <span>vs amount due</span>
-                <span className="tabular-nums">₹{formatCheckoutInr(paymentDueAfterLoyalty)}</span>
-              </div>
-              {paymentDueAfterLoyalty > 0.01 ? (
-                <p className="mt-1.5 text-xs text-emerald-900/80">
-                  {paymentTotalTenderEntered > paymentDueAfterLoyalty + 0.05
-                    ? `Over by ₹${formatCheckoutInr(paymentTotalTenderEntered - paymentDueAfterLoyalty)}`
-                    : paymentTotalTenderEntered + 0.02 < paymentDueAfterLoyalty
-                      ? `Partial payment: ₹${formatCheckoutInr(
-                          paymentDueAfterLoyalty - paymentTotalTenderEntered
-                        )} will stay due on the bill.`
-                      : "Full amount collected for this bill."}
+          <ScrollArea className="flex-1 min-h-0 rounded-lg border border-border/70">
+            <div className="py-1 pl-1 pr-4">
+              {pinPickerCandidates.length === 0 ? (
+                <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  {pinPickerSearch.trim()
+                    ? "No services match your search."
+                    : "Start typing to see services."}
                 </p>
               ) : (
-                <p className="mt-1.5 text-xs text-emerald-900/80">
-                  No cash tender needed if reward covers the full amount due.
-                </p>
+                pinPickerCandidates.map((svc: any) => {
+                  const sid = String(svc._id || svc.id)
+                  const price = Number(svc.price) || 0
+                  return (
+                    <button
+                      key={sid}
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 rounded-md py-2.5 pl-3 pr-3 text-left text-sm transition-colors hover:bg-muted/80"
+                      onClick={() => {
+                        addPinnedService(sid)
+                        setPinPickerOpen(false)
+                        setPinPickerSearch("")
+                      }}
+                    >
+                      <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                        {svc.name || "Service"}
+                      </span>
+                      {price > 0 ? (
+                        <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
+                          ₹{price.toLocaleString("en-IN")}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                          No price
+                        </span>
+                      )}
+                    </button>
+                  )
+                })
               )}
             </div>
-            </div>
           </ScrollArea>
-        )}
-        <SheetFooter className="shrink-0 gap-2 border-t border-border/60 px-6 py-4 sm:flex-row sm:justify-end">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setPaymentMethodDialogOpen(false)}
-            disabled={navigating}
-          >
-            Cancel
+        </div>
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button type="button" variant="outline" onClick={() => setPinPickerOpen(false)}>
+            Close
           </Button>
-          <Button
-            type="button"
-            className="bg-violet-600 hover:bg-violet-700 text-white"
-            disabled={navigating || paymentMethodLoading}
-            onClick={() => void confirmPaymentMethodAndContinue()}
-          >
-            {navigating ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" aria-hidden />
-                Saving…
-              </>
-            ) : (
-              "Complete billing"
-            )}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 
   const checkoutPartialPaymentConfirmDialog = (
@@ -5200,8 +5154,8 @@ export function ServiceCheckoutDialog({
         </div>
         {serviceLineEditDialog}
         {changeClientDialog}
+        {pinServicePickerDialog}
         {cancelDraftConfirmDialog}
-        {paymentMethodDialog}
         {checkoutPartialPaymentConfirmDialog}
         {checkoutCreditChangeConfirmDialog}
         {checkoutExtrasDialogs}
@@ -5235,8 +5189,8 @@ export function ServiceCheckoutDialog({
       </Dialog>
       {serviceLineEditDialog}
       {changeClientDialog}
+      {pinServicePickerDialog}
       {cancelDraftConfirmDialog}
-      {paymentMethodDialog}
       {checkoutPartialPaymentConfirmDialog}
       {checkoutCreditChangeConfirmDialog}
       {checkoutExtrasDialogs}
@@ -5248,4 +5202,6 @@ export function ServiceCheckoutDialog({
       />
     </>
   )
-}
+})
+
+ServiceCheckoutDialog.displayName = "ServiceCheckoutDialog"

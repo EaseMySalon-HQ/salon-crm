@@ -12,14 +12,16 @@ export default function EditAppointmentRedirect() {
 
   useEffect(() => {
     if (id) {
-      router.replace(`/appointments/new?edit=${id}`)
+      // Open the appointment drawer directly on /appointments rather than bouncing through /appointments/new,
+      // so that route's "create" permission gate doesn't block users who only have "edit".
+      router.replace(`/appointments?form=1&edit=${id}`)
     } else {
       router.replace("/appointments")
     }
   }, [id, router])
 
   return (
-    <ProtectedRoute requiredModule="appointments">
+    <ProtectedRoute requiredModule="appointments" requiredFeature="edit">
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
         <Loader2 className="h-10 w-10 animate-spin text-indigo-600" />
       </div>

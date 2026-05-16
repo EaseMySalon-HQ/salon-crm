@@ -11,8 +11,7 @@ import { SalesReport } from "@/components/reports/sales-report"
 import { MembershipReport } from "@/components/reports/membership-report"
 import { ExpenseReport } from "@/components/reports/expense-report"
 import { StaffPerformanceReport } from "@/components/reports/staff-performance-report"
-import { PackageReport } from "@/components/reports/package-report"
-import { BarChart3, TrendingUp, Receipt, Users, CreditCard, Package } from "lucide-react"
+import { BarChart3, TrendingUp, Receipt, Users, CreditCard } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 
 function ReportsTabsBody() {
@@ -22,15 +21,13 @@ function ReportsTabsBody() {
 
   const canViewFinancialReports = !user || hasPermission("reports", "view_financial_reports")
   const canViewStaffCommission = !user || hasPermission("reports", "view_staff_commission")
-  const canViewPackageReports = !user || hasPermission("packages", "view")
 
   const allowedTabs = useMemo(() => {
     const t: string[] = []
     if (canViewFinancialReports) t.push("sales", "membership", "expense")
     if (canViewStaffCommission) t.push("staff")
-    if (canViewPackageReports) t.push("package")
     return t
-  }, [canViewFinancialReports, canViewStaffCommission, canViewPackageReports])
+  }, [canViewFinancialReports, canViewStaffCommission])
 
   const tabCount = allowedTabs.length
 
@@ -101,12 +98,6 @@ function ReportsTabsBody() {
                 <div className="w-2 h-2 bg-purple-500 rounded-full" />
                 <span>Staff performance analytics</span>
               </div>
-              {canViewPackageReports && (
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 bg-cyan-500 rounded-full" />
-                  <span>Package sales & utilization</span>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -148,15 +139,6 @@ function ReportsTabsBody() {
                 >
                   <Users className="h-4 w-4 mr-2 shrink-0" />
                   Staff Performance
-                </TabsTrigger>
-              )}
-              {canViewPackageReports && (
-                <TabsTrigger
-                  value="package"
-                  className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
-                >
-                  <Package className="h-4 w-4 mr-2 shrink-0" />
-                  Package
                 </TabsTrigger>
               )}
             </TabsList>
@@ -217,17 +199,6 @@ function ReportsTabsBody() {
               </TabsContent>
             )}
 
-            {canViewPackageReports && (
-              <TabsContent value="package" className="space-y-6">
-                {activeTab === "package" && (
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
-                    <CardContent className="pt-6">
-                      <PackageReport embedded />
-                    </CardContent>
-                  </Card>
-                )}
-              </TabsContent>
-            )}
           </Tabs>
         </div>
       </div>

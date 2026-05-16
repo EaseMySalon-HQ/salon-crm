@@ -758,6 +758,64 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
   }
 });
 
+// Toggle platform-level tenant email kill switch (operational emails only)
+router.patch(
+  '/businesses/:id/platform-email',
+  setupMainDatabase,
+  authenticateAdmin,
+  checkAdminPermission('businesses', 'update'),
+  async (req, res) => {
+    try {
+      const { platformEmailDisabled } = req.body;
+      if (typeof platformEmailDisabled !== 'boolean') {
+        return res.status(400).json({
+          success: false,
+          error: 'platformEmailDisabled must be a boolean',
+        });
+      }
+      const business = await req.mainModels.Business.findByIdAndUpdate(
+        req.params.id,
+        {
+          $set: {
+            'settings.platformEmailDisabled': platformEmailDisabled,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true }
+      )
+        .populate('owner', 'firstName lastName email mobile')
+        .lean();
+
+      if (!business) {
+        return res.status(404).json({ success: false, error: 'Business not found' });
+      }
+
+      logAdminActivity({
+        adminId: req.admin,
+        action: 'update',
+        module: 'businesses',
+        details: {
+          businessId: req.params.id,
+          platformEmailDisabled,
+        },
+        ipAddress: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      }).catch((err) => logger.error('Failed to log admin activity:', err));
+
+      res.json({
+        success: true,
+        data: business,
+        message: platformEmailDisabled
+          ? 'Email notifications disabled for this business'
+          : 'Email notifications enabled for this business',
+      });
+    } catch (error) {
+      logger.error('platform-email toggle error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  }
+);
+
 // Update Business
 router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'update'), async (req, res) => {
   try {

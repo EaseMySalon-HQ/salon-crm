@@ -63,7 +63,10 @@ interface ClientsTableProps {
 export function ClientsTable({ clients }: ClientsTableProps) {
   const { toast } = useToast()
   const router = useRouter()
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
+  const canEditSale = hasPermission("sales", "edit")
+  const canEditClient = hasPermission("clients", "edit")
+  const canDeleteClient = hasPermission("clients", "delete")
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [isBillActivityOpen, setIsBillActivityOpen] = useState(false)
@@ -81,6 +84,8 @@ export function ClientsTable({ clients }: ClientsTableProps) {
   const [detailsDrawerForEdit, setDetailsDrawerForEdit] = useState(false)
   const prevClientsLengthRef = useRef<number>(0)
   const prevClientsIdsRef = useRef<string>('')
+  const lastStatsRequestKeyRef = useRef<string>('')
+  const activeStatsRequestKeyRef = useRef<string>('')
 
   // Reset clientsWithStats when clients prop actually changes (filter changed)
   // Use a stable reference to avoid resetting on every render
@@ -95,6 +100,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
     if (prevClientsLengthRef.current !== clientsLength || prevClientsIdsRef.current !== clientsIds) {
       prevClientsLengthRef.current = clientsLength
       prevClientsIdsRef.current = clientsIds
+      lastStatsRequestKeyRef.current = ''
       setClientsWithStats([])
       // Reset pagination to first page when filter changes
       setPagination(prev => ({ ...prev, pageIndex: 0 }))
@@ -105,13 +111,18 @@ export function ClientsTable({ clients }: ClientsTableProps) {
   const fetchClientStats = async (currentPageIndex: number, currentPageSize: number) => {
     if (!user || clients.length === 0) return
 
-    setIsLoadingStats(true)
     const start = currentPageIndex * currentPageSize
     const end = Math.min(start + currentPageSize, clients.length)
     const visible = clients.slice(start, end)
+    const clientIds = visible.map(c => c._id || c.id).filter(Boolean) as string[]
+    const requestKey = clientIds.join('|')
+    if (!requestKey || requestKey === lastStatsRequestKeyRef.current || requestKey === activeStatsRequestKeyRef.current) {
+      return
+    }
 
     try {
-      const clientIds = visible.map(c => c._id || c.id).filter(Boolean) as string[]
+      activeStatsRequestKeyRef.current = requestKey
+      setIsLoadingStats(true)
       const response = await ClientsAPI.getBulkStats(clientIds)
 
       if (response.success && response.data) {
@@ -132,10 +143,14 @@ export function ClientsTable({ clients }: ClientsTableProps) {
           return c
         })
         setClientsWithStats(merged)
+        lastStatsRequestKeyRef.current = requestKey
       }
     } catch (error) {
       console.error('Error fetching bulk client stats:', error)
     } finally {
+      if (activeStatsRequestKeyRef.current === requestKey) {
+        activeStatsRequestKeyRef.current = ''
+      }
       setIsLoadingStats(false)
     }
   }
@@ -480,29 +495,33 @@ export function ClientsTable({ clients }: ClientsTableProps) {
               <DropdownMenuContent align="end" className="w-48">
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  disabled={walkInRow}
-                  title={walkInRow ? "Walk-in cannot be edited" : undefined}
-                  onClick={() => {
-                    if (walkInRow) return
-                    openClientDetailsDrawerForEdit(client)
-                  }}
-                >
-                  <Pencil className="mr-2 h-4 w-4" />
-                  Edit Client
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={walkInRow}
-                  title={walkInRow ? "Walk-in cannot be deleted" : undefined}
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => {
-                    if (walkInRow) return
-                    handleDeleteClient(client)
-                  }}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete Client
-                </DropdownMenuItem>
+                {canEditClient && (
+                  <DropdownMenuItem
+                    disabled={walkInRow}
+                    title={walkInRow ? "Walk-in cannot be edited" : undefined}
+                    onClick={() => {
+                      if (walkInRow) return
+                      openClientDetailsDrawerForEdit(client)
+                    }}
+                  >
+                    <Pencil className="mr-2 h-4 w-4" />
+                    Edit Client
+                  </DropdownMenuItem>
+                )}
+                {canDeleteClient && (
+                  <DropdownMenuItem
+                    disabled={walkInRow}
+                    title={walkInRow ? "Walk-in cannot be deleted" : undefined}
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => {
+                      if (walkInRow) return
+                      handleDeleteClient(client)
+                    }}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Client
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -819,16 +838,18 @@ export function ClientsTable({ clients }: ClientsTableProps) {
                         >
                           {bill.status || 'completed'}
                         </Badge>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => router.push(`/billing/${bill.billNo || bill._id}?mode=edit`)}
-                          title="Edit Bill"
-                          className="h-8"
-                        >
-                          <Edit className="h-3 w-3" />
-                        </Button>
-                        {bill.items && bill.items.some((item: any) => item.type === 'product') && (
+                        {canEditSale && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => router.push(`/billing/${bill.billNo || bill._id}?mode=edit`)}
+                            title="Edit Bill"
+                            className="h-8"
+                          >
+                            <Edit className="h-3 w-3" />
+                          </Button>
+                        )}
+                        {canEditSale && bill.items && bill.items.some((item: any) => item.type === 'product') && (
                           <Button
                             size="sm"
                             variant="outline"

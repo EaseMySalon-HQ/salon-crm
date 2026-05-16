@@ -9,8 +9,8 @@ import { StaffForm } from "@/components/staff/staff-form"
 
 export default function NewStaffPage() {
   return (
-    <ProtectedRoute requiredModule="staff">
-      <ProtectedLayout>
+    <ProtectedRoute requiredModule="staff" requiredFeature="create">
+      <ProtectedLayout requiredModule="staff" requiredFeature="create">
         <div className="flex flex-col space-y-6 min-h-0 flex-1 overflow-y-auto">
               <div className="flex items-center gap-4 shrink-0">
                 <Button asChild variant="outline" size="icon">

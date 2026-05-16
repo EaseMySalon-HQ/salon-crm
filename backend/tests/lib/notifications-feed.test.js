@@ -15,11 +15,10 @@ function mockProductFind(docs) {
   return jest.fn(() => chain);
 }
 
-function mockModels(lowStockDocs, membershipCount, packageCount) {
+function mockModels(lowStockDocs, membershipCount) {
   return {
     Product: { find: mockProductFind(lowStockDocs) },
     MembershipSubscription: { countDocuments: jest.fn(async () => membershipCount) },
-    ClientPackage: { countDocuments: jest.fn(async () => packageCount) },
   };
 }
 
@@ -29,13 +28,13 @@ describe('notifications-feed', () => {
   it('returns no items when all counts are zero', async () => {
     const r = await buildNotificationsFeed({
       branchId,
-      businessModels: mockModels([], 0, 0),
+      businessModels: mockModels([], 0),
     });
     expect(r.success).toBe(true);
     expect(r.data.items).toEqual([]);
   });
 
-  it('adds one row per low-stock product plus membership and package aggregates', async () => {
+  it('adds one row per low-stock product plus membership aggregate', async () => {
     const pid1 = new mongoose.Types.ObjectId();
     const pid2 = new mongoose.Types.ObjectId();
     const lowDocs = [
@@ -44,14 +43,13 @@ describe('notifications-feed', () => {
     ];
     const r = await buildNotificationsFeed({
       branchId,
-      businessModels: mockModels(lowDocs, 1, 3),
+      businessModels: mockModels(lowDocs, 1),
     });
-    expect(r.data.items).toHaveLength(4);
+    expect(r.data.items).toHaveLength(3);
     expect(r.data.items.map((x) => x.type)).toEqual([
       'low_stock',
       'low_stock',
       'membership_expiry',
-      'package_expiry',
     ]);
     expect(r.data.items[0].title).toBe('Alpha Cream');
     expect(r.data.items[0].body).toBe('1 in stock · minimum 5');
@@ -61,6 +59,5 @@ describe('notifications-feed', () => {
     expect(r.data.items[1].title).toBe('Beta Spray');
     expect(r.data.items[1].fingerprint).toBe('stock:0:min:3');
     expect(r.data.items[2].href).toBe('/membership');
-    expect(r.data.items[3].href).toBe('/packages/reports');
   });
 });

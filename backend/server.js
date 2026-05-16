@@ -381,6 +381,8 @@ function getEmailSettingsWithDefaults(emailSettings) {
   return merged;
 }
 
+const { isPlatformEmailDisabled } = require('./lib/business-email-policy');
+
 // Register Routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/settings', require('./routes/admin-settings'));
@@ -396,7 +398,6 @@ app.use('/api/client-wallet', require('./routes/client-wallet'));
 app.use('/api/reward-points', require('./routes/reward-points'));
 app.use('/api/plan', require('./routes/plan-checkout'));
 app.use('/api/campaigns', require('./routes/campaigns'));
-app.use('/api/packages', require('./routes/packages'));
 app.use('/api/purchase-invoices', purchaseInvoicesRoutes);
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/public/feedback', require('./routes/public-feedback'));
@@ -521,6 +522,7 @@ const initializeBusinessSettings = async () => {
 };
 // Import authentication middleware
 const { authenticateToken, requireAdmin, requireManager, requireStaff } = require('./middleware/auth');
+const { requirePermission } = require('./middleware/permissions');
 
 // Granular permission middleware
 const checkPermission = (module, feature) => {
@@ -2127,7 +2129,7 @@ app.get('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requ
 });
 
 // Update user permissions
-app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requireAdmin, async (req, res) => {
+app.put('/api/users/:id/permissions', authenticateToken, setupMainDatabase, requirePermission('staff', 'manage'), async (req, res) => {
   try {
     const { permissions } = req.body;
     const { User } = req.mainModels;
@@ -2409,8 +2411,8 @@ app.get('/api/clients/:id', authenticateToken, setupBusinessDatabase, async (req
 app.post(
   '/api/clients',
   authenticateToken,
-  requireManager,
   setupBusinessDatabase,
+  requirePermission('clients', 'create'),
   validate(createClientBodySchema),
   async (req, res) => {
   try {
@@ -2483,7 +2485,7 @@ app.put(
   '/api/clients/:id',
   authenticateToken,
   setupBusinessDatabase,
-  requireManager,
+  requirePermission('clients', 'edit'),
   validateAll(
     [
       { schema: mongoIdParamSchema, source: 'params' },
@@ -2569,7 +2571,7 @@ app.delete(
   '/api/clients/:id',
   authenticateToken,
   setupBusinessDatabase,
-  requireAdmin,
+  requirePermission('clients', 'delete'),
   validate(mongoIdParamSchema, 'params'),
   async (req, res) => {
   try {
@@ -2795,7 +2797,7 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
 });
 
 // Import clients from Excel/CSV
-app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requirePermission('clients', 'create'), async (req, res) => {
   try {
     const { Client } = req.businessModels;
     const { clients, mapping, updateExisting } = req.body;
@@ -3882,7 +3884,7 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
   }
 });
 
-app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/services', authenticateToken, setupBusinessDatabase, requirePermission('services', 'create'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const body = req.body || {};
@@ -3979,7 +3981,7 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requireManag
   }
 });
 
-app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requirePermission('services', 'edit'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const body = req.body || {};
@@ -4122,7 +4124,7 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requireMa
   }
 });
 
-app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requirePermission('services', 'delete'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const refBundle = await serviceBundle.findBundleReferencingService(
@@ -4159,7 +4161,7 @@ app.delete('/api/services/:id', authenticateToken, setupBusinessDatabase, requir
 });
 
 // Bulk update tax applicable for all services
-app.patch('/api/services/tax-applicable', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.patch('/api/services/tax-applicable', authenticateToken, setupBusinessDatabase, requirePermission('services', 'edit'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const { taxApplicable } = req.body;
@@ -4189,7 +4191,7 @@ app.patch('/api/services/tax-applicable', authenticateToken, setupBusinessDataba
 });
 
 // Bulk delete services
-app.delete('/api/services', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/services', authenticateToken, setupBusinessDatabase, requirePermission('services', 'delete'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     
@@ -4213,7 +4215,7 @@ app.delete('/api/services', authenticateToken, setupBusinessDatabase, requireAdm
 });
 
 // Import services from Excel/CSV
-app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requirePermission('services', 'create'), async (req, res) => {
   try {
     const { Service } = req.businessModels;
     const { services, mapping } = req.body;
@@ -4475,7 +4477,7 @@ app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabas
   }
 });
 
-app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), async (req, res) => {
   try {
     const { MembershipPlan, Service } = req.businessModels;
     const { planName, price, durationInDays, discountPercentage = 0, includedServices = [], isActive = true } = req.body;
@@ -4537,7 +4539,7 @@ app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'edit'), async (req, res) => {
   try {
     const { MembershipPlan, Service } = req.businessModels;
     const planId = req.params.id;
@@ -4602,7 +4604,7 @@ app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, r
   }
 });
 
-app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'edit'), async (req, res) => {
   try {
     const { MembershipPlan } = req.businessModels;
     const planId = req.params.id;
@@ -4627,7 +4629,7 @@ app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDa
 });
 
 // Subscription APIs
-app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), async (req, res) => {
   try {
     const { MembershipPlan, MembershipSubscription, Client } = req.businessModels;
     const { customerId, planId } = req.body;
@@ -4965,7 +4967,7 @@ app.get('/api/products', authenticateToken, setupBusinessDatabase, requireStaff,
   }
 });
 
-app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/products', authenticateToken, setupBusinessDatabase, requirePermission('products', 'create'), async (req, res) => {
   try {
     const { Product, InventoryTransaction } = req.businessModels;
     const { name, category, price, stock, minimumStock, sku, barcode, hsnSacCode, supplier, description, taxCategory, productType, transactionType, cost, offerPrice, volume, volumeUnit, imageUrl } = req.body;
@@ -5046,7 +5048,7 @@ app.post('/api/products', authenticateToken, setupBusinessDatabase, requireManag
   }
 });
 
-app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requirePermission('products', 'edit'), async (req, res) => {
   try {
     
     const { Product, InventoryTransaction } = req.businessModels;
@@ -5173,7 +5175,7 @@ app.put('/api/products/:id', authenticateToken, setupBusinessDatabase, requireMa
 });
 
 // Bulk delete all products
-app.delete('/api/products', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/products', authenticateToken, setupBusinessDatabase, requirePermission('products', 'delete'), async (req, res) => {
   try {
     const { Product } = req.businessModels;
     
@@ -5196,7 +5198,7 @@ app.delete('/api/products', authenticateToken, setupBusinessDatabase, requireAdm
   }
 });
 
-app.delete('/api/products/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/products/:id', authenticateToken, setupBusinessDatabase, requirePermission('products', 'delete'), async (req, res) => {
   try {
     const { Product } = req.businessModels;
     const deletedProduct = await Product.findByIdAndDelete(req.params.id);
@@ -5222,7 +5224,7 @@ app.delete('/api/products/:id', authenticateToken, setupBusinessDatabase, requir
 });
 
 // Import products from Excel/CSV data
-app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.post('/api/products/import', authenticateToken, setupBusinessDatabase, requirePermission('products', 'create'), async (req, res) => {
   try {
     const { Product, InventoryTransaction } = req.businessModels;
     const { products, mapping } = req.body;
@@ -5799,7 +5801,7 @@ app.post(
 );
 
 // Create a new supplier
-app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requirePermission('products', 'create'), async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
     const { name, contactPerson, phone, whatsapp, email, address, gstNumber, paymentTerms, bankDetails, categories, notes } = req.body;
@@ -5858,7 +5860,7 @@ app.post('/api/suppliers', authenticateToken, setupBusinessDatabase, requireStaf
 });
 
 // Update a supplier
-app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requirePermission('products', 'edit'), async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
     const { name, contactPerson, phone, whatsapp, email, address, gstNumber, paymentTerms, bankDetails, categories, notes, isActive } = req.body;
@@ -5928,7 +5930,7 @@ app.put('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireS
 });
 
 // Delete a supplier
-app.delete('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/suppliers/:id', authenticateToken, setupBusinessDatabase, requirePermission('products', 'delete'), async (req, res) => {
   try {
     const { Supplier } = req.businessModels;
     const deletedSupplier = await Supplier.findByIdAndDelete(req.params.id);
@@ -7058,7 +7060,7 @@ app.get('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
 });
 
 // Create a new category
-app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/categories', authenticateToken, setupBusinessDatabase, requirePermission('services', 'create'), async (req, res) => {
   try {
     const { Category } = req.businessModels;
     const { name, description, type: typeParam } = req.body;
@@ -7117,7 +7119,7 @@ app.post('/api/categories', authenticateToken, setupBusinessDatabase, requireSta
 });
 
 // Update a category
-app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, requirePermission('services', 'edit'), async (req, res) => {
   try {
     const { Category } = req.businessModels;
     const { name, description, isActive } = req.body;
@@ -7176,7 +7178,7 @@ app.put('/api/categories/:id', authenticateToken, setupBusinessDatabase, require
 });
 
 // Delete a category
-app.delete('/api/categories/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/categories/:id', authenticateToken, setupBusinessDatabase, requirePermission('services', 'delete'), async (req, res) => {
   try {
     const { Category } = req.businessModels;
     const deletedCategory = await Category.findByIdAndDelete(req.params.id);
@@ -7202,7 +7204,7 @@ app.delete('/api/categories/:id', authenticateToken, setupBusinessDatabase, requ
 });
 
 // Update product stock
-app.patch('/api/products/:id/stock', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.patch('/api/products/:id/stock', authenticateToken, setupBusinessDatabase, requirePermission('products', 'edit'), async (req, res) => {
   try {
     const { Product } = req.businessModels;
     const { id } = req.params;
@@ -7430,7 +7432,7 @@ app.post(
   '/api/staff',
   authenticateToken,
   setupBusinessDatabase,
-  requireAdmin,
+  requirePermission('staff', 'create'),
   validate(createStaffBodySchema),
   async (req, res) => {
   try {
@@ -7528,6 +7530,7 @@ app.put(
   '/api/staff/:id',
   authenticateToken,
   setupBusinessDatabase,
+  requirePermission('staff', 'edit'),
   validateAll(
     [
       { schema: mongoIdParamSchema, source: 'params' },
@@ -7789,7 +7792,7 @@ app.delete(
   '/api/staff/:id',
   authenticateToken,
   setupBusinessDatabase,
-  requireAdmin,
+  requirePermission('staff', 'delete'),
   validate(mongoIdParamSchema, 'params'),
   async (req, res) => {
   try {
@@ -7847,7 +7850,7 @@ app.post(
   '/api/staff/:id/change-password',
   authenticateToken,
   setupBusinessDatabase,
-  requireManager,
+  requirePermission('staff', 'edit'),
   validateAll(
     [
       { schema: mongoIdParamSchema, source: 'params' },
@@ -9054,7 +9057,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
   }
 });
 
-app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requirePermission('appointments', 'create'), async (req, res) => {
   try {
     const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
     const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel } = req.body;
@@ -9402,11 +9405,12 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         
         if (!business) {
           logger.error('❌ Business not found for branchId:', req.user.branchId);
+        } else if (isPlatformEmailDisabled(business)) {
+          logger.info('📧 Skipping appointment emails — platform policy (tenant email disabled)');
         } else {
           logger.debug('✅ Business found:', business.name);
-        }
-        
-        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+
+        const rawEmailSettings = business.settings?.emailNotificationSettings;
         
         // Apply defaults to email settings (similar to WhatsApp)
         const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
@@ -9753,6 +9757,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, async (r
         } else {
           logger.debug('⚠️ Staff appointment notifications are disabled in business settings');
         }
+        }
       }
       }
     } catch (emailError) {
@@ -10004,7 +10009,12 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
         
         const { Staff, Client } = req.businessModels;
         const business = await Business.findById(req.user.branchId);
-        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+        if (!business) {
+          logger.error('📧 Business not found for receipt email, branchId:', req.user.branchId);
+        } else if (isPlatformEmailDisabled(business)) {
+          logger.info('📧 Skipping receipt emails — platform policy');
+        } else {
+        const rawEmailSettings = business.settings?.emailNotificationSettings;
         
         // Apply defaults to email settings (similar to WhatsApp)
         const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
@@ -10136,6 +10146,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
               }
             }
           }
+        }
         }
       }
       }
@@ -10643,7 +10654,7 @@ app.post('/api/appointments/finalize-for-billing', authenticateToken, setupBusin
 });
 
 // Update appointment
-app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requirePermission('appointments', 'edit'), async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = { ...req.body };
@@ -10675,11 +10686,46 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       ((updateData.date && updateData.date !== appointment.date) ||
        (updateData.time && updateData.time !== appointment.time));
 
+    // Detect primary-staff reassignment (e.g. calendar drag-drop to another column). When this
+    // happens — even at the same wall-clock time — we still need to recompute startAt/endAt for
+    // the new staff, re-run conflict detection on the destination, and refresh slotKey (the
+    // pre('save') hook does not run on findOneAndUpdate, so a stale key would block future writes
+    // for the source staff and let the destination double-book).
+    const currentPrimaryStaffId = (() => {
+      const sid = appointment.staffId;
+      if (sid) {
+        const raw = typeof sid === 'object' && sid?._id ? sid._id : sid;
+        return String(raw);
+      }
+      if (Array.isArray(appointment.staffAssignments) && appointment.staffAssignments[0]?.staffId) {
+        const asid = appointment.staffAssignments[0].staffId;
+        const raw = typeof asid === 'object' && asid?._id ? asid._id : asid;
+        return String(raw);
+      }
+      return null;
+    })();
+    const incomingPrimaryStaffId = (() => {
+      if (updateData.staffId) return String(updateData.staffId);
+      if (Array.isArray(updateData.staffAssignments) && updateData.staffAssignments[0]?.staffId) {
+        return String(updateData.staffAssignments[0].staffId);
+      }
+      return null;
+    })();
+    const staffIsChanging = !!(
+      incomingPrimaryStaffId &&
+      (!currentPrimaryStaffId || incomingPrimaryStaffId !== currentPrimaryStaffId)
+    );
+
     // When the time changes for a single appointment doc (per-service edit), refetch duration
     // from the Service catalog as source of truth, recompute startAt/endAt, and pre-check staff conflict.
     const timeIsChanging = updateData.time && updateData.time !== appointment.time;
     const dateIsChanging = updateData.date && updateData.date !== appointment.date;
-    if ((timeIsChanging || dateIsChanging) && updateData.status !== 'cancelled') {
+    let scheduleStartAt = null;
+    let scheduleEndAt = null;
+    let scheduleDurationMinutes = appointment.duration || 60;
+    let scheduleStartMinutes = null;
+    let scheduleTimeString = null;
+    if ((timeIsChanging || dateIsChanging || staffIsChanging) && updateData.status !== 'cancelled') {
       const newTime = updateData.time || appointment.time;
       const newDate = updateData.date || appointment.date;
       if (!/^\d{1,2}:\d{2}/.test(String(newTime || ''))) {
@@ -10703,7 +10749,11 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           });
         }
         durationForWindow = catalogDuration;
-        updateData.duration = catalogDuration;
+        // Only force-write duration when the schedule actually changes; staff-only moves keep
+        // the existing sequential total for multi-service rows.
+        if (timeIsChanging || dateIsChanging) {
+          updateData.duration = catalogDuration;
+        }
       }
 
       const dayStart = parseDateIST(newDate);
@@ -10712,21 +10762,15 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
       const endAt = new Date(startAt.getTime() + durationForWindow * 60 * 1000);
       updateData.startAt = startAt;
       updateData.endAt = endAt;
+      scheduleStartAt = startAt;
+      scheduleEndAt = endAt;
+      scheduleDurationMinutes = durationForWindow;
+      scheduleStartMinutes = startMinutes;
+      scheduleTimeString = newTime;
 
-      // Conflict detection (skip if newly cancelled).
-      const primaryStaffId = (() => {
-        if (updateData.staffId) return String(updateData.staffId);
-        if (Array.isArray(updateData.staffAssignments) && updateData.staffAssignments[0]?.staffId) {
-          return String(updateData.staffAssignments[0].staffId);
-        }
-        if (appointment.staffId) {
-          return String(appointment.staffId._id || appointment.staffId);
-        }
-        if (Array.isArray(appointment.staffAssignments) && appointment.staffAssignments[0]?.staffId) {
-          return String(appointment.staffAssignments[0].staffId);
-        }
-        return null;
-      })();
+      // Conflict detection runs against the destination staff (drag-drop to a different stylist
+      // must verify that stylist is free at this window, even if the wall-clock time is unchanged).
+      const primaryStaffId = incomingPrimaryStaffId || currentPrimaryStaffId;
       if (primaryStaffId && !allowParallelBooking) {
         const { detectStaffConflict } = require('./services/scheduling/conflict-detector');
         const result = await detectStaffConflict(
@@ -10755,6 +10799,16 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
             error: `Staff is already booked from ${formatTimeForError(newTime)} to ${formatTimeForError(endStr)}`
           });
         }
+      }
+
+      // Refresh slotKey for the new (staff, window) combination. findByIdAndUpdate does not
+      // trigger pre('save'), so without this the unique-slot index would still point at the
+      // old staff and silently allow double-booking on the destination column.
+      const activeForSlot = ['scheduled', 'confirmed', 'arrived', 'service_started'];
+      const finalStatus = updateData.status || appointment.status;
+      if (primaryStaffId && activeForSlot.includes(finalStatus)) {
+        const base = `${String(req.user.branchId)}:${String(primaryStaffId)}:${startAt.toISOString()}:${endAt.toISOString()}`;
+        updateData.slotKey = allowParallelBooking ? `${base}:${require('crypto').randomUUID()}` : base;
       }
     }
 
@@ -10816,9 +10870,10 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
           
           if (!business) {
             logger.error('❌ Business not found for branchId:', req.user.branchId);
-          }
-          
-          const emailSettings = business?.settings?.emailNotificationSettings;
+          } else if (isPlatformEmailDisabled(business)) {
+            logger.info('📧 Skipping cancellation emails — platform policy');
+          } else {
+          const emailSettings = business.settings?.emailNotificationSettings;
           // Default to enabled unless explicitly disabled AND recipient list exists (meaning it was configured)
           const hasRecipientList = emailSettings?.appointmentNotifications?.recipientStaffIds?.length > 0;
           const explicitlyDisabledCancellations = emailSettings?.appointmentNotifications?.cancellations === false;
@@ -11037,6 +11092,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
             }
           }
         }
+        }
       } catch (emailError) {
         logger.error('Error sending cancellation emails:', emailError);
         // Don't fail the update if email fails
@@ -11078,7 +11134,7 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async
 });
 
 // Delete appointment
-app.delete('/api/appointments/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.delete('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requirePermission('appointments', 'delete'), async (req, res) => {
   try {
     const { id } = req.params;
     const { Appointment } = req.businessModels;
@@ -11207,7 +11263,13 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
 // reflected immediately.
 app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    const cached = getDashboardCache(req.user.branchId);
+    const chartRangeRaw = typeof req.query.chartRange === 'string' ? req.query.chartRange.trim() : '';
+    const chartRange =
+      chartRangeRaw === 'last7days' || chartRangeRaw === 'last30days' ? chartRangeRaw : 'year';
+    const metricsRangeRaw = typeof req.query.metricsRange === 'string' ? req.query.metricsRange.trim() : '';
+    const metricsRange = metricsRangeRaw === 'last7days' ? 'last7days' : 'today';
+    const cacheVariant = `chart:${chartRange}|metrics:${metricsRange}`;
+    const cached = getDashboardCache(req.user.branchId, cacheVariant);
     if (cached) {
       markCache(res, 'HIT');
       return res.json(cached);
@@ -11216,8 +11278,10 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
       branchId: req.user.branchId,
       businessModels: req.businessModels,
       user: req.user,
+      chartRange,
+      metricsRange,
     });
-    setDashboardCache(req.user.branchId, payload);
+    setDashboardCache(req.user.branchId, payload, undefined, cacheVariant);
     markCache(res, 'MISS');
     res.json(payload);
   } catch (error) {
@@ -11606,7 +11670,7 @@ app.get('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, as
   }
 });
 
-app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermission('sales', 'create'), async (req, res) => {
   try {
     if (process.env.DEBUG_SALES) {
       logger.debug('🔍 Sales POST request received');
@@ -12084,7 +12148,13 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
         const Business = mainConnection.model('Business', require('./models/Business').schema);
         
         const business = await Business.findById(req.user.branchId);
-        const rawEmailSettings = business?.settings?.emailNotificationSettings;
+        if (!business) {
+          emailStatus.error = 'Business not found';
+        } else if (isPlatformEmailDisabled(business)) {
+          logger.info('📧 Skipping sale receipt email — platform policy');
+          emailStatus.error = 'Email disabled by platform for this business';
+        } else {
+        const rawEmailSettings = business.settings?.emailNotificationSettings;
         
         // Apply defaults to email settings (similar to WhatsApp)
         const emailSettings = getEmailSettingsWithDefaults(rawEmailSettings);
@@ -12202,6 +12272,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requireStaff, a
           } else {
             emailStatus.error = !sendToClients ? 'Send to clients disabled' : 'No customer email';
           }
+        }
         }
       }
     } catch (emailError) {
@@ -12569,7 +12640,7 @@ app.get('/api/sales/:id', authenticateToken, setupBusinessDatabase, async (req, 
   }
 });
 
-app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireManager, async (req, res) => {
+app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermission('sales', 'edit'), async (req, res) => {
     const { Sale } = req.businessModels;
   
   // For standalone MongoDB, transactions are not supported
@@ -14367,7 +14438,7 @@ app.get("/api/settings/business", authenticateToken, setupBusinessDatabase, asyn
   }
 });
 
-app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, requirePermission('general_settings', 'edit'), async (req, res) => {
   try {
     logger.debug('📝 Business settings update request received for user:', req.user?.email, 'branchId:', req.user?.branchId);
     logger.debug('📊 Request body size:', JSON.stringify(req.body).length, 'characters');
@@ -14741,7 +14812,7 @@ app.get("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
   }
 });
 
-app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, requirePermission('pos_settings', 'edit'), async (req, res) => {
   try {
     const { invoicePrefix, autoResetReceipt } = req.body;
 
@@ -14792,7 +14863,7 @@ app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, async (re
   }
 });
 
-app.post("/api/settings/pos/reset-sequence", authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.post("/api/settings/pos/reset-sequence", authenticateToken, setupBusinessDatabase, requirePermission('pos_settings', 'manage'), async (req, res) => {
   try {
     const { BusinessSettings } = req.businessModels;
     let settings = await BusinessSettings.findOne();
@@ -14967,7 +15038,7 @@ app.get("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
   }
 });
 
-app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, requirePermission('payment_settings', 'edit'), async (req, res) => {
   try {
     const { 
       currency, 
@@ -15058,7 +15129,7 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, async
   }
 });
 
-app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requireAdmin, async (req, res) => {
+app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermission('sales', 'delete'), async (req, res) => {
   // For standalone MongoDB, transactions are not supported
   // We'll proceed without transactions - operations will still work
   // All operations will execute individually without atomic rollback
@@ -15574,7 +15645,7 @@ app.get('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
   }
 });
 
-app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'create'), async (req, res) => {
   try {
     const { CashRegistry, Sale, Expense } = req.businessModels;
     const {
@@ -15747,7 +15818,7 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, async (
   }
 });
 
-app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'edit'), async (req, res) => {
   try {
     const {
       denominations,
@@ -15833,7 +15904,7 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
   }
 });
 
-app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'edit'), async (req, res) => {
   try {
     const { CashRegistry } = req.businessModels;
     const { type, reason, note } = req.body;
@@ -15872,7 +15943,7 @@ app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBu
   }
 });
 
-app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'manage'), async (req, res) => {
   try {
     const { CashRegistry, Sale, Expense } = req.businessModels;
     const { verificationNotes, balanceDifferenceReason, balanceDifferenceNote, onlineCashDifferenceReason, onlineCashDifferenceNote } = req.body;
@@ -16001,7 +16072,7 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
   }
 });
 
-app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, async (req, res) => {
+app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'delete'), async (req, res) => {
   try {
     const { CashRegistry } = req.businessModels;
     const cashRegistry = await CashRegistry.findById(req.params.id);
@@ -16185,6 +16256,21 @@ app.get('/api/inventory-transactions', authenticateToken, setupBusinessDatabase,
 
 // ==================== Report Export Endpoints ====================
 
+function respondReportExportError(res, error, fallbackMessage, logLabel) {
+  if (error && error.code === 'PLATFORM_EMAIL_DISABLED') {
+    return res.status(403).json({
+      success: false,
+      error: error.message || 'Operational emails are disabled for this business by the platform.',
+      code: 'PLATFORM_EMAIL_DISABLED',
+    });
+  }
+  logger.error(logLabel, error);
+  return res.status(500).json({
+    success: false,
+    error: error?.message || fallbackMessage,
+  });
+}
+
 // Export products report (emailed to admin)
 app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
@@ -16202,11 +16288,12 @@ app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabas
       message: result.message || 'Products report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting products report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export products report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export products report',
+      'Error exporting products report:',
+    );
   }
 });
 
@@ -16227,11 +16314,12 @@ app.post('/api/reports/export/services', authenticateToken, setupBusinessDatabas
       message: result.message || 'Services report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting services catalog report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export services report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export services report',
+      'Error exporting services catalog report:',
+    );
   }
 });
 
@@ -16252,11 +16340,12 @@ app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, 
       message: result.message || 'Sales report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting sales report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export sales report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export sales report',
+      'Error exporting sales report:',
+    );
   }
 });
 
@@ -16275,11 +16364,12 @@ app.post('/api/reports/export/summary', authenticateToken, setupBusinessDatabase
       message: result.message || 'Summary report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting summary report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export summary report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export summary report',
+      'Error exporting summary report:',
+    );
   }
 });
 
@@ -16299,11 +16389,12 @@ app.post('/api/reports/export/staff-performance', authenticateToken, setupBusine
       message: result.message || 'Staff performance report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting staff performance report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export staff performance report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export staff performance report',
+      'Error exporting staff performance report:',
+    );
   }
 });
 
@@ -16322,11 +16413,12 @@ app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDat
       message: result.message || 'Service list report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting service list report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export service list report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export service list report',
+      'Error exporting service list report:',
+    );
   }
 });
 
@@ -16345,11 +16437,12 @@ app.post('/api/reports/export/product-list', authenticateToken, setupBusinessDat
       message: result.message || 'Product list report has been generated and sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting product list report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export product list report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export product list report',
+      'Error exporting product list report:',
+    );
   }
 });
 
@@ -16563,11 +16656,12 @@ app.post('/api/reports/export/unpaid-part-paid', authenticateToken, setupBusines
       message: result.message || 'Unpaid/Part-Paid report has been sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting unpaid/part-paid report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export unpaid/part-paid report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export unpaid/part-paid report',
+      'Error exporting unpaid/part-paid report:',
+    );
   }
 });
 
@@ -16586,11 +16680,12 @@ app.post('/api/reports/export/deleted-invoices', authenticateToken, setupBusines
       message: result.message || 'Deleted invoice report has been sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting deleted invoice report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export deleted invoice report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export deleted invoice report',
+      'Error exporting deleted invoice report:',
+    );
   }
 });
 
@@ -16609,11 +16704,12 @@ app.post('/api/reports/export/appointment-list', authenticateToken, setupBusines
       message: result.message || 'Appointment list report has been sent to admin email(s)'
     });
   } catch (error) {
-    logger.error('Error exporting appointment list report:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to export appointment list report'
-    });
+    respondReportExportError(
+      res,
+      error,
+      'Failed to export appointment list report',
+      'Error exporting appointment list report:',
+    );
   }
 });
 
@@ -16789,7 +16885,16 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
         const mainConnection = await databaseManager.getMainConnection();
         const Business = mainConnection.model('Business', require('./models/Business').schema);
         const business = await Business.findById(req.user.branchId);
-        const emailSettings = business?.settings?.emailNotificationSettings;
+        if (!business) {
+          return res.status(400).json({ success: false, error: 'Business not found' });
+        }
+        if (isPlatformEmailDisabled(business)) {
+          return res.status(403).json({
+            success: false,
+            error: 'Email notifications are disabled for this business by the platform administrator.'
+          });
+        }
+        const emailSettings = business.settings?.emailNotificationSettings;
         
         // Generate JSON file from export data
         const exportFileName = `export-${user.name || user.email || userId}-${new Date().toISOString().split('T')[0]}.json`;
@@ -17136,6 +17241,17 @@ app.use('*', (req, res) => {
 // Start server
 
 const server = app.listen(PORT, '0.0.0.0', async () => {
+  // Stamp default-on email policy for existing businesses (one-time per DB)
+  try {
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+    const { migrateBusinessEmailDefaultsV1 } = require('./lib/migrate-business-email-defaults-v1');
+    await migrateBusinessEmailDefaultsV1(Business);
+  } catch (migrateErr) {
+    logger.error('Business email defaults migration failed:', migrateErr);
+  }
+
   logger.debug(`🚀 EaseMySalon Backend running on port ${PORT}`);
   logger.debug(`📊 Health check: http://localhost:${PORT}/health / http://localhost:${PORT}/api/health (also /api/v1/health)`);
   logger.debug(`🔐 API base: http://localhost:${PORT}/api — versioned alias: http://localhost:${PORT}/api/v1`);
@@ -17150,10 +17266,6 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   // Setup email scheduler jobs
   const { setupEmailScheduler } = require('./jobs/email-scheduler');
   setupEmailScheduler();
-
-  // Setup package expiry cron job (daily midnight UTC)
-  const { startExpiryJob } = require('./services/package-expiry-job');
-  startExpiryJob();
 
   const { startClientWalletExpiryJob } = require('./jobs/client-wallet-expiry-job');
   startClientWalletExpiryJob();
