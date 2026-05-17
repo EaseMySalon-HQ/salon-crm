@@ -12106,6 +12106,40 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
     }
 
     logger.debug('✅ Sale created successfully:', sale._id);
+
+    const createdSale = savedSale || sale;
+    try {
+      await rewardPointsSvcCreate.processSaleCompletionLoyalty({
+        savedSale: createdSale,
+        branchId: req.user.branchId,
+        businessModels: req.businessModels,
+        userId: req.user._id,
+      });
+    } catch (rpErr) {
+      logger.error('[reward-points] process sale completion failed', rpErr);
+    }
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.CREATE_INVOICE,
+        entity: 'sale',
+        entityId: createdSale._id,
+        summary: `Invoice ${createdSale.billNo || createdSale._id} created`,
+      },
+      req
+    );
+
+    // Respond immediately after save — notifications run in background
+    res.status(201).json({
+      success: true,
+      data: savedSale || sale,
+    });
+
+    // Fire-and-forget: send email/WhatsApp/SMS notifications without blocking the response
+    setImmediate(async () => {
     logger.debug('📧 Sale customer email check:', {
       customerEmail: sale.customerEmail,
       hasEmail: !!sale.customerEmail,
@@ -12113,7 +12147,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
       billNo: sale.billNo
     });
 
-    // Track email sending status for response
+    // Track email sending status for background logging
     let emailStatus = {
       attempted: false,
       sent: false,
@@ -12574,38 +12608,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
     }
     
     logger.debug('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
-
-    const createdSale = savedSale || sale;
-    try {
-      await rewardPointsSvcCreate.processSaleCompletionLoyalty({
-        savedSale: createdSale,
-        branchId: req.user.branchId,
-        businessModels: req.businessModels,
-        userId: req.user._id,
-      });
-    } catch (rpErr) {
-      logger.error('[reward-points] process sale completion failed', rpErr);
-    }
-
-    scheduleActivityLog(
-      {
-        businessId: req.user.branchId,
-        actorType: tenantActorTypeFromRole(req.user.role),
-        actorId: req.user._id,
-        action: ACTIVITY_ACTIONS.CREATE_INVOICE,
-        entity: 'sale',
-        entityId: createdSale._id,
-        summary: `Invoice ${createdSale.billNo || createdSale._id} created`,
-      },
-      req
-    );
-
-    res.status(201).json({ 
-      success: true, 
-      data: savedSale || sale,
-      emailStatus: emailStatus, // Include email sending status in response
-      whatsappStatus: whatsappStatus // Include WhatsApp sending status in response
-    });
+    }); // end setImmediate (fire-and-forget notifications)
   } catch (err) {
     logger.error('❌ Sales creation error:', err);
     logger.error('❌ Error details:', {
