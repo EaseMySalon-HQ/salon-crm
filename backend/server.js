@@ -9374,6 +9374,17 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
       }
     }
 
+    // Respond immediately — notifications are sent in the background
+    res.status(201).json({
+      success: true,
+      data: createdAppointments,
+      message: 'Appointments created successfully'
+    });
+
+    // Fire-and-forget: send all notifications after the response has been flushed.
+    // Errors here must never propagate to the request handler.
+    setImmediate(async () => {
+
     // Send email notifications if enabled
     try {
       const emailService = require('./services/email-service');
@@ -9860,11 +9871,8 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
       logger.error('Error sending appointment confirmation SMS:', smsErr);
     }
 
-    res.status(201).json({
-      success: true,
-      data: createdAppointments,
-      message: 'Appointments created successfully'
-    });
+    }); // end setImmediate (background notifications)
+
   } catch (error) {
     if (error.code === 11000 || error.codeName === 'DuplicateKey' || /duplicate key/i.test(String(error.message || ''))) {
       logger.warn('Appointment slot conflict (duplicate slotKey):', error.message);
@@ -12098,6 +12106,40 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
     }
 
     logger.debug('✅ Sale created successfully:', sale._id);
+
+    const createdSale = savedSale || sale;
+    try {
+      await rewardPointsSvcCreate.processSaleCompletionLoyalty({
+        savedSale: createdSale,
+        branchId: req.user.branchId,
+        businessModels: req.businessModels,
+        userId: req.user._id,
+      });
+    } catch (rpErr) {
+      logger.error('[reward-points] process sale completion failed', rpErr);
+    }
+
+    scheduleActivityLog(
+      {
+        businessId: req.user.branchId,
+        actorType: tenantActorTypeFromRole(req.user.role),
+        actorId: req.user._id,
+        action: ACTIVITY_ACTIONS.CREATE_INVOICE,
+        entity: 'sale',
+        entityId: createdSale._id,
+        summary: `Invoice ${createdSale.billNo || createdSale._id} created`,
+      },
+      req
+    );
+
+    // Respond immediately after save — notifications run in background
+    res.status(201).json({
+      success: true,
+      data: savedSale || sale,
+    });
+
+    // Fire-and-forget: send email/WhatsApp/SMS notifications without blocking the response
+    setImmediate(async () => {
     logger.debug('📧 Sale customer email check:', {
       customerEmail: sale.customerEmail,
       hasEmail: !!sale.customerEmail,
@@ -12105,7 +12147,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
       billNo: sale.billNo
     });
 
-    // Track email sending status for response
+    // Track email sending status for background logging
     let emailStatus = {
       attempted: false,
       sent: false,
@@ -12566,38 +12608,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
     }
     
     logger.debug('📱 [WhatsApp] Final WhatsApp status:', whatsappStatus);
-
-    const createdSale = savedSale || sale;
-    try {
-      await rewardPointsSvcCreate.processSaleCompletionLoyalty({
-        savedSale: createdSale,
-        branchId: req.user.branchId,
-        businessModels: req.businessModels,
-        userId: req.user._id,
-      });
-    } catch (rpErr) {
-      logger.error('[reward-points] process sale completion failed', rpErr);
-    }
-
-    scheduleActivityLog(
-      {
-        businessId: req.user.branchId,
-        actorType: tenantActorTypeFromRole(req.user.role),
-        actorId: req.user._id,
-        action: ACTIVITY_ACTIONS.CREATE_INVOICE,
-        entity: 'sale',
-        entityId: createdSale._id,
-        summary: `Invoice ${createdSale.billNo || createdSale._id} created`,
-      },
-      req
-    );
-
-    res.status(201).json({ 
-      success: true, 
-      data: savedSale || sale,
-      emailStatus: emailStatus, // Include email sending status in response
-      whatsappStatus: whatsappStatus // Include WhatsApp sending status in response
-    });
+    }); // end setImmediate (fire-and-forget notifications)
   } catch (err) {
     logger.error('❌ Sales creation error:', err);
     logger.error('❌ Error details:', {
