@@ -65,7 +65,10 @@ function getActiveMembershipPlanName(data: { subscription?: any; plan?: any } | 
   const plan = data.plan ?? sub.planId
   const isActive = sub.status === "ACTIVE"
   const isExpired =
-    sub.status === "EXPIRED" || (sub.expiryDate && new Date(sub.expiryDate) < new Date())
+    sub.status === "EXPIRED" ||
+    (sub.expiryDate != null &&
+      String(sub.expiryDate) !== "" &&
+      new Date(sub.expiryDate) < new Date())
   if (!isActive || isExpired) return "NA"
   if (plan && typeof plan === "object") {
     const name = (plan.planName || plan.name || "").trim()
@@ -517,7 +520,17 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
             </Button>
           </div>
         ) : null}
-        {membershipData?.subscription?.expiryDate && (
+        {membershipData?.subscription?.status === "ACTIVE" && !membershipData?.subscription?.expiryDate ? (
+          <span
+            className={cn(
+              "absolute right-4 sm:right-5 lg:right-6 text-xs text-slate-500",
+              onViewProfile ? "top-12 sm:top-14 lg:top-16" : "top-4 sm:top-5 lg:top-6"
+            )}
+          >
+            Membership: no end date
+          </span>
+        ) : null}
+        {membershipData?.subscription?.expiryDate ? (
           <span
             className={cn(
               "absolute right-4 sm:right-5 lg:right-6 text-xs text-slate-500",
@@ -526,7 +539,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
           >
             Valid till {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
           </span>
-        )}
+        ) : null}
         {/* Profile photo (avatar / initial) */}
         <div className="flex justify-center shrink-0">
           <Avatar
@@ -795,11 +808,14 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
                     />
                   </div>
                 </div>
-                {membershipData?.subscription?.expiryDate && (
+                {membershipData?.subscription?.status === "ACTIVE" && !membershipData?.subscription?.expiryDate ? (
+                  <p className="text-[10px] sm:text-xs text-slate-500 mt-1">No end date</p>
+                ) : null}
+                {membershipData?.subscription?.expiryDate ? (
                   <p className="text-[10px] sm:text-xs text-slate-500 mt-1">
                     Valid till {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
                   </p>
-                )}
+                ) : null}
                 {membershipCardOpen && (
                   <div
                     className={cn(

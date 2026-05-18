@@ -23,7 +23,8 @@ const membershipSubscriptionSchema = new mongoose.Schema({
   },
   expiryDate: {
     type: Date,
-    required: true
+    required: false,
+    default: null
   },
   status: {
     type: String,
