@@ -996,6 +996,100 @@ async function creditChangeOpenWalletFromPos({
 }
 
 /**
+ * Manager: client has no wallet — open a non-expiring balance wallet (optional opening credit).
+ * No prepaid plan or sale required (production backfill / manual setup).
+ */
+async function openBalanceWalletForClient({
+  branchId,
+  businessModels,
+  staffUser,
+  clientId,
+  amount,
+  reason,
+}) {
+  const amt = Math.round(Number(amount) * 100) / 100;
+  if (!Number.isFinite(amt) || amt < 0) {
+    const err = new Error('Amount must be zero or positive');
+    err.status = 400;
+    throw err;
+  }
+  const { ClientWallet, ClientWalletTransaction } = businessModels;
+
+  if (!mongoose.Types.ObjectId.isValid(String(clientId))) {
+    const err = new Error('Invalid client id');
+    err.status = 400;
+    throw err;
+  }
+
+  const clientOid = new mongoose.Types.ObjectId(String(clientId));
+  const existingCount = await ClientWallet.countDocuments({
+    branchId,
+    clientId: clientOid,
+    status: { $nin: ['cancelled'] },
+  });
+  if (existingCount > 0) {
+    const err = new Error(
+      'This client already has a wallet — pick it in Manual adjustment below (no need for wallet ID).'
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const far = NON_EXPIRING_WALLET_DATE();
+  const purchasedAt = new Date();
+  const reasonTrim = reason != null ? String(reason).trim() : '';
+
+  const planSnapshot = {
+    planName: 'Bill change credit',
+    payAmount: 0,
+    creditAmount: amt,
+    validityDays: null,
+    allowCouponStacking: false,
+    openedFromBillChangeCredit: true,
+    billChangeCashCreditNonExpiring: true,
+    openedManuallyByStaff: true,
+  };
+
+  const wallet = await ClientWallet.create({
+    branchId,
+    clientId: clientOid,
+    planId: null,
+    planSnapshot,
+    paidAmount: amt,
+    creditedBalance: amt,
+    remainingBalance: amt,
+    purchasedAt,
+    expiryDate: far,
+    gracePeriodDays: 0,
+    effectiveExpiryDate: far,
+    nonExpiring: true,
+    status: amt > 0.009 ? 'active' : 'exhausted',
+    issuedBranchId: branchId,
+    saleId: null,
+    notifiedDays: [],
+  });
+
+  if (amt > 0.009) {
+    const txDesc = reasonTrim || `Wallet opened — ₹${amt.toLocaleString('en-IN')} opening credit`;
+    const wt = await ClientWalletTransaction.create({
+      branchId,
+      walletId: wallet._id,
+      clientId: clientOid,
+      type: 'credit',
+      amount: amt,
+      balanceAfter: amt,
+      description: txDesc,
+      performedBy: staffUser?._id || null,
+      saleId: null,
+      serviceNames: [],
+    });
+    queueWalletTxnWhatsApp(branchId, businessModels, wallet, wt);
+  }
+
+  return { wallet };
+}
+
+/**
  * When an invoice is deleted, restore prepaid wallet amounts that were debited at checkout for that bill.
  * Groups multiple debit rows per wallet, writes one refund_credit ledger row per wallet.
  */
@@ -1182,6 +1276,7 @@ module.exports = {
   manualAdjust,
   creditChangeReturnFromPos,
   creditChangeOpenWalletFromPos,
+  openBalanceWalletForClient,
   reverseWalletRedemptionsForDeletedSale,
   getLiabilitySummary,
   DEFAULT_SETTINGS,

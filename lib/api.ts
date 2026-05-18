@@ -2861,6 +2861,16 @@ export class ClientWalletAPI {
     return response.data
   }
 
+  /** Manager: client has no wallet — open balance wallet with optional opening credit (no plan required) */
+  static async openBalanceWallet(body: {
+    clientId: string
+    amount?: number
+    reason?: string
+  }): Promise<ApiResponse<{ wallet?: any }>> {
+    const response = await apiClient.post("/client-wallet/open-balance-wallet", body)
+    return response.data
+  }
+
   /** Staff: when customer overpaid and there is no cash change, credit excess to prepaid wallet */
   static async creditChange(body: {
     walletId: string
