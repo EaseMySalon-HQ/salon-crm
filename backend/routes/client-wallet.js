@@ -278,7 +278,7 @@ router.post('/credit-change', authStaff, async (req, res) => {
   }
 });
 
-/** Staff: no wallet yet — open one from an active prepaid plan template and credit bill change */
+/** Staff: no wallet yet — open a balance wallet and credit bill change / overpayment */
 router.post('/credit-change-open-wallet', authStaff, async (req, res) => {
   try {
     const { clientId, amount, saleId, billNo } = req.body;

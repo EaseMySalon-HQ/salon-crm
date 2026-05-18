@@ -14,10 +14,11 @@ const clientWalletSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    /** Omitted for wallets opened from bill change / overpayment credit (no prepaid plan purchase). */
     planId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'PrepaidPlan',
-      required: true,
+      default: null,
     },
     planSnapshot: {
       type: mongoose.Schema.Types.Mixed,
