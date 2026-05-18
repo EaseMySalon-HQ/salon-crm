@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
-import { Search, Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Banknote, Calendar, Clock, CreditCard, Receipt, RefreshCw, CheckCircle, Clock as ClockIcon, FileText, FileSpreadsheet, ChevronDown, Info, Smartphone } from "lucide-react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
+import { Search, Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Banknote, Calendar, Clock, CreditCard, Receipt, RefreshCw, CheckCircle, Clock as ClockIcon, FileText, FileSpreadsheet, ChevronDown, Info, Smartphone, ArrowLeftRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -16,7 +16,11 @@ import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { CashRegistryAPI, ExpensesAPI, SalesAPI } from "@/lib/api"
+import { CashRegistryAPI, CashMovementsAPI, ExpensesAPI, SalesAPI } from "@/lib/api"
+import { computeExpectedCashBalance } from "@/lib/cash-movements"
+import { CashMovementModal } from "./cash-movement-modal"
+import { CashMovementsLogDialog } from "./cash-movements-log-dialog"
+import type { CashMovementRow } from "@/lib/cash-movements"
 import { billChangeCreditedToWalletCashAddition } from "@/lib/bill-change-wallet-cash"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
@@ -85,6 +89,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   const canCloseCashShift = hasPermission("cash_registry", "manage")
   const canDeleteCashEntry = hasPermission("cash_registry", "delete")
   const canCreateOrCloseShift = canOpenCashShift || canCloseCashShift
+  const canRecordCashMovement = canOpenCashShift || canCloseCashShift
+  const canManageCashMovement = canCloseCashShift
   const [searchTerm, setSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("today")
@@ -92,7 +98,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
   const [reportType, setReportType] = useState<string>("summary")
   const [cashRegistryData, setCashRegistryData] = useState<CashRegistryEntry[]>([])
   const [expensesData, setExpensesData] = useState<{ [date: string]: number }>({})
+  const [cashMovementsData, setCashMovementsData] = useState<{ [date: string]: { cashIn: number; cashOut: number } }>({})
+  const [cashMovementsList, setCashMovementsList] = useState<CashMovementRow[]>([])
   const [salesData, setSalesData] = useState<any[]>([])
+  const [isCashMovementModalOpen, setIsCashMovementModalOpen] = useState(false)
+  const [isCashMovementsLogOpen, setIsCashMovementsLogOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [selectedEntry, setSelectedEntry] = useState<CashRegistryEntry | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
@@ -120,6 +130,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     openingBalance: number
     cashCollected: number
     expense: number
+    cashIn: number
+    cashOut: number
     cashBalance: number
     closingBalance: number
     cashDifference: number
@@ -170,7 +182,14 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       // Calculate values for this specific date
       const cashCollected = getEntryCashSales(dateKey)
       const expense = getEntryExpenses(dateKey)
-      const cashBalance = openingBalance + cashCollected - expense
+      const { cashIn, cashOut } = getEntryCashMovements(dateKey)
+      const cashBalance = computeExpectedCashBalance({
+        opening: openingBalance,
+        cashCollected,
+        expense,
+        cashIn,
+        cashOut,
+      })
       const cashDifference = closingBalance - cashBalance
       const cashInPos = closingEntry?.posCash || 0
       const onlineSales = getEntryOnlineSales(dateKey)
@@ -184,6 +203,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         openingBalance,
         cashCollected,
         expense,
+        cashIn,
+        cashOut,
         cashBalance,
         closingBalance,
         cashDifference,
@@ -208,7 +229,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     } else {
       setDailySummaries([])
     }
-  }, [cashRegistryData, salesData, expensesData])
+  }, [cashRegistryData, salesData, expensesData, cashMovementsData])
 
   // Get today's closing entry for verification (IST calendar day)
   const todayClosingEntry = cashRegistryData.find(entry => {
@@ -271,7 +292,14 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             onlineSales = getEntryOnlineSales(verifiedEntry.date)
           }
           
-          const cashBalance = openingBalance + cashCollected - expense
+          const { cashIn, cashOut } = getEntryCashMovements(dateKey)
+          const cashBalance = computeExpectedCashBalance({
+            opening: openingBalance,
+            cashCollected,
+            expense,
+            cashIn,
+            cashOut,
+          })
           const cashDifference = closingBalance - cashBalance
           const cashInPos = verifiedEntry.posCash || 0
           const onlineCashDifference = cashInPos - onlineSales
@@ -288,6 +316,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             openingBalance,
             cashCollected,
             expense,
+            cashIn,
+            cashOut,
             cashBalance,
             closingBalance,
             cashDifference,
@@ -326,6 +356,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         await fetchCashRegistryData(true)
         await fetchSalesData()
         await fetchExpensesData()
+        await fetchCashMovementsData()
         // useEffect will regenerate daily summaries when cashRegistryData updates
         onVerificationModalChange(false)
       } else {
@@ -350,7 +381,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     if (cashRegistryData.length > 0) {
       generateDailySummaries()
     }
-  }, [cashRegistryData, salesData, expensesData, generateDailySummaries])
+  }, [cashRegistryData, salesData, expensesData, cashMovementsData, generateDailySummaries])
 
   // Click outside both cards to collapse — clicking the other card must not collapse this one
   // (so Cash + Online breakdowns can stay open together).
@@ -504,6 +535,57 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     }
   }
 
+  const fetchCashMovementsData = async (rangeOverride?: { from: Date; to: Date } | null) => {
+    const range =
+      rangeOverride ??
+      (dateRange?.from && dateRange?.to ? getEffectiveDateRange(dateRange.from, dateRange.to) : null)
+    if (!range) {
+      setCashMovementsData({})
+      setCashMovementsList([])
+      return
+    }
+    const { dateFrom, dateTo } = getEffectiveDateParams(range.from, range.to)
+    try {
+      const response = await CashMovementsAPI.getAll({ dateFrom, dateTo, status: 'active' })
+      const map: { [date: string]: { cashIn: number; cashOut: number } } = {}
+      const list: CashMovementRow[] = []
+      if (response.success && Array.isArray(response.data)) {
+        response.data.forEach((m: CashMovementRow) => {
+          list.push(m)
+          const day = toDateStringIST(m.date)
+          if (!map[day]) map[day] = { cashIn: 0, cashOut: 0 }
+          const amt = Number(m.amount) || 0
+          if (m.direction === 'in') map[day].cashIn += amt
+          else map[day].cashOut += amt
+        })
+      }
+      setCashMovementsData(map)
+      setCashMovementsList(list)
+    } catch (error) {
+      console.error('Error fetching cash movements:', error)
+      setCashMovementsData({})
+      setCashMovementsList([])
+    }
+  }
+
+  const verifiedCashMovementDates = useMemo(() => {
+    const dates = new Set<string>()
+    cashRegistryData.forEach((entry) => {
+      if (entry.shiftType === "closing" && entry.isVerified) {
+        dates.add(toDateStringIST(entry.date))
+      }
+    })
+    return dates
+  }, [cashRegistryData])
+
+  const refreshCashMovements = () => {
+    if (dateRange?.from && dateRange?.to) {
+      const effectiveRange = getEffectiveDateRange(dateRange.from, dateRange.to)
+      fetchCashMovementsData(effectiveRange)
+      fetchCashRegistryData(true, effectiveRange)
+    }
+  }
+
   const fetchSalesData = async (overrideRange?: { from: Date; to: Date } | null) => {
     try {
       const range =
@@ -542,6 +624,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     const effectiveRange = getEffectiveDateRange(dateRange.from, dateRange.to)
     fetchCashRegistryData(false, effectiveRange)
     fetchExpensesData(effectiveRange)
+    fetchCashMovementsData(effectiveRange)
     fetchSalesData(effectiveRange)
   }, [dateRange?.from?.getTime(), dateRange?.to?.getTime()])
 
@@ -551,6 +634,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       const effectiveRange = getEffectiveDateRange(dateRange.from, dateRange.to)
       fetchCashRegistryData(true, effectiveRange)
       fetchExpensesData(effectiveRange)
+      fetchCashMovementsData(effectiveRange)
       fetchSalesData(effectiveRange)
     }
     window.addEventListener("cash-registry-saved", handleCashRegistrySaved)
@@ -935,6 +1019,14 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       return sum
     }, 0)
   }
+
+  const getEntryCashMovements = (entryDate: string) => {
+    const normalizedEntryDate = toDateStringIST(entryDate)
+    return cashMovementsData[normalizedEntryDate] || { cashIn: 0, cashOut: 0 }
+  }
+
+  const totalCashMovementIn = Object.values(cashMovementsData).reduce((s, v) => s + v.cashIn, 0)
+  const totalCashMovementOut = Object.values(cashMovementsData).reduce((s, v) => s + v.cashOut, 0)
   
   const totalOpeningBalance = statsFilteredData
     .filter(entry => entry.shiftType === "opening")
@@ -949,9 +1041,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     .filter(entry => entry.shiftType === "closing")
     .reduce((sum, entry) => sum + (entry.posCash || 0), 0)
   
-  // Calculate Cash Difference using the formula: ((Total Opening Balance + Total Cash Sales) - Total Expenses) - Total Closing Balance
-  // This represents the variance between expected and actual cash at closing
-  const cashDifference =   totalClosingBalance - ((totalOpeningBalance + totalCashSales) - totalExpenses)
+  const expectedCashInRange =
+    totalOpeningBalance + totalCashSales - totalExpenses + totalCashMovementIn - totalCashMovementOut
+  const cashDifference = totalClosingBalance - expectedCashInRange
   
   // Calculate Online Cash Difference using the formula: Online Cash Collected - Total Online Sales
   // This represents the variance between collected online cash and actual online sales
@@ -1705,6 +1797,26 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
             
             {/* Right Side - Actions */}
             <div className="flex items-center space-x-3">
+              {canRecordCashMovement && (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsCashMovementModalOpen(true)}
+                    className="flex items-center space-x-2 bg-white border-emerald-300 hover:bg-emerald-50 hover:border-emerald-400 rounded-xl px-4 py-2"
+                  >
+                    <ArrowLeftRight className="h-4 w-4 text-emerald-700" />
+                    <span className="font-medium text-emerald-900">Record</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsCashMovementsLogOpen(true)}
+                    className="flex items-center space-x-2 bg-white border-slate-300 hover:bg-slate-50 rounded-xl px-4 py-2"
+                  >
+                    <FileText className="h-4 w-4 text-slate-600" />
+                    <span className="font-medium text-slate-800">Movement log</span>
+                  </Button>
+                </>
+              )}
               {canExport ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1779,6 +1891,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Opening Balance</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Cash Collected</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Expense</TableHead>
+                        <TableHead className="text-right font-semibold text-slate-700 py-4">Cash in</TableHead>
+                        <TableHead className="text-right font-semibold text-slate-700 py-4">Cash out</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Expected Cash</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Actual Cash (Closing)</TableHead>
                         <TableHead className="text-right font-semibold text-slate-700 py-4">Cash Difference</TableHead>
@@ -1803,7 +1917,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                 <TableBody>
                   {(reportType === "summary" ? filteredDailySummaries.length === 0 : filteredData.length === 0) ? (
                     <TableRow className="border-0">
-                      <TableCell colSpan={reportType === "summary" ? 12 : 6} className="text-center py-16 border-0">
+                      <TableCell colSpan={reportType === "summary" ? 14 : 6} className="text-center py-16 border-0">
                         <div className="flex flex-col items-center space-y-5">
                           <div className="w-20 h-20 bg-gradient-to-br from-slate-100 to-blue-100 rounded-full flex items-center justify-center">
                             <Receipt className="h-10 w-10 text-slate-400" />
@@ -1844,6 +1958,8 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                           const openingBalance = entry.openingBalance
                           const cashCollected = entry.cashCollected
                           const expense = entry.expense
+                          const cashIn = entry.cashIn ?? 0
+                          const cashOut = entry.cashOut ?? 0
                           const cashBalance = entry.cashBalance
                           const closingBalance = entry.closingBalance
                           const cashDifference = entry.cashDifference
@@ -1890,6 +2006,12 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                               <TableCell className="text-right min-w-[120px]">₹{openingBalance.toFixed(2)}</TableCell>
                               <TableCell className="text-right min-w-[120px]">₹{cashCollected.toFixed(2)}</TableCell>
                               <TableCell className="text-right min-w-[100px]">₹{expense.toFixed(2)}</TableCell>
+                              <TableCell className="text-right min-w-[90px] text-emerald-700">
+                                {cashIn > 0 ? `₹${cashIn.toFixed(2)}` : '—'}
+                              </TableCell>
+                              <TableCell className="text-right min-w-[90px] text-amber-700">
+                                {cashOut > 0 ? `₹${cashOut.toFixed(2)}` : '—'}
+                              </TableCell>
                               <TableCell className="text-right min-w-[120px]">₹{cashBalance.toFixed(2)}</TableCell>
                               <TableCell className="text-right min-w-[120px]">₹{closingBalance.toFixed(2)}</TableCell>
                               <TableCell className="text-right min-w-[120px]">
@@ -2211,6 +2333,22 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
               </Table>
                 </div>
             </div>
+
+      <CashMovementModal
+        open={isCashMovementModalOpen}
+        onOpenChange={setIsCashMovementModalOpen}
+        onSuccess={refreshCashMovements}
+      />
+
+      <CashMovementsLogDialog
+        open={isCashMovementsLogOpen}
+        onOpenChange={setIsCashMovementsLogOpen}
+        movements={cashMovementsList}
+        canManage={canManageCashMovement}
+        onRefresh={refreshCashMovements}
+        verifiedDates={verifiedCashMovementDates}
+        isAdmin={user?.role === "admin"}
+      />
 
       {/* Add Entry Modal */}
       <CashRegistryModal

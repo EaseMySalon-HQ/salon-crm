@@ -15597,10 +15597,19 @@ app.delete('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePe
 // Note: Specific routes must come before parameterized routes
 app.get('/api/cash-registry/petty-cash-summary', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
-    const { Expense, PettyCashTransaction } = req.businessModels;
+    const { Expense, PettyCashTransaction, CashMovement } = req.businessModels;
     const { date } = req.query;
     const dateStr = date || new Date().toISOString().split('T')[0];
     const endOfDay = getEndOfDayIST(dateStr);
+
+    if (CashMovement && PettyCashTransaction) {
+      const { backfillOrphanPettyCashTransfers } = require('./utils/sync-cash-movement-petty-cash');
+      await backfillOrphanPettyCashTransfers(
+        req.businessModels,
+        req.user.branchId,
+        req.user._id || req.user.id
+      );
+    }
 
     // Total additions (all time up to end of date)
     const additions = await PettyCashTransaction.aggregate([
@@ -15671,13 +15680,214 @@ app.get('/api/petty-cash/logs', authenticateToken, setupBusinessDatabase, async 
       .lean();
 
     const logs = [
-      ...additions.map(a => ({ type: 'add', amount: a.amount, date: a.date })),
-      ...deductions.map(d => ({ type: 'deduct', amount: -d.amount, date: d.date }))
+      ...additions.map(a => ({
+        type: 'add',
+        amount: a.amount,
+        date: a.date,
+        label: a.cashMovementId ? 'From cash drawer' : 'Manual add',
+      })),
+      ...deductions.map(d => ({ type: 'deduct', amount: -d.amount, date: d.date, label: 'Expense' }))
     ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
     res.json({ success: true, data: logs });
   } catch (error) {
     logger.error('Error fetching petty cash logs:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+const { CASH_MOVEMENT_TYPES } = require('./models/CashMovement');
+const CASH_MOVEMENT_TYPE_DIRECTION = {
+  owner_withdrawal: 'out',
+  bank_deposit: 'out',
+  safe_transfer: 'out',
+  petty_cash_transfer: 'out',
+  cash_added: 'in',
+};
+
+app.get('/api/cash-movements', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { CashMovement } = req.businessModels;
+    const branchId = req.user.branchId;
+    const { dateFrom, dateTo, status = 'active' } = req.query;
+
+    const query = { branchId };
+    if (status && status !== 'all') query.status = status;
+    if (dateFrom || dateTo) {
+      query.date = {};
+      if (dateFrom) query.date.$gte = new Date(dateFrom);
+      if (dateTo) query.date.$lte = new Date(dateTo);
+    }
+
+    const movements = await CashMovement.find(query).sort({ date: -1, createdAt: -1 }).lean();
+    res.json({ success: true, data: movements });
+  } catch (error) {
+    logger.error('Error fetching cash movements:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/cash-movements', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'create'), async (req, res) => {
+  try {
+    const { syncPettyCashForCashMovement } = require('./utils/sync-cash-movement-petty-cash');
+    const { CashMovement } = req.businessModels;
+    const { type, direction, amount, date, reason, referenceNo } = req.body;
+    const amt = Number(amount);
+    if (!type || !CASH_MOVEMENT_TYPES.includes(type)) {
+      return res.status(400).json({ success: false, error: 'Invalid movement type' });
+    }
+    if (!amt || amt <= 0) {
+      return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    }
+
+    let resolvedDirection = CASH_MOVEMENT_TYPE_DIRECTION[type];
+    if (type === 'other') {
+      if (direction !== 'in' && direction !== 'out') {
+        return res.status(400).json({ success: false, error: 'Direction must be in or out for other movements' });
+      }
+      resolvedDirection = direction;
+    } else if (!resolvedDirection) {
+      return res.status(400).json({ success: false, error: 'Invalid movement type' });
+    }
+
+    const movementDate = date ? parseDateIST(date) : new Date();
+    const createdByName = req.user.firstName && req.user.lastName
+      ? `${req.user.firstName} ${req.user.lastName}`.trim()
+      : req.user.email || 'Unknown';
+
+    const movement = new CashMovement({
+      branchId: req.user.branchId,
+      date: movementDate,
+      type,
+      direction: resolvedDirection,
+      amount: amt,
+      reason: (reason || '').trim().slice(0, 500),
+      referenceNo: (referenceNo || '').trim().slice(0, 100),
+      createdBy: createdByName,
+      userId: req.user.id,
+      status: 'active',
+    });
+    await movement.save();
+    await syncPettyCashForCashMovement(
+      req.businessModels,
+      movement,
+      req.user._id || req.user.id
+    );
+    res.status(201).json({ success: true, data: movement });
+  } catch (error) {
+    logger.error('Error creating cash movement:', error);
+    res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+});
+
+async function assertCashMovementEditable(req, movement) {
+  const { CashRegistry } = req.businessModels;
+  if (!CashRegistry || !movement?.date) return;
+  const branchId = req.user.branchId;
+  const startOfDay = getStartOfDayIST(movement.date);
+  const endOfDay = getEndOfDayIST(movement.date);
+  const verifiedClosing = await CashRegistry.findOne({
+    branchId,
+    shiftType: 'closing',
+    date: { $gte: startOfDay, $lt: endOfDay },
+    isVerified: true,
+  })
+    .select('_id')
+    .lean();
+  if (verifiedClosing && req.user.role !== 'admin') {
+    const err = new Error('This day is verified and locked. Only an admin can change cash movements.');
+    err.statusCode = 409;
+    throw err;
+  }
+}
+
+app.put('/api/cash-movements/:id', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'manage'), async (req, res) => {
+  try {
+    const { syncPettyCashForCashMovement } = require('./utils/sync-cash-movement-petty-cash');
+    const { CashMovement } = req.businessModels;
+    const { type, direction, amount, date, reason, referenceNo } = req.body;
+    const movement = await CashMovement.findOne({ _id: req.params.id, branchId: req.user.branchId });
+    if (!movement) {
+      return res.status(404).json({ success: false, error: 'Cash movement not found' });
+    }
+    if (movement.status === 'void') {
+      return res.status(400).json({ success: false, error: 'Cannot edit a voided movement. Record a new one instead.' });
+    }
+
+    await assertCashMovementEditable(req, movement);
+
+    const amt = Number(amount);
+    if (!type || !CASH_MOVEMENT_TYPES.includes(type)) {
+      return res.status(400).json({ success: false, error: 'Invalid movement type' });
+    }
+    if (!amt || amt <= 0) {
+      return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    }
+
+    let resolvedDirection = CASH_MOVEMENT_TYPE_DIRECTION[type];
+    if (type === 'other') {
+      if (direction !== 'in' && direction !== 'out') {
+        return res.status(400).json({ success: false, error: 'Direction must be in or out for other movements' });
+      }
+      resolvedDirection = direction;
+    } else if (!resolvedDirection) {
+      return res.status(400).json({ success: false, error: 'Invalid movement type' });
+    }
+
+    movement.type = type;
+    movement.direction = resolvedDirection;
+    movement.amount = amt;
+    if (date) movement.date = parseDateIST(date);
+    movement.reason = (reason || '').trim().slice(0, 500);
+    movement.referenceNo = (referenceNo || '').trim().slice(0, 100);
+    await movement.save();
+    await syncPettyCashForCashMovement(
+      req.businessModels,
+      movement,
+      req.user._id || req.user.id
+    );
+    res.json({ success: true, data: movement });
+  } catch (error) {
+    if (error.statusCode === 409) {
+      return res.status(409).json({ success: false, error: error.message });
+    }
+    logger.error('Error updating cash movement:', error);
+    res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+});
+
+app.delete('/api/cash-movements/:id', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'manage'), async (req, res) => {
+  try {
+    const { syncPettyCashForCashMovement } = require('./utils/sync-cash-movement-petty-cash');
+    const { CashMovement } = req.businessModels;
+    const movement = await CashMovement.findOne({ _id: req.params.id, branchId: req.user.branchId });
+    if (!movement) {
+      return res.status(404).json({ success: false, error: 'Cash movement not found' });
+    }
+    if (movement.status === 'void') {
+      return res.json({ success: true, data: movement, message: 'Already voided' });
+    }
+
+    await assertCashMovementEditable(req, movement);
+
+    const voidedBy = req.user.firstName && req.user.lastName
+      ? `${req.user.firstName} ${req.user.lastName}`.trim()
+      : req.user.email || 'Unknown';
+    movement.status = 'void';
+    movement.voidedAt = new Date();
+    movement.voidedBy = voidedBy;
+    await movement.save();
+    await syncPettyCashForCashMovement(
+      req.businessModels,
+      movement,
+      req.user._id || req.user.id
+    );
+    res.json({ success: true, data: movement });
+  } catch (error) {
+    if (error.statusCode === 409) {
+      return res.status(409).json({ success: false, error: error.message });
+    }
+    logger.error('Error voiding cash movement:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -15803,7 +16013,7 @@ app.get('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, asyn
 
 app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'create'), async (req, res) => {
   try {
-    const { CashRegistry, Sale, Expense } = req.businessModels;
+    const { CashRegistry, Sale, Expense, CashMovement } = req.businessModels;
     const {
       date,
       shiftType,
@@ -15836,75 +16046,25 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, require
     const dateObj = parseDateIST(date);
     
     if (shiftType === 'closing') {
-      const startOfDay = getStartOfDayIST(date);
-      const endOfDay = getEndOfDayIST(date);
       const branchId = req.user.branchId;
+      const {
+        computeDayCashLedger,
+        computeDayCashMovements,
+        computeExpectedCashBalance,
+        computeDayOnlineSales,
+        resolveOpeningBalanceForRegistryDay,
+      } = require('./utils/cash-registry-ledger');
 
-      // Cash Register uses PAYMENT DATE (when cash was collected), not invoice date
-      // Total Cash = New payments (checkout) + Due collections on this date
-      const salesToday = await Sale.find({
-        branchId,
-        date: { $gte: startOfDay, $lt: endOfDay },
-        status: { $nin: ['cancelled', 'Cancelled'] }
-      }).lean();
-      const salesWithDuesToday = await Sale.find({
-        branchId,
-        paymentHistory: {
-          $elemMatch: {
-            date: { $gte: startOfDay, $lt: endOfDay },
-            method: 'Cash'
-          }
-        },
-        status: { $nin: ['cancelled', 'Cancelled'] }
-      }).lean();
-      let cashFromNewBills = 0;
-      salesToday.forEach((sale) => {
-        let cashAmt = 0;
-        let isAllCash = false;
-        if (sale.payments && sale.payments.length > 0) {
-          sale.payments.forEach((p) => {
-            const m = (p.mode || p.type || '').toLowerCase();
-            if (m.includes('cash')) cashAmt += p.amount || 0;
-          });
-          const hasNonCash = (sale.payments || []).some((p) => {
-            const m = (p.mode || p.type || '').toLowerCase();
-            return m.includes('card') || m.includes('online') || m.includes('upi');
-          });
-          isAllCash = cashAmt > 0 && !hasNonCash;
-        } else {
-          const pm = (sale.paymentMode || '').toLowerCase();
-          if (pm.includes('cash') && !pm.includes('card') && !pm.includes('online')) {
-            cashAmt = sale.netTotal || sale.grossTotal || 0;
-            isAllCash = true;
-          }
-        }
-        cashAmt += billChangeCreditedToWalletCashAddition(sale);
-        const tip = sale.tip || 0;
-        cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
-      });
-      let cashFromDueCollected = 0;
-      salesWithDuesToday.forEach((sale) => {
-        (sale.paymentHistory || []).forEach((ph) => {
-          if (!ph || (ph.method || '').toLowerCase() !== 'cash') return;
-          const phDate = ph.date ? new Date(ph.date) : null;
-          if (phDate && phDate >= startOfDay && phDate < endOfDay) {
-            cashFromDueCollected += ph.amount || 0;
-          }
-        });
-      });
-      cashCollected = cashFromNewBills + cashFromDueCollected;
-      
-      // Get expenses for the date
-      const expenses = await Expense.find({
-        ...(branchId && { branchId }),
-        date: { $gte: startOfDay, $lt: endOfDay },
-        paymentMode: 'Cash',
-        status: { $in: ['approved', 'pending'] }
-      });
-      
-      expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
+      const ledger = (Sale && Expense)
+        ? await computeDayCashLedger({ Sale, Expense, branchId, registryDate: dateObj })
+        : { cashCollected: 0, expenseValue: 0 };
+      cashCollected = ledger.cashCollected;
+      expenseValue = ledger.expenseValue;
 
-      const { resolveOpeningBalanceForRegistryDay, computeDayOnlineSales } = require('./utils/cash-registry-ledger');
+      const { cashIn, cashOut } = CashMovement
+        ? await computeDayCashMovements({ CashMovement, branchId, registryDate: dateObj })
+        : { cashIn: 0, cashOut: 0 };
+
       let effectiveOpening = Number(openingBalance) || 0;
       if (!effectiveOpening) {
         effectiveOpening = await resolveOpeningBalanceForRegistryDay({
@@ -15917,8 +16077,13 @@ app.post('/api/cash-registry', authenticateToken, setupBusinessDatabase, require
 
       const closingTotalPhysical = Number(closingBalance) || totalBalance;
 
-      // Calculate cash balance and differences
-      cashBalance = effectiveOpening + cashCollected - expenseValue;
+      cashBalance = computeExpectedCashBalance({
+        opening: effectiveOpening,
+        cashCollected,
+        expenseValue,
+        cashIn,
+        cashOut,
+      });
       balanceDifference = closingTotalPhysical - cashBalance;
       const posCashNum = Number(posCash) || 0;
       let totalOnlineSales = Number(onlineCash) || 0;
@@ -15985,7 +16150,7 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, requ
       balanceDifferenceReason,
       onlineCashDifferenceReason
     } = req.body;
-    const { CashRegistry, Sale, Expense } = req.businessModels;
+    const { CashRegistry, Sale, Expense, CashMovement } = req.businessModels;
     
     const cashRegistry = await CashRegistry.findById(req.params.id);
     if (!cashRegistry) {
@@ -16006,6 +16171,8 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, requ
 
       const {
         computeDayCashLedger,
+        computeDayCashMovements,
+        computeExpectedCashBalance,
         computeDayOnlineSales,
         resolveOpeningBalanceForRegistryDay,
       } = require('./utils/cash-registry-ledger');
@@ -16019,6 +16186,14 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, requ
         })
         : { cashCollected: cashRegistry.cashCollected, expenseValue: cashRegistry.expenseValue };
 
+      const { cashIn, cashOut } = CashMovement
+        ? await computeDayCashMovements({
+          CashMovement,
+          branchId,
+          registryDate: cashRegistry.date,
+        })
+        : { cashIn: 0, cashOut: 0 };
+
       const resolvedOpening = (Sale && Expense)
         ? await resolveOpeningBalanceForRegistryDay({
           CashRegistry,
@@ -16031,7 +16206,13 @@ app.put('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, requ
       updates.cashCollected = cashCollected;
       updates.expenseValue = expenseValue;
       updates.openingBalance = resolvedOpening;
-      const cashBalance = resolvedOpening + cashCollected - expenseValue;
+      const cashBalance = computeExpectedCashBalance({
+        opening: resolvedOpening,
+        cashCollected,
+        expenseValue,
+        cashIn,
+        cashOut,
+      });
       updates.cashBalance = cashBalance;
       updates.balanceDifference = closingBalance - cashBalance;
       const posCashNum = Number(posCash) || 0;
@@ -16101,7 +16282,7 @@ app.patch('/api/cash-registry/:id/difference-reason', authenticateToken, setupBu
 
 app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDatabase, requirePermission('cash_registry', 'manage'), async (req, res) => {
   try {
-    const { CashRegistry, Sale, Expense } = req.businessModels;
+    const { CashRegistry, Sale, Expense, CashMovement } = req.businessModels;
     const { verificationNotes, balanceDifferenceReason, balanceDifferenceNote, onlineCashDifferenceReason, onlineCashDifferenceNote } = req.body;
     const updatedBy = req.user.firstName && req.user.lastName ?
       `${req.user.firstName} ${req.user.lastName}`.trim() : req.user.email || 'Unknown User';
@@ -16122,6 +16303,8 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
     if (cashRegistry.shiftType === 'closing' && Sale && Expense) {
       const {
         computeDayCashLedger,
+        computeDayCashMovements,
+        computeExpectedCashBalance,
         computeDayOnlineSales,
         resolveOpeningBalanceForRegistryDay,
       } = require('./utils/cash-registry-ledger');
@@ -16132,6 +16315,13 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
         branchId,
         registryDate: cashRegistry.date,
       });
+      const { cashIn, cashOut } = CashMovement
+        ? await computeDayCashMovements({
+          CashMovement,
+          branchId,
+          registryDate: cashRegistry.date,
+        })
+        : { cashIn: 0, cashOut: 0 };
       const resolvedOpening = await resolveOpeningBalanceForRegistryDay({
         CashRegistry,
         branchId,
@@ -16145,7 +16335,13 @@ app.post('/api/cash-registry/:id/verify', authenticateToken, setupBusinessDataba
         branchId,
         registryDate: cashRegistry.date,
       });
-      const cashBalance = resolvedOpening + cashCollected - expenseValue;
+      const cashBalance = computeExpectedCashBalance({
+        opening: resolvedOpening,
+        cashCollected,
+        expenseValue,
+        cashIn,
+        cashOut,
+      });
       const balanceDifference = closingBal - cashBalance;
       const onlinePosDifference = posCashNum - totalOnlineSales;
 
