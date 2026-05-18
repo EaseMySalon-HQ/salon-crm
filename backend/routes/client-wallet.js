@@ -235,6 +235,27 @@ router.post('/redeem', authStaff, async (req, res) => {
   }
 });
 
+/** Manager: open first wallet for client (no plan / sale) — optional opening balance */
+router.post('/open-balance-wallet', authManager, async (req, res) => {
+  try {
+    const { clientId, amount, reason } = req.body;
+    if (!clientId) return fail(res, 400, 'clientId is required');
+    const out = await walletSvc.openBalanceWalletForClient({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+      staffUser: req.user,
+      clientId: String(clientId),
+      amount: amount != null ? Number(amount) : 0,
+      reason: reason || '',
+    });
+    return ok(res, out, 'Wallet opened');
+  } catch (e) {
+    const status = e.status || 500;
+    logger.error('[client-wallet] open-balance-wallet', e);
+    return fail(res, status, e.message);
+  }
+});
+
 router.post('/adjust', authManager, async (req, res) => {
   try {
     const { walletId, delta, reason } = req.body;
@@ -278,7 +299,7 @@ router.post('/credit-change', authStaff, async (req, res) => {
   }
 });
 
-/** Staff: no wallet yet — open one from an active prepaid plan template and credit bill change */
+/** Staff: no wallet yet — open a balance wallet and credit bill change / overpayment */
 router.post('/credit-change-open-wallet', authStaff, async (req, res) => {
   try {
     const { clientId, amount, saleId, billNo } = req.body;

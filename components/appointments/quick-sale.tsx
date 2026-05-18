@@ -5310,15 +5310,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     })
                     if (cr.success) {
                       toast({
-                        title: "Prepaid wallet opened",
-                        description: `₹${changeToCredit.toFixed(2)} credited — new wallet linked to bill ${receiptNumber}.`,
+                        title: "Change credited to wallet",
+                        description: `₹${changeToCredit.toFixed(2)} added to the client's wallet (bill ${receiptNumber}).`,
                       })
                     } else {
                       toast({
                         title: "Could not create wallet credit",
                         description:
                           cr.message ||
-                          "Ensure an active prepaid plan exists under Wallet settings. Adjust balance manually if needed.",
+                          "Bill was saved — add the change manually from the client wallet if needed.",
                         variant: "destructive",
                       })
                     }
@@ -5500,15 +5500,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     })
                     if (cr.success) {
                       toast({
-                        title: "Prepaid wallet opened",
-                        description: `₹${changeToCredit.toFixed(2)} credited — wallet created using your salon prepaid plan.`,
+                        title: "Change credited to wallet",
+                        description: `₹${changeToCredit.toFixed(2)} added to the client's wallet.`,
                       })
                     } else {
                       toast({
                         title: "Could not create wallet credit",
                         description:
                           cr.message ||
-                          "Create at least one active prepaid plan under Wallet settings, then add credit manually.",
+                          "Bill was saved — add the change manually from the client wallet if needed.",
                         variant: "destructive",
                       })
                     }

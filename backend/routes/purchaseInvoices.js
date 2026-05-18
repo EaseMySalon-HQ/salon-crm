@@ -940,4 +940,41 @@ router.post('/:id/cancel', async (req, res) => {
   }
 });
 
+/** Permanently remove a cancelled invoice (no outstanding supplier payments on its payable). */
+router.delete('/:id', async (req, res) => {
+  try {
+    const { PurchaseInvoice, SupplierPayable } = req.businessModels;
+    const branchId = req.user.branchId;
+    const inv = await PurchaseInvoice.findOne({ _id: req.params.id, branchId });
+    if (!inv) {
+      return res.status(404).json({ success: false, error: 'Purchase invoice not found' });
+    }
+    if (inv.status !== 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only cancelled invoices can be permanently deleted',
+      });
+    }
+    const payable = await SupplierPayable.findOne({ branchId, purchaseInvoiceId: inv._id });
+    if (payable && (payable.amountPaid || 0) > 0.005) {
+      return res.status(400).json({
+        success: false,
+        error: 'This invoice still has supplier payments recorded. Reverse payments before deleting.',
+      });
+    }
+    if (payable) {
+      await SupplierPayable.deleteOne({ _id: payable._id });
+    }
+    const linkedPoId = inv.purchaseOrderId;
+    await PurchaseInvoice.deleteOne({ _id: inv._id });
+    if (linkedPoId) {
+      await reconcileLinkedPurchaseOrderStatus(req.businessModels, branchId, linkedPoId);
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Error deleting purchase invoice:', error);
+    res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+});
+
 module.exports = router;

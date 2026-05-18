@@ -6623,6 +6623,40 @@ app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessData
   }
 });
 
+// Permanently delete a cancelled purchase order (no linked purchase invoices).
+app.delete('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder, PurchaseInvoice } = req.businessModels;
+    const branchId = req.user.branchId;
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po || po.branchId.toString() !== branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Purchase order not found' });
+    }
+    if (po.status !== 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only cancelled purchase orders can be permanently deleted',
+      });
+    }
+    const linkedCount = await PurchaseInvoice.countDocuments({
+      branchId,
+      purchaseOrderId: po._id,
+    });
+    if (linkedCount > 0) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'This order still has linked purchase invoices. Delete those records first if they are already cancelled.',
+      });
+    }
+    await PurchaseOrder.deleteOne({ _id: po._id });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Error deleting purchase order:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // ==================== SUPPLIER PAYABLE ROUTES ====================
 
 /** Keep PurchaseInvoice paid/due in sync when payments are recorded against a payable tied to a PI. */
