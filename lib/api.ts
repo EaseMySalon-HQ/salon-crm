@@ -808,6 +808,11 @@ export class PurchaseOrdersAPI {
     return response.data
   }
 
+  static async deletePermanently(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.delete(`/purchase-orders/${id}`)
+    return response.data
+  }
+
   static async updateStatus(id: string, data: { status: 'draft' | 'sent' | 'ordered' }): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`/purchase-orders/${id}/status`, data)
     return response.data
@@ -878,6 +883,16 @@ export class PurchaseInvoicesAPI {
   static async cancel(id: string): Promise<ApiResponse<any>> {
     try {
       const response = await apiClient.post(`/purchase-invoices/${id}/cancel`)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async deletePermanently(id: string): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.delete(`/purchase-invoices/${id}`)
       return response.data
     } catch (e: unknown) {
       const structured = coerceThrownResponseToFailure<any>(e)
