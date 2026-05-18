@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { expiringMembershipMongoMatch } = require('./membership-subscription-helpers');
 
 /**
  * Lightweight in-app alerts for staff: derived from live tenant data (no separate inbox store).
@@ -41,8 +42,7 @@ async function buildNotificationsFeed({ branchId, businessModels }) {
       .lean(),
     MembershipSubscription.countDocuments({
       branchId: bid,
-      status: 'ACTIVE',
-      expiryDate: { $gte: today, $lte: in30 },
+      ...expiringMembershipMongoMatch(today, in30),
     }),
   ]);
 

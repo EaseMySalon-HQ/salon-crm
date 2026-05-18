@@ -105,6 +105,7 @@ import { MultiStaffSelector, type StaffContribution } from "@/components/ui/mult
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
 import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
+import { effectiveMembershipPlanDiscountPercent } from "@/lib/membership-plan-discount"
 import { useRouter } from "next/navigation"
 import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
 import type { RaiseSaleLinkageSnapshot } from "@/lib/quick-sale-helpers"
@@ -787,9 +788,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               total = 0
               isMembershipFree = true
               membershipDiscountPercent = 100
-            } else if (plan?.discountPercentage > 0) {
-              discount = plan.discountPercentage
-              membershipDiscountPercent = plan.discountPercentage
+            } else if (effectiveMembershipPlanDiscountPercent(plan, svcId) > 0) {
+              const d = effectiveMembershipPlanDiscountPercent(plan, svcId)
+              discount = d
+              membershipDiscountPercent = d
               total = computeLineTotalAndTaxForAddInner(basePrice, discount, serviceTaxRate, applyTaxRow)
             } else {
               total = computeLineTotalAndTaxForAddInner(basePrice, 0, serviceTaxRate, applyTaxRow)
@@ -3216,9 +3218,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   discount = 100
                   isMembershipFree = true
                   membershipDiscountPercent = 100
-                } else if (plan?.discountPercentage > 0) {
-                  discount = plan.discountPercentage
-                  membershipDiscountPercent = plan.discountPercentage
+                } else if (effectiveMembershipPlanDiscountPercent(plan, String(value)) > 0) {
+                  const d = effectiveMembershipPlanDiscountPercent(plan, String(value))
+                  discount = d
+                  membershipDiscountPercent = d
                 }
               }
 
@@ -3477,7 +3480,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       membershipData.usageSummary.map((u: any) => [String(u.serviceId || u.serviceId?._id), u])
     )
     const plan = membershipData.plan
-    const discountPct = plan?.discountPercentage || 0
 
     const remaining: Record<string, number> = {}
     usageMap.forEach((u: any, sid: string) => {
@@ -3506,6 +3508,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         }
       }
       const sid = String(item.serviceId)
+      const discountPct = effectiveMembershipPlanDiscountPercent(plan, sid)
       const u = usageMap.get(sid)
       const service = services.find((s) => (s._id || s.id) === item.serviceId)
       const basePrice = service?.price ?? item.price
@@ -6664,12 +6667,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       </span>
                     )}
                   </div>
-                  {membershipData?.subscription?.expiryDate && (
+                  {membershipData?.subscription?.status === "ACTIVE" && !membershipData?.subscription?.expiryDate ? (
+                    <p className="text-xs text-slate-500">No end date</p>
+                  ) : null}
+                  {membershipData?.subscription?.expiryDate ? (
                     <p className="text-xs text-slate-500">
                       Valid through{" "}
                       {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
                     </p>
-                  )}
+                  ) : null}
                 </div>
               </div>
 

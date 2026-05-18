@@ -30,6 +30,14 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -56,6 +64,11 @@ import {
   collectPartialPaymentAppointmentIdsFromSales,
   getCalendarCardVisualStatus,
   getAppointmentCalendarOpenIntent,
+  toMongoIdString,
+  APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS,
+  canChangeAppointmentStatusViaContextMenu,
+  getAppointmentIdsForCardStatusUpdate,
+  type AppointmentCardContextStatus,
 } from "@/lib/appointment-calendar-helpers"
 import {
   RaiseSaleConfirmationModal,
@@ -605,6 +618,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [deleteInvoiceReason, setDeleteInvoiceReason] = useState("")
   const [deletingInvoice, setDeletingInvoice] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [cardStatusMenuUpdatingId, setCardStatusMenuUpdatingId] = useState<string | null>(null)
   const [showColorLegend, setShowColorLegend] = useState(false)
   const [blockTimes, setBlockTimes] = useState<BlockTime[]>([])
   const [walkInSales, setWalkInSales] = useState<any[]>([])
@@ -1657,6 +1671,48 @@ export const AppointmentsCalendarGrid = forwardRef<
       alert("Failed to update status. Please try again.")
     } finally {
       setUpdatingStatus(false)
+    }
+  }
+
+  const handleCalendarCardQuickStatus = async (
+    appointment: Appointment,
+    newStatus: AppointmentCardContextStatus,
+  ) => {
+    const ids = getAppointmentIdsForCardStatusUpdate(appointment, appointments, newStatus)
+    if (ids.length === 0) return
+    const idSet = new Set(ids.map((x) => toMongoIdString(x) || String(x)))
+    setCardStatusMenuUpdatingId(appointment._id)
+    try {
+      const results = await Promise.all(ids.map((id) => AppointmentsAPI.update(id, { status: newStatus })))
+      if (results.every((r) => r?.success)) {
+        setAppointments((prev) =>
+          prev.map((a) =>
+            idSet.has(toMongoIdString(a._id) || String(a._id)) ? { ...a, status: newStatus } : a,
+          ),
+        )
+        setSelectedAppointment((cur) =>
+          cur && idSet.has(toMongoIdString(cur._id) || String(cur._id))
+            ? { ...cur, status: newStatus }
+            : cur,
+        )
+        const label = APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS.find((o) => o.value === newStatus)?.label
+        toast({
+          title: "Status updated",
+          description:
+            ids.length > 1 && newStatus !== "service_started"
+              ? `${label ?? newStatus} applied to ${ids.length} linked services`
+              : label
+                ? `Set to ${label}`
+                : undefined,
+        })
+      } else {
+        toast({ title: "Could not update status", variant: "destructive" })
+      }
+    } catch (e) {
+      console.error(e)
+      toast({ title: "Could not update status", variant: "destructive" })
+    } finally {
+      setCardStatusMenuUpdatingId(null)
     }
   }
 
@@ -2858,6 +2914,9 @@ export const AppointmentsCalendarGrid = forwardRef<
                       })
                     }
 
+                    const showStatusContextMenu = canChangeAppointmentStatusViaContextMenu(apt)
+                    const statusMenuBusy = cardStatusMenuUpdatingId === apt._id
+
                     return (
                       <div
                         data-calendar-appt-slot
@@ -2912,7 +2971,8 @@ export const AppointmentsCalendarGrid = forwardRef<
                           openDelay={50}
                           closeDelay={0}
                         >
-                          <HoverCardTrigger asChild>
+                          {(() => {
+                            const cardDiv = (
                         <div
                           data-appointment-card
                           className={`group relative flex h-full min-h-0 w-full max-w-full flex-1 flex-col overflow-hidden rounded-md text-left animate-appointment-card-enter ${
@@ -3068,7 +3128,32 @@ export const AppointmentsCalendarGrid = forwardRef<
                           )}
                         </div>
                         </div>
-                          </HoverCardTrigger>
+                            )
+                            const withHoverTrigger = (
+                              <HoverCardTrigger asChild>{cardDiv}</HoverCardTrigger>
+                            )
+                            if (!showStatusContextMenu) return withHoverTrigger
+                            return (
+                              <ContextMenu>
+                                <ContextMenuTrigger asChild>{withHoverTrigger}</ContextMenuTrigger>
+                                <ContextMenuContent className="w-52" onClick={(e) => e.stopPropagation()}>
+                                  <ContextMenuLabel>Change status</ContextMenuLabel>
+                                  <ContextMenuSeparator />
+                                  {APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS.map((opt) => (
+                                    <ContextMenuItem
+                                      key={opt.value}
+                                      disabled={statusMenuBusy || apt.status === opt.value}
+                                      onSelect={() => {
+                                        void handleCalendarCardQuickStatus(apt, opt.value)
+                                      }}
+                                    >
+                                      {opt.label}
+                                    </ContextMenuItem>
+                                  ))}
+                                </ContextMenuContent>
+                              </ContextMenu>
+                            )
+                          })()}
                           <HoverCardContent
                             side={colIndex === 0 ? "right" : "left"}
                             align="start"

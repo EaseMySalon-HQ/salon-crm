@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -85,11 +86,17 @@ export function MembershipPlansTable() {
               Add Plan
             </Button>
           </SheetTrigger>
-          <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
-            <SheetHeader>
-              <SheetTitle>Create Membership Plan</SheetTitle>
+          <SheetContent
+            side="right"
+            className="flex h-full w-full flex-col gap-0 border-l p-0 shadow-xl sm:max-w-lg"
+          >
+            <SheetHeader className="space-y-1 border-b border-border/60 px-6 py-5 text-left">
+              <SheetTitle className="text-lg font-semibold tracking-tight">
+                Create Membership Plan
+              </SheetTitle>
+              <SheetDescription>Create a new membership plan using the fields below.</SheetDescription>
             </SheetHeader>
-            <div className="mt-6">
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
               <MembershipPlanForm
                 onSuccess={() => setIsAddOpen(false)}
                 onClose={() => setIsAddOpen(false)}
@@ -145,6 +152,20 @@ export function MembershipPlansTable() {
                         >
                           {plan.isActive ? "Active" : "Inactive"}
                         </Badge>
+                        {(plan.appliesToAllClients || plan.unlimitedDuration) && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {plan.appliesToAllClients ? (
+                              <Badge variant="outline" className="text-[10px] font-normal">
+                                All clients
+                              </Badge>
+                            ) : null}
+                            {plan.unlimitedDuration ? (
+                              <Badge variant="outline" className="text-[10px] font-normal">
+                                No expiry
+                              </Badge>
+                            ) : null}
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div className="flex gap-1 shrink-0">
@@ -178,7 +199,7 @@ export function MembershipPlansTable() {
                   <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
                     <span className="flex items-center gap-1.5">
                       <Calendar className="h-3.5 w-3.5" />
-                      {plan.durationInDays} days
+                      {plan.unlimitedDuration ? "No end date" : `${plan.durationInDays} days`}
                     </span>
                     {(plan.discountPercentage || 0) > 0 && (
                       <span className="flex items-center gap-1.5">
@@ -190,6 +211,11 @@ export function MembershipPlansTable() {
                       <Wrench className="h-3.5 w-3.5" />
                       {(plan.includedServices || []).length} service(s)
                     </span>
+                    {(plan.excludedServiceIds || []).length > 0 && (
+                      <span className="flex items-center gap-1.5 text-amber-700 dark:text-amber-500">
+                        {(plan.excludedServiceIds || []).length} excluded from discount
+                      </span>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -199,19 +225,23 @@ export function MembershipPlansTable() {
       </div>
 
       <Sheet open={!!editingPlan} onOpenChange={(open) => !open && setEditingPlan(null)}>
-        <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>Edit Membership Plan</SheetTitle>
+        <SheetContent
+          side="right"
+          className="flex h-full w-full flex-col gap-0 border-l p-0 shadow-xl sm:max-w-lg"
+        >
+          <SheetHeader className="space-y-1 border-b border-border/60 px-6 py-5 text-left">
+            <SheetTitle className="text-lg font-semibold tracking-tight">Edit Membership Plan</SheetTitle>
+            <SheetDescription>Edit the plan fields below and save.</SheetDescription>
           </SheetHeader>
-          {editingPlan && (
-            <div className="mt-6">
+          {editingPlan ? (
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
               <MembershipPlanForm
                 plan={editingPlan}
                 onSuccess={() => setEditingPlan(null)}
                 onClose={() => setEditingPlan(null)}
               />
             </div>
-          )}
+          ) : null}
         </SheetContent>
       </Sheet>
     </div>
