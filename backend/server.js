@@ -33,6 +33,15 @@ const serviceBundle = require('./lib/service-bundle');
 const { buildDashboardInitPayload, buildAppointmentsSummary } = require('./lib/dashboard-init');
 const { buildNotificationsFeed } = require('./lib/notifications-feed');
 const {
+  activeMembershipMongoMatch,
+  expiringMembershipMongoMatch,
+  membershipExpiredMongoMatch,
+  subscriptionExpiryDateForPlan,
+  resetAppliesToAllClientsExcept,
+  assignUniversalMembershipToNewClient,
+  ensureAllClientsSubscribedToUniversalPlan,
+} = require('./lib/membership-subscription-helpers');
+const {
   buildAnalyticsRevenueTab,
   buildAnalyticsServicesTab,
   buildAnalyticsClientsTab,
@@ -2458,6 +2467,12 @@ app.post(
 
     const savedClient = await newClient.save();
 
+    try {
+      await assignUniversalMembershipToNewClient(req.businessModels, req.user.branchId, savedClient._id, savedClient);
+    } catch (uniMemErr) {
+      logger.error('[Membership] Universal assign on client create failed:', uniMemErr);
+    }
+
     scheduleActivityLog(
       {
         businessId: req.user.branchId,
@@ -3066,6 +3081,25 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
           error: error.message || 'Failed to create client',
           data: clientData
         });
+      }
+    }
+
+    if (results.created > 0) {
+      try {
+        const { MembershipPlan } = req.businessModels;
+        const uni = await MembershipPlan.findOne({
+          branchId: req.user.branchId,
+          isActive: true,
+          appliesToAllClients: true,
+        }).lean();
+        if (uni) {
+          const backfill = await ensureAllClientsSubscribedToUniversalPlan(req.businessModels, req.user.branchId, uni);
+          if (backfill.created > 0) {
+            logger.info(`[Membership] After client import: created ${backfill.created} universal subscription(s)`);
+          }
+        }
+      } catch (impUniErr) {
+        logger.error('[Membership] Universal backfill after client import failed:', impUniErr);
       }
     }
 
@@ -3697,6 +3731,11 @@ app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusine
         status: 'active'
       });
       await client.save();
+      try {
+        await assignUniversalMembershipToNewClient(req.businessModels, req.user.branchId, client._id, client);
+      } catch (uniMemErr) {
+        logger.error('[Membership] Universal assign on lead convert failed:', uniMemErr);
+      }
     }
 
     // Create appointments for interested services
@@ -4432,13 +4471,9 @@ app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabas
     if (statusUpper === 'ALL') {
       // no status / expiry constraint
     } else if (statusUpper === 'ACTIVE') {
-      query.status = 'ACTIVE';
-      query.expiryDate = { $gte: today };
+      Object.assign(query, activeMembershipMongoMatch(today));
     } else if (statusUpper === 'EXPIRED') {
-      query.$or = [
-        { status: 'EXPIRED' },
-        { status: 'ACTIVE', expiryDate: { $lt: today } },
-      ];
+      query.$or = membershipExpiredMongoMatch(today).$or;
     } else if (statusUpper === 'CANCELLED') {
       query.status = 'CANCELLED';
     } else {
@@ -4480,7 +4515,17 @@ app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabas
 app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), async (req, res) => {
   try {
     const { MembershipPlan, Service } = req.businessModels;
-    const { planName, price, durationInDays, discountPercentage = 0, includedServices = [], isActive = true } = req.body;
+    const {
+      planName,
+      price,
+      durationInDays,
+      discountPercentage = 0,
+      includedServices = [],
+      excludedServiceIds = [],
+      isActive = true,
+      appliesToAllClients = false,
+      unlimitedDuration = false,
+    } = req.body;
 
     if (!planName || price == null || !durationInDays) {
       return res.status(400).json({
@@ -4492,6 +4537,8 @@ app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requ
     const priceNum = parseFloat(price);
     const durationNum = parseInt(durationInDays);
     const discountNum = parseFloat(discountPercentage) || 0;
+    const appliesAll = !!appliesToAllClients;
+    const unlimited = !!unlimitedDuration;
 
     if (isNaN(priceNum) || priceNum < 0) {
       return res.status(400).json({ success: false, error: 'price must be a non-negative number' });
@@ -4501,6 +4548,10 @@ app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requ
     }
 
     const branchId = req.user.branchId;
+
+    if (appliesAll) {
+      await resetAppliesToAllClientsExcept(MembershipPlan, branchId, null);
+    }
     const validIncludedServices = [];
     if (Array.isArray(includedServices) && includedServices.length > 0) {
       for (const inc of includedServices) {
@@ -4521,6 +4572,26 @@ app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requ
       }
     }
 
+    const validExcludedIds = [];
+    const excludedSeen = new Set();
+    if (Array.isArray(excludedServiceIds) && excludedServiceIds.length > 0) {
+      for (const raw of excludedServiceIds) {
+        const serviceId = raw?._id || raw;
+        if (!serviceId || !mongoose.Types.ObjectId.isValid(serviceId)) continue;
+        const service = await Service.findById(serviceId);
+        if (!service || service.branchId?.toString() !== branchId.toString()) {
+          return res.status(400).json({
+            success: false,
+            error: `Service ${serviceId} not found or does not belong to this business`
+          });
+        }
+        const k = String(serviceId);
+        if (excludedSeen.has(k)) continue;
+        excludedSeen.add(k);
+        validExcludedIds.push(new mongoose.Types.ObjectId(serviceId));
+      }
+    }
+
     const plan = new MembershipPlan({
       branchId,
       planName: String(planName).trim(),
@@ -4528,10 +4599,19 @@ app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requ
       durationInDays: durationNum,
       discountPercentage: Math.min(100, Math.max(0, discountNum)),
       includedServices: validIncludedServices,
-      isActive: !!isActive
+      excludedServiceIds: validExcludedIds,
+      isActive: !!isActive,
+      appliesToAllClients: appliesAll,
+      unlimitedDuration: unlimited,
     });
 
     const savedPlan = await plan.save();
+    if (savedPlan.isActive && savedPlan.appliesToAllClients) {
+      const backfill = await ensureAllClientsSubscribedToUniversalPlan(req.businessModels, branchId, savedPlan.toObject());
+      if (backfill.created > 0) {
+        logger.info(`[Membership] Universal plan ${savedPlan._id}: created ${backfill.created} subscription(s)`);
+      }
+    }
     res.status(201).json({ success: true, data: savedPlan });
   } catch (error) {
     logger.error('Error creating membership plan:', error);
@@ -4554,7 +4634,7 @@ app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, r
       return res.status(404).json({ success: false, error: 'Plan not found' });
     }
 
-    const { planName, price, durationInDays, discountPercentage, includedServices, isActive } = req.body;
+    const { planName, price, durationInDays, discountPercentage, includedServices, excludedServiceIds, isActive, appliesToAllClients, unlimitedDuration } = req.body;
 
     const updatePayload = {};
     if (planName !== undefined) updatePayload.planName = String(planName).trim();
@@ -4574,6 +4654,12 @@ app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, r
     }
     if (discountPercentage !== undefined) updatePayload.discountPercentage = Math.min(100, Math.max(0, parseFloat(discountPercentage) || 0));
     if (isActive !== undefined) updatePayload.isActive = !!isActive;
+    if (appliesToAllClients !== undefined) updatePayload.appliesToAllClients = !!appliesToAllClients;
+    if (unlimitedDuration !== undefined) updatePayload.unlimitedDuration = !!unlimitedDuration;
+
+    if (updatePayload.appliesToAllClients === true) {
+      await resetAppliesToAllClientsExcept(MembershipPlan, branchId, planId);
+    }
 
     if (Array.isArray(includedServices)) {
       const validIncludedServices = [];
@@ -4596,7 +4682,34 @@ app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, r
       updatePayload.includedServices = validIncludedServices;
     }
 
+    if (Array.isArray(excludedServiceIds)) {
+      const validExcludedIds = [];
+      const excludedSeen = new Set();
+      for (const raw of excludedServiceIds) {
+        const serviceId = raw?._id || raw;
+        if (!serviceId || !mongoose.Types.ObjectId.isValid(serviceId)) continue;
+        const service = await Service.findById(serviceId);
+        if (!service || service.branchId?.toString() !== branchId.toString()) {
+          return res.status(400).json({
+            success: false,
+            error: `Service ${serviceId} not found or does not belong to this business`
+          });
+        }
+        const k = String(serviceId);
+        if (excludedSeen.has(k)) continue;
+        excludedSeen.add(k);
+        validExcludedIds.push(new mongoose.Types.ObjectId(serviceId));
+      }
+      updatePayload.excludedServiceIds = validExcludedIds;
+    }
+
     const updatedPlan = await MembershipPlan.findByIdAndUpdate(planId, updatePayload, { new: true });
+    if (updatedPlan?.isActive && updatedPlan.appliesToAllClients) {
+      const backfill = await ensureAllClientsSubscribedToUniversalPlan(req.businessModels, branchId, updatedPlan.toObject());
+      if (backfill.created > 0) {
+        logger.info(`[Membership] Universal plan ${updatedPlan._id} (update): created ${backfill.created} subscription(s)`);
+      }
+    }
     res.json({ success: true, data: updatedPlan });
   } catch (error) {
     logger.error('Error updating membership plan:', error);
@@ -4621,6 +4734,12 @@ app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDa
 
     plan.isActive = !plan.isActive;
     await plan.save();
+    if (plan.isActive && plan.appliesToAllClients) {
+      const backfill = await ensureAllClientsSubscribedToUniversalPlan(req.businessModels, branchId, plan.toObject());
+      if (backfill.created > 0) {
+        logger.info(`[Membership] Universal plan ${plan._id} (toggle on): created ${backfill.created} subscription(s)`);
+      }
+    }
     res.json({ success: true, data: plan });
   } catch (error) {
     logger.error('Error toggling membership plan:', error);
@@ -4664,8 +4783,7 @@ app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, 
     const existingActive = await MembershipSubscription.findOne({
       branchId,
       customerId: new mongoose.Types.ObjectId(customerId),
-      status: 'ACTIVE',
-      expiryDate: { $gte: todaySubscribe },
+      ...activeMembershipMongoMatch(todaySubscribe),
     });
     if (existingActive) {
       return res.status(400).json({
@@ -4675,8 +4793,7 @@ app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, 
     }
 
     const startDate = new Date();
-    const expiryDate = new Date(startDate);
-    expiryDate.setDate(expiryDate.getDate() + plan.durationInDays);
+    const expiryDate = subscriptionExpiryDateForPlan(plan, startDate);
 
     const subscription = new MembershipSubscription({
       branchId,
@@ -4718,8 +4835,7 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
     const subscription = await MembershipSubscription.findOne({
       branchId,
       customerId: new mongoose.Types.ObjectId(customerId),
-      status: 'ACTIVE',
-      expiryDate: { $gte: startOfRef },
+      ...activeMembershipMongoMatch(startOfRef),
     })
       .populate('planId')
       .lean();
@@ -4868,7 +4984,7 @@ app.post('/api/membership/redeem', authenticateToken, setupBusinessDatabase, req
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    if (new Date(subscription.expiryDate) < today) {
+    if (subscription.expiryDate != null && new Date(subscription.expiryDate) < today) {
       return res.status(400).json({
         success: false,
         error: 'Membership has expired'
@@ -6503,6 +6619,40 @@ app.post('/api/purchase-orders/:id/cancel', authenticateToken, setupBusinessData
     res.json({ success: true, data: po });
   } catch (error) {
     logger.error('Error cancelling purchase order:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Permanently delete a cancelled purchase order (no linked purchase invoices).
+app.delete('/api/purchase-orders/:id', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { PurchaseOrder, PurchaseInvoice } = req.businessModels;
+    const branchId = req.user.branchId;
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po || po.branchId.toString() !== branchId.toString()) {
+      return res.status(404).json({ success: false, error: 'Purchase order not found' });
+    }
+    if (po.status !== 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only cancelled purchase orders can be permanently deleted',
+      });
+    }
+    const linkedCount = await PurchaseInvoice.countDocuments({
+      branchId,
+      purchaseOrderId: po._id,
+    });
+    if (linkedCount > 0) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'This order still has linked purchase invoices. Delete those records first if they are already cancelled.',
+      });
+    }
+    await PurchaseOrder.deleteOne({ _id: po._id });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Error deleting purchase order:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
@@ -11221,13 +11371,10 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
     const totalRevenue = receipts.reduce((sum, receipt) => sum + receipt.total, 0);
     logger.debug('Total revenue:', totalRevenue);
 
-    // Membership metrics — only count subscriptions not past expiry (aligns with UI Active vs Inactive by date)
+    // Membership metrics — active = ACTIVE and (no expiry or expiry on/after today)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const membershipActiveFilter = {
-      status: 'ACTIVE',
-      expiryDate: { $gte: today },
-    };
+    const membershipActiveFilter = activeMembershipMongoMatch(today);
     const totalActiveMembers = await MembershipSubscription.countDocuments(membershipActiveFilter);
     const activeSubscriptions = await MembershipSubscription.find(membershipActiveFilter)
       .populate('planId', 'price')
@@ -11235,10 +11382,9 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
     const membershipRevenue = activeSubscriptions.reduce((sum, sub) => sum + (sub.planId?.price || 0), 0);
     const in30Days = new Date(today);
     in30Days.setDate(in30Days.getDate() + 30);
-    const membersExpiringIn30Days = await MembershipSubscription.countDocuments({
-      status: 'ACTIVE',
-      expiryDate: { $gte: today, $lte: in30Days },
-    });
+    const membersExpiringIn30Days = await MembershipSubscription.countDocuments(
+      expiringMembershipMongoMatch(today, in30Days),
+    );
 
     logger.debug('✅ Dashboard stats calculated for business:', req.user?.branchId);
     res.json({
@@ -11945,17 +12091,16 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
     const customerId = saleData.customerId || savedSale.customerId;
     if (customerId && mongoose.Types.ObjectId.isValid(customerId) && savedSale.items && Array.isArray(savedSale.items)) {
       const { MembershipUsage, MembershipSubscription } = req.businessModels;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
       const subscription = await MembershipSubscription.findOne({
         branchId: req.user.branchId,
         customerId: new mongoose.Types.ObjectId(customerId),
-        status: 'ACTIVE'
+        ...activeMembershipMongoMatch(today),
       }).populate('planId');
 
       if (subscription && subscription.planId) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        if (new Date(subscription.expiryDate) >= today) {
-          for (const item of savedSale.items) {
+        for (const item of savedSale.items) {
             if (item.type === 'service' && item.serviceId && item.isMembershipFree) {
               const staffId = (item.staffContributions && item.staffContributions[0]?.staffId)
                 ? item.staffContributions[0].staffId
@@ -11994,7 +12139,6 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
                   } catch (membershipErr) {
                     logger.error('[Membership] Redeem failed for item:', item.name, membershipErr);
                   }
-                }
               }
             }
           }
@@ -12009,15 +12153,16 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
         const { MembershipPlan, MembershipSubscription } = req.businessModels;
         const plan = await MembershipPlan.findOne({ _id: planIdToAssign, branchId: req.user.branchId });
         if (plan && plan.isActive) {
+          const todayAssign = new Date();
+          todayAssign.setHours(0, 0, 0, 0);
           const existingActive = await MembershipSubscription.findOne({
             branchId: req.user.branchId,
             customerId: new mongoose.Types.ObjectId(customerId),
-            status: 'ACTIVE'
+            ...activeMembershipMongoMatch(todayAssign),
           });
           if (!existingActive) {
             const startDate = new Date();
-            const expiryDate = new Date(startDate);
-            expiryDate.setDate(expiryDate.getDate() + plan.durationInDays);
+            const expiryDate = subscriptionExpiryDateForPlan(plan, startDate);
             const subscription = new MembershipSubscription({
               branchId: req.user.branchId,
               customerId: new mongoose.Types.ObjectId(customerId),

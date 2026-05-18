@@ -879,7 +879,8 @@ async function creditChangeReturnFromPos({
 }
 
 /**
- * POS: client had no prepaid wallet — create one using an active prepaid plan template and credit the bill change.
+ * POS: client had no wallet — open a non-expiring balance wallet and credit bill change / overpayment.
+ * Does not require a prepaid plan template in settings.
  */
 async function creditChangeOpenWalletFromPos({
   branchId,
@@ -896,7 +897,7 @@ async function creditChangeOpenWalletFromPos({
     err.status = 400;
     throw err;
   }
-  const { ClientWallet, ClientWalletTransaction, PrepaidPlan, Sale } = businessModels;
+  const { ClientWallet, ClientWalletTransaction, Sale } = businessModels;
 
   if (!mongoose.Types.ObjectId.isValid(String(clientId))) {
     const err = new Error('Invalid client id');
@@ -937,35 +938,15 @@ async function creditChangeOpenWalletFromPos({
 
   await assertSaleIsCashOnlyPayments(businessModels, saleId, branchId);
 
-  const plans = await PrepaidPlan.find({ branchId, status: 'active' }).sort({ createdAt: -1 }).lean();
-  let plan = null;
-  for (const p of plans) {
-    if (!p.branchIds || p.branchIds.length === 0) {
-      plan = p;
-      break;
-    }
-    if (p.branchIds.some((b) => String(b) === String(branchId))) {
-      plan = p;
-      break;
-    }
-  }
-  if (!plan) {
-    const err = new Error('No active prepaid plan — create one under Wallet plans to enable this.');
-    err.status = 409;
-    throw err;
-  }
-
   const far = NON_EXPIRING_WALLET_DATE();
   const purchasedAt = new Date();
 
   const planSnapshot = {
-    // Uses an active template for schema/FK only — not a prepaid plan purchase on this bill
     planName: 'Bill change credit',
-    templatePlanName: plan.name,
-    payAmount: plan.payAmount,
-    creditAmount: plan.creditAmount,
-    validityDays: plan.validityDays,
-    allowCouponStacking: !!plan.allowCouponStacking,
+    payAmount: 0,
+    creditAmount: amt,
+    validityDays: null,
+    allowCouponStacking: false,
     openedFromBillChangeCredit: true,
     billChangeCashCreditNonExpiring: true,
   };
@@ -976,7 +957,7 @@ async function creditChangeOpenWalletFromPos({
   const wallet = await ClientWallet.create({
     branchId,
     clientId: clientOid,
-    planId: plan._id,
+    planId: null,
     planSnapshot,
     paidAmount: amt,
     creditedBalance: amt,
@@ -1010,6 +991,100 @@ async function creditChangeOpenWalletFromPos({
   });
 
   queueWalletTxnWhatsApp(branchId, businessModels, wallet, wt);
+
+  return { wallet };
+}
+
+/**
+ * Manager: client has no wallet — open a non-expiring balance wallet (optional opening credit).
+ * No prepaid plan or sale required (production backfill / manual setup).
+ */
+async function openBalanceWalletForClient({
+  branchId,
+  businessModels,
+  staffUser,
+  clientId,
+  amount,
+  reason,
+}) {
+  const amt = Math.round(Number(amount) * 100) / 100;
+  if (!Number.isFinite(amt) || amt < 0) {
+    const err = new Error('Amount must be zero or positive');
+    err.status = 400;
+    throw err;
+  }
+  const { ClientWallet, ClientWalletTransaction } = businessModels;
+
+  if (!mongoose.Types.ObjectId.isValid(String(clientId))) {
+    const err = new Error('Invalid client id');
+    err.status = 400;
+    throw err;
+  }
+
+  const clientOid = new mongoose.Types.ObjectId(String(clientId));
+  const existingCount = await ClientWallet.countDocuments({
+    branchId,
+    clientId: clientOid,
+    status: { $nin: ['cancelled'] },
+  });
+  if (existingCount > 0) {
+    const err = new Error(
+      'This client already has a wallet — pick it in Manual adjustment below (no need for wallet ID).'
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const far = NON_EXPIRING_WALLET_DATE();
+  const purchasedAt = new Date();
+  const reasonTrim = reason != null ? String(reason).trim() : '';
+
+  const planSnapshot = {
+    planName: 'Bill change credit',
+    payAmount: 0,
+    creditAmount: amt,
+    validityDays: null,
+    allowCouponStacking: false,
+    openedFromBillChangeCredit: true,
+    billChangeCashCreditNonExpiring: true,
+    openedManuallyByStaff: true,
+  };
+
+  const wallet = await ClientWallet.create({
+    branchId,
+    clientId: clientOid,
+    planId: null,
+    planSnapshot,
+    paidAmount: amt,
+    creditedBalance: amt,
+    remainingBalance: amt,
+    purchasedAt,
+    expiryDate: far,
+    gracePeriodDays: 0,
+    effectiveExpiryDate: far,
+    nonExpiring: true,
+    status: amt > 0.009 ? 'active' : 'exhausted',
+    issuedBranchId: branchId,
+    saleId: null,
+    notifiedDays: [],
+  });
+
+  if (amt > 0.009) {
+    const txDesc = reasonTrim || `Wallet opened — ₹${amt.toLocaleString('en-IN')} opening credit`;
+    const wt = await ClientWalletTransaction.create({
+      branchId,
+      walletId: wallet._id,
+      clientId: clientOid,
+      type: 'credit',
+      amount: amt,
+      balanceAfter: amt,
+      description: txDesc,
+      performedBy: staffUser?._id || null,
+      saleId: null,
+      serviceNames: [],
+    });
+    queueWalletTxnWhatsApp(branchId, businessModels, wallet, wt);
+  }
 
   return { wallet };
 }
@@ -1201,6 +1276,7 @@ module.exports = {
   manualAdjust,
   creditChangeReturnFromPos,
   creditChangeOpenWalletFromPos,
+  openBalanceWalletForClient,
   reverseWalletRedemptionsForDeletedSale,
   getLiabilitySummary,
   DEFAULT_SETTINGS,

@@ -168,6 +168,56 @@ export const APPOINTMENT_EDITABLE_STATUSES: ReadonlySet<string> = new Set([
   "service_started",
 ])
 
+/** Values allowed from appointment card context menu (right-click). */
+export type AppointmentCardContextStatus = "scheduled" | "confirmed" | "arrived" | "service_started"
+
+export const APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS: ReadonlyArray<{
+  value: AppointmentCardContextStatus
+  label: string
+}> = [
+  { value: "scheduled", label: "Scheduled" },
+  { value: "confirmed", label: "Confirmed" },
+  { value: "arrived", label: "Arrived" },
+  { value: "service_started", label: "Service started" },
+]
+
+/** Whether the appointment can switch among {@link APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS} from the UI. */
+export function canChangeAppointmentStatusViaContextMenu(apt: { status?: string } | null | undefined): boolean {
+  const s = apt?.status
+  if (!s) return false
+  return APPOINTMENT_EDITABLE_STATUSES.has(s)
+}
+
+/**
+ * Appointment IDs to update when setting status from a booking card context menu.
+ * - `service_started` → only the card that was acted on.
+ * - `scheduled`, `confirmed`, `arrived` → all loaded rows sharing `bookingGroupId` (or the anchor alone if no group / no siblings in memory).
+ */
+export function getAppointmentIdsForCardStatusUpdate(
+  anchor: { _id: string; bookingGroupId?: string | null | undefined },
+  loadedAppointments: Array<{ _id: string; bookingGroupId?: string | null | undefined }>,
+  newStatus: AppointmentCardContextStatus,
+): string[] {
+  const anchorId = toMongoIdString(anchor._id) || String(anchor._id)
+  if (newStatus === "service_started") {
+    return anchorId ? [anchorId] : []
+  }
+  const raw = anchor.bookingGroupId
+  if (raw == null || String(raw).trim() === "") {
+    return anchorId ? [anchorId] : []
+  }
+  const bg = String(raw).trim()
+  const out = new Set<string>()
+  for (const a of loadedAppointments) {
+    const aid = toMongoIdString(a._id) || String(a._id)
+    if (!aid) continue
+    const ag = a.bookingGroupId
+    if (ag != null && String(ag).trim() === bg) out.add(aid)
+  }
+  if (out.size === 0 && anchorId) out.add(anchorId)
+  return [...out]
+}
+
 export type AppointmentCalendarOpenIntent =
   | { type: "details" }
   | { type: "edit_form"; appointmentId: string }

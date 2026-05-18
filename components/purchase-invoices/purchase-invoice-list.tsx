@@ -43,13 +43,6 @@ const STATUS_OPTS = [
   { value: "cancelled", label: "Cancelled" },
 ]
 
-const PAY_OPTS = [
-  { value: "all", label: "All payments" },
-  { value: "paid", label: "Paid" },
-  { value: "unpaid", label: "Unpaid" },
-  { value: "partially_paid", label: "Partially paid" },
-]
-
 function badgeVariant(s: string) {
   const m: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
     draft: "outline",
@@ -71,7 +64,6 @@ export function PurchaseInvoiceList({
   const [rows, setRows] = React.useState<any[]>([])
   const [loading, setLoading] = React.useState(true)
   const [status, setStatus] = React.useState("all")
-  const [paymentStatus, setPaymentStatus] = React.useState("all")
   const [supplierId, setSupplierId] = React.useState("all")
   const [suppliers, setSuppliers] = React.useState<{ _id: string; name?: string }[]>([])
   const [suppliersLoading, setSuppliersLoading] = React.useState(true)
@@ -110,7 +102,6 @@ export function PurchaseInvoiceList({
       const res = await PurchaseInvoicesAPI.getAll({
         supplier: supplierId === "all" ? undefined : supplierId,
         status: status === "all" ? undefined : status,
-        paymentStatus: paymentStatus === "all" ? undefined : paymentStatus,
         search: search.trim() || undefined,
         dateFrom: dateFrom.trim() || undefined,
         dateTo: dateTo.trim() || undefined,
@@ -130,7 +121,7 @@ export function PurchaseInvoiceList({
     } finally {
       setLoading(false)
     }
-  }, [status, paymentStatus, supplierId, search, searchTick, dateFrom, dateTo, toast])
+  }, [status, supplierId, search, searchTick, dateFrom, dateTo, toast])
 
   React.useEffect(() => {
     load()
@@ -236,18 +227,6 @@ export function PurchaseInvoiceList({
             </SelectTrigger>
             <SelectContent>
               {STATUS_OPTS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={paymentStatus} onValueChange={setPaymentStatus}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PAY_OPTS.map((o) => (
                 <SelectItem key={o.value} value={o.value}>
                   {o.label}
                 </SelectItem>

@@ -497,7 +497,7 @@ async function expireMembershipSubscriptions() {
         const { MembershipSubscription } = businessModels;
 
         const result = await MembershipSubscription.updateMany(
-          { status: 'ACTIVE', expiryDate: { $lt: today } },
+          { status: 'ACTIVE', expiryDate: { $ne: null, $lt: today } },
           { $set: { status: 'EXPIRED' } }
         );
 

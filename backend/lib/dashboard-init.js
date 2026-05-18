@@ -4,6 +4,7 @@
  */
 
 const mongoose = require('mongoose');
+const { activeMembershipMongoMatch, expiringMembershipMongoMatch } = require('./membership-subscription-helpers');
 const {
   getTodayIST,
   getStartOfDayIST,
@@ -129,23 +130,15 @@ async function buildDashboardInitPayload({
       today.setHours(0, 0, 0, 0);
       const in30 = new Date(today);
       in30.setDate(in30.getDate() + 30);
-      const totalActiveMembers = await MembershipSubscription.countDocuments({
-        branchId: bid,
-        status: 'ACTIVE',
-        expiryDate: { $gte: today },
-      });
-      const activeSubscriptions = await MembershipSubscription.find({
-        branchId: bid,
-        status: 'ACTIVE',
-        expiryDate: { $gte: today },
-      })
+      const activeMatch = { branchId: bid, ...activeMembershipMongoMatch(today) };
+      const totalActiveMembers = await MembershipSubscription.countDocuments(activeMatch);
+      const activeSubscriptions = await MembershipSubscription.find(activeMatch)
         .populate('planId', 'price')
         .lean();
       const membershipRevenue = activeSubscriptions.reduce((sum, sub) => sum + (sub.planId?.price || 0), 0);
       const membersExpiringIn30Days = await MembershipSubscription.countDocuments({
         branchId: bid,
-        status: 'ACTIVE',
-        expiryDate: { $gte: today, $lte: in30 },
+        ...expiringMembershipMongoMatch(today, in30),
       });
       return { totalActiveMembers, membershipRevenue, membersExpiringIn30Days };
     })(),

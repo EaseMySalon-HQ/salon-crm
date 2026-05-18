@@ -94,7 +94,11 @@ export function MembershipCard({ clientId }: MembershipCardProps) {
   const plan = data?.plan || subscription?.planId
   const usageSummary = data?.usageSummary || []
   const isActive = subscription?.status === "ACTIVE"
-  const isExpired = subscription?.status === "EXPIRED" || (subscription?.expiryDate && new Date(subscription.expiryDate) < new Date())
+  const isExpired =
+    subscription?.status === "EXPIRED" ||
+    (subscription?.expiryDate != null &&
+      String(subscription.expiryDate) !== "" &&
+      new Date(subscription.expiryDate) < new Date())
 
   if (loading) {
     return (
@@ -138,16 +142,26 @@ export function MembershipCard({ clientId }: MembershipCardProps) {
                   {isActive && !isExpired ? "Active" : "Expired"}
                 </Badge>
               </div>
-              {subscription?.expiryDate && (
+              {subscription?.expiryDate ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Calendar className="h-4 w-4" />
                   Expires: {format(new Date(subscription.expiryDate), "MMM d, yyyy")}
                 </div>
-              )}
+              ) : isActive && !isExpired ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Calendar className="h-4 w-4" />
+                  No end date
+                </div>
+              ) : null}
               {plan?.discountPercentage > 0 && (
                 <div className="flex items-center gap-2 text-sm">
                   <Percent className="h-4 w-4" />
                   {plan.discountPercentage}% discount on non-included services
+                  {Array.isArray(plan?.excludedServiceIds) && plan.excludedServiceIds.length > 0 ? (
+                    <span className="text-muted-foreground font-normal">
+                      ({plan.excludedServiceIds.length} excluded)
+                    </span>
+                  ) : null}
                 </div>
               )}
               {usageSummary.length > 0 && (

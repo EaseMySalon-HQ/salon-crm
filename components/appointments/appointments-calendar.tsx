@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo } from "react"
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, Fragment } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
@@ -8,6 +8,14 @@ import { Pencil, Eye, ChevronDown, Square, List, Calendar, Heart } from "lucide-
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -34,6 +42,10 @@ import {
   getCalendarCardVisualStatus,
   getAppointmentCalendarOpenIntent,
   toMongoIdString,
+  APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS,
+  canChangeAppointmentStatusViaContextMenu,
+  getAppointmentIdsForCardStatusUpdate,
+  type AppointmentCardContextStatus,
 } from "@/lib/appointment-calendar-helpers"
 import {
   RaiseSaleConfirmationModal,
@@ -175,6 +187,7 @@ export const AppointmentsCalendar = forwardRef<
   const [deleteInvoiceReason, setDeleteInvoiceReason] = useState('')
   const [deletingInvoice, setDeletingInvoice] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [cardStatusMenuUpdatingId, setCardStatusMenuUpdatingId] = useState<string | null>(null)
   const [showCancelledModal, setShowCancelledModal] = useState(false)
   const [showUpcomingModal, setShowUpcomingModal] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
@@ -764,6 +777,48 @@ export const AppointmentsCalendar = forwardRef<
     }
   }
 
+  const handleAppointmentCardQuickStatus = async (
+    appointment: Appointment,
+    newStatus: AppointmentCardContextStatus,
+  ) => {
+    const ids = getAppointmentIdsForCardStatusUpdate(appointment, appointments, newStatus)
+    if (ids.length === 0) return
+    const idSet = new Set(ids.map((x) => toMongoIdString(x) || String(x)))
+    setCardStatusMenuUpdatingId(appointment._id)
+    try {
+      const results = await Promise.all(ids.map((id) => AppointmentsAPI.update(id, { status: newStatus })))
+      if (results.every((r) => r?.success)) {
+        setAppointments((prev) =>
+          prev.map((a) =>
+            idSet.has(toMongoIdString(a._id) || String(a._id)) ? { ...a, status: newStatus } : a,
+          ),
+        )
+        setSelectedAppointment((prev) =>
+          prev && idSet.has(toMongoIdString(prev._id) || String(prev._id))
+            ? { ...prev, status: newStatus }
+            : prev,
+        )
+        const label = APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS.find((o) => o.value === newStatus)?.label
+        toast({
+          title: "Status updated",
+          description:
+            ids.length > 1 && newStatus !== "service_started"
+              ? `${label ?? newStatus} applied to ${ids.length} linked services`
+              : label
+                ? `Set to ${label}`
+                : undefined,
+        })
+      } else {
+        toast({ title: "Could not update status", variant: "destructive" })
+      }
+    } catch (e) {
+      console.error(e)
+      toast({ title: "Could not update status", variant: "destructive" })
+    } finally {
+      setCardStatusMenuUpdatingId(null)
+    }
+  }
+
   type ColumnStatusKey =
     | "scheduled"
     | "confirmed"
@@ -1146,9 +1201,10 @@ export const AppointmentsCalendar = forwardRef<
                     const showLinkedHoverOutline = Boolean(
                       bookingGroupIdStr && hoveredBookingGroupId && bookingGroupIdStr === hoveredBookingGroupId
                     )
-                    return (
+                    const showStatusContextMenu = canChangeAppointmentStatusViaContextMenu(appointment)
+                    const statusMenuBusy = cardStatusMenuUpdatingId === appointment._id
+                    const appointmentCard = (
                       <Card
-                        key={appointment._id}
                         draggable={isDraggable}
                         onDragStart={(e) => isDraggable && handleCardDragStart(e, appointment)}
                         onDragEnd={handleCardDragEnd}
@@ -1232,6 +1288,28 @@ export const AppointmentsCalendar = forwardRef<
                           </div>
                         </CardContent>
                       </Card>
+                    )
+                    return showStatusContextMenu ? (
+                      <ContextMenu key={appointment._id}>
+                        <ContextMenuTrigger asChild>{appointmentCard}</ContextMenuTrigger>
+                        <ContextMenuContent className="w-52">
+                          <ContextMenuLabel>Change status</ContextMenuLabel>
+                          <ContextMenuSeparator />
+                          {APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS.map((opt) => (
+                            <ContextMenuItem
+                              key={opt.value}
+                              disabled={statusMenuBusy || appointment.status === opt.value}
+                              onSelect={() => {
+                                void handleAppointmentCardQuickStatus(appointment, opt.value)
+                              }}
+                            >
+                              {opt.label}
+                            </ContextMenuItem>
+                          ))}
+                        </ContextMenuContent>
+                      </ContextMenu>
+                    ) : (
+                      <Fragment key={appointment._id}>{appointmentCard}</Fragment>
                     )
                   })
                 ) : (
@@ -1547,9 +1625,10 @@ export const AppointmentsCalendar = forwardRef<
                   const staffName = anyAppt?.staffId?.name || 'Unassigned Staff'
                   const price = anyAppt?.price ?? 0
                   const duration = anyAppt?.duration ?? 0
-                  return (
+                  const showStatusContextMenu = canChangeAppointmentStatusViaContextMenu(appointment)
+                  const statusMenuBusy = cardStatusMenuUpdatingId === appointment._id
+                  const upcomingCard = (
                     <Card
-                      key={appointment._id}
                       className={`relative bg-indigo-50/50 shadow-lg hover:shadow-xl transition-all duration-300 rounded-2xl cursor-pointer ${
                         anyAppt.staffLocked === true
                           ? 'border-[3px] border-amber-600 ring-2 ring-amber-500/80'
@@ -1616,6 +1695,28 @@ export const AppointmentsCalendar = forwardRef<
                         </div>
                       </CardContent>
                     </Card>
+                  )
+                  return showStatusContextMenu ? (
+                    <ContextMenu key={appointment._id}>
+                      <ContextMenuTrigger asChild>{upcomingCard}</ContextMenuTrigger>
+                      <ContextMenuContent className="w-52">
+                        <ContextMenuLabel>Change status</ContextMenuLabel>
+                        <ContextMenuSeparator />
+                        {APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS.map((opt) => (
+                          <ContextMenuItem
+                            key={opt.value}
+                            disabled={statusMenuBusy || appointment.status === opt.value}
+                            onSelect={() => {
+                              void handleAppointmentCardQuickStatus(appointment, opt.value)
+                            }}
+                          >
+                            {opt.label}
+                          </ContextMenuItem>
+                        ))}
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  ) : (
+                    <Fragment key={appointment._id}>{upcomingCard}</Fragment>
                   )
                 })
               ) : (

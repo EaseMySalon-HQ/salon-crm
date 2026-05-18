@@ -66,6 +66,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { useToast } from "@/hooks/use-toast"
+import { effectiveMembershipPlanDiscountPercent } from "@/lib/membership-plan-discount"
 import { cn } from "@/lib/utils"
 import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import { clientStore, type Client } from "@/lib/client-store"
@@ -299,7 +300,6 @@ function applyMembershipToCheckoutServiceLines(
       u,
     ])
   )
-  const discountPct = Number(membershipData.plan?.discountPercentage) || 0
   const remaining: Record<string, number> = {}
   usageMap.forEach((u: any, sid: string) => {
     remaining[sid] = typeof u.remaining === "number" ? u.remaining : 0
@@ -309,6 +309,7 @@ function applyMembershipToCheckoutServiceLines(
     if (!line.serviceId || line.membershipAutoDiscount === false || line.fromBundle) return line
 
     const sid = String(line.serviceId)
+    const discountPct = effectiveMembershipPlanDiscountPercent(membershipData.plan, sid)
     const u = usageMap.get(sid)
     const svc = catalogServices.find((s: any) => String(s._id || s.id) === sid)
     const basePrice = Number(svc?.price ?? line.price) || 0
@@ -1193,6 +1194,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     /** Pre-tax value of lines: excl. membership benefit on services, vs current (for display / membership savings). */
     let subtotalPreTaxExclMembership = 0
     let subtotalPreTaxCurrent = 0
+    /** Sum of pre-tax amounts from line gross (price × qty) before line-item discounts. */
+    let subtotalPreTaxGrossBeforeLineDiscounts = 0
 
     const netToPreTaxLine = (net: number, rate: number, taxable: boolean) => {
       if (!enableTax || !taxable || rate <= 0) return net
@@ -1231,6 +1234,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     lines.forEach((l) => {
       const qty = serviceLineQuantity(l)
       const price = Number(l.price) || 0
+      const grossLine = price * qty
       const netCurrent = lineNetAfterLineDiscount(
         price,
         qty,
@@ -1241,12 +1245,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       const svc = catalogServices.find((s: any) => String(s._id || s.id) === String(l.serviceId))
       const rate = sRate
       const taxable = !!(svc?.taxApplicable === true)
+      subtotalPreTaxGrossBeforeLineDiscounts += netToPreTaxLine(grossLine, rate, taxable)
       addLine(netCurrent, netExclMembership, rate, taxable)
     })
 
     productLines.forEach((l) => {
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
-      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const price = Number(l.price) || 0
+      const grossLine = price * q
+      const net = lineNetAfterLineDiscount(price, q, l.discountValue, l.discountIsPercent)
       const p = catalogProducts.find((x: any) => String(x._id || x.id) === String(l.productId))
       let rate = ts?.standardProductRate ?? 18
       if (p?.taxCategory && ts) {
@@ -1270,18 +1277,25 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
             rate = ts.standardProductRate
         }
       }
+      subtotalPreTaxGrossBeforeLineDiscounts += netToPreTaxLine(grossLine, rate, true)
       addLine(net, net, rate, true)
     })
 
     membershipLines.forEach((l) => {
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
-      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const price = Number(l.price) || 0
+      const grossLine = price * q
+      const net = lineNetAfterLineDiscount(price, q, l.discountValue, l.discountIsPercent)
+      subtotalPreTaxGrossBeforeLineDiscounts += netToPreTaxLine(grossLine, mRate, true)
       addLine(net, net, mRate, true)
     })
 
     prepaidLines.forEach((l) => {
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
-      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const price = Number(l.price) || 0
+      const grossLine = price * q
+      const net = lineNetAfterLineDiscount(price, q, l.discountValue, l.discountIsPercent)
+      subtotalPreTaxGrossBeforeLineDiscounts += netToPreTaxLine(grossLine, prRate, true)
       addLine(net, net, prRate, true)
     })
 
@@ -1293,6 +1307,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       taxSumExclMembership,
       subtotalPreTaxExclMembership,
       subtotalPreTaxCurrent,
+      subtotalPreTaxGrossBeforeLineDiscounts,
     }
   }, [
     lines,
@@ -1310,6 +1325,17 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const membershipDiscountPreTaxRupees = Math.max(
     0,
     cartPricing.subtotalPreTaxExclMembership - cartPricing.subtotalPreTaxCurrent
+  )
+
+  const grossPreTaxTotal = cartPricing.subtotalPreTaxGrossBeforeLineDiscounts
+  const totalPreTaxLineDiscountEffect = Math.max(
+    0,
+    grossPreTaxTotal - cartPricing.subtotalPreTaxCurrent
+  )
+  /** Line-item (non-membership) discounts in pre-tax rupees; membership savings use the row below. */
+  const itemManualDiscountPreTaxRupees = Math.max(
+    0,
+    totalPreTaxLineDiscountEffect - membershipDiscountPreTaxRupees
   )
 
   const cartDiscountApplied = useMemo(() => {
@@ -4231,26 +4257,37 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
                   {!cartBreakdownOpen ? (
                     <>
+                      <div className="flex items-center justify-between text-sm">
+                        <span
+                          className="text-muted-foreground"
+                          title="Sum of line amounts before GST, using catalog line total (price × qty) before line-item discounts."
+                        >
+                          Total amount (Excl. GST)
+                        </span>
+                        <span className="tabular-nums text-muted-foreground">
+                          ₹{formatCheckoutInr(grossPreTaxTotal)}
+                        </span>
+                      </div>
+                      {itemManualDiscountPreTaxRupees > 0.01 ? (
+                        <div className="flex items-center justify-between text-sm">
+                          <span
+                            className="text-muted-foreground"
+                            title="Pre-tax value of discounts applied on individual items (excludes membership plan savings)."
+                          >
+                            Discount
+                          </span>
+                          <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                            −₹{formatCheckoutInr(itemManualDiscountPreTaxRupees)}
+                          </span>
+                        </div>
+                      ) : null}
                       {membershipDiscountPreTaxRupees > 0.01 ? (
-                        <>
-                          <div className="flex items-center justify-between text-sm">
-                            <span
-                              className="text-muted-foreground"
-                              title="Sum of line amounts before GST; membership benefit not applied on services where applicable."
-                            >
-                              Total amount (Excl. GST)
-                            </span>
-                            <span className="tabular-nums text-muted-foreground">
-                              ₹{formatCheckoutInr(cartPricing.subtotalPreTaxExclMembership)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-muted-foreground">Membership Discount</span>
-                            <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
-                              −₹{formatCheckoutInr(membershipDiscountPreTaxRupees)}
-                            </span>
-                          </div>
-                        </>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Membership Discount</span>
+                          <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                            −₹{formatCheckoutInr(membershipDiscountPreTaxRupees)}
+                          </span>
+                        </div>
                       ) : null}
                       <div className="flex items-center justify-between text-sm">
                         <span
@@ -4303,18 +4340,33 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                     </>
                   ) : null}
 
-                  <CollapsibleContent className="space-y-2 data-[state=closed]:animate-none">
+                  <CollapsibleContent
+                    className={cn("space-y-2", "data-[state=closed]:animate-none")}
+                  >
                     <div className="flex items-center justify-between text-sm">
                       <span
                         className="text-muted-foreground"
-                        title="Sum of line amounts before GST; membership benefit not applied on services where applicable."
+                        title="Sum of line amounts before GST, using catalog line total (price × qty) before line-item discounts."
                       >
                         Total amount (Excl. GST)
                       </span>
                       <span className="tabular-nums text-muted-foreground">
-                        ₹{formatCheckoutInr(cartPricing.subtotalPreTaxExclMembership)}
+                        ₹{formatCheckoutInr(grossPreTaxTotal)}
                       </span>
                     </div>
+                    {itemManualDiscountPreTaxRupees > 0.01 ? (
+                      <div className="flex items-center justify-between text-sm">
+                        <span
+                          className="text-muted-foreground"
+                          title="Pre-tax value of discounts applied on individual items (excludes membership plan savings)."
+                        >
+                          Discount
+                        </span>
+                        <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                          −₹{formatCheckoutInr(itemManualDiscountPreTaxRupees)}
+                        </span>
+                      </div>
+                    ) : null}
                     {membershipDiscountPreTaxRupees > 0.01 ? (
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-muted-foreground">Membership Discount</span>

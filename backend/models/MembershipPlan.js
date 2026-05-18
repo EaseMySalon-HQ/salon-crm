@@ -43,9 +43,25 @@ const membershipPlanSchema = new mongoose.Schema({
     type: [includedServiceSchema],
     default: []
   },
+  /** Services that do not receive the plan's discountPercentage (full price unless manually discounted). */
+  excludedServiceIds: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'Service',
+    default: []
+  },
   isActive: {
     type: Boolean,
     default: true
+  },
+  /** When true (and plan is active), new clients get this plan; saving also backfills clients without an active membership. Only one plan per branch should have this flag. */
+  appliesToAllClients: {
+    type: Boolean,
+    default: false
+  },
+  /** When true, new subscriptions use expiryDate: null (never expires via daily job). */
+  unlimitedDuration: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

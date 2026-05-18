@@ -808,6 +808,11 @@ export class PurchaseOrdersAPI {
     return response.data
   }
 
+  static async deletePermanently(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.delete(`/purchase-orders/${id}`)
+    return response.data
+  }
+
   static async updateStatus(id: string, data: { status: 'draft' | 'sent' | 'ordered' }): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`/purchase-orders/${id}/status`, data)
     return response.data
@@ -878,6 +883,16 @@ export class PurchaseInvoicesAPI {
   static async cancel(id: string): Promise<ApiResponse<any>> {
     try {
       const response = await apiClient.post(`/purchase-invoices/${id}/cancel`)
+      return response.data
+    } catch (e: unknown) {
+      const structured = coerceThrownResponseToFailure<any>(e)
+      return structured ?? { success: false, error: apiErrorMessage(e), data: null }
+    }
+  }
+
+  static async deletePermanently(id: string): Promise<ApiResponse<any>> {
+    try {
+      const response = await apiClient.delete(`/purchase-invoices/${id}`)
       return response.data
     } catch (e: unknown) {
       const structured = coerceThrownResponseToFailure<any>(e)
@@ -2843,6 +2858,16 @@ export class ClientWalletAPI {
     reason?: string
   }): Promise<ApiResponse<any>> {
     const response = await apiClient.post("/client-wallet/adjust", body)
+    return response.data
+  }
+
+  /** Manager: client has no wallet — open balance wallet with optional opening credit (no plan required) */
+  static async openBalanceWallet(body: {
+    clientId: string
+    amount?: number
+    reason?: string
+  }): Promise<ApiResponse<{ wallet?: any }>> {
+    const response = await apiClient.post("/client-wallet/open-balance-wallet", body)
     return response.data
   }
 
