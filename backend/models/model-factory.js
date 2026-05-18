@@ -73,6 +73,8 @@ class ModelFactory {
       
       // CashRegistry model
       CashRegistry: this.getModel('CashRegistry', require('./CashRegistry').schema, connection),
+
+      CashMovement: this.getModel('CashMovement', require('./CashMovement').schema, connection),
       
       // Expense model
       Expense: this.getModel('Expense', require('./Expense').schema, connection),

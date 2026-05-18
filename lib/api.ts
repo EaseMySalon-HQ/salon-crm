@@ -2115,6 +2115,49 @@ export class CashRegistryAPI {
   }
 }
 
+export class CashMovementsAPI {
+  static async getAll(params?: {
+    dateFrom?: string
+    dateTo?: string
+    status?: string
+  }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/cash-movements', { params })
+    return response.data
+  }
+
+  static async create(data: {
+    type: string
+    direction?: 'in' | 'out'
+    amount: number
+    date?: string
+    reason?: string
+    referenceNo?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/cash-movements', data)
+    return response.data
+  }
+
+  static async update(
+    id: string,
+    data: {
+      type: string
+      direction?: 'in' | 'out'
+      amount: number
+      date?: string
+      reason?: string
+      referenceNo?: string
+    }
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/cash-movements/${encodeURIComponent(id)}`, data)
+    return response.data
+  }
+
+  static async void(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.delete(`/cash-movements/${encodeURIComponent(id)}`)
+    return response.data
+  }
+}
+
 export class PettyCashAPI {
   static async addBalance(amount: number, date?: string): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/petty-cash', { amount, date })
