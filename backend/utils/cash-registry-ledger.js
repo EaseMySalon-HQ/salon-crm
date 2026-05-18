@@ -120,6 +120,55 @@ async function computeDayCashLedger({ Sale, Expense, branchId, registryDate }) {
 }
 
 /**
+ * Cash movements for drawer reconciliation (not expenses).
+ *
+ * @param {object} opts
+ * @param {import('mongoose').Model} opts.CashMovement
+ * @param {import('mongoose').Types.ObjectId|string} opts.branchId
+ * @param {Date|string} opts.registryDate
+ * @returns {Promise<{ cashIn: number, cashOut: number }>}
+ */
+async function computeDayCashMovements({ CashMovement, branchId, registryDate }) {
+  if (!CashMovement) return { cashIn: 0, cashOut: 0 };
+  const startOfDay = getStartOfDayIST(registryDate);
+  const endOfDay = getEndOfDayIST(registryDate);
+
+  const movements = await CashMovement.find({
+    branchId,
+    date: { $gte: startOfDay, $lt: endOfDay },
+    status: 'active',
+  }).lean();
+
+  let cashIn = 0;
+  let cashOut = 0;
+  movements.forEach((m) => {
+    const amt = Number(m.amount) || 0;
+    if (m.direction === 'in') cashIn += amt;
+    else cashOut += amt;
+  });
+  return { cashIn, cashOut };
+}
+
+/**
+ * Expected physical cash in drawer for reconciliation.
+ */
+function computeExpectedCashBalance({
+  opening = 0,
+  cashCollected = 0,
+  expenseValue = 0,
+  cashIn = 0,
+  cashOut = 0,
+}) {
+  return (
+    Number(opening) +
+    Number(cashCollected) -
+    Number(expenseValue) +
+    Number(cashIn) -
+    Number(cashOut)
+  );
+}
+
+/**
  * Card + Online totals for one IST calendar day — aligned with cash-registry-report
  * getEntryOnlineSales (invoice-day Card/Online + paymentHistory Card/Online on payment date).
  *
@@ -198,6 +247,8 @@ async function computeDayOnlineSales({ Sale, branchId, registryDate }) {
 
 module.exports = {
   computeDayCashLedger,
+  computeDayCashMovements,
+  computeExpectedCashBalance,
   computeDayOnlineSales,
   resolveOpeningBalanceForRegistryDay,
 };

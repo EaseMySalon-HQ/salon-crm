@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
 import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
+import { getSaleAdjustmentSummary } from "@/lib/sale-adjustments"
 import { getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST, formatDateIST } from "@/lib/date-utils"
 import { Calendar } from "@/components/ui/calendar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -21,6 +22,11 @@ import { Switch } from "@/components/ui/switch"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, ProductsAPI, type SalesSummaryData } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
 import { ProductListReport } from "@/components/reports/product-list-report"
+import {
+  CashMovementReport,
+  type CashMovementReportHandle,
+} from "@/components/reports/cash-movement-report"
+import { CASH_MOVEMENT_TYPE_OPTIONS } from "@/lib/cash-movements"
 import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
 import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
 import { useToast } from "@/hooks/use-toast"
@@ -99,6 +105,7 @@ interface SalesRecord {
   isEdited?: boolean // Track if bill has been edited
   editedAt?: Date | string
   items?: Array<{ type: string; [key: string]: unknown }>
+  billChangeCreditedToWallet?: number
 }
 
 function expandSaleTipAllocations(sale: SalesRecord): { staffId: string; staffName: string; amount: number }[] {
@@ -165,6 +172,8 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
     items: (sale.items as SalesRecord["items"]) || [],
     isEdited: sale.isEdited === true || !!sale.editedAt,
     editedAt: sale.editedAt as Date | string | undefined,
+    billChangeCreditedToWallet:
+      sale.billChangeCreditedToWallet != null ? Number(sale.billChangeCreditedToWallet) : undefined,
   }
 }
 
@@ -181,6 +190,7 @@ const REPORT_TYPES = [
   "appointment-list",
   "deleted-invoice",
   "unpaid-part-paid",
+  "cash-movement",
 ] as const
 
 export function SalesReport() {
@@ -295,6 +305,13 @@ export function SalesReport() {
     totalDuesSettled?: number
   }>({ count: 0, totalOutstanding: 0 })
   const [unpaidPartPaidLoading, setUnpaidPartPaidLoading] = useState(false)
+
+  // Cash Movement report filters
+  const [cashMovementDatePeriod, setCashMovementDatePeriod] = useState<DatePeriod>("today")
+  const [cashMovementDateRange, setCashMovementDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [cashMovementTypeFilter, setCashMovementTypeFilter] = useState<string>("all")
+  const [cashMovementDirectionFilter, setCashMovementDirectionFilter] = useState<string>("all")
+  const cashMovementReportRef = useRef<CashMovementReportHandle>(null)
 
   // Staff Tip report: payouts (for Mark as Paid)
   const [tipPayouts, setTipPayouts] = useState<{ staffId: string; staffName: string; amount: number; paidAt: string }[]>([])
@@ -637,6 +654,22 @@ export function SalesReport() {
     } else {
       setUnpaidPartPaidDateRange({})
     }
+  }
+
+  const handleCashMovementDatePeriodChange = (period: DatePeriod) => {
+    setCashMovementDatePeriod(period)
+    if (period === "custom") {
+      setCashMovementDateRange(getDateRangeFromPeriod("last7days"))
+    } else if (period !== "all") {
+      setCashMovementDateRange(getDateRangeFromPeriod(period))
+    } else {
+      setCashMovementDateRange({})
+    }
+  }
+
+  const handleExportCashMovementXLS = () => {
+    toast({ title: "Export", description: "Downloading cash movement Excel...", duration: 2500 })
+    cashMovementReportRef.current?.exportExcel()
   }
 
   useEffect(() => {
@@ -1584,6 +1617,7 @@ export function SalesReport() {
                   <SelectItem value="appointment-list">Appointment List</SelectItem>
                   <SelectItem value="deleted-invoice">Deleted Invoice</SelectItem>
                   <SelectItem value="unpaid-part-paid">Unpaid/Part-Paid</SelectItem>
+                  <SelectItem value="cash-movement">Cash Movement</SelectItem>
                 </SelectContent>
               </Select>
               {reportType === "summary" && (
@@ -2144,6 +2178,87 @@ export function SalesReport() {
                   )}
                 </>
               )}
+              {reportType === "cash-movement" && (
+                <>
+                  <Select value={cashMovementDatePeriod} onValueChange={(v: DatePeriod) => handleCashMovementDatePeriodChange(v)}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="last7days">Last 7 days</SelectItem>
+                      <SelectItem value="last30days">Last 30 days</SelectItem>
+                      <SelectItem value="currentMonth">Current month</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {cashMovementDatePeriod === "custom" && (
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {cashMovementDateRange?.from ? format(cashMovementDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={cashMovementDateRange?.from}
+                            onSelect={(d) => setCashMovementDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (cashMovementDateRange?.to ? d > cashMovementDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {cashMovementDateRange?.to ? format(cashMovementDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={cashMovementDateRange?.to}
+                            onSelect={(d) => setCashMovementDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (cashMovementDateRange?.from ? d < cashMovementDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                  <Select value={cashMovementTypeFilter} onValueChange={setCashMovementTypeFilter}>
+                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All types</SelectItem>
+                      {CASH_MOVEMENT_TYPE_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={cashMovementDirectionFilter} onValueChange={setCashMovementDirectionFilter}>
+                    <SelectTrigger className="w-32 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Direction" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="in">Cash in</SelectItem>
+                      <SelectItem value="out">Cash out</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </>
+              )}
               {reportType === "unpaid-part-paid" && (
                 <>
                   <Select value={unpaidPartPaidDatePeriod} onValueChange={(v: DatePeriod) => handleUnpaidPartPaidDatePeriodChange(v)}>
@@ -2225,7 +2340,7 @@ export function SalesReport() {
                   View Unpaid Bills
                 </Button>
               )}
-              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid") && (
+              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement") && (
                 canExport ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -2323,6 +2438,12 @@ export function SalesReport() {
                             Export via Email (PDF)
                           </DropdownMenuItem>
                         </>
+                      )}
+                      {reportType === "cash-movement" && (
+                        <DropdownMenuItem onClick={handleExportCashMovementXLS} className="cursor-pointer">
+                          <FileSpreadsheet className="h-4 w-4 mr-2" />
+                          Export as Excel
+                        </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -2669,6 +2790,16 @@ export function SalesReport() {
             </>
           )}
         </div>
+      ) : reportType === "cash-movement" ? (
+        <CashMovementReport
+          ref={cashMovementReportRef}
+          controlledFilters={{
+            datePeriod: cashMovementDatePeriod,
+            dateRange: cashMovementDateRange,
+            typeFilter: cashMovementTypeFilter,
+            directionFilter: cashMovementDirectionFilter,
+          }}
+        />
       ) : reportType === "service-list" ? (
         <ServiceListReport
           controlledFilters={{
@@ -3266,13 +3397,32 @@ export function SalesReport() {
                     )}
                   </span>
                 </TableHead>
+                <TableHead className="font-semibold text-slate-800">
+                  <span className="inline-flex items-center gap-1">
+                    Adjustments
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex cursor-help">
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400" />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs">
+                          <p className="text-sm">
+                            Change credited to prepaid wallet or other non-bill adjustments at checkout.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </span>
+                </TableHead>
                 <TableHead className="font-semibold text-slate-800">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {salesListLoading ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-16 text-slate-500">
+                  <TableCell colSpan={10} className="text-center py-16 text-slate-500">
                     <div className="flex flex-col items-center gap-3">
                       <div className="h-8 w-8 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin" />
                       <span className="text-sm">Loading sales…</span>
@@ -3281,7 +3431,7 @@ export function SalesReport() {
                 </TableRow>
               ) : paginatedSales.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-12 text-slate-500">
+                  <TableCell colSpan={10} className="text-center py-12 text-slate-500">
                     No sales records found for the selected filters.
                   </TableCell>
                 </TableRow>
@@ -3320,6 +3470,28 @@ export function SalesReport() {
                     <TableCell className="text-slate-600">₹{getTaxableAmount(sale).toFixed(2)}</TableCell>
                     <TableCell className="text-slate-600">₹{getGST(sale).toFixed(2)}</TableCell>
                     <TableCell className="font-semibold text-green-700">₹{getTotalPaid(sale).toFixed(2)}</TableCell>
+                    <TableCell>
+                      {(() => {
+                        const adj = getSaleAdjustmentSummary(sale)
+                        if (!adj.hasAdjustment) {
+                          return <span className="text-slate-400">—</span>
+                        }
+                        return (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-800 border border-violet-200 cursor-help">
+                                  {adj.displayLabel}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <p className="text-sm">{adj.tooltip}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )
+                      })()}
+                    </TableCell>
                     <TableCell>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -3459,6 +3631,18 @@ export function SalesReport() {
                 <div>
                   <label className="text-sm font-medium text-muted-foreground">Total Paid</label>
                   <p className="text-2xl font-bold text-green-600">₹{getTotalPaid(selectedBill, true).toFixed(2)}</p>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground">Adjustments</label>
+                  {(() => {
+                    const adj = getSaleAdjustmentSummary(selectedBill)
+                    if (!adj.hasAdjustment) {
+                      return <p className="text-lg text-muted-foreground">—</p>
+                    }
+                    return (
+                      <p className="text-lg font-semibold text-violet-700">{adj.displayLabel}</p>
+                    )
+                  })()}
                 </div>
               </div>
               {selectedBill.payments && selectedBill.payments.length > 0 && (

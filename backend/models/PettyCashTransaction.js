@@ -25,12 +25,19 @@ const pettyCashTransactionSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Business',
     required: true
-  }
+  },
+  /** Set when funded from Cash Registry “To petty cash” movement */
+  cashMovementId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CashMovement',
+    default: null,
+  },
 }, {
   timestamps: true
 });
 
 pettyCashTransactionSchema.index({ branchId: 1, date: -1 });
+pettyCashTransactionSchema.index({ cashMovementId: 1 }, { sparse: true });
 
 module.exports = {
   schema: pettyCashTransactionSchema,
