@@ -187,7 +187,13 @@ class ModelFactory {
       InvoiceCounter: this.getModel('InvoiceCounter', require('./InvoiceCounter').schema, connection),
       PlanInvoiceTransaction: this.getModel('PlanInvoiceTransaction', require('./PlanInvoiceTransaction').schema, connection),
       Invoice: this.getModel('Invoice', require('./Invoice').schema, connection),
-      GstFiling: this.getModel('GstFiling', require('./GstFiling').schema, connection)
+      GstFiling: this.getModel('GstFiling', require('./GstFiling').schema, connection),
+      PlatformLead: this.getModel('PlatformLead', require('./PlatformLead').schema, connection),
+      PlatformLeadActivity: this.getModel(
+        'PlatformLeadActivity',
+        require('./PlatformLeadActivity').schema,
+        connection
+      ),
     };
   }
 

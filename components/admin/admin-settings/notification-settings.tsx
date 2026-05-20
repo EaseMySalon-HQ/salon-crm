@@ -20,7 +20,7 @@ import {
   MessageCircle
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
-import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ChevronDown, HelpCircle } from "lucide-react"
@@ -84,6 +84,12 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
       userCreated: {
         subject: "Welcome to EaseMySalon - User Account Created",
         body: "Your user account has been created. Please log in to access the system.",
+        enabled: true
+      },
+      platformLeadPending: {
+        subject: "New platform lead — pending assignment",
+        body:
+          "A new lead was added to Lead Management and needs an assignee. Open the admin panel to assign.",
         enabled: true
       }
     },
@@ -191,6 +197,7 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
   const { toast } = useToast()
   const [testEmail, setTestEmail] = useState('')
   const [isTestingEmail, setIsTestingEmail] = useState(false)
+  const [testingTemplateKey, setTestingTemplateKey] = useState<string | null>(null)
   const [testSmsPhone, setTestSmsPhone] = useState('')
   const [testSmsMessage, setTestSmsMessage] = useState('Test message from EaseMySalon')
   const [isTestingSms, setIsTestingSms] = useState(false)
@@ -242,8 +249,23 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
     })
   }
 
+  const postTestEmail = async (body: Record<string, unknown>) => {
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
+    const response = await fetch(`${API_URL}/admin/settings/test/email`, {
+      method: "POST",
+      credentials: "include",
+      headers: adminRequestHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || data.success === false) {
+      throw new Error(data.error || `Request failed (${response.status})`)
+    }
+    return data
+  }
+
   const handleTestEmail = async () => {
-    if (!testEmail || !testEmail.includes('@')) {
+    if (!testEmail || !testEmail.includes("@")) {
       toast({
         title: "Error",
         description: "Please enter a valid email address",
@@ -254,39 +276,67 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
 
     setIsTestingEmail(true)
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-      const token = getAdminAuthToken()
-      
-      const response = await fetch(`${API_URL}/admin/settings/test/email`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify({
-          email: testEmail,
-          settings: settings.email // Send current email settings for testing
-        })
+      await postTestEmail({
+        email: testEmail,
+        settings: settings.email,
       })
-
-      const data = await response.json()
-
-      if (data.success) {
-        toast({
-          title: "Success",
-          description: `Test email sent to ${testEmail}`,
-        })
-      } else {
-        throw new Error(data.error || 'Failed to send test email')
-      }
-    } catch (error: any) {
+      toast({
+        title: "Success",
+        description: `Test email sent to ${testEmail}`,
+      })
+    } catch (error: unknown) {
       toast({
         title: "Error",
-        description: error.message || "Failed to send test email",
+        description: error instanceof Error ? error.message : "Failed to send test email",
         variant: "destructive",
       })
     } finally {
       setIsTestingEmail(false)
+    }
+  }
+
+  const handleTestTemplateEmail = async (templateKey: string) => {
+    if (!testEmail || !testEmail.includes("@")) {
+      toast({
+        title: "Enter a test email",
+        description:
+          "Add your email in the “Test email” field under Email Configuration above, then try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!settings.email?.enabled) {
+      toast({
+        title: "Email disabled",
+        description: "Enable email under Email Configuration before sending a template test.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setTestingTemplateKey(templateKey)
+    try {
+      await postTestEmail({
+        email: testEmail,
+        templateType: templateKey,
+        settings: settings.email,
+      })
+      toast({
+        title: "Test sent",
+        description:
+          templateKey === "platformLeadPending"
+            ? `Platform lead pending sample sent to ${testEmail}`
+            : `Test email sent to ${testEmail}`,
+      })
+    } catch (error: unknown) {
+      toast({
+        title: "Test failed",
+        description: error instanceof Error ? error.message : "Could not send test email",
+        variant: "destructive",
+      })
+    } finally {
+      setTestingTemplateKey(null)
     }
   }
 
@@ -302,13 +352,10 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
     setIsTestingSms(true)
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-      const token = getAdminAuthToken()
       const response = await fetch(`${API_URL}/admin/settings/test/sms`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
+        credentials: 'include',
+        headers: adminRequestHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           phone: testSmsPhone,
           message: testSmsMessage || 'Test message from EaseMySalon'
@@ -348,13 +395,10 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
     setIsFetchingTemplate(true)
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-      const token = getAdminAuthToken()
       const response = await fetch(`${API_URL}/admin/settings/sms/template-details`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
+        credentials: 'include',
+        headers: adminRequestHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           templateId: templateId || undefined,
           templateBody: templateBody || undefined
@@ -750,9 +794,14 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                       variant="outline"
                       size="sm"
                       className="border-slate-200"
-                      onClick={() => toast({ title: "Send test", description: "Test email would be sent for this template. Use the test field in Email Configuration to send a test." })}
+                      disabled={
+                        testingTemplateKey === key ||
+                        isTestingEmail ||
+                        !settings.email?.enabled
+                      }
+                      onClick={() => handleTestTemplateEmail(key)}
                     >
-                      Send test
+                      {testingTemplateKey === key ? "Sending…" : "Send test"}
                     </Button>
                   </div>
                 </CardContent>

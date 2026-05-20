@@ -61,6 +61,7 @@ interface InvoiceSeller {
 interface InvoiceSettingsShape {
   seller: InvoiceSeller
   invoicePrefix: string
+  planInvoicePrefix: string
   gstRate: number
 }
 
@@ -92,6 +93,7 @@ const DEFAULT_SETTINGS: InvoiceSettingsShape = {
     website: "https://easemysalon.in",
   },
   invoicePrefix: "EMS/WLT",
+  planInvoicePrefix: "EMS/SUB",
   gstRate: 0.18,
 }
 
@@ -114,9 +116,7 @@ export function InvoiceSettings({
 
   // Keep local state in sync when parent reloads (e.g. after save)
   useEffect(() => {
-    if (propSettings) {
-      setSettings(mergeWithDefaults(propSettings))
-    }
+    setSettings(mergeWithDefaults(propSettings))
   }, [propSettings])
 
   const updateSeller = (field: keyof InvoiceSeller, value: string) => {
@@ -392,27 +392,29 @@ export function InvoiceSettings({
             <span>Numbering &amp; tax rate</span>
           </CardTitle>
           <CardDescription>
-            Controls the shape of invoice numbers (
+            Invoice number format:{" "}
             <code className="text-xs">
               {"<prefix>/<fiscal-year>/<sequence>"}
             </code>
-            ) and the GST rate applied at recharge time.
+            . Wallet and subscription use separate prefixes and counters (
+            <span className="font-mono text-xs">WLT/</span> vs{" "}
+            <span className="font-mono text-xs">SUB/</span>).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="invoice-prefix">Invoice prefix</Label>
+              <Label htmlFor="invoice-prefix-wallet">Wallet invoice prefix</Label>
               <Input
-                id="invoice-prefix"
-                value={settings.invoicePrefix}
+                id="invoice-prefix-wallet"
+                value={settings.invoicePrefix ?? ""}
                 placeholder="EMS/WLT"
                 onChange={(e) =>
                   updateTopLevel("invoicePrefix", e.target.value)
                 }
               />
               <p className="text-xs text-slate-500">
-                Example:{" "}
+                Wallet recharges — example:{" "}
                 <span className="font-mono">
                   {(settings.invoicePrefix || "EMS/WLT").replace(/\/+$/, "") ||
                     "EMS/WLT"}
@@ -421,6 +423,27 @@ export function InvoiceSettings({
               </p>
             </div>
             <div className="space-y-2">
+              <Label htmlFor="invoice-prefix-plan">Subscription invoice prefix</Label>
+              <Input
+                id="invoice-prefix-plan"
+                value={settings.planInvoicePrefix ?? ""}
+                placeholder="EMS/SUB"
+                onChange={(e) =>
+                  updateTopLevel("planInvoicePrefix", e.target.value)
+                }
+              />
+              <p className="text-xs text-slate-500">
+                Plan billing — example:{" "}
+                <span className="font-mono">
+                  {(settings.planInvoicePrefix || "EMS/SUB").replace(/\/+$/, "") ||
+                    "EMS/SUB"}
+                  /2026-27/00042
+                </span>
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2 md:col-span-2 md:max-w-xs">
               <Label htmlFor="invoice-gst-rate">GST rate</Label>
               <div className="flex items-center gap-2">
                 <Input
@@ -443,7 +466,8 @@ export function InvoiceSettings({
                 <span className="text-sm text-slate-500">%</span>
               </div>
               <p className="text-xs text-slate-500">
-                Applied on top of the wallet-credit base. 18% by default.
+                Applied on top of the taxable base for wallet recharges and plan
+                billing. 18% by default.
               </p>
             </div>
           </div>
@@ -664,12 +688,15 @@ export function InvoiceSettings({
 function mergeWithDefaults(
   value?: Partial<InvoiceSettingsShape>
 ): InvoiceSettingsShape {
+  const invoicePrefix =
+    typeof value?.invoicePrefix === "string" ? value.invoicePrefix.trim() : ""
+  const planInvoicePrefix =
+    typeof value?.planInvoicePrefix === "string" ? value.planInvoicePrefix.trim() : ""
+
   return {
     seller: { ...DEFAULT_SETTINGS.seller, ...(value?.seller || {}) },
-    invoicePrefix:
-      typeof value?.invoicePrefix === "string" && value.invoicePrefix.length > 0
-        ? value.invoicePrefix
-        : DEFAULT_SETTINGS.invoicePrefix,
+    invoicePrefix: invoicePrefix || DEFAULT_SETTINGS.invoicePrefix,
+    planInvoicePrefix: planInvoicePrefix || DEFAULT_SETTINGS.planInvoicePrefix,
     gstRate:
       typeof value?.gstRate === "number" && Number.isFinite(value.gstRate)
         ? value.gstRate
