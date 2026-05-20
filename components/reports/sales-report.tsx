@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
-import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail } from "lucide-react"
+import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail, ReceiptText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -19,13 +19,14 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { CursorTooltip } from "@/components/ui/cursor-tooltip"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
-import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, ProductsAPI, type SalesSummaryData } from "@/lib/api"
+import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, ProductsAPI, SettingsAPI, type SalesSummaryData } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
 import { ProductListReport } from "@/components/reports/product-list-report"
 import {
   CashMovementReport,
   type CashMovementReportHandle,
 } from "@/components/reports/cash-movement-report"
+import { GstReport, type GstReportHandle } from "@/components/reports/gst-report"
 import { CASH_MOVEMENT_TYPE_OPTIONS } from "@/lib/cash-movements"
 import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
 import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
@@ -312,6 +313,12 @@ export function SalesReport() {
   const [cashMovementTypeFilter, setCashMovementTypeFilter] = useState<string>("all")
   const [cashMovementDirectionFilter, setCashMovementDirectionFilter] = useState<string>("all")
   const cashMovementReportRef = useRef<CashMovementReportHandle>(null)
+
+  // GST report filters
+  const [gstDatePeriod, setGstDatePeriod] = useState<DatePeriod>("currentMonth")
+  const [gstDateRange, setGstDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [gstBusinessGstin, setGstBusinessGstin] = useState("")
+  const gstReportRef = useRef<GstReportHandle>(null)
 
   // Staff Tip report: payouts (for Mark as Paid)
   const [tipPayouts, setTipPayouts] = useState<{ staffId: string; staffName: string; amount: number; paidAt: string }[]>([])
@@ -671,6 +678,34 @@ export function SalesReport() {
     toast({ title: "Export", description: "Downloading cash movement Excel...", duration: 2500 })
     cashMovementReportRef.current?.exportExcel()
   }
+
+  const handleGstDatePeriodChange = (period: DatePeriod) => {
+    setGstDatePeriod(period)
+    if (period === "custom") {
+      setGstDateRange(getDateRangeFromPeriod("last30days"))
+    } else if (period !== "all") {
+      setGstDateRange(getDateRangeFromPeriod(period))
+    } else {
+      setGstDateRange({})
+    }
+  }
+
+  useEffect(() => {
+    if (reportType !== "gst") return
+    let cancelled = false
+    SettingsAPI.getBusinessSettings()
+      .then((res) => {
+        if (cancelled) return
+        const data = (res?.data || {}) as { gstNumber?: string }
+        setGstBusinessGstin(String(data.gstNumber || ""))
+      })
+      .catch(() => {
+        if (!cancelled) setGstBusinessGstin("")
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reportType])
 
   useEffect(() => {
     if (reportType !== "service-list") return
@@ -1618,6 +1653,7 @@ export function SalesReport() {
                   <SelectItem value="deleted-invoice">Deleted Invoice</SelectItem>
                   <SelectItem value="unpaid-part-paid">Unpaid/Part-Paid</SelectItem>
                   <SelectItem value="cash-movement">Cash Movement</SelectItem>
+                  <SelectItem value="gst">GST Report</SelectItem>
                 </SelectContent>
               </Select>
               {reportType === "summary" && (
@@ -2259,6 +2295,73 @@ export function SalesReport() {
                   </Select>
                 </>
               )}
+              {reportType === "gst" && (
+                <>
+                  <Select value={gstDatePeriod} onValueChange={(v: DatePeriod) => handleGstDatePeriodChange(v)}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="last7days">Last 7 days</SelectItem>
+                      <SelectItem value="last30days">Last 30 days</SelectItem>
+                      <SelectItem value="currentMonth">Current month</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {gstDatePeriod === "custom" && (
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {gstDateRange?.from ? format(gstDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={gstDateRange?.from}
+                            onSelect={(d) => setGstDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (gstDateRange?.to ? d > gstDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {gstDateRange?.to ? format(gstDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={gstDateRange?.to}
+                            onSelect={(d) => setGstDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (gstDateRange?.from ? d < gstDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                  {gstBusinessGstin ? (
+                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                      GSTIN: {gstBusinessGstin}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                      No GSTIN — set in Business Settings
+                    </Badge>
+                  )}
+                </>
+              )}
               {reportType === "unpaid-part-paid" && (
                 <>
                   <Select value={unpaidPartPaidDatePeriod} onValueChange={(v: DatePeriod) => handleUnpaidPartPaidDatePeriodChange(v)}>
@@ -2340,7 +2443,7 @@ export function SalesReport() {
                   View Unpaid Bills
                 </Button>
               )}
-              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement") && (
+              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement" || reportType === "gst") && (
                 canExport ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -2444,6 +2547,31 @@ export function SalesReport() {
                           <FileSpreadsheet className="h-4 w-4 mr-2" />
                           Export as Excel
                         </DropdownMenuItem>
+                      )}
+                      {reportType === "gst" && (
+                        <>
+                          <DropdownMenuItem
+                            onClick={() => gstReportRef.current?.exportCsv()}
+                            className="cursor-pointer"
+                          >
+                            <FileText className="h-4 w-4 mr-2" />
+                            CSV (per bill)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => gstReportRef.current?.exportXlsx()}
+                            className="cursor-pointer"
+                          >
+                            <FileSpreadsheet className="h-4 w-4 mr-2" />
+                            Excel (summary + detail)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => gstReportRef.current?.exportJson()}
+                            className="cursor-pointer"
+                          >
+                            <ReceiptText className="h-4 w-4 mr-2" />
+                            GSTR-1 B2CS JSON
+                          </DropdownMenuItem>
+                        </>
                       )}
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -2798,6 +2926,14 @@ export function SalesReport() {
             dateRange: cashMovementDateRange,
             typeFilter: cashMovementTypeFilter,
             directionFilter: cashMovementDirectionFilter,
+          }}
+        />
+      ) : reportType === "gst" ? (
+        <GstReport
+          ref={gstReportRef}
+          controlledFilters={{
+            datePeriod: gstDatePeriod,
+            dateRange: gstDateRange,
           }}
         />
       ) : reportType === "service-list" ? (

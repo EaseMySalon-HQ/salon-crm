@@ -12,6 +12,12 @@ const ADMIN_ACCESS_MODULES = [
     actions: ['view', 'create', 'update', 'delete', 'export']
   },
   {
+    id: 'leads',
+    label: 'Leads',
+    description: 'Track and manage platform sales leads',
+    actions: ['view', 'create', 'update', 'delete']
+  },
+  {
     id: 'plans',
     label: 'Plans & Billing',
     description: 'Manage subscription templates, assignments and history',
@@ -77,7 +83,7 @@ const DEFAULT_ADMIN_ROLES = [
     description: 'Day-to-day administration across businesses, plans and settings',
     isSystem: true,
     color: 'blue',
-    permissions: clonePermissionsFromModules(['dashboard', 'businesses', 'plans', 'settings'])
+    permissions: clonePermissionsFromModules(['dashboard', 'businesses', 'leads', 'plans', 'settings'])
   },
   {
     key: 'support',

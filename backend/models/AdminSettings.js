@@ -198,7 +198,19 @@ const adminSettingsSchema = new mongoose.Schema({
         subject: { type: String, default: 'Appointment Confirmation - {date}' },
         body: { type: String, default: 'Dear {clientName},\n\nYour appointment has been confirmed!\n\nAppointment Details:\nService: {serviceName}\nDate: {date}\nTime: {time}\nStaff: {staffName}\nBusiness: {businessName}\nPhone: {businessPhone}\n\n{notes}\n\nWe look forward to seeing you!' },
         enabled: { type: Boolean, default: true }
-      }
+      },
+      platformLeadPending: {
+        subject: {
+          type: String,
+          default: 'New platform lead — pending assignment',
+        },
+        body: {
+          type: String,
+          default:
+            'A new lead was added to Lead Management and needs an assignee. Open the admin panel to assign.',
+        },
+        enabled: { type: Boolean, default: true },
+      },
     },
     alerts: {
       systemHealth: {
@@ -278,10 +290,10 @@ const adminSettingsSchema = new mongoose.Schema({
       phone: { type: String, default: '' },
       website: { type: String, default: '' },
     },
-    // Prefix applied to the generated number (e.g. "EMS/WLT/2026-27/00042").
-    // Keep structure `<prefix>/<fiscalYear>/<seq>` — only the leading token
-    // is configurable so downstream parsers don't break.
+    // Prefix for wallet recharge invoices (e.g. "EMS/WLT/2026-27/00042").
     invoicePrefix: { type: String, default: 'EMS/WLT' },
+    // Prefix for plan subscription invoices (e.g. "EMS/SUB/2026-27/00042").
+    planInvoicePrefix: { type: String, default: 'EMS/SUB' },
     // GST rate applied on top of the wallet-credit base. 0.18 → 18%.
     gstRate: { type: Number, default: 0.18, min: 0, max: 1 },
   }
@@ -446,6 +458,25 @@ adminSettingsSchema.statics.getSettings = async function() {
       await settings.save();
     }
   }
+
+  // Ensure invoice prefix fields exist on older settings documents
+  if (!settings.invoice) {
+    settings.invoice = {};
+  }
+  let invoiceNeedsSave = false;
+  if (!settings.invoice.invoicePrefix) {
+    settings.invoice.invoicePrefix = 'EMS/WLT';
+    invoiceNeedsSave = true;
+  }
+  if (!settings.invoice.planInvoicePrefix) {
+    settings.invoice.planInvoicePrefix = 'EMS/SUB';
+    invoiceNeedsSave = true;
+  }
+  if (invoiceNeedsSave) {
+    settings.markModified('invoice');
+    await settings.save();
+  }
+
   return settings;
 };
 

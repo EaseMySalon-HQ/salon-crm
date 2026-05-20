@@ -20,7 +20,9 @@ function elementMatchesPortaledSurface(el: Element): boolean {
     el.closest("[cmdk-item]") ||
     el.closest("[cmdk-input-wrapper]") ||
     el.closest("[cmdk-group]") ||
-    el.closest("[cmdk-empty]")
+    el.closest("[cmdk-empty]") ||
+    el.closest("[data-slot=calendar]") ||
+    el.closest(".rdp-root")
   )
 }
 

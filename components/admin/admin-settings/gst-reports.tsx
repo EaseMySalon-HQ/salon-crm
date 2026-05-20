@@ -221,7 +221,9 @@ export function GstReports() {
     loadFilings()
   }, [loadFilings])
 
-  const handleExport = async (format: "csv" | "xlsx" | "gstr1") => {
+  const handleExport = async (
+    format: "csv" | "xlsx" | "gstr1" | "gstr1_json"
+  ) => {
     setExporting(true)
     try {
       const filename = await AdminGstAPI.exportInvoices({
@@ -566,7 +568,10 @@ export function GstReports() {
                     Excel (XLSX)
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => handleExport("gstr1")}>
-                    GSTR-1 template
+                    GSTR-1 template (Excel)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport("gstr1_json")}>
+                    GSTR-1 JSON (GST portal)
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

@@ -11,6 +11,12 @@ import { Textarea } from "@/components/ui/textarea"
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "@/components/ui/use-toast"
+import {
+  DemoBookingSuccessDialog,
+  type DemoBookingSuccessSummary,
+} from "@/components/marketing/demo-booking-success-dialog"
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
 
 const contactSchema = z.object({
   name: z.string().min(2, "Please enter your name"),
@@ -21,6 +27,7 @@ const contactSchema = z.object({
   branches: z.string().optional(),
   preferredTime: z.string().optional(),
   message: z.string().min(10, "Tell us a little about your requirements"),
+  website: z.string().optional(),
 })
 
 const timeSlots = Array.from({ length: 8 }, (_, index) => {
@@ -38,6 +45,8 @@ const timeSlots = Array.from({ length: 8 }, (_, index) => {
 
 export function ContactForm() {
   const [loading, setLoading] = useState(false)
+  const [successOpen, setSuccessOpen] = useState(false)
+  const [successSummary, setSuccessSummary] = useState<DemoBookingSuccessSummary | null>(null)
   const form = useForm<z.infer<typeof contactSchema>>({
     resolver: zodResolver(contactSchema),
     defaultValues: {
@@ -49,6 +58,7 @@ export function ContactForm() {
       branches: "",
       preferredTime: "",
       message: "",
+      website: "",
     },
   })
 
@@ -56,26 +66,39 @@ export function ContactForm() {
     setLoading(true)
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-      const whatsappMessage = `Hi EaseMySalon! I'm ${values.name} from ${values.salon} in ${values.city}.
-
-Phone: ${values.phone}
-Email: ${values.email}
-Branches: ${values.branches || "N/A"}
-Preferred time: ${values.preferredTime || "Anytime"}
-Message: ${values.message}`
-
-      window.open(`https://wa.me/916360019041?text=${encodeURIComponent(whatsappMessage)}`, "_blank")
-
-      toast({
-        title: "Thanks! We’ll be in touch soon.",
-        description: "Opening WhatsApp so you can chat with our concierge.",
+      const leadRes = await fetch(`${API_URL}/public/demo-lead`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: values.name,
+          phone: values.phone,
+          email: values.email,
+          salon: values.salon,
+          city: values.city,
+          branches: values.branches || undefined,
+          preferredTime: values.preferredTime || undefined,
+          message: values.message,
+          website: values.website || "",
+        }),
       })
+      const leadPayload = await leadRes.json().catch(() => ({}))
+      if (!leadRes.ok || leadPayload?.success === false) {
+        throw new Error(leadPayload?.error || "Could not save your details")
+      }
+
+      setSuccessSummary({
+        name: values.name,
+        salon: values.salon,
+        email: values.email,
+        preferredTime: values.preferredTime || undefined,
+      })
+      setSuccessOpen(true)
       form.reset()
     } catch (error) {
       toast({
         title: "Something went wrong",
-        description: "Please try again or WhatsApp us directly.",
+        description:
+          error instanceof Error ? error.message : "Please try again in a moment.",
         variant: "destructive",
       })
     } finally {
@@ -84,8 +107,22 @@ Message: ${values.message}`
   }
 
   return (
-    <Form {...form}>
+    <>
+      <DemoBookingSuccessDialog
+        open={successOpen}
+        onOpenChange={setSuccessOpen}
+        summary={successSummary}
+      />
+      <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+        <input
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden
+          className="absolute -left-[9999px] h-0 w-0 opacity-0 pointer-events-none"
+          {...form.register("website")}
+        />
         <div className="grid md:grid-cols-2 gap-4">
           <FormField
             control={form.control}
@@ -208,10 +245,11 @@ Message: ${values.message}`
           )}
         />
         <Button type="submit" disabled={loading} className="w-full bg-[#7C3AED] hover:bg-[#6D28D9]">
-                {loading ? "Sharing details…" : "Book demo via WhatsApp"}
+          {loading ? "Submitting…" : "Book demo"}
         </Button>
       </form>
     </Form>
+    </>
   )
 }
 

@@ -94,6 +94,16 @@ async function getInvoicePrefix() {
   );
 }
 
+async function getPlanInvoicePrefix() {
+  const invoiceSettings = await loadInvoiceSettings();
+  return (
+    firstNonEmpty(
+      invoiceSettings.planInvoicePrefix,
+      process.env.INVOICE_PLAN_PREFIX
+    ) || 'EMS/SUB'
+  );
+}
+
 function buildBuyerContext(business) {
   const addr = business?.address || {};
   const addressLines = [
@@ -517,6 +527,7 @@ module.exports = {
     getSellerContext,
     buildBuyerContext,
     getInvoicePrefix,
+    getPlanInvoicePrefix,
     fiscalYearContext,
     sanitizePrefix,
     formatInvoiceNumber,

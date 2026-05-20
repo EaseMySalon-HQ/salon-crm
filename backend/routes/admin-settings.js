@@ -320,6 +320,12 @@ let adminSettingsFallback = {
         subject: "Welcome to EaseMySalon - User Account Created",
         body: "Your user account has been created. Please log in to access the system.",
         enabled: true
+      },
+      platformLeadPending: {
+        subject: "New platform lead — pending assignment",
+        body:
+          "A new lead was added to Lead Management and needs an assignee. Open the admin panel to assign.",
+        enabled: true
       }
     },
     alerts: {
@@ -510,6 +516,7 @@ let adminSettingsFallback = {
       website: "https://easemysalon.in"
     },
     invoicePrefix: "EMS/WLT",
+    planInvoicePrefix: "EMS/SUB",
     gstRate: 0.18
   }
 };
@@ -582,6 +589,28 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
           return res.status(400).json({
             success: false,
             error: 'Email address is required'
+          });
+        }
+
+        if (templateType === 'platformLeadPending') {
+          const { sendPlatformLeadPendingTestEmail } = require('../lib/notify-platform-leads-pending');
+          const adminName =
+            req.admin?.name ||
+            `${req.admin?.firstName || ''} ${req.admin?.lastName || ''}`.trim() ||
+            'Admin';
+          const result = await sendPlatformLeadPendingTestEmail(email, adminName, {
+            testSettings,
+          });
+          if (result.success) {
+            return res.json({
+              success: true,
+              message: 'Platform lead pending test email sent successfully',
+            });
+          }
+          logger.error('Platform lead pending test email failed:', result.error);
+          return res.status(500).json({
+            success: false,
+            error: formatErrorMessage(result.error),
           });
         }
 
