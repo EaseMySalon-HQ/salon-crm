@@ -7,6 +7,7 @@ import {
   Building2,
   ChevronRight,
   CreditCard,
+  Phone,
   FileText,
   LayoutDashboard,
   ScrollText,
@@ -38,6 +39,7 @@ export const adminNavGroups: NavGroup[] = [
     label: "Business",
     items: [
       { title: "Businesses", href: "/admin/businesses", icon: Building2 },
+      { title: "Leads", href: "/admin/leads", icon: Phone },
       { title: "Settings", href: "/admin/notifications", icon: Bell },
     ],
   },

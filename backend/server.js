@@ -399,6 +399,7 @@ app.use('/api/admin/gst', require('./routes/admin-gst-reports'));
 app.use('/api/admin/plans', require('./routes/admin-plans'));
 app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
+app.use('/api/admin/leads', require('./routes/admin-leads'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
@@ -410,6 +411,7 @@ app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/purchase-invoices', purchaseInvoicesRoutes);
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/public/feedback', require('./routes/public-feedback'));
+app.use('/api/public/demo-lead', require('./routes/public-demo-lead'));
 app.use('/api/feedback', require('./routes/feedback'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 
