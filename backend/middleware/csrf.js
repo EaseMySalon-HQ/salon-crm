@@ -39,6 +39,13 @@ const SKIP_PREFIXES = [
   /** Unauthenticated audit beacon — fired after session already invalid, no CSRF state to check. */
   '/api/auth/session-expired-beacon',
   '/api/admin/login',
+  /**
+   * Inbound provider webhooks (Meta WhatsApp, etc.) authenticate via HMAC
+   * signature in `X-Hub-Signature-256` (verified inside the route), not a
+   * browser session. They have no cookies, so CSRF must be skipped or every
+   * delivery would 403.
+   */
+  '/api/webhooks',
 ];
 
 function normalizePath(req) {

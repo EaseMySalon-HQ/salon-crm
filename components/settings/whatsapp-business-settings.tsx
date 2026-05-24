@@ -21,6 +21,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { EmailNotificationsAPI } from "@/lib/api"
 import { useAddon } from "@/hooks/use-entitlements"
+import { WhatsAppMetaConnectCard } from "./whatsapp-meta-connect-card"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
@@ -195,6 +196,8 @@ export function WhatsAppBusinessSettings() {
 
   return (
     <div className="space-y-6">
+      <WhatsAppMetaConnectCard />
+
       {/* Status Banner */}
       {!isLoadingStatus && (
         <Card className={adminConfig?.adminConfigured ? "border-green-200 bg-green-50" : "border-yellow-200 bg-yellow-50"}>
