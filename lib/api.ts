@@ -1134,6 +1134,190 @@ export class BookingsAPI {
   }
 }
 
+export class PackagesAPI {
+  static async list(params?: {
+    status?: string
+    search?: string
+    page?: number
+    limit?: number
+  }): Promise<
+    ApiResponse<{
+      packages: Array<{
+        _id: string
+        name: string
+        type: string
+        total_price: number
+        total_sittings: number
+        validity_days?: number | null
+        status: string
+        service_count?: number
+      }>
+      total: number
+      page: number
+      limit: number
+    }>
+  > {
+    const response = await apiClient.get('/packages', { params })
+    return response.data
+  }
+
+  static async getById(id: string): Promise<
+    ApiResponse<{
+      _id: string
+      name: string
+      description?: string
+      type: string
+      total_price: number
+      total_sittings: number
+      validity_days?: number | null
+      min_service_count?: number
+      services?: Array<{
+        service_id: { _id: string; name: string; price?: number; category?: string } | string
+        is_optional?: boolean
+        tag?: string
+      }>
+    }>
+  > {
+    const response = await apiClient.get(`/packages/${id}`)
+    return response.data
+  }
+
+  static async create(data: {
+    name: string
+    description?: string
+    type: "FIXED" | "CUSTOMIZED"
+    total_price: number
+    total_sittings: number
+    validity_days?: number | null
+    min_service_count?: number
+    services: Array<{ service_id: string; is_optional?: boolean; tag?: string }>
+  }): Promise<
+    ApiResponse<{
+      package: { _id: string; name: string }
+      warning?: string | null
+    }>
+  > {
+    const response = await apiClient.post("/packages", data)
+    return response.data
+  }
+
+  static async update(
+    id: string,
+    data: {
+      name: string
+      description?: string
+      type: "FIXED" | "CUSTOMIZED"
+      total_price: number
+      total_sittings: number
+      validity_days?: number | null
+      min_service_count?: number
+      services: Array<{ service_id: string; is_optional?: boolean; tag?: string }>
+    }
+  ): Promise<ApiResponse<{ _id: string; name: string }>> {
+    const response = await apiClient.put(`/packages/${id}`, data)
+    return response.data
+  }
+
+  static async delete(id: string): Promise<ApiResponse<null>> {
+    const response = await apiClient.delete(`/packages/${id}`)
+    return response.data
+  }
+
+  static async sell(
+    packageId: string,
+    data: {
+      client_id: string
+      amount_paid?: number
+      sold_by_staff_id?: string
+    }
+  ): Promise<
+    ApiResponse<{
+      clientPackage: { _id: string; payment_status: string; remaining_sittings: number }
+      warning?: string | null
+    }>
+  > {
+    const response = await apiClient.post(`/packages/${packageId}/sell`, data)
+    return response.data
+  }
+
+  static async listSessions(clientPackageId: string): Promise<
+    ApiResponse<{
+      clientPackage: { _id: string; payment_status: string }
+      sessions: Array<{
+        _id: string
+        sessionNumber: number
+        status: string
+        appointmentId?: string | null
+      }>
+      totalSessions: number
+      remainingCount: number
+    }>
+  > {
+    const response = await apiClient.get(`/packages/client-packages/${clientPackageId}/sessions`)
+    return response.data
+  }
+
+  static async scheduleSession(
+    clientPackageId: string,
+    data: {
+      sessionNumber: number
+      serviceId: string
+      staffId: string
+      startAt: string
+      endAt: string
+      blockIfPendingPayment?: boolean
+    }
+  ): Promise<ApiResponse<{ appointmentIds?: string[]; bookingId?: string }>> {
+    const response = await apiClient.post(
+      `/packages/client-packages/${clientPackageId}/sessions/schedule`,
+      data
+    )
+    return response.data
+  }
+
+  static async getClientPackages(clientId: string): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get(`/packages/client/${clientId}`)
+    return response.data
+  }
+
+  static async getRedemptionHistory(clientPackageId: string): Promise<
+    ApiResponse<{
+      clientPackage: Record<string, unknown>
+      history: Array<{
+        _id: string
+        sitting_number: number
+        redeemed_at?: string
+        is_reversed?: boolean
+        services_redeemed?: Array<{ service_id: string; service_name?: string }>
+      }>
+    }>
+  > {
+    const response = await apiClient.get(`/packages/client-packages/${clientPackageId}/history`)
+    return response.data
+  }
+
+  static async redeem(
+    clientPackageId: string,
+    data: {
+      services: Array<{ service_id: string } | string>
+      redeemed_at_branch_id?: string
+    }
+  ): Promise<
+    ApiResponse<{
+      clientPackage: {
+        _id: string
+        remaining_sittings: number
+        used_sittings: number
+        status: string
+      }
+      redemption: { _id: string; sitting_number: number }
+    }>
+  > {
+    const response = await apiClient.post(`/packages/client-packages/${clientPackageId}/redeem`, data)
+    return response.data
+  }
+}
+
 export class LeadsAPI {
   static async getAll(params?: { 
     page?: number; 
@@ -1314,7 +1498,11 @@ export interface SalesListResponse extends ApiResponse<any[]> {
 export interface SalesSummaryData {
   totalRevenue: number
   cashCollected: number
+  serviceCashCollected?: number
+  walletCashCollected?: number
   onlineCash: number
+  cardCollected?: number
+  onlinePayCollected?: number
   unpaidValue: number
   tips: number
   completedSales: number
@@ -1546,7 +1734,17 @@ export class MembershipAPI {
     /** ISO range — filters by membership startDate */
     dateFrom?: string
     dateTo?: string
-  }): Promise<ApiResponse<any[]>> {
+    page?: number
+    limit?: number
+  }): Promise<
+    ApiResponse<any[]> & {
+      total?: number
+      page?: number
+      limit?: number
+      totalPages?: number
+      totalRevenue?: number
+    }
+  > {
     const response = await apiClient.get('/membership/subscriptions', { params })
     return response.data
   }
@@ -1829,9 +2027,12 @@ export class ReportsAPI {
     totalSalesCash: number
     totalSalesOnline: number
     totalSalesCard: number
+    totalSalesWallet?: number
+    totalSalesRewardPoint?: number
     duesCollected: number
     cashExpense: number
     tipCollected: number
+    cashAddedToWallet?: number
     cashBalance: number
     totalDue?: number
     customersWithDue?: number
@@ -2804,6 +3005,8 @@ export type ClientWalletSettings = {
   expiryAlertsEnabled: boolean
   /** When true, POS redeems across all client wallets FIFO (soonest expiry first). */
   combineMultipleWallets: boolean
+  /** Line-type redemption toggles (stored in tenant paymentConfiguration). */
+  walletRedemption?: PaymentConfiguration["walletRedemption"]
 }
 
 /** POST /client-wallet/issue */
@@ -2943,6 +3146,36 @@ export class ClientWalletAPI {
     return response.data
   }
 
+  static async listClientLiability(params?: {
+    search?: string
+    page?: number
+    limit?: number
+  }): Promise<
+    ApiResponse<{
+      rows: Array<{
+        clientId: string
+        name: string
+        phone: string
+        email: string
+        totalOutstanding: number
+        walletCount: number
+        soonestExpiry: string | null
+      }>
+      total: number
+      page: number
+      limit: number
+      totalPages: number
+    }>
+  > {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.page != null) qs.set("page", String(params.page))
+    if (params?.limit != null) qs.set("limit", String(params.limit))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ""
+    const response = await apiClient.get(`/client-wallet/liability/clients${suffix}`)
+    return response.data
+  }
+
   static async getHistory(params?: {
     service?: string
     from?: string
@@ -2963,6 +3196,7 @@ export type RewardPointsSettings = {
   redeemPointsStep: number
   redeemRupeeStep: number
   minRedeemPoints: number
+  minBillAmountForRedemption: number
   maxRedeemPercentOfBill: number
   earnOnWalletPurchaseLines: boolean
   /** When true, service lines count toward earn base. */
@@ -2978,6 +3212,8 @@ export type RewardPointsSettings = {
   firstVisitBonusPoints: number
   birthdayBonusPoints: number
   birthdayBonusWindowDays: number
+  /** Line-type redemption toggles (stored in tenant paymentConfiguration). */
+  rewardPointRedemption?: PaymentConfiguration["rewardPointRedemption"]
 }
 
 export class RewardPointsAPI {
@@ -3037,6 +3273,37 @@ export class RewardPointsAPI {
     }>
   > {
     const response = await apiClient.get(`/reward-points/summary?clientId=${encodeURIComponent(clientId)}`)
+    return response.data
+  }
+
+  static async listClientBalances(params?: {
+    search?: string
+    page?: number
+    limit?: number
+    includeZero?: boolean
+  }): Promise<
+    ApiResponse<{
+      rows: Array<{
+        id: string
+        name: string
+        phone: string
+        email: string
+        rewardPointsBalance: number
+        updatedAt: string | null
+      }>
+      total: number
+      page: number
+      limit: number
+      totalPages: number
+    }>
+  > {
+    const qs = new URLSearchParams()
+    if (params?.search) qs.set("search", params.search)
+    if (params?.page != null) qs.set("page", String(params.page))
+    if (params?.limit != null) qs.set("limit", String(params.limit))
+    if (params?.includeZero) qs.set("includeZero", "true")
+    const suffix = qs.toString() ? `?${qs.toString()}` : ""
+    const response = await apiClient.get(`/reward-points/client-balances${suffix}`)
     return response.data
   }
 
@@ -3257,9 +3524,15 @@ export class PlanCheckoutAPI {
 
 export type { PaymentConfiguration, PaymentRedemptionLine } from "./payment-redemption-eligibility"
 
+export type RewardRedemptionThreshold = {
+  minBillAmountForRedemption?: number
+  maxRedeemPercentOfBill?: number
+}
+
 /** GET /settings/payment `data` shape (aligned with backend/server.js). */
 export type PaymentSettingsData = {
   paymentConfiguration?: Partial<PaymentConfiguration> | null
+  rewardRedemptionThreshold?: RewardRedemptionThreshold
   processingFee?: number | string
   enableProcessingFees?: boolean
   currency?: string
@@ -3288,6 +3561,7 @@ export type PaymentSettingsUpdatePayload = {
   processingFee?: number
   enableProcessingFees?: boolean
   paymentConfiguration?: PaymentConfiguration
+  rewardRedemptionThreshold?: RewardRedemptionThreshold
 } & Record<string, unknown>
 
 // Export the main API client for direct use if needed

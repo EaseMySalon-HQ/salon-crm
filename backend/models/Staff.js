@@ -15,6 +15,11 @@ const staffSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  /** Base64 data URL or external image URL for staff profile photo */
+  avatar: {
+    type: String,
+    default: '',
+  },
   role: {
     type: String,
     enum: ['admin', 'manager', 'staff'],

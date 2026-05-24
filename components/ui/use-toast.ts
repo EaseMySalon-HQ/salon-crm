@@ -9,7 +9,9 @@ import type {
 } from "@/components/ui/toast"
 
 const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 1000000
+const TOAST_DURATION = 3000
+/** Time to keep dismissed toast in DOM for exit animation before removal */
+const TOAST_REMOVE_DELAY = 500
 
 type ToasterToast = ToastProps & {
   id: string
@@ -57,6 +59,20 @@ interface State {
 }
 
 const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+const toastDismissTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+
+function resolveToastDuration(duration?: number): number {
+  if (duration == null || duration <= 0) return TOAST_DURATION
+  return Math.min(duration, TOAST_DURATION)
+}
+
+function clearToastDismissTimeout(toastId: string) {
+  const timeout = toastDismissTimeouts.get(toastId)
+  if (timeout) {
+    clearTimeout(timeout)
+    toastDismissTimeouts.delete(toastId)
+  }
+}
 
 const addToRemoveQueue = (toastId: string) => {
   if (toastTimeouts.has(toastId)) {
@@ -96,9 +112,11 @@ export const reducer = (state: State, action: Action): State => {
       // ! Side effects ! - This could be extracted into a dismissToast() action,
       // but I'll keep it here for simplicity
       if (toastId) {
+        clearToastDismissTimeout(toastId)
         addToRemoveQueue(toastId)
       } else {
         state.toasts.forEach((toast) => {
+          clearToastDismissTimeout(toast.id)
           addToRemoveQueue(toast.id)
         })
       }
@@ -142,8 +160,9 @@ function dispatch(action: Action) {
 
 type Toast = Omit<ToasterToast, "id">
 
-function toast({ ...props }: Toast) {
+function toast({ duration, ...props }: Toast) {
   const id = genId()
+  const resolvedDuration = resolveToastDuration(duration)
 
   const update = (props: ToasterToast) =>
     dispatch({
@@ -157,12 +176,17 @@ function toast({ ...props }: Toast) {
     toast: {
       ...props,
       id,
+      duration: resolvedDuration,
       open: true,
       onOpenChange: (open) => {
         if (!open) dismiss()
       },
     },
   })
+
+  clearToastDismissTimeout(id)
+  const autoDismiss = setTimeout(() => dismiss(), resolvedDuration)
+  toastDismissTimeouts.set(id, autoDismiss)
 
   return {
     id: id,

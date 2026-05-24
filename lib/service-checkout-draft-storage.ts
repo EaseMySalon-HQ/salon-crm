@@ -2,6 +2,7 @@ import type {
   CheckoutTipLine,
   ServiceCheckoutLine,
   ServiceCheckoutMembershipLine,
+  ServiceCheckoutPackageLine,
   ServiceCheckoutPrepaidLine,
   ServiceCheckoutProductLine,
 } from "@/components/appointments/service-checkout-dialog"
@@ -22,6 +23,7 @@ export type ServiceCheckoutDraftPayload = {
   lines: ServiceCheckoutLine[]
   productLines: ServiceCheckoutProductLine[]
   membershipLines: ServiceCheckoutMembershipLine[]
+  packageLines?: ServiceCheckoutPackageLine[]
   prepaidLines: ServiceCheckoutPrepaidLine[]
   /** Optional checkout extras (appointment add-to-cart). */
   checkoutTipLines?: CheckoutTipLine[]
@@ -88,6 +90,7 @@ function parseDraftFile(raw: string): ServiceCheckoutDraftPayload | null {
       lines: parsed.lines,
       productLines: parsed.productLines,
       membershipLines: parsed.membershipLines,
+      packageLines: Array.isArray(parsed.packageLines) ? parsed.packageLines : [],
       prepaidLines: parsed.prepaidLines,
       checkoutTipLines: parsed.checkoutTipLines,
       checkoutCartDiscountType: parsed.checkoutCartDiscountType,

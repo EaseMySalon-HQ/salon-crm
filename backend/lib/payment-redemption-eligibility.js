@@ -10,6 +10,7 @@ const DEFAULT_PAYMENT_CONFIGURATION = {
     products: true,
     packages: true,
     memberships: true,
+    allowOnDiscountedItems: true,
   },
   rewardPointRedemption: {
     enabled: true,
@@ -17,6 +18,7 @@ const DEFAULT_PAYMENT_CONFIGURATION = {
     products: true,
     packages: true,
     memberships: true,
+    allowOnDiscountedItems: true,
   },
   billingRedemption: {
     allowRedemptionInBilling: true,
@@ -54,12 +56,27 @@ function mergePaymentConfiguration(raw) {
   };
 }
 
+function isDiscountedRedemptionLine(item, options) {
+  if (!item || typeof item !== 'object') return false;
+  if (item.isDiscounted === true) return true;
+  if (Number(item.discount) > 0) return true;
+  if (item.isMembershipFree === true) return true;
+  if (Number(item.membershipDiscountPercent) > 0) return true;
+  const cartAmt = Number(options?.cartDiscountAmount) || 0;
+  if (cartAmt > 0) {
+    const t = String(item.type || '').toLowerCase();
+    if (t !== 'prepaid_wallet') return true;
+  }
+  return false;
+}
+
 /**
- * @param {Array<{ type?: string, total?: number }>} items
+ * @param {Array<{ type?: string, total?: number, discount?: number, isDiscounted?: boolean }>} items
  * @param {object} config merged or raw paymentConfiguration
  * @param {'wallet'|'reward'} kind
+ * @param {{ cartDiscountAmount?: number }} [options]
  */
-function eligibleRedemptionSubtotal(items, config, kind) {
+function eligibleRedemptionSubtotal(items, config, kind, options) {
   const c = mergePaymentConfiguration(config);
   if (!c.billingRedemption || c.billingRedemption.allowRedemptionInBilling === false) {
     return 0;
@@ -68,10 +85,12 @@ function eligibleRedemptionSubtotal(items, config, kind) {
   if (!group || group.enabled === false) {
     return 0;
   }
+  const allowDiscounted = group.allowOnDiscountedItems !== false;
   let sum = 0;
   for (const item of items || []) {
     const t = String(item.type || "").toLowerCase();
     if (t === "prepaid_wallet") continue;
+    if (!allowDiscounted && isDiscountedRedemptionLine(item, options)) continue;
     let ok = false;
     if (t === "service") ok = !!group.services;
     else if (t === "product") ok = !!group.products;
@@ -101,6 +120,7 @@ function isMutualExclusiveRedemption(config) {
 module.exports = {
   DEFAULT_PAYMENT_CONFIGURATION,
   mergePaymentConfiguration,
+  isDiscountedRedemptionLine,
   eligibleRedemptionSubtotal,
   sumWalletPayments,
   isMutualExclusiveRedemption,

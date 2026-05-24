@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useParams } from "next/navigation"
+import { useParams, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft, Wallet } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -58,8 +58,21 @@ function pickDefaultAdjustWalletId(wallets: any[]): string {
   return String(sorted[0]._id)
 }
 
+function resolveReturnHref(raw: string | null, fallback: string): string {
+  if (!raw) return fallback
+  try {
+    const decoded = decodeURIComponent(raw)
+    if (decoded.startsWith("/")) return decoded
+  } catch {
+    /* ignore */
+  }
+  return raw.startsWith("/") ? raw : fallback
+}
+
 export default function ClientWalletPage() {
   const { id: clientId } = useParams<{ id: string }>()
+  const searchParams = useSearchParams()
+  const backHref = resolveReturnHref(searchParams.get("returnTo"), `/clients/${clientId}`)
   const { toast } = useToast()
   const { user } = useAuth()
   const isManager = user?.role === "admin" || user?.role === "manager"
@@ -170,7 +183,7 @@ export default function ClientWalletPage() {
       <div className="p-6 max-w-3xl mx-auto space-y-6">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" asChild>
-            <Link href={`/clients/${clientId}`}>
+            <Link href={backHref}>
               <ArrowLeft className="h-4 w-4" />
             </Link>
           </Button>

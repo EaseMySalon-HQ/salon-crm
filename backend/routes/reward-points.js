@@ -22,20 +22,36 @@ const authStaff = [authenticateToken, setupBusinessDatabase, requireStaff];
 const authManager = [authenticateToken, setupBusinessDatabase, requireManager];
 const authMainStaff = [authenticateToken, setupMainDatabase, requireStaff];
 const authMainManager = [authenticateToken, setupMainDatabase, requireManager];
+const authMainBusinessStaff = [authenticateToken, setupMainDatabase, setupBusinessDatabase, requireStaff];
+const authMainBusinessManager = [authenticateToken, setupMainDatabase, setupBusinessDatabase, requireManager];
 
-router.get('/settings', authMainStaff, async (req, res) => {
+async function loadRewardSettingsPayload(req) {
+  const Business = req.mainModels.Business;
+  const b = await Business.findById(req.user.branchId).select('rewardPointsSettings').lean();
+  const settings = rewardSvc.mergeRewardPointsSettings(b?.rewardPointsSettings);
+  const { mergePaymentConfiguration } = require('../lib/payment-redemption-eligibility');
+  let rewardPointRedemption = mergePaymentConfiguration(null).rewardPointRedemption;
+  const { BusinessSettings } = req.businessModels || {};
+  if (BusinessSettings) {
+    const bs = await BusinessSettings.findOne().select('paymentConfiguration').lean();
+    if (bs) {
+      rewardPointRedemption = mergePaymentConfiguration(bs.paymentConfiguration).rewardPointRedemption;
+    }
+  }
+  return { ...settings, rewardPointRedemption };
+}
+
+router.get('/settings', authMainBusinessStaff, async (req, res) => {
   try {
-    const Business = req.mainModels.Business;
-    const b = await Business.findById(req.user.branchId).select('rewardPointsSettings').lean();
-    const settings = rewardSvc.mergeRewardPointsSettings(b?.rewardPointsSettings);
-    return ok(res, settings);
+    const payload = await loadRewardSettingsPayload(req);
+    return ok(res, payload);
   } catch (e) {
     logger.error('[reward-points] GET settings', e);
     return fail(res, 500, e.message);
   }
 });
 
-router.put('/settings', authMainManager, async (req, res) => {
+router.put('/settings', authMainBusinessManager, async (req, res) => {
   try {
     const Business = req.mainModels.Business;
     const allowed = [
@@ -45,6 +61,7 @@ router.put('/settings', authMainManager, async (req, res) => {
       'redeemPointsStep',
       'redeemRupeeStep',
       'minRedeemPoints',
+      'minBillAmountForRedemption',
       'maxRedeemPercentOfBill',
       'earnOnWalletPurchaseLines',
       'earnPointsOnServices',
@@ -63,9 +80,30 @@ router.put('/settings', authMainManager, async (req, res) => {
     if (req.body.earnPointsOnPrepaidPlan !== undefined) {
       patch['rewardPointsSettings.earnOnWalletPurchaseLines'] = req.body.earnPointsOnPrepaidPlan === true;
     }
-    await Business.updateOne({ _id: req.user.branchId }, { $set: patch });
-    const b = await Business.findById(req.user.branchId).select('rewardPointsSettings').lean();
-    return ok(res, rewardSvc.mergeRewardPointsSettings(b?.rewardPointsSettings), 'Settings updated');
+    if (Object.keys(patch).length > 0) {
+      await Business.updateOne({ _id: req.user.branchId }, { $set: patch });
+    }
+
+    if (req.body.rewardPointRedemption !== undefined && typeof req.body.rewardPointRedemption === 'object') {
+      const { BusinessSettings } = req.businessModels;
+      const { mergePaymentConfiguration } = require('../lib/payment-redemption-eligibility');
+      const settingsDoc = await BusinessSettings.findOne();
+      if (settingsDoc) {
+        const existing = mergePaymentConfiguration(settingsDoc.paymentConfiguration);
+        settingsDoc.paymentConfiguration = mergePaymentConfiguration({
+          ...existing,
+          rewardPointRedemption: {
+            ...existing.rewardPointRedemption,
+            ...req.body.rewardPointRedemption,
+          },
+        });
+        settingsDoc.markModified('paymentConfiguration');
+        await settingsDoc.save();
+      }
+    }
+
+    const payload = await loadRewardSettingsPayload(req);
+    return ok(res, payload, 'Settings updated');
   } catch (e) {
     logger.error('[reward-points] PUT settings', e);
     return fail(res, 500, e.message);
@@ -131,6 +169,25 @@ router.get('/summary', authStaff, async (req, res) => {
     return ok(res, summary);
   } catch (e) {
     logger.error('[reward-points] summary', e);
+    return fail(res, 500, e.message);
+  }
+});
+
+router.get('/client-balances', authStaff, async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(Math.max(1, Number(req.query.limit) || 25), 100);
+    const includeZero = req.query.includeZero === 'true' || req.query.includeZero === '1';
+    const data = await rewardSvc.listClientBalances(req.businessModels, req.user.branchId, {
+      search,
+      page,
+      limit,
+      includeZero,
+    });
+    return ok(res, data);
+  } catch (e) {
+    logger.error('[reward-points] client-balances', e);
     return fail(res, 500, e.message);
   }
 });

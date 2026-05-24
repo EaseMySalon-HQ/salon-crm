@@ -1,18 +1,14 @@
 "use client"
 
-import { CalendarRange, PlusCircle } from "lucide-react"
 import { useRef, Suspense, useState, useEffect, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 
-import { Button } from "@/components/ui/button"
 import { AppointmentsCalendar } from "@/components/appointments/appointments-calendar"
 import { AppointmentsCalendarGrid } from "@/components/appointments/appointments-calendar-grid"
 import { AppointmentFormDrawer } from "@/components/appointments/appointment-form-drawer"
-import { MultiDayBookingDialog } from "@/components/appointments/multi-day-booking-dialog"
 import { ServiceCheckoutDraftFloatChip } from "@/components/appointments/service-checkout-draft-float-chip"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
-import { useAuth } from "@/lib/auth-context"
 
 const VIEW_STORAGE_KEY = "appointments-view"
 
@@ -21,12 +17,9 @@ function AppointmentsContent() {
   const gridRef = useRef<{ showCancelledModal: () => void }>(null)
   const searchParams = useSearchParams()
   const router = useRouter()
-  const { hasPermission } = useAuth()
-  const canCreateAppointment = hasPermission("appointments", "create")
   const selectedAppointmentId = searchParams?.get("appointment") || undefined
 
   const [formDrawerOpen, setFormDrawerOpen] = useState(false)
-  const [multiDayOpen, setMultiDayOpen] = useState(false)
   const [formDrawerParams, setFormDrawerParams] = useState<{
     date?: string
     time?: string
@@ -35,6 +28,7 @@ function AppointmentsContent() {
     initialClientId?: string
     resumeServiceCheckoutDraft?: boolean
     resumeSavedDraftToken?: string
+    openCheckoutDirectly?: boolean
   }>({})
 
   const openAppointmentForm = useCallback(
@@ -46,6 +40,7 @@ function AppointmentsContent() {
       initialClientId?: string
       resumeServiceCheckoutDraft?: boolean
       resumeSavedDraftToken?: string
+      openCheckoutDirectly?: boolean
     }) => {
       setFormDrawerParams(params ?? {})
       setFormDrawerOpen(true)
@@ -112,68 +107,29 @@ function AppointmentsContent() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100/80 px-4 py-6 w-full">
-      <div className="w-full max-w-full">
-        <div className="flex flex-col space-y-6">
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div className="space-y-1">
-              <h1 className="text-3xl font-bold text-slate-800">
-                Appointments
-              </h1>
-              <p className="text-slate-500 text-sm">Manage and view all your appointments</p>
-            </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              {canCreateAppointment && (
-                <Button
-                  variant="outline"
-                  onClick={() => setMultiDayOpen(true)}
-                  className="rounded-xl px-5 py-2.5 font-semibold border-slate-200 bg-white hover:bg-slate-50 text-slate-800"
-                >
-                  <CalendarRange className="mr-2 h-4 w-4 text-violet-600" />
-                  Multi-day booking
-                </Button>
-              )}
-              {canCreateAppointment && (
-                <Button
-                  onClick={() => openAppointmentForm()}
-                  className="bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-5 py-2.5 font-semibold shadow-md shadow-violet-500/20 transition-all hover:shadow-lg"
-                >
-                  <PlusCircle className="mr-2 h-4 w-4" />
-                  New Appointment
-                </Button>
-              )}
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-4 sm:p-6 transition-opacity duration-300 w-full">
-            {view === "list" ? (
-              <AppointmentsCalendar
-                ref={calendarRef}
-                initialAppointmentId={selectedAppointmentId}
-                onOpenAppointmentForm={openAppointmentForm}
-                view={view}
-                onSwitchView={setView}
-              />
-            ) : (
-              <AppointmentsCalendarGrid
-                ref={gridRef}
-                initialAppointmentId={selectedAppointmentId}
-                onSwitchToList={() => setView("list")}
-                onOpenAppointmentForm={openAppointmentForm}
-                view={view}
-                onSwitchView={setView}
-              />
-            )}
-          </div>
+    <div className="flex flex-col h-[calc(100vh-7.25rem)] min-h-0 w-full bg-slate-100/80">
+      <div className="flex flex-col flex-1 min-h-0 w-full max-w-full px-4 py-4">
+        <div className="flex flex-col flex-1 min-h-0 bg-white rounded-2xl shadow-sm border border-slate-200/80 p-4 sm:p-6 transition-opacity duration-300 w-full">
+          {view === "list" ? (
+            <AppointmentsCalendar
+              ref={calendarRef}
+              initialAppointmentId={selectedAppointmentId}
+              onOpenAppointmentForm={openAppointmentForm}
+              view={view}
+              onSwitchView={setView}
+            />
+          ) : (
+            <AppointmentsCalendarGrid
+              ref={gridRef}
+              initialAppointmentId={selectedAppointmentId}
+              onSwitchToList={() => setView("list")}
+              onOpenAppointmentForm={openAppointmentForm}
+              view={view}
+              onSwitchView={setView}
+            />
+          )}
         </div>
       </div>
-
-      <MultiDayBookingDialog
-        open={multiDayOpen}
-        onOpenChange={setMultiDayOpen}
-        onSuccess={() => {
-          window.dispatchEvent(new CustomEvent("appointments-refresh"))
-        }}
-      />
 
       <ServiceCheckoutDraftFloatChip
         hidden={formDrawerOpen}
@@ -197,6 +153,7 @@ function AppointmentsContent() {
               resumeServiceCheckoutDraft: false,
               initialClientId: undefined,
               resumeSavedDraftToken: undefined,
+              openCheckoutDirectly: false,
             }))
           }
         }}
@@ -207,6 +164,7 @@ function AppointmentsContent() {
         initialClientId={formDrawerParams.initialClientId}
         resumeServiceCheckoutDraft={formDrawerParams.resumeServiceCheckoutDraft}
         resumeSavedDraftToken={formDrawerParams.resumeSavedDraftToken}
+        openCheckoutDirectly={formDrawerParams.openCheckoutDirectly}
         onSuccess={() => {
           setFormDrawerOpen(false)
           window.dispatchEvent(new CustomEvent("appointments-refresh"))

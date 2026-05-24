@@ -9,14 +9,14 @@ import {
   AlertCircle,
   Ban,
   Calendar,
-  ChevronDown,
   Clock,
   Eye,
   Heart,
   List,
   Loader2,
   Pencil,
-  Square,
+  PlusCircle,
+  Receipt,
   Trash2,
   X,
 } from "lucide-react"
@@ -49,6 +49,7 @@ import { useAuth } from "@/lib/auth-context"
 import { resolveCreatedByDisplay } from "@/lib/utils"
 import { formatAmountWithSymbol } from "@/lib/currency"
 import { BlockTimeModal, getBlockReasonIcon } from "@/components/appointments/block-time-modal"
+import { AppointmentsViewSettingsPopover } from "@/components/appointments/appointments-view-settings-popover"
 import { useToast } from "@/hooks/use-toast"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
@@ -68,6 +69,7 @@ import {
   APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS,
   canChangeAppointmentStatusViaContextMenu,
   getAppointmentIdsForCardStatusUpdate,
+  appointmentsOnSameVisitDate,
   type AppointmentCardContextStatus,
 } from "@/lib/appointment-calendar-helpers"
 import {
@@ -134,6 +136,7 @@ interface StaffMember {
   name: string
   email?: string
   role?: string
+  avatar?: string
   workSchedule?: StaffWorkDay[]
   allowAppointmentScheduling?: boolean
 }
@@ -170,6 +173,7 @@ const slotHeight_COMPACT = 14
 const slotHeight_COMFORTABLE = 26
 /** Sticky time/staff headers must stack above the appointment overlay (`z-20`) while scrolling. */
 const CALENDAR_STICKY_HEADER_Z_CLASS = "z-40"
+const CALENDAR_STAFF_HEADER_HEIGHT_PX = 80
 const CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS = "z-20"
 const CALENDAR_NOW_LINE_Z_CLASS = "z-[35]"
 const SLOTS_PER_HOUR = 12
@@ -581,7 +585,13 @@ function getStatusText(status: string): string {
 interface AppointmentsCalendarGridProps {
   initialAppointmentId?: string
   onSwitchToList?: () => void
-  onOpenAppointmentForm?: (params?: { date?: string; time?: string; staffId?: string; appointmentId?: string }) => void
+  onOpenAppointmentForm?: (params?: {
+    date?: string
+    time?: string
+    staffId?: string
+    appointmentId?: string
+    openCheckoutDirectly?: boolean
+  }) => void
   view?: "list" | "calendar"
   onSwitchView?: (v: "list" | "calendar") => void
 }
@@ -590,7 +600,9 @@ export const AppointmentsCalendarGrid = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarGridProps
 >(({ initialAppointmentId, onSwitchToList, onOpenAppointmentForm, view = "calendar", onSwitchView }, ref) => {
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
+  const canCreateAppointment = hasPermission("appointments", "create")
+  const canQuickSale = hasPermission("sales", "create")
   const router = useRouter()
   const { toast } = useToast()
   const [staffList, setStaffList] = useState<StaffMember[]>([])
@@ -619,7 +631,6 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [deletingInvoice, setDeletingInvoice] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [cardStatusMenuUpdatingId, setCardStatusMenuUpdatingId] = useState<string | null>(null)
-  const [showColorLegend, setShowColorLegend] = useState(false)
   const [blockTimes, setBlockTimes] = useState<BlockTime[]>([])
   const [walkInSales, setWalkInSales] = useState<any[]>([])
   /** Appointment ids with a linked sale that has partial payment (same calendar day as `selectedDate`). */
@@ -1253,7 +1264,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       if (!container) return false
       const containerHeight = container.clientHeight
       if (containerHeight === 0) return false // Layout not ready
-      const topPx = 56 + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
+      const topPx = CALENDAR_STAFF_HEADER_HEIGHT_PX + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
       const scrollTop = Math.max(0, topPx - containerHeight / 2)
       container.scrollTop = scrollTop
       return true
@@ -1285,7 +1296,7 @@ export const AppointmentsCalendarGrid = forwardRef<
     const currentMinutes =
       now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60
     if (currentMinutes < extendedStartMinutes || currentMinutes >= extendedEndMinutes) return
-    const topPx = 56 + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
+    const topPx = CALENDAR_STAFF_HEADER_HEIGHT_PX + ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
     const containerHeight = el.clientHeight
     el.scrollTop = Math.max(0, topPx - containerHeight / 2)
     setScrollToNowRequested(false)
@@ -1656,7 +1667,7 @@ export const AppointmentsCalendarGrid = forwardRef<
         const syncGroup = newStatus === "arrived" || newStatus === "missed"
         const list = appointments.map((a) => {
           if (a._id === selectedAppointment._id) return { ...a, status: newStatus }
-          if (syncGroup && bgId && (a as any).bookingGroupId === bgId) {
+          if (syncGroup && bgId && (a as any).bookingGroupId === bgId && appointmentsOnSameVisitDate(a, selectedAppointment)) {
             return { ...a, status: newStatus }
           }
           return a
@@ -2347,9 +2358,9 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   return (
-    <div className="space-y-5 calendar-fade-transition w-full">
+    <div className="flex flex-col h-full min-h-0 space-y-5 calendar-fade-transition w-full">
       {/* Section 5: Top Control Bar - Premium hierarchy */}
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex flex-wrap items-center gap-4 shrink-0">
         {/* Staff filter, Date selector, Density toggle */}
         <div className="flex items-center gap-3">
           <Select
@@ -2399,148 +2410,59 @@ export const AppointmentsCalendarGrid = forwardRef<
               )
             })}
           </div>
-          {/* Density toggle */}
-          <div className="flex gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
-            <button
-              type="button"
-              onClick={() => setDensity("compact")}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
-                density === "compact"
-                  ? "bg-violet-600 text-white shadow-sm"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              Compact
-            </button>
-            <button
-              type="button"
-              onClick={() => setDensity("comfortable")}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
-                density === "comfortable"
-                  ? "bg-violet-600 text-white shadow-sm"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              Comfortable
-            </button>
-          </div>
-          <label className="flex items-center gap-2 cursor-pointer select-none text-slate-600 text-sm">
-            <Checkbox
-              checked={showWalkInCards}
-              onCheckedChange={(checked) => setShowWalkInCards(checked === true)}
-              className="border-slate-300 data-[state=checked]:bg-violet-600 data-[state=checked]:border-violet-600"
-            />
-            <span>Show Walk-in</span>
-          </label>
         </div>
         <div className="flex-1" />
-        {/* List/Calendar toggle - just before Color Code */}
-        {onSwitchView && (
-          <div className="flex gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
-            <button
-              type="button"
-              onClick={() => onSwitchView("list")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
-                view === "list"
-                  ? "bg-violet-600 text-white shadow-sm"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              <List className="h-3.5 w-3.5 shrink-0" />
-              List
-            </button>
-            <button
-              type="button"
-              onClick={() => onSwitchView("calendar")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
-                view === "calendar"
-                  ? "bg-violet-600 text-white shadow-sm"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              <Calendar className="h-3.5 w-3.5 shrink-0" />
-              Calendar
-            </button>
-          </div>
-        )}
-        {/* Color Code - right side, above table */}
-        <div className="relative">
+        {canCreateAppointment && onOpenAppointmentForm ? (
           <Button
-            variant="outline"
-            size="sm"
-            className="rounded-xl border-slate-200 gap-1.5"
-            onClick={() => setShowColorLegend((v) => !v)}
+            type="button"
+            onClick={() => onOpenAppointmentForm()}
+            className="h-9 shrink-0 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 font-semibold shadow-md shadow-violet-500/20 transition-all hover:shadow-lg"
           >
-            <Square className="h-3.5 w-3.5 rounded bg-red-500" />
-            Color Code
-            <ChevronDown className="h-4 w-4" />
+            <PlusCircle className="mr-2 h-4 w-4" />
+            New Appointment
           </Button>
-          {showColorLegend && (
-            <>
-              <div
-                className="fixed inset-0 z-[100]"
-                aria-hidden
-                onClick={() => setShowColorLegend(false)}
-              />
-              <div className="absolute right-0 top-full mt-1 z-[101] rounded-xl border border-slate-200 bg-white p-3 shadow-lg min-w-[220px] max-w-[min(calc(100vw-2rem),280px)]">
-                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-                  Status
-                </div>
-                <div className="space-y-1.5 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-slate-500" />
-                    Scheduled
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-cyan-500" />
-                    Confirmed
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-blue-500" />
-                    Arrived
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-amber-500" />
-                    Partial payment
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-indigo-500" />
-                    Service started
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-emerald-500" />
-                    Completed
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-rose-600" />
-                    No show
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-red-500" />
-                    Cancelled
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-slate-600" />
-                    Blocked time
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        ) : null}
+        {canQuickSale && onOpenAppointmentForm ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() =>
+              onOpenAppointmentForm({
+                date: selectedDate,
+                openCheckoutDirectly: true,
+              })
+            }
+            className="h-9 shrink-0 rounded-xl border-slate-200 bg-white/80 px-4 font-semibold text-slate-800 hover:bg-slate-50"
+          >
+            <Receipt className="mr-2 h-4 w-4 text-violet-600" />
+            Quick Sale
+          </Button>
+        ) : null}
+        <AppointmentsViewSettingsPopover
+          view={view}
+          onSwitchView={onSwitchView}
+          showDensity
+          density={density}
+          onDensityChange={setDensity}
+          showWalkIn
+          showWalkInCards={showWalkInCards}
+          onShowWalkInCardsChange={setShowWalkInCards}
+          title="Calendar settings"
+          description="View, density, and display options"
+        />
       </div>
 
       {/* Section 1: Grid with soft gray bg, alternating hour shading. Section 6: key triggers fade on date change */}
-      <div key={selectedDate} className="rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-50/50 shadow-sm">
+      <div key={selectedDate} className="flex flex-col flex-1 min-h-0 rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-50/50 shadow-sm">
         <div
           ref={scrollContainerRef}
-          className="overflow-auto max-h-[calc(100vh-320px)] min-h-[400px] bg-white/50"
+          className="overflow-auto flex-1 min-h-0 bg-white/50"
         >
           <div
             className="grid w-full min-w-[600px] relative calendar-fade-transition"
             style={{
               gridTemplateColumns: `88px repeat(${Math.max(1, columns.length)}, minmax(140px, 1fr))`,
-              gridTemplateRows: `56px repeat(${totalSlotsWithSales}, ${slotHeight}px)`,
+              gridTemplateRows: `${CALENDAR_STAFF_HEADER_HEIGHT_PX}px repeat(${totalSlotsWithSales}, ${slotHeight}px)`,
             }}
           >
             {/* Time column header - click to scroll to current time */}
@@ -2568,13 +2490,19 @@ export const AppointmentsCalendarGrid = forwardRef<
                 return (
                   <div
                     key={col._id}
-                    className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} border-b border-r border-slate-200/80 bg-white/95 backdrop-blur-sm px-4 py-3 last:border-r-0 shadow-[0_1px_0_0_rgba(0,0,0,0.05)] flex flex-col items-center justify-center gap-1.5`}
+                    className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} border-b border-r border-slate-200/80 bg-white/95 backdrop-blur-sm px-3 py-2 last:border-r-0 shadow-[0_1px_0_0_rgba(0,0,0,0.05)] flex items-center justify-center min-w-0`}
                   >
-                    <div className="flex items-center gap-2.5">
-                      <div className="h-8 w-8 rounded-full bg-violet-100 flex items-center justify-center text-violet-700 font-semibold text-xs shrink-0">
-                        {initials}
-                      </div>
-                      <span className="font-semibold text-slate-700 text-sm truncate max-w-[100px]">
+                    <div className="flex items-center gap-2.5 min-w-0 max-w-full">
+                      <Avatar className="h-11 w-11 shrink-0 border-2 border-violet-100 shadow-sm">
+                        <AvatarImage src={col.avatar || undefined} alt={col.name} />
+                        <AvatarFallback className="bg-violet-100 text-violet-700 font-semibold text-sm">
+                          {initials}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span
+                        className="font-semibold text-slate-700 text-sm truncate leading-tight min-w-0"
+                        title={col.name}
+                      >
                         {col.name}
                       </span>
                     </div>
@@ -2773,8 +2701,11 @@ export const AppointmentsCalendarGrid = forwardRef<
             {columns.length > 0 && (
               <div
                 ref={blocksContainerRef}
-                className={`absolute top-[56px] left-[88px] right-0 bottom-0 min-w-[520px] ${CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS} pointer-events-none`}
-                style={{ height: totalSlotsWithSales * slotHeight }}
+                className={`absolute left-[88px] right-0 bottom-0 min-w-[520px] ${CALENDAR_APPOINTMENTS_OVERLAY_Z_CLASS} pointer-events-none`}
+                style={{
+                  top: CALENDAR_STAFF_HEADER_HEIGHT_PX,
+                  height: totalSlotsWithSales * slotHeight,
+                }}
               >
               {columns.map((col, colIndex) => {
                 return (
@@ -3395,7 +3326,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                 currentMinutes < extendedEndMinutes
               if (!showLine) return null
               const topPx =
-                56 +
+                CALENDAR_STAFF_HEADER_HEIGHT_PX +
                 ((currentMinutes - extendedStartMinutes) / SLOT_MINUTES) * slotHeight
               return (
                 <div

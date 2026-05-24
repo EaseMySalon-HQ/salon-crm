@@ -410,6 +410,7 @@ app.use('/api/plan', require('./routes/plan-checkout'));
 app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/purchase-invoices', purchaseInvoicesRoutes);
 app.use('/api/bookings', require('./routes/bookings'));
+app.use('/api/packages', require('./routes/packages'));
 app.use('/api/public/feedback', require('./routes/public-feedback'));
 app.use('/api/public/demo-lead', require('./routes/public-demo-lead'));
 app.use('/api/feedback', require('./routes/feedback'));
@@ -4459,55 +4460,106 @@ app.get('/api/membership/plans', authenticateToken, setupBusinessDatabase, requi
 app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
     const { MembershipSubscription, Client, MembershipPlan } = req.businessModels;
-    const { planId, search, status = 'ACTIVE', dateFrom, dateTo } = req.query;
+    const { planId, search, status = 'ACTIVE', dateFrom, dateTo, page: pageQ, limit: limitQ } = req.query;
     const branchId = req.user.branchId;
 
-    const query = { branchId };
-    if (planId && mongoose.Types.ObjectId.isValid(planId)) query.planId = new mongoose.Types.ObjectId(planId);
+    const page = Math.max(parseInt(String(pageQ ?? ''), 10) || 1, 1);
+    const limitRaw = parseInt(String(limitQ ?? ''), 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw >= 1 ? Math.min(limitRaw, 500) : 25;
+    const skip = (page - 1) * limit;
+
+    const parts = [{ branchId }];
+    if (planId && mongoose.Types.ObjectId.isValid(planId)) {
+      parts.push({ planId: new mongoose.Types.ObjectId(planId) });
+    }
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     // Status: ALL | ACTIVE (valid) | EXPIRED (incl. ACTIVE but past expiry) | CANCELLED
     const statusUpper = String(status || 'ACTIVE').toUpperCase();
-    if (statusUpper === 'ALL') {
-      // no status / expiry constraint
-    } else if (statusUpper === 'ACTIVE') {
-      Object.assign(query, activeMembershipMongoMatch(today));
+    if (statusUpper === 'ACTIVE') {
+      parts.push(activeMembershipMongoMatch(today));
     } else if (statusUpper === 'EXPIRED') {
-      query.$or = membershipExpiredMongoMatch(today).$or;
+      parts.push(membershipExpiredMongoMatch(today));
     } else if (statusUpper === 'CANCELLED') {
-      query.status = 'CANCELLED';
-    } else {
-      query.status = statusUpper;
+      parts.push({ status: 'CANCELLED' });
+    } else if (statusUpper !== 'ALL') {
+      parts.push({ status: statusUpper });
     }
 
     if (dateFrom && dateTo) {
       const from = new Date(String(dateFrom));
       const to = new Date(String(dateTo));
       if (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())) {
-        query.startDate = { $gte: from, $lte: to };
+        parts.push({ startDate: { $gte: from, $lte: to } });
       }
     }
 
-    let subs = await MembershipSubscription.find(query)
-      .populate('customerId', 'name phone email')
-      .populate('planId', 'planName price durationInDays')
-      .sort({ expiryDate: 1 })
-      .lean();
-
-    if (search && String(search).trim()) {
-      const term = String(search).trim().toLowerCase();
-      subs = subs.filter((s) => {
-        const name = (s.customerId?.name || '').toLowerCase();
-        const phone = (s.customerId?.phone || '').toLowerCase();
-        const email = (s.customerId?.email || '').toLowerCase();
-        const planName = (s.planId?.planName || '').toLowerCase();
-        return name.includes(term) || phone.includes(term) || email.includes(term) || planName.includes(term);
-      });
+    const searchTerm = search && String(search).trim() ? String(search).trim() : '';
+    if (searchTerm) {
+      const re = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const [clients, plans] = await Promise.all([
+        Client.find({ branchId, $or: [{ name: re }, { phone: re }, { email: re }] }).select('_id').lean(),
+        MembershipPlan.find({ branchId, planName: re }).select('_id').lean(),
+      ]);
+      const customerIds = clients.map((c) => c._id);
+      const planIds = plans.map((p) => p._id);
+      if (customerIds.length === 0 && planIds.length === 0) {
+        return res.json({
+          success: true,
+          data: [],
+          total: 0,
+          page,
+          limit,
+          totalPages: 0,
+          totalRevenue: 0,
+        });
+      }
+      const searchOr = [];
+      if (customerIds.length > 0) searchOr.push({ customerId: { $in: customerIds } });
+      if (planIds.length > 0) searchOr.push({ planId: { $in: planIds } });
+      parts.push({ $or: searchOr });
     }
 
-    res.json({ success: true, data: subs });
+    const matchQuery = parts.length === 1 ? parts[0] : { $and: parts };
+
+    const [total, subs, revenueRows] = await Promise.all([
+      MembershipSubscription.countDocuments(matchQuery),
+      MembershipSubscription.find(matchQuery)
+        .populate('customerId', 'name phone email')
+        .populate('planId', 'planName price durationInDays')
+        .sort({ expiryDate: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      MembershipSubscription.aggregate([
+        { $match: matchQuery },
+        {
+          $lookup: {
+            from: MembershipPlan.collection.name,
+            localField: 'planId',
+            foreignField: '_id',
+            as: 'plan',
+          },
+        },
+        { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+        { $group: { _id: null, totalRevenue: { $sum: { $ifNull: ['$plan.price', 0] } } } },
+      ]),
+    ]);
+
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    const totalRevenue = revenueRows[0]?.totalRevenue ?? 0;
+
+    res.json({
+      success: true,
+      data: subs,
+      total,
+      page,
+      limit,
+      totalPages,
+      totalRevenue,
+    });
   } catch (error) {
     logger.error('Error fetching membership subscriptions:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
@@ -7532,6 +7584,7 @@ app.get('/api/staff-directory', authenticateToken, setupBusinessDatabase, async 
           name: businessOwner.name,
           email: businessOwner.email,
           phone: businessOwner.mobile,
+          avatar: businessOwner.avatar || '',
           role: 'admin',
           specialties: businessOwner.specialties || [],
           salary: businessOwner.salary || 0,
@@ -7589,7 +7642,7 @@ app.post(
   async (req, res) => {
   try {
     const { Staff } = req.businessModels;
-    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, workSchedule } = req.body;
+    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, workSchedule, avatar } = req.body;
 
     if (!name || !email || !phone || !role) {
       return res.status(400).json({
@@ -7634,6 +7687,9 @@ app.post(
       isActive: isActive !== undefined ? isActive : true,
       branchId: req.user.branchId
     };
+    if (typeof avatar === 'string' && avatar.trim() !== '') {
+      staffData.avatar = avatar.trim();
+    }
     if (Array.isArray(workSchedule) && workSchedule.length > 0) {
       staffData.workSchedule = workSchedule.map(ws => ({
         day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
@@ -7692,7 +7748,7 @@ app.put(
   async (req, res) => {
   try {
     const { Staff } = req.businessModels;
-    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive } = req.body;
+    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, avatar } = req.body;
 
     // Get existing staff to check current state
     const existingStaff = await Staff.findById(req.params.id);
@@ -7799,6 +7855,9 @@ app.put(
         email,
         phone
       };
+      if (typeof avatar === 'string') {
+        updateData.avatar = avatar.trim();
+      }
       
       // Add password if provided
       if (password && password.trim() !== '') {
@@ -7868,6 +7927,9 @@ app.put(
       allowAppointmentScheduling: allowAppointmentScheduling !== undefined ? allowAppointmentScheduling : false,
       isActive: isActive !== undefined ? isActive : true,
     };
+    if (typeof avatar === 'string') {
+      updateData.avatar = avatar.trim();
+    }
     const { workSchedule, permissions } = req.body;
     if (Array.isArray(workSchedule)) {
       updateData.workSchedule = workSchedule.map(ws => ({
@@ -9233,6 +9295,26 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
 
     const createdBy = req.user?.name || (req.user?.firstName && req.user?.lastName ? `${req.user.firstName} ${req.user.lastName}`.trim() : null) || req.user?.email || '';
 
+    /** One bookingGroupId per calendar day when services span multiple dates (status stays per visit). */
+    const createBookingGroupIdResolver = (servicesList, defaultDate, existingGroupId) => {
+      const normalizedDefault = String(defaultDate || '').slice(0, 10);
+      const visitDates = servicesList.map((s) => String(s.date || defaultDate || normalizedDefault).slice(0, 10));
+      const uniqueDates = new Set(visitDates.filter(Boolean));
+      if (uniqueDates.size <= 1) {
+        const single = existingGroupId || uuidv4();
+        return () => single;
+      }
+      const byDate = new Map();
+      for (const d of uniqueDates) {
+        byDate.set(d, uuidv4());
+      }
+      return (serviceDate) => {
+        const key = String(serviceDate || defaultDate || normalizedDefault).slice(0, 10);
+        return byDate.get(key) || uuidv4();
+      };
+    };
+    const bookingGroupIdFor = createBookingGroupIdResolver(services, date, existingBookingGroupId);
+
     // Helper: get primary staff ID from a service for comparison
     const getPrimaryStaffId = (s) => {
       const id = s.staffId || (s.staffAssignments && s.staffAssignments[0] && s.staffAssignments[0].staffId);
@@ -9277,14 +9359,16 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           });
         }
         const duration = catalog.duration;
+        const serviceDate = s.date || date;
         const startMinutes = parseTimeToMinutes(startTimeRaw);
-        const dayStart = parseDateIST(date);
+        const dayStart = parseDateIST(serviceDate);
         const startAt = new Date(dayStart.getTime() + startMinutes * 60 * 1000);
         const endAt = new Date(startAt.getTime() + duration * 60 * 1000);
         resolved.push({
           raw: s,
           name: displayName,
           serviceId: s.serviceId,
+          serviceDate,
           time: minutesToTimeString(startMinutes),
           duration,
           price: typeof s.price === 'number' ? s.price : 0,
@@ -9349,12 +9433,11 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
         }
       }
 
-      const bookingGroupId = existingBookingGroupId || uuidv4();
       for (const r of resolved) {
         const appointmentData = {
           clientId,
           serviceId: r.serviceId,
-          date,
+          date: r.serviceDate,
           time: r.time,
           duration: r.duration,
           startAt: r.startAt,
@@ -9365,7 +9448,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           createdBy,
           price: r.price,
           branchId: req.user.branchId,
-          bookingGroupId,
+          bookingGroupId: bookingGroupIdFor(r.serviceDate),
           schedulingMode: 'custom',
           ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
         };
@@ -9422,9 +9505,9 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
         .lean();
       const catalogById = new Map(catalogDocs.map((d) => [String(d._id), d]));
 
-      const bookingGroupId = existingBookingGroupId || uuidv4();
       const baseTimeMinutes = parseTimeToMinutes(time);
       let cumulativeMinutes = 0;
+      let chainDate = date;
       for (let i = 0; i < services.length; i++) {
         const service = services[i];
         const catalog = catalogById.get(String(service.serviceId));
@@ -9438,11 +9521,16 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           });
         }
 
+        const serviceDate = service.date || date;
+        if (serviceDate !== chainDate) {
+          cumulativeMinutes = 0;
+          chainDate = serviceDate;
+        }
         const serviceStartMinutes = baseTimeMinutes + cumulativeMinutes;
         const serviceTime = minutesToTimeString(serviceStartMinutes);
         cumulativeMinutes += effectiveDuration;
 
-        const dayStart = parseDateIST(date);
+        const dayStart = parseDateIST(serviceDate);
         const startAt = new Date(dayStart.getTime() + serviceStartMinutes * 60 * 1000);
         const endAt = new Date(startAt.getTime() + effectiveDuration * 60 * 1000);
 
@@ -9476,7 +9564,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
         const appointmentData = {
           clientId,
           serviceId: service.serviceId,
-          date,
+          date: serviceDate,
           time: serviceTime,
           duration: effectiveDuration,
           status,
@@ -9485,7 +9573,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           createdBy,
           price: service.price,
           branchId: req.user.branchId,
-          bookingGroupId,
+          bookingGroupId: bookingGroupIdFor(serviceDate),
           staffLocked: !!service.staffLocked,
           ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
         };
@@ -10987,26 +11075,30 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
     .populate('serviceId', 'name price duration')
     .populate('staffId', 'name role');
 
-    // Propagate "arrived" to all cards in the same bookingGroup (same customer physically arrived).
+    // Propagate "arrived" to same-day siblings in the booking group (customer arrived for that visit).
     // Other status transitions (service_started, completed) remain per-card since each staff starts independently.
     if (updateData.status === 'arrived' && appointment.bookingGroupId) {
+      const visitDate = appointment.date ? String(appointment.date).slice(0, 10) : null;
       await Appointment.updateMany(
         {
           bookingGroupId: appointment.bookingGroupId,
           _id: { $ne: appointment._id },
-          status: { $in: ['scheduled', 'confirmed'] }
+          status: { $in: ['scheduled', 'confirmed'] },
+          ...(visitDate ? { date: visitDate } : {}),
         },
         { $set: { status: 'arrived' } }
       );
     }
 
-    // No-show: mark sibling pre-service cards in the same group so the day view stays in sync after refresh.
+    // No-show: mark same-day pre-service siblings in the group so the day view stays in sync after refresh.
     if (updateData.status === 'missed' && appointment.bookingGroupId) {
+      const visitDate = appointment.date ? String(appointment.date).slice(0, 10) : null;
       await Appointment.updateMany(
         {
           bookingGroupId: appointment.bookingGroupId,
           _id: { $ne: appointment._id },
-          status: { $in: ['scheduled', 'confirmed', 'arrived'] }
+          status: { $in: ['scheduled', 'confirmed', 'arrived'] },
+          ...(visitDate ? { date: visitDate } : {}),
         },
         { $set: { status: 'missed' } }
       );
@@ -11650,26 +11742,46 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     const uniqueCustomers = new Set(salesInInvoiceRange.map(s => (s.customerName || '').trim()).filter(Boolean));
     const totalCustomerCount = uniqueCustomers.size || totalBillCount;
     const totalSales = salesInInvoiceRange.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
-    let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
+    let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0, totalSalesWallet = 0, totalSalesRewardPoint = 0;
+    let cashAddedToWallet = 0;
     salesInInvoiceRange.forEach(s => {
       let cashAmt = 0;
       let isAllCash = false;
       if (s.payments && s.payments.length) {
         s.payments.forEach(p => {
           const amt = p.amount || 0;
-          if (p.mode === 'Cash') { totalSalesCash += amt; cashAmt += amt; }
-          else if (p.mode === 'Online') totalSalesOnline += amt;
-          else if (p.mode === 'Card') totalSalesCard += amt;
+          const mode = String(p.mode || '').toLowerCase();
+          if (mode === 'cash') { totalSalesCash += amt; cashAmt += amt; }
+          else if (mode === 'online') totalSalesOnline += amt;
+          else if (mode === 'card') totalSalesCard += amt;
+          else if (mode === 'wallet') totalSalesWallet += amt;
+          else if (mode === 'reward point' || mode === 'reward') totalSalesRewardPoint += amt;
         });
-        const hasNonCash = (s.payments || []).some(p => p.mode === 'Card' || p.mode === 'Online');
+        const hasNonCash = (s.payments || []).some(p => {
+          const m = String(p.mode || '').toLowerCase();
+          return m === 'card' || m === 'online' || m === 'wallet' || m === 'reward point' || m === 'reward';
+        });
         isAllCash = cashAmt > 0 && !hasNonCash;
       } else {
         const amt = s.grossTotal || s.netTotal || 0;
-        if (s.paymentMode === 'Cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
-        else if (s.paymentMode === 'Online') totalSalesOnline += amt;
-        else if (s.paymentMode === 'Card') totalSalesCard += amt;
+        const pm = String(s.paymentMode || '').toLowerCase();
+        if (pm === 'cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
+        else if (pm === 'online') totalSalesOnline += amt;
+        else if (pm === 'card') totalSalesCard += amt;
+        else if (pm === 'wallet') totalSalesWallet += amt;
+        else if (pm === 'reward point' || pm === 'reward') totalSalesRewardPoint += amt;
+      }
+      const hasRewardPayment = (s.payments || []).some((p) => {
+        const m = String(p.mode || '').toLowerCase();
+        return m === 'reward point' || m === 'reward';
+      });
+      const loyaltyDisc = Number(s.loyaltyDiscountAmount) || 0;
+      const loyaltyPts = Math.floor(Number(s.loyaltyPointsRedeemed) || 0);
+      if (!hasRewardPayment && loyaltyPts > 0 && loyaltyDisc > 0.005) {
+        totalSalesRewardPoint += loyaltyDisc;
       }
       const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+      cashAddedToWallet += walletCashAdd;
       totalSalesCash += walletCashAdd;
       cashAmt += walletCashAdd;
       if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
@@ -11720,11 +11832,14 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         totalSalesCash,
         totalSalesOnline,
         totalSalesCard,
+        totalSalesWallet,
+        totalSalesRewardPoint,
         duesCollected,
         cashDuesCollected,
         cashExpense,
         pettyCashExpense,
         tipCollected,
+        cashAddedToWallet,
         cashBalance,
         openingBalance,
         closingBalance,
@@ -11761,7 +11876,11 @@ app.get('/api/sales/summary', authenticateToken, setupBusinessDatabase, requireS
       data: {
         totalRevenue: totals.totalRevenue,
         cashCollected: totals.cashCollected,
+        serviceCashCollected: totals.serviceCashCollected,
+        walletCashCollected: totals.walletCashCollected,
         onlineCash: totals.onlineCash,
+        cardCollected: totals.cardCollected,
+        onlinePayCollected: totals.onlinePayCollected,
         unpaidValue: totals.unpaidValue,
         tips: totals.tips,
         completedSales: totals.completedSales,
@@ -11965,8 +12084,9 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
       const payDoc = await BusinessSettings.findOne().select('paymentConfiguration').lean();
       const payCfg = mergePaymentConfiguration(payDoc?.paymentConfiguration);
       const itemsForRedeem = Array.isArray(saleData.items) ? saleData.items : [];
-      eligibleWalletSubCreate = eligibleRedemptionSubtotal(itemsForRedeem, payCfg, 'wallet');
-      eligibleRewardSubCreate = eligibleRedemptionSubtotal(itemsForRedeem, payCfg, 'reward');
+      const redeemOptsCreate = { cartDiscountAmount: Number(saleData.discount) || 0 };
+      eligibleWalletSubCreate = eligibleRedemptionSubtotal(itemsForRedeem, payCfg, 'wallet', redeemOptsCreate);
+      eligibleRewardSubCreate = eligibleRedemptionSubtotal(itemsForRedeem, payCfg, 'reward', redeemOptsCreate);
       const walletPaid = sumWalletPayments(saleData.payments);
       if (walletPaid > eligibleWalletSubCreate + 0.02) {
         return res.status(400).json({
@@ -13235,8 +13355,11 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
       const payDocPut = await BizSettingsRedeemPut.findOne().select('paymentConfiguration').lean();
       const payCfgPut = mergePayCfgPut(payDocPut?.paymentConfiguration);
       const itemsForRedeemPut = Array.isArray(existingSale.items) ? existingSale.items : [];
-      const eligibleWalletPut = eligibleRedemptionSubtotalPut(itemsForRedeemPut, payCfgPut, 'wallet');
-      eligibleRewardPut = eligibleRedemptionSubtotalPut(itemsForRedeemPut, payCfgPut, 'reward');
+      const mergedDiscountPut =
+        updateData.discount != null ? Number(updateData.discount) : Number(existingSale.discount) || 0;
+      const redeemOptsPut = { cartDiscountAmount: mergedDiscountPut };
+      const eligibleWalletPut = eligibleRedemptionSubtotalPut(itemsForRedeemPut, payCfgPut, 'wallet', redeemOptsPut);
+      eligibleRewardPut = eligibleRedemptionSubtotalPut(itemsForRedeemPut, payCfgPut, 'reward', redeemOptsPut);
       const walletPaidPut = sumWalletPaymentsPut(existingSale.payments);
       if (walletPaidPut > eligibleWalletPut + 0.02) {
         return res.status(400).json({
@@ -15221,7 +15344,7 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, requi
       exemptProductRate,
       taxCategories,
       priceInclusiveOfTax,
-      paymentConfiguration
+      paymentConfiguration,
     } = req.body;
     const { BusinessSettings } = req.businessModels;
 
@@ -15264,7 +15387,23 @@ app.put("/api/settings/payment", authenticateToken, setupBusinessDatabase, requi
     }
     if (priceInclusiveOfTax !== undefined) settings.priceInclusiveOfTax = priceInclusiveOfTax;
     if (paymentConfiguration !== undefined && paymentConfiguration !== null && typeof paymentConfiguration === 'object') {
-      settings.paymentConfiguration = mergePayCfg(paymentConfiguration);
+      const existingPayCfg = mergePayCfg(settings.paymentConfiguration);
+      settings.paymentConfiguration = mergePayCfg({
+        ...existingPayCfg,
+        ...paymentConfiguration,
+        walletRedemption: {
+          ...existingPayCfg.walletRedemption,
+          ...(paymentConfiguration.walletRedemption || {}),
+        },
+        rewardPointRedemption: {
+          ...existingPayCfg.rewardPointRedemption,
+          ...(paymentConfiguration.rewardPointRedemption || {}),
+        },
+        billingRedemption: {
+          ...existingPayCfg.billingRedemption,
+          ...(paymentConfiguration.billingRedemption || {}),
+        },
+      });
       settings.markModified('paymentConfiguration');
     }
 

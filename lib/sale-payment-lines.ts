@@ -9,7 +9,11 @@ export type SalePaymentSource = {
     amount?: number
     method?: string
   } | null>
+  loyaltyPointsRedeemed?: number
+  loyaltyDiscountAmount?: number
 }
+
+export type ReceiptPaymentType = "cash" | "card" | "online" | "wallet" | "reward" | "unknown"
 
 export type SalePaymentLine = {
   mode: string
@@ -32,18 +36,51 @@ export function normalizePaymentModeLabel(modeOrType: string | undefined | null)
   if (lower === "card") return "Card"
   if (lower === "online") return "Online"
   if (lower === "wallet") return "Wallet"
+  if (lower === "reward" || lower === "reward point" || lower === "reward points") return "Reward Point"
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
 }
 
-export function modeStringToReceiptType(
-  mode: string
-): "cash" | "card" | "online" | "wallet" | "unknown" {
+export function receiptPaymentTypeDisplayName(type: string | undefined | null): string {
+  const t = String(type || "").toLowerCase()
+  if (t === "cash") return "Cash"
+  if (t === "card") return "Card"
+  if (t === "online") return "Online"
+  if (t === "wallet") return "Wallet"
+  if (t === "reward") return "Reward Point"
+  if (t === "unknown") return "Unknown"
+  return normalizePaymentModeLabel(type)
+}
+
+export function modeStringToReceiptType(mode: string): ReceiptPaymentType {
   const m = String(mode || "").toLowerCase()
   if (m === "cash") return "cash"
   if (m === "card") return "card"
   if (m === "online") return "online"
   if (m === "wallet") return "wallet"
+  if (m === "reward" || m === "reward point" || m === "reward points") return "reward"
   return "unknown"
+}
+
+export function buildSalePaymentModeFromCheckout(opts: {
+  payments: Array<{ type?: string; mode?: string; amount?: number }>
+  loyaltyPointsRedeemed?: number
+  loyaltyDiscountAmount?: number
+}): string {
+  const modes: string[] = []
+  for (const p of opts.payments) {
+    if ((Number(p.amount) || 0) <= 0.005) continue
+    const label = normalizePaymentModeLabel(p.mode ?? p.type)
+    if (label && !modes.includes(label)) modes.push(label)
+  }
+  const disc = Number(opts.loyaltyDiscountAmount) || 0
+  const pts = Math.floor(Number(opts.loyaltyPointsRedeemed) || 0)
+  if (pts > 0 && disc > 0.005 && !modes.includes("Reward Point")) {
+    modes.push("Reward Point")
+  }
+  if (modes.length === 0) {
+    return pts > 0 && disc > 0.005 ? "Reward Point" : "Cash"
+  }
+  return modes.join(", ")
 }
 
 /**
@@ -125,13 +162,26 @@ export function formatPaymentRecordedDateLabelFromIso(iso: string | undefined): 
 
 /** Receipt / API payload: lowercase type + ISO recordedAt for each split. */
 export function buildReceiptPaymentsFromSale(sale: SalePaymentSource): Array<{
-  type: "cash" | "card" | "online" | "wallet" | "unknown"
+  type: ReceiptPaymentType
   amount: number
   recordedAt: string
 }> {
-  return getSalePaymentLinesWithDates(sale).map((line) => ({
+  const saleDate = parseSaleDate(sale.date)
+  const lines = getSalePaymentLinesWithDates(sale).map((line) => ({
     type: modeStringToReceiptType(line.mode),
     amount: line.amount,
     recordedAt: line.recordedAt.toISOString(),
   }))
+
+  const loyaltyDisc = Math.max(0, Number(sale.loyaltyDiscountAmount) || 0)
+  const loyaltyPts = Math.floor(Number(sale.loyaltyPointsRedeemed) || 0)
+  if (loyaltyPts > 0 && loyaltyDisc > 0.005) {
+    lines.push({
+      type: "reward",
+      amount: loyaltyDisc,
+      recordedAt: saleDate.toISOString(),
+    })
+  }
+
+  return lines
 }

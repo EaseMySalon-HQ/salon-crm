@@ -109,11 +109,59 @@ function resolvePaymentStatus(amountPaid, totalPrice) {
   return 'PENDING';
 }
 
+/**
+ * Service IDs already redeemed on this client package (non-reversed redemptions).
+ *
+ * @param {string|ObjectId} clientPackageId
+ * @param {Model}           PackageRedemptionModel
+ * @returns {Promise<Set<string>>}
+ */
+async function getRedeemedServiceIdSet(clientPackageId, PackageRedemptionModel) {
+  const rows = await PackageRedemptionModel.find({
+    client_package_id: clientPackageId,
+    is_reversed: { $ne: true }
+  })
+    .select('services_redeemed')
+    .lean();
+
+  const ids = new Set();
+  for (const row of rows) {
+    for (const svc of row.services_redeemed || []) {
+      if (svc?.service_id) ids.add(String(svc.service_id));
+    }
+  }
+  return ids;
+}
+
+/**
+ * Block redeeming a service that was already used on this client package.
+ *
+ * @param {Array}         servicesRequested
+ * @param {Set<string>}   redeemedServiceIds
+ * @returns {{ valid: boolean, message: string, duplicateIds: string[] }}
+ */
+function validateServicesNotAlreadyRedeemed(servicesRequested, redeemedServiceIds) {
+  const requested = (Array.isArray(servicesRequested) ? servicesRequested : []).map((s) =>
+    String(s?.service_id || s || '')
+  ).filter(Boolean);
+  const duplicateIds = requested.filter((id) => redeemedServiceIds.has(id));
+  if (duplicateIds.length > 0) {
+    return {
+      valid: false,
+      message: 'One or more selected services were already redeemed on this package.',
+      duplicateIds
+    };
+  }
+  return { valid: true, message: '', duplicateIds: [] };
+}
+
 module.exports = {
   calculateExpiryDate,
   validateMinServiceCount,
   checkDuplicatePackageName,
   calculateServicePriceSum,
   buildRedemptionSnapshot,
-  resolvePaymentStatus
+  resolvePaymentStatus,
+  getRedeemedServiceIdSet,
+  validateServicesNotAlreadyRedeemed
 };

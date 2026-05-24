@@ -21,13 +21,17 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
   const billNo = String(saleData.billNo || "")
   const items = saleData.items || []
 
-  const payments =
-    saleData.payments?.length > 0
-      ? buildReceiptPaymentsFromSale({
-          date: saleData.date,
-          payments: saleData.payments,
-          paymentHistory: saleData.paymentHistory || [],
-        })
+  const payments = buildReceiptPaymentsFromSale({
+    date: saleData.date,
+    payments: saleData.payments,
+    paymentHistory: saleData.paymentHistory || [],
+    loyaltyPointsRedeemed: saleData.loyaltyPointsRedeemed,
+    loyaltyDiscountAmount: saleData.loyaltyDiscountAmount,
+  })
+
+  const paymentsFinal =
+    payments.length > 0
+      ? payments
       : [
           {
             type: (saleData.paymentMode?.split?.(",")?.[0]?.toLowerCase() || "cash") as
@@ -92,7 +96,7 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
     discount: 0,
     tax: saleData.taxAmount,
     total: saleData.grossTotal + (saleData.tip || 0),
-    payments,
+    payments: paymentsFinal,
     staffId: id,
     staffName: saleData.staffName,
     notes: "",

@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import type { Receipt } from "@/lib/data"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
+import { receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
@@ -297,14 +298,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
               )
             }
             
-            // Map payment types to display names
-            let displayName = 'Unknown'
-            if (payment.type === 'cash') displayName = 'Cash'
-            if (payment.type === 'card') displayName = 'Card'
-            if (payment.type === 'online') displayName = 'Online'
-            if (payment.type === 'wallet') displayName = 'Wallet'
-            if (payment.type === 'unknown') displayName = 'Unknown'
-            
+            const displayName = receiptPaymentTypeDisplayName(payment.type)
             const dateLabel = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
             return (
               <div key={index} className="flex justify-between">
