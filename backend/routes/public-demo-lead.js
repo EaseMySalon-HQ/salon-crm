@@ -1,0 +1,162 @@
+'use strict';
+
+/**
+ * Public marketing demo / contact form → PlatformLead (admin Lead Management).
+ * No auth; rate-limited; CSRF skipped via /api/public/demo-lead prefix.
+ */
+
+const express = require('express');
+const rateLimit = require('express-rate-limit');
+const { setupMainDatabase } = require('../middleware/business-db');
+const { logger } = require('../utils/logger');
+const { validate } = require('../middleware/validate');
+const { publicDemoLeadSchema } = require('../validation/schemas');
+const { notifyPlatformAdminsPendingLead } = require('../lib/notify-platform-leads-pending');
+
+const router = express.Router();
+
+const publicDemoLeadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many submissions. Please try again later.' },
+});
+
+/** Strip to last 10 digits (India mobile). */
+function normalizeIndianPhone(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  return digits.slice(-10);
+}
+
+router.post(
+  '/',
+  publicDemoLeadLimiter,
+  setupMainDatabase,
+  validate(publicDemoLeadSchema),
+  async (req, res) => {
+    try {
+      const {
+        name,
+        phone,
+        email,
+        salon,
+        city,
+        branches,
+        preferredTime,
+        message,
+        website,
+      } = req.body;
+
+      // Honeypot — bots only
+      if (website && String(website).trim()) {
+        return res.json({ success: true, data: { id: null } });
+      }
+
+      const normalizedPhone = normalizeIndianPhone(phone);
+      if (!normalizedPhone) {
+        return res.status(400).json({
+          success: false,
+          error: 'Enter a valid 10-digit phone number',
+        });
+      }
+
+      const { PlatformLead, PlatformLeadActivity } = req.mainModels;
+
+      const salonName = String(salon || '').trim();
+      const cityName = String(city || '').trim();
+      const branchCount = branches != null ? String(branches).trim() : '';
+      const preferredDemoTime = preferredTime != null ? String(preferredTime).trim() : '';
+      const demoNotes = String(message || '').trim();
+
+      const interestedParts = [
+        cityName ? `City: ${cityName}` : '',
+        branchCount ? `Branches: ${branchCount}` : '',
+      ].filter(Boolean);
+
+      const existing = await PlatformLead.findOne({
+        phone: normalizedPhone,
+        status: { $in: ['new', 'follow-up'] },
+      }).sort({ createdAt: -1 });
+
+      if (existing) {
+        const appendNote = [
+          demoNotes ? `Demo request: ${demoNotes}` : '',
+          preferredDemoTime ? `Preferred time: ${preferredDemoTime}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+
+        if (appendNote) {
+          existing.notes = [existing.notes, appendNote].filter(Boolean).join('\n\n');
+        }
+        if (salonName && !existing.salonName) existing.salonName = salonName;
+        if (cityName && !existing.city) existing.city = cityName;
+        if (branchCount && !existing.branchCount) existing.branchCount = branchCount;
+        if (preferredDemoTime) existing.preferredDemoTime = preferredDemoTime;
+        if (email && !existing.email) existing.email = String(email).trim().toLowerCase();
+        await existing.save();
+
+        await PlatformLeadActivity.create({
+          leadId: existing._id,
+          activityType: 'updated',
+          performedByName: 'Website demo form',
+          description: 'Repeat demo booking from website',
+          details: { preferredDemoTime, demoNotes },
+        });
+
+        return res.json({
+          success: true,
+          data: { id: existing._id, updated: true },
+        });
+      }
+
+      const newLead = new PlatformLead({
+        name: String(name).trim(),
+        salonName,
+        city: cityName,
+        branchCount,
+        preferredDemoTime,
+        phone: normalizedPhone,
+        email: email ? String(email).trim().toLowerCase() : undefined,
+        source: 'website',
+        status: 'new',
+        interestedIn: interestedParts.join(' | '),
+        notes: demoNotes,
+      });
+
+      const savedLead = await newLead.save();
+
+      await PlatformLeadActivity.create({
+        leadId: savedLead._id,
+        activityType: 'created',
+        performedByName: 'Website demo form',
+        newValue: {
+          name: savedLead.name,
+          salonName: savedLead.salonName,
+          phone: savedLead.phone,
+          source: 'website',
+        },
+        description: 'Lead created from website demo form',
+        details: {
+          city: cityName,
+          branchCount,
+          preferredDemoTime,
+        },
+      });
+
+      notifyPlatformAdminsPendingLead(req.mainModels, savedLead);
+
+      res.status(201).json({
+        success: true,
+        data: { id: savedLead._id, updated: false },
+      });
+    } catch (error) {
+      logger.error('Public demo lead error:', error);
+      res.status(500).json({ success: false, error: 'Could not save your request. Please try again.' });
+    }
+  }
+);
+
+module.exports = router;

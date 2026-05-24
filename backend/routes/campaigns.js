@@ -2,6 +2,7 @@ const express = require('express');
 const { logger } = require('../utils/logger');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/permissions');
 const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/business-db');
 const whatsappService = require('../services/whatsapp-service');
 const databaseManager = require('../config/database-manager');
@@ -86,7 +87,7 @@ async function getRecipientsForCampaign(campaign, businessId, businessModels) {
  * POST /api/campaigns
  * Create a new campaign
  */
-router.post('/', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+router.post('/', authenticateToken, setupMainDatabase, setupBusinessDatabase, requirePermission('campaigns', 'create'), async (req, res) => {
   try {
     const businessId = req.user?.branchId;
     
@@ -353,7 +354,7 @@ router.get('/:campaignId/recipients', authenticateToken, setupMainDatabase, setu
  * POST /api/campaigns/:campaignId/send
  * Send a campaign
  */
-router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusinessDatabase, requirePermission('campaigns', 'manage'), async (req, res) => {
   try {
     const businessId = req.user?.branchId;
     const { campaignId } = req.params;
@@ -427,94 +428,110 @@ router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusi
     campaign.startedAt = new Date();
     await campaign.save();
 
-    // Send messages in batches
-    let sentCount = 0;
-    let failedCount = 0;
-    const batchSize = 10; // Send 10 messages at a time to avoid rate limits
-
-    for (let i = 0; i < recipients.length; i += batchSize) {
-      const batch = recipients.slice(i, i + batchSize);
-      
-      await Promise.all(batch.map(async (recipient) => {
-        try {
-          // Map template variables - use recipient data and campaign templateVariables
-          const variables = { ...campaign.templateVariables };
-          
-          // Add recipient-specific variables if needed
-          if (recipient.name) {
-            variables.body_1 = recipient.name;
-          }
-
-          const result = await whatsappService.sendMessage({
-            to: recipient.phone,
-            templateId: template.msg91TemplateId || template.templateName,
-            variables
-          });
-
-          // Log message
-          await WhatsAppMessageLog.create({
-            businessId,
-            recipientPhone: recipient.phone,
-            messageType: 'campaign',
-            status: result.success ? 'sent' : 'failed',
-            msg91Response: result.data || null,
-            relatedEntityId: campaign._id,
-            relatedEntityType: 'Campaign',
-            campaignId: campaign._id,
-            error: result.error || null,
-            timestamp: new Date()
-          });
-
-          if (result.success) {
-            sentCount++;
-          } else {
-            failedCount++;
-          }
-        } catch (error) {
-          logger.error(`Error sending to ${recipient.phone}:`, error);
-          failedCount++;
-          
-          await WhatsAppMessageLog.create({
-            businessId,
-            recipientPhone: recipient.phone,
-            messageType: 'campaign',
-            status: 'failed',
-            relatedEntityId: campaign._id,
-            relatedEntityType: 'Campaign',
-            campaignId: campaign._id,
-            error: error.message,
-            timestamp: new Date()
-          });
-        }
-      }));
-
-      // Small delay between batches to avoid rate limiting
-      if (i + batchSize < recipients.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-
-    // Update campaign stats
-    campaign.sentCount = sentCount;
-    campaign.failedCount = failedCount;
-    campaign.status = 'completed';
-    campaign.completedAt = new Date();
-    await campaign.save();
-
-    // Update template usage
-    template.campaignCount = (template.campaignCount || 0) + sentCount;
-    template.lastUsedAt = new Date();
-    await template.save();
-
+    // Respond immediately after status update — message sending runs in background
     res.json({
       success: true,
-      message: `Campaign sent to ${sentCount} recipients`,
+      message: `Campaign is being sent to ${recipients.length} recipients`,
       data: {
         total: recipients.length,
-        successful: sentCount,
-        failed: failedCount
+        status: 'sending'
       }
     });
+
+    // Fire-and-forget: send messages in batches without blocking the response
+    setImmediate(async () => {
+      let sentCount = 0;
+      let failedCount = 0;
+      const batchSize = 10; // Send 10 messages at a time to avoid rate limits
+
+      try {
+        for (let i = 0; i < recipients.length; i += batchSize) {
+          const batch = recipients.slice(i, i + batchSize);
+          
+          await Promise.all(batch.map(async (recipient) => {
+            try {
+              // Map template variables - use recipient data and campaign templateVariables
+              const variables = { ...campaign.templateVariables };
+              
+              // Add recipient-specific variables if needed
+              if (recipient.name) {
+                variables.body_1 = recipient.name;
+              }
+
+              const result = await whatsappService.sendMessage({
+                to: recipient.phone,
+                templateId: template.msg91TemplateId || template.templateName,
+                variables
+              });
+
+              // Log message
+              await WhatsAppMessageLog.create({
+                businessId,
+                recipientPhone: recipient.phone,
+                messageType: 'campaign',
+                status: result.success ? 'sent' : 'failed',
+                msg91Response: result.data || null,
+                relatedEntityId: campaign._id,
+                relatedEntityType: 'Campaign',
+                campaignId: campaign._id,
+                error: result.error || null,
+                timestamp: new Date()
+              });
+
+              if (result.success) {
+                sentCount++;
+              } else {
+                failedCount++;
+              }
+            } catch (error) {
+              logger.error(`Error sending to ${recipient.phone}:`, error);
+              failedCount++;
+              
+              await WhatsAppMessageLog.create({
+                businessId,
+                recipientPhone: recipient.phone,
+                messageType: 'campaign',
+                status: 'failed',
+                relatedEntityId: campaign._id,
+                relatedEntityType: 'Campaign',
+                campaignId: campaign._id,
+                error: error.message,
+                timestamp: new Date()
+              });
+            }
+          }));
+
+          // Small delay between batches to avoid rate limiting
+          if (i + batchSize < recipients.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+
+        // Update campaign stats
+        campaign.sentCount = sentCount;
+        campaign.failedCount = failedCount;
+        campaign.status = 'completed';
+        campaign.completedAt = new Date();
+        await campaign.save();
+
+        // Update template usage
+        template.campaignCount = (template.campaignCount || 0) + sentCount;
+        template.lastUsedAt = new Date();
+        await template.save();
+
+        logger.info(`Campaign ${campaignId} completed: ${sentCount} sent, ${failedCount} failed`);
+      } catch (error) {
+        logger.error('Error sending campaign messages in background:', error);
+
+        // Revert campaign status to draft on unexpected error
+        try {
+          campaign.status = 'draft';
+          await campaign.save();
+        } catch (updateError) {
+          logger.error('Error reverting campaign status:', updateError);
+        }
+      }
+    }); // end setImmediate (fire-and-forget message sending)
   } catch (error) {
     logger.error('Error sending campaign:', error);
     
@@ -610,7 +627,7 @@ router.get('/:campaignId/stats', authenticateToken, setupMainDatabase, setupBusi
  * PUT /api/campaigns/:campaignId/cancel
  * Cancel a campaign
  */
-router.put('/:campaignId/cancel', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
+router.put('/:campaignId/cancel', authenticateToken, setupMainDatabase, setupBusinessDatabase, requirePermission('campaigns', 'edit'), async (req, res) => {
   try {
     const businessId = req.user?.branchId;
     const { campaignId } = req.params;

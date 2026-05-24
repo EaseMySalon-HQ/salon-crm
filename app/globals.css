@@ -294,9 +294,17 @@
   animation: appointmentCardEnter 0.14s ease-out forwards;
 }
 
-/* Outside working hours - greyed out */
+@keyframes toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* Outside working hours (per staff) — tint comes from inline layered backgrounds with 5-min guides */
 .calendar-outside-hours {
-  background-color: rgb(226 232 240) !important;
   color: rgb(148 163 184) !important;
   border-right-color: rgb(203 213 225) !important; /* slate-300 - light column lines */
   border-bottom-color: rgb(203 213 225) !important; /* slate-300 - light row lines */

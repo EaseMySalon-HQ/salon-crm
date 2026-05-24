@@ -13,8 +13,10 @@ import { cn } from "@/lib/utils"
 
 interface ProtectedLayoutProps {
   children: React.ReactNode
-  /** Permission module to check. Access granted only when user has view permission. */
+  /** Permission module to check. Access granted only when user has the required feature on this module. */
   requiredModule?: string
+  /** Feature within the module to require. Defaults to "view" for page-level access. */
+  requiredFeature?: string
   topNavQuickAdd?: boolean
   topNavRightSlot?: React.ReactNode
 }
@@ -68,7 +70,7 @@ function ProtectedLayoutContent({
   )
 }
 
-export function ProtectedLayout({ children, requiredModule, topNavQuickAdd = true, topNavRightSlot }: ProtectedLayoutProps) {
+export function ProtectedLayout({ children, requiredModule, requiredFeature = "view", topNavQuickAdd = true, topNavRightSlot }: ProtectedLayoutProps) {
   const { user, isLoading, hasPermission, exitImpersonation } = useAuth()
   const router = useRouter()
 
@@ -119,7 +121,7 @@ export function ProtectedLayout({ children, requiredModule, topNavQuickAdd = tru
   }
 
   // Check permission-based access
-  if (requiredModule && !hasPermission(requiredModule, "view")) {
+  if (requiredModule && !hasPermission(requiredModule, requiredFeature)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
@@ -128,10 +130,17 @@ export function ProtectedLayout({ children, requiredModule, topNavQuickAdd = tru
             You don&apos;t have permission to access this page.
           </p>
           <button
-            onClick={() => router.push("/dashboard")}
+            type="button"
+            onClick={() => {
+              if (typeof window !== "undefined" && window.history.length > 1) {
+                router.back()
+              } else {
+                router.push("/dashboard")
+              }
+            }}
             className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
           >
-            Go to Dashboard
+            Go back
           </button>
         </div>
       </div>

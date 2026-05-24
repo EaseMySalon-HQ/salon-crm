@@ -20,6 +20,12 @@ export interface Service {
   price: number
   description?: string
   isActive: boolean
+  serviceKind?: "simple" | "bundle"
+  bundleItems?: Array<{ serviceId: string; sortOrder?: number }>
+  bundleScheduleType?: "sequence" | "parallel"
+  bundlePricingType?: "full_price" | "custom" | "percent_discount" | "free"
+  bundlePercentOff?: number
+  bundleRetailPrice?: number
 }
 
 export interface Product {
@@ -81,6 +87,8 @@ export interface Receipt {
   subtotalExcludingTax?: number
   tip: number
   tipStaffName?: string
+  /** Split tip allocations for receipt display (from Sale.tipLines). */
+  tipLines?: Array<{ staffName?: string; amount: number }>
   discount: number
   tax: number
   roundOff?: number
@@ -122,10 +130,12 @@ export interface ReceiptItem {
   staffContributions?: ReceiptStaffContribution[]
   total: number
   hsnSacCode?: string
+  /** When set on API sale items: checkout add-on vs pre-booked (`appointment` — not shown on receipt). */
+  lineSource?: string
 }
 
 export interface PaymentMethod {
-  type: "cash" | "card" | "online" | "wallet" | "unknown"
+  type: "cash" | "card" | "online" | "wallet" | "reward" | "unknown"
   amount: number
   /** ISO timestamp when this split was recorded (checkout or due collection). */
   recordedAt?: string

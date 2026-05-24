@@ -15,6 +15,10 @@ const businessSettingsSchema = new mongoose.Schema({
   zipCode: { type: String, required: true, default: "10001" },
   /** Link to Google Maps (place or directions); optional. */
   googleMapsUrl: { type: String, default: "" },
+  /** Google Business Profile review link (shown to customers only after 5★ feedback). */
+  googleReviewUrl: { type: String, default: "" },
+  /** When true, customers may change feedback for the same invoice; otherwise one submission per sale. */
+  allowFeedbackResubmission: { type: Boolean, default: false },
   
   // Receipt/Invoice Settings
   receiptPrefix: { type: String, default: "INV" },
@@ -22,6 +26,7 @@ const businessSettingsSchema = new mongoose.Schema({
   receiptNumber: { type: Number, default: 1 },
   autoIncrementReceipt: { type: Boolean, default: true },
   purchaseOrderNumber: { type: Number, default: 1 },
+  purchaseInvoiceNumber: { type: Number, default: 1 },
   
   // Payment Settings
   currency: { type: String, default: "INR" },

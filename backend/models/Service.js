@@ -49,6 +49,39 @@ const serviceSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  serviceKind: {
+    type: String,
+    enum: ['simple', 'bundle'],
+    default: 'simple'
+  },
+  bundleItems: {
+    type: [{
+      serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service' },
+      sortOrder: { type: Number, default: 0 }
+    }],
+    default: undefined
+  },
+  bundleScheduleType: {
+    type: String,
+    enum: ['sequence', 'parallel'],
+    default: undefined
+  },
+  bundlePricingType: {
+    type: String,
+    enum: ['full_price', 'custom', 'percent_discount', 'free'],
+    default: undefined
+  },
+  bundlePercentOff: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: undefined
+  },
+  bundleRetailPrice: {
+    type: Number,
+    min: 0,
+    default: undefined
+  },
   branchId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Business',

@@ -4,8 +4,11 @@ import { useEffect } from "react"
 import type { Receipt } from "@/lib/data"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
+import { receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
+import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 import { Card, CardContent } from "@/components/ui/card"
 import { useCurrency } from "@/hooks/use-currency"
 
@@ -114,9 +117,17 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
                     )}
                     {(() => {
                       const staffLabel = formatReceiptItemStaffNames(item)
-                      return staffLabel ? (
-                        <span className="block text-xs text-gray-600">{staffLabel}</span>
-                      ) : null
+                      const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+                      return (
+                        <>
+                          {staffLabel ? (
+                            <span className="block text-xs text-gray-600">{staffLabel}</span>
+                          ) : null}
+                          {walkInLabel ? (
+                            <span className="block text-xs text-amber-800 font-medium">{walkInLabel}</span>
+                          ) : null}
+                        </>
+                      )
                     })()}
                   </td>
                   <td className="py-1.5 text-right">{formatAmount(item.price)}</td>
@@ -225,12 +236,13 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
               })()}
             </>
           )}
-          {receipt.tip > 0 && (
-            <div className="flex justify-between">
-              <span>{receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-              <span>{formatAmount(receipt.tip)}</span>
-            </div>
-          )}
+          {receipt.tip > 0 &&
+            receiptTipDisplayLines(receipt).map((line, i) => (
+              <div key={i} className="flex justify-between">
+                <span>{line.staffName ? `Tip (${line.staffName}):` : "Tip:"}</span>
+                <span>{formatAmount(line.amount)}</span>
+              </div>
+            ))}
           {receipt.roundOff && Math.abs(receipt.roundOff) > 0.01 && (
             <div className="flex justify-between">
               <span>Round Off:</span>
@@ -286,14 +298,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
               )
             }
             
-            // Map payment types to display names
-            let displayName = 'Unknown'
-            if (payment.type === 'cash') displayName = 'Cash'
-            if (payment.type === 'card') displayName = 'Card'
-            if (payment.type === 'online') displayName = 'Online'
-            if (payment.type === 'wallet') displayName = 'Wallet'
-            if (payment.type === 'unknown') displayName = 'Unknown'
-            
+            const displayName = receiptPaymentTypeDisplayName(payment.type)
             const dateLabel = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
             return (
               <div key={index} className="flex justify-between">

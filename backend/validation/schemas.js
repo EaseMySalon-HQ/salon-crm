@@ -144,6 +144,7 @@ const createStaffBodySchema = z
           .strict()
       )
       .optional(),
+    avatar: z.string().max(7_000_000).optional(),
   })
   .strict();
 
@@ -165,6 +166,7 @@ const staffUpdateBodySchema = z
     workSchedule: z.array(z.unknown()).optional(),
     permissions: z.array(z.unknown()).optional(),
     permissionsTemplate: z.string().nullable().optional(),
+    avatar: z.string().max(7_000_000).optional(),
   })
   .passthrough();
 
@@ -398,7 +400,7 @@ const gstExportBodySchema = z
     status: gstStatusSchema.optional(),
     buyerType: gstBuyerTypeSchema.optional(),
     search: z.string().trim().max(200).optional(),
-    format: z.enum(['csv', 'xlsx', 'gstr1']).default('xlsx'),
+    format: z.enum(['csv', 'xlsx', 'gstr1', 'gstr1_json']).default('xlsx'),
   })
   .strict();
 
@@ -509,6 +511,22 @@ const whatsappTemplateListQuerySchema = z
   })
   .strict();
 
+/** Marketing site “Book demo” form → admin platform lead */
+const publicDemoLeadSchema = z
+  .object({
+    name: z.string().trim().min(2).max(120),
+    phone: z.string().trim().min(10).max(20),
+    email: emailSchema,
+    salon: z.string().trim().min(2).max(200),
+    city: z.string().trim().min(2).max(120),
+    branches: z.string().trim().max(32).optional(),
+    preferredTime: z.string().trim().max(80).optional(),
+    message: z.string().trim().min(10).max(4000),
+    /** Honeypot — must be empty; non-empty still validates but is ignored server-side */
+    website: z.string().max(200).optional(),
+  })
+  .strict();
+
 module.exports = {
   tenantLoginSchema,
   staffLoginSchema,
@@ -548,4 +566,5 @@ module.exports = {
   whatsappTemplateBodySchema,
   whatsappTemplateUpdateBodySchema,
   whatsappTemplateListQuerySchema,
+  publicDemoLeadSchema,
 };

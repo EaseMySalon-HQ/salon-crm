@@ -1,7 +1,13 @@
-"use client"
+import { PackageNewPage } from "@/components/packages/package-new-page"
+import { ProtectedLayout } from "@/components/layout/protected-layout"
+import { ProtectedRoute } from "@/components/auth/protected-route"
 
-import { NewPackageForm } from "@/components/packages/NewPackageForm"
-
-export default function NewPackagePage() {
-  return <NewPackageForm />
+export default function PackageNewRoutePage() {
+  return (
+    <ProtectedRoute requiredModule="sales">
+      <ProtectedLayout>
+        <PackageNewPage />
+      </ProtectedLayout>
+    </ProtectedRoute>
+  )
 }

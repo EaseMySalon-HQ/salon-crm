@@ -42,6 +42,7 @@ interface ReceiptData {
   subtotalExcludingTax?: number
   tip: number
   tipStaffName?: string
+  tipLines?: Array<{ staffName?: string; amount: number }>
   paymentMode: string
   payments: Array<{
     type: string
@@ -135,7 +136,8 @@ export default function ReceiptPage() {
                 hsnSacCode: item.hsnSacCode || '',
                 taxAmount: item.taxAmount,
                 priceExcludingGST: item.priceExcludingGST,
-                taxRate: item.taxRate
+                taxRate: item.taxRate,
+                lineSource: item.lineSource,
               })),
               netTotal: frontendData.subtotal,
               taxAmount: frontendData.tax,
@@ -143,6 +145,7 @@ export default function ReceiptPage() {
               subtotalExcludingTax: frontendData.subtotalExcludingTax,
               tip: frontendData.tip || 0,
               tipStaffName: frontendData.tipStaffName,
+              tipLines: frontendData.tipLines,
               paymentMode: frontendData.payments?.[0]?.type || 'Cash',
               payments:
                 buildReceiptPaymentsFromSale({
@@ -154,6 +157,8 @@ export default function ReceiptPage() {
                     })
                   ),
                   paymentHistory: frontendData.paymentHistory || [],
+                  loyaltyPointsRedeemed: frontendData.loyaltyPointsRedeemed,
+                  loyaltyDiscountAmount: frontendData.loyaltyDiscountAmount,
                 }),
               staffName: frontendData.staffName,
               status:
@@ -195,6 +200,14 @@ export default function ReceiptPage() {
             console.log('🔍 Sale payments array:', saleData.payments)
             console.log('🔍 Sale payment mode:', saleData.paymentMode)
             
+            const receiptPaymentsFromSale = buildReceiptPaymentsFromSale({
+              date: saleData.date,
+              payments: saleData.payments,
+              paymentHistory: saleData.paymentHistory || [],
+              loyaltyPointsRedeemed: saleData.loyaltyPointsRedeemed,
+              loyaltyDiscountAmount: saleData.loyaltyDiscountAmount,
+            })
+
             const receiptData: ReceiptData = {
               id: saleData._id || saleData.id,
               billNo: saleData.billNo,
@@ -215,7 +228,8 @@ export default function ReceiptPage() {
                 hsnSacCode: item.hsnSacCode || '',
                 taxAmount: item.taxAmount,
                 priceExcludingGST: item.priceExcludingGST,
-                taxRate: item.taxRate
+                taxRate: item.taxRate,
+                lineSource: item.lineSource,
               })),
               netTotal: saleData.netTotal,
               taxAmount: saleData.taxAmount,
@@ -226,14 +240,18 @@ export default function ReceiptPage() {
               }, 0) || (saleData.grossTotal - saleData.taxAmount),
               tip: saleData.tip || 0,
               tipStaffName: saleData.tipStaffName,
+              tipLines: Array.isArray(saleData.tipLines)
+                ? saleData.tipLines
+                    .map((tl: any) => ({
+                      staffName: tl.staffName != null ? String(tl.staffName).trim() : undefined,
+                      amount: Math.max(0, Number(tl.amount) || 0),
+                    }))
+                    .filter((tl: { amount: number }) => tl.amount > 0.005)
+                : undefined,
               paymentMode: saleData.paymentMode,
               payments:
-                saleData.payments?.length > 0
-                  ? buildReceiptPaymentsFromSale({
-                      date: saleData.date,
-                      payments: saleData.payments,
-                      paymentHistory: saleData.paymentHistory || [],
-                    })
+                receiptPaymentsFromSale.length > 0
+                  ? receiptPaymentsFromSale
                   : [
                       {
                         type: (saleData.paymentMode?.split?.(",")?.[0]?.toLowerCase() || "cash") as
@@ -379,11 +397,13 @@ ${publicUrl}`
         hsnSacCode: (item as any).hsnSacCode || "",
         taxAmount: (item as any).taxAmount,
         priceExcludingGST: (item as any).priceExcludingGST,
-        taxRate: (item as any).taxRate
+        taxRate: (item as any).taxRate,
+        lineSource: (item as any).lineSource,
       })),
       subtotal: receipt.netTotal,
       tip: receipt.tip || 0,
       tipStaffName: receipt.tipStaffName,
+      tipLines: receipt.tipLines,
       status: receipt.status,
       invoiceDeleted: receipt.invoiceDeleted,
       discount: 0,
@@ -424,7 +444,7 @@ ${publicUrl}`
         </div>
         <h1 className="text-xl font-semibold text-gray-900 mb-2">Receipt Not Found</h1>
         <p className="text-gray-600 mb-6">{error || 'The requested receipt could not be found.'}</p>
-        <Link href="/reports">
+        <Link href="/reports" prefetch={false}>
           <Button variant="outline" className="mr-2">
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back to Reports
@@ -511,6 +531,7 @@ ${publicUrl}`
               subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
               tip: receipt.tip || 0,
               tipStaffName: receipt.tipStaffName,
+              tipLines: receipt.tipLines,
               discount: 0,
               tax: receipt.taxAmount,
               total: receipt.grossTotal + (receipt.tip || 0),

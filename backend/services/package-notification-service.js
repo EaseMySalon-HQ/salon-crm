@@ -12,6 +12,7 @@ const { getAddonStatus } = require('../lib/entitlements');
 const emailService = require('./email-service');
 const smsService = require('./sms-service');
 const whatsappService = require('./whatsapp-service');
+const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
 
 // ── Message templates ────────────────────────────────────────────────────────
 
@@ -73,6 +74,16 @@ async function sendPackageNotification(
 
   const channels = ['SMS', 'EMAIL', 'WHATSAPP'];
 
+  const mainConnection = await databaseManager.getMainConnection();
+  const BizModel = mainConnection.model(
+    'Business',
+    require('../models/Business').schema
+  );
+  const bizForPolicy = await BizModel.findById(clientPackage.branchId).lean();
+  const blockClientEmail = Boolean(
+    bizForPolicy && isPlatformEmailDisabled(bizForPolicy)
+  );
+
   for (const channel of channels) {
     const log = await PackageNotificationModel.create({
       branchId: clientPackage.branchId,
@@ -98,6 +109,11 @@ async function sendPackageNotification(
           await PackageNotificationModel.findByIdAndUpdate(log._id, { status: 'FAILED' });
         }
       } else if (channel === 'EMAIL' && client.email) {
+        if (blockClientEmail) {
+          await PackageNotificationModel.findByIdAndUpdate(log._id, {
+            status: 'FAILED',
+          });
+        } else {
         await emailService.initialize();
         if (emailService.enabled) {
           await emailService.sendEmail({
@@ -112,6 +128,7 @@ async function sendPackageNotification(
           });
         } else {
           await PackageNotificationModel.findByIdAndUpdate(log._id, { status: 'FAILED' });
+        }
         }
       } else if (channel === 'WHATSAPP' && client.phone) {
         await whatsappService.initialize();

@@ -15,6 +15,11 @@ const staffSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  /** Base64 data URL or external image URL for staff profile photo */
+  avatar: {
+    type: String,
+    default: '',
+  },
   role: {
     type: String,
     enum: ['admin', 'manager', 'staff'],
@@ -96,7 +101,9 @@ const staffSchema = new mongoose.Schema({
       receiptAlerts: { type: Boolean, default: false },
       exportAlerts: { type: Boolean, default: false },
       systemAlerts: { type: Boolean, default: false },
-      lowInventory: { type: Boolean, default: false }
+      lowInventory: { type: Boolean, default: false },
+      /** When true (manager/staff only), include this staff email in report export delivery */
+      allowReportsDelivery: { type: Boolean, default: false }
     },
     managedBy: {
       type: String,

@@ -2,9 +2,25 @@
 
 import { Receipt } from "@/lib/data"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
+import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
-import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
+import { formatPaymentRecordedDateLabelFromIso, receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
+import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
+
+/** Thermal HTML rows for split tips (one line per staff). */
+function thermalTipRowsHtml(receipt: Receipt): string {
+  if ((receipt.tip || 0) <= 0) return ""
+  return receiptTipDisplayLines(receipt)
+    .map(
+      (line) => `
+            <div class="total-line">
+              <span>${line.staffName ? `Tip (${line.staffName}):` : "Tip:"}</span>
+              <span>₹${line.amount.toFixed(2)}</span>
+            </div>`,
+    )
+    .join("")
+}
 
 /** Shared thermal HTML block: TOTAL … Total Paid (Bill). */
 function buildThermalSettlementTotals(receipt: Receipt): string {
@@ -204,10 +220,14 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
               ${receipt.items.map(item => {
                 const staffLabel = formatReceiptItemStaffNames(item)
+                const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+                const lineMeta =
+                  (staffLabel || walkInLabel) &&
+                  `${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 15px; color: #92400e;">${walkInLabel}</span>` : ""}`
                 return `
                 <tr style="border-bottom: 1px dashed #999;">
                   <td>${(item as any).hsnSacCode || "-"}</td>
-                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}</td>
+                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
                   <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                   <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                   <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
@@ -279,12 +299,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
                 `
               })()}
             ` : ''}
-            ${receipt.tip > 0 ? `
-              <div class="total-line">
-                <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-                <span>₹${receipt.tip.toFixed(2)}</span>
-              </div>
-            ` : ''}
+            ${thermalTipRowsHtml(receipt)}
             ${receipt.roundOff && Math.abs(receipt.roundOff) > 0.01 ? `
               <div class="total-line round-off">
                 <span>Round Off:</span>
@@ -298,16 +313,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             <div style="font-weight: bold; margin-bottom: 4px;">Payment Method(s):</div>
             ${receipt.payments
               .map((payment) => {
-                const displayName =
-                  payment.type === "cash"
-                    ? "Cash"
-                    : payment.type === "card"
-                      ? "Card"
-                      : payment.type === "online"
-                        ? "Online"
-                        : payment.type === "wallet"
-                          ? "Wallet"
-                          : "Unknown"
+                const displayName = receiptPaymentTypeDisplayName(payment.type)
                 const d = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
                 const label = d ? `${displayName} (${d})` : displayName
                 return `
@@ -496,10 +502,14 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
             ${receipt.items.map(item => {
               const staffLabel = formatReceiptItemStaffNames(item)
+              const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+              const lineMeta =
+                (staffLabel || walkInLabel) &&
+                `${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 15px; color: #92400e;">${walkInLabel}</span>` : ""}`
               return `
               <tr style="border-bottom: 1px dashed #999;">
                 <td>${(item as any).hsnSacCode || "-"}</td>
-                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}</td>
+                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
                 <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
                 <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
                 <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
@@ -571,12 +581,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               `
             })()}
           ` : ''}
-          ${receipt.tip > 0 ? `
-            <div class="total-line">
-              <span>${receipt.tipStaffName ? `Tip (${receipt.tipStaffName}):` : 'Tip:'}</span>
-              <span>₹${receipt.tip.toFixed(2)}</span>
-            </div>
-          ` : ''}
+          ${thermalTipRowsHtml(receipt)}
           ${receipt.roundOff && Math.abs(receipt.roundOff) > 0.01 ? `
             <div class="total-line round-off">
               <span>Round Off:</span>
@@ -590,16 +595,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           <div style="font-weight: bold; margin-bottom: 4px;">Payment Method(s):</div>
           ${receipt.payments
             .map((payment) => {
-              const displayName =
-                payment.type === "cash"
-                  ? "Cash"
-                  : payment.type === "card"
-                    ? "Card"
-                    : payment.type === "online"
-                      ? "Online"
-                      : payment.type === "wallet"
-                        ? "Wallet"
-                        : "Unknown"
+              const displayName = receiptPaymentTypeDisplayName(payment.type)
               const d = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
               const label = d ? `${displayName} (${d})` : displayName
               return `

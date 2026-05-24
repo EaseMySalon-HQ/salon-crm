@@ -5,6 +5,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/business-db');
 const emailService = require('../services/email-service');
 const { logger } = require('../utils/logger');
+const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
 
 /**
  * Middleware to check if user is admin or manager
@@ -1110,7 +1111,8 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
           receiptAlerts: false,
           exportAlerts: false,
           systemAlerts: false,
-          lowInventory: false
+          lowInventory: false,
+          allowReportsDelivery: false
         },
         managedBy: 'admin'
       })
@@ -1587,6 +1589,9 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+      totalSalesCash += walletCashAdd;
+      cashAmt += walletCashAdd;
       if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;

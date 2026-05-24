@@ -28,16 +28,11 @@ const {
   formatInvoiceNumber,
   fallbackInvoiceNumber,
   sanitizePrefix,
+  getPlanInvoicePrefix,
 } = _shared;
 
 // Counter scope for plan subscriptions — stays independent of wallet (`WLT/`).
 const COUNTER_SCOPE = 'SUB';
-// Invoice-number prefix for the printed/emailed number. Admins can override
-// via `INVOICE_PLAN_PREFIX`; fall back to a sibling of the wallet default.
-function getPlanInvoicePrefix() {
-  const raw = (process.env.INVOICE_PLAN_PREFIX || 'EMS/SUB').trim();
-  return raw || 'EMS/SUB';
-}
 
 /**
  * Atomically allocate the next sequence for the transaction's fiscal year.
@@ -45,7 +40,7 @@ function getPlanInvoicePrefix() {
  * and plan counters never collide.
  */
 async function allocatePlanInvoiceNumber(txDoc) {
-  const prefix = getPlanInvoicePrefix();
+  const prefix = await getPlanInvoicePrefix();
   try {
     const mainConnection = await databaseManager.getMainConnection();
     const InvoiceCounter = mainConnection.model(
@@ -300,6 +295,14 @@ async function sendPlanRenewalInvoice({ transactionId, triggeredByEmail } = {}) 
       return { success: false, error: err?.message || String(err) };
     }
     const { pdfBuffer, invoiceNumber, context, business, txDoc } = built;
+
+    const { isPlatformEmailDisabled } = require('./business-email-policy');
+    if (isPlatformEmailDisabled(business)) {
+      logger.info(
+        `[plan-invoice] Skipping invoice email — platform policy for business ${business._id}`
+      );
+      return { success: true, skippedEmail: true, invoiceNumber };
+    }
 
     const recipients = Array.from(
       new Set(

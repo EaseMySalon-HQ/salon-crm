@@ -56,6 +56,8 @@ class ModelFactory {
       
       // Sale model
       Sale: this.getModel('Sale', require('./Sale').schema, connection),
+
+      Feedback: this.getModel('Feedback', require('./Feedback').schema, connection),
       
       // Receipt model
       Receipt: this.getModel('Receipt', require('./Receipt').schema, connection),
@@ -71,6 +73,8 @@ class ModelFactory {
       
       // CashRegistry model
       CashRegistry: this.getModel('CashRegistry', require('./CashRegistry').schema, connection),
+
+      CashMovement: this.getModel('CashMovement', require('./CashMovement').schema, connection),
       
       // Expense model
       Expense: this.getModel('Expense', require('./Expense').schema, connection),
@@ -95,6 +99,9 @@ class ModelFactory {
 
       // PurchaseOrder model
       PurchaseOrder: this.getModel('PurchaseOrder', require('./PurchaseOrder').schema, connection),
+
+      // PurchaseInvoice model (after PurchaseOrder for refs)
+      PurchaseInvoice: this.getModel('PurchaseInvoice', require('./PurchaseInvoice').schema, connection),
 
       // SupplierPayable model
       SupplierPayable: this.getModel('SupplierPayable', require('./SupplierPayable').schema, connection),
@@ -188,6 +195,12 @@ class ModelFactory {
       PlanInvoiceTransaction: this.getModel('PlanInvoiceTransaction', require('./PlanInvoiceTransaction').schema, connection),
       Invoice: this.getModel('Invoice', require('./Invoice').schema, connection),
       GstFiling: this.getModel('GstFiling', require('./GstFiling').schema, connection),
+      PlatformLead: this.getModel('PlatformLead', require('./PlatformLead').schema, connection),
+      PlatformLeadActivity: this.getModel(
+        'PlatformLeadActivity',
+        require('./PlatformLeadActivity').schema,
+        connection
+      ),
 
       // WhatsApp Business module (Meta Cloud API)
       WhatsAppAccount: this.getModel('WhatsAppAccount', require('./WhatsAppAccount').schema, connection),

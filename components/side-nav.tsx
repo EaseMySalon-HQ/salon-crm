@@ -8,6 +8,7 @@ import type { LucideIcon } from "lucide-react"
 import {
   CalendarDays,
   Home,
+  BarChart3,
   PieChart,
   Settings,
   Users,
@@ -89,7 +90,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
       ],
     },
     { kind: "link", title: "Cash Register", href: "/cash-registry", icon: Banknote, permissionModule: "cash_registry" },
-    { kind: "link", title: "Analytics", href: "/analytics", icon: PieChart, permissionModule: "analytics" },
+    { kind: "link", title: "Analytics", href: "/analytics", icon: BarChart3, permissionModule: "analytics" },
     { kind: "link", title: "Reports", href: "/reports", icon: PieChart, permissionModule: "reports" },
     { kind: "link", title: "Staff Directory", href: "/staff", icon: Users, permissionModule: "staff" },
     { kind: "link", title: "Settings", href: "/settings", icon: Settings, permissionModule: "settings" },
@@ -171,6 +172,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                 width={150}
                 height={40}
                 className="object-contain transition-all duration-300 group-hover:scale-105"
+                style={{ width: "auto", height: "auto" }}
                 priority
               />
             )}

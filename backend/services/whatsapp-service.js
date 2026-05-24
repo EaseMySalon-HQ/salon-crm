@@ -582,9 +582,18 @@ class WhatsAppService {
     });
   }
 
-  /**
-   * Send receipt via WhatsApp
-   */
+  extractFeedbackPath(feedbackLink) {
+    if (!feedbackLink) return '';
+    if (feedbackLink.startsWith('http://') || feedbackLink.startsWith('https://')) {
+      const match = feedbackLink.match(/\/feedback\/(.+)$/);
+      if (match && match[1]) {
+        return match[1].split('?')[0];
+      }
+      return feedbackLink;
+    }
+    return feedbackLink;
+  }
+
   /**
    * Extract receipt path from full URL if template already includes base URL
    * If receiptLink is a full URL like "https://www.easemysalon.in/receipt/public/INV-000052/abc123"
@@ -673,13 +682,14 @@ class WhatsAppService {
     });
   }
 
-  async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink }) {
+  async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink, feedbackLink }) {
     logger.debug('📱 [sendReceipt] Starting receipt send:', {
       to,
       clientName,
       receiptNumber,
       businessName: receiptData?.businessName,
       receiptLink,
+      feedbackLink: feedbackLink ? `${String(feedbackLink).substring(0, 48)}…` : '',
       templateId: this.getTemplateId('receipt'),
       hasConfig: !!this.config
     });
@@ -704,10 +714,18 @@ class WhatsAppService {
       logger.debug(`📱 [sendReceipt] Template will combine base URL + path: https://www.easemysalon.in/receipt/public/${processedReceiptLinkForButton}`);
     }
     
+    let processedFeedbackForBody = feedbackLink || '';
+    let processedFeedbackForButton = feedbackLink || '';
+    if (templateIncludesBaseUrl && feedbackLink) {
+      processedFeedbackForBody = this.extractFeedbackPath(feedbackLink);
+      processedFeedbackForButton = this.extractFeedbackPath(feedbackLink);
+    }
+
     const data = {
       clientName: clientName || 'Customer',
       businessName: receiptData?.businessName || 'Business',
-      receiptLink: processedReceiptLinkForBody // Use extracted path for body variables
+      receiptLink: processedReceiptLinkForBody, // Use extracted path for body variables
+      feedbackLink: processedFeedbackForBody,
     };
     
     logger.debug('📱 [sendReceipt] Data object:', data);
@@ -741,6 +759,10 @@ class WhatsAppService {
         } else if (varName.startsWith('body_') && variableMapping[varName] === 'receiptLink') {
           // Use extracted path for body variables if template includes base URL
           variables[varName] = processedReceiptLinkForBody;
+        } else if (varName.startsWith('button_') && variableMapping[varName] === 'feedbackLink') {
+          variables[varName] = processedFeedbackForButton;
+        } else if (varName.startsWith('body_') && variableMapping[varName] === 'feedbackLink') {
+          variables[varName] = processedFeedbackForBody;
         }
       });
     }

@@ -173,6 +173,22 @@ function parseSchedulingInstant(val) {
   return Number.isNaN(t.getTime()) ? null : t;
 }
 
+/**
+ * Supplier payment forms typically send {@code yyyy-MM-dd} without time.
+ * That must represent start of that calendar day in IST — not ECMA "date-only UTC midnight"
+ * (which becomes 05:30 when shown in India).
+ * @param {string|Date|number|null|undefined} val
+ * @returns {Date}
+ */
+function parseSupplierPaymentDateInput(val) {
+  if (val == null || val === '') return new Date();
+  if (val instanceof Date) return val;
+  const s = String(val).trim();
+  if (!s) return new Date();
+  const d = parseSchedulingInstant(s);
+  return d && !Number.isNaN(d.getTime()) ? d : new Date();
+}
+
 module.exports = {
   parseDateIST,
   getStartOfDayIST,
@@ -184,5 +200,6 @@ module.exports = {
   minutesToTimeString,
   toIsoStringIST,
   parseSchedulingInstant,
+  parseSupplierPaymentDateInput,
   IST_TIMEZONE: 'Asia/Kolkata'
 };

@@ -175,7 +175,7 @@ export interface AnalyticsProductsTabData {
 }
 
 /** GET /api/analytics/staff — `lineType` query filters bill line items before attribution */
-export type StaffAnalyticsLineType = "all" | "service" | "product" | "membership" | "package"
+export type StaffAnalyticsLineType = "all" | "service" | "product" | "membership"
 
 /** GET /api/analytics/staff */
 export interface AnalyticsStaffRow {

@@ -87,7 +87,7 @@ export default function ContactPage() {
             <Card className="lg:col-span-2 border-2 border-slate-100 shadow-xl">
               <CardHeader className="space-y-2">
                 <CardTitle className="text-2xl font-bold">Tell Us About Your Salon</CardTitle>
-                <CardDescription className="text-base">We'll reply within 1 business day with a calendar invite and WhatsApp confirmation.</CardDescription>
+                <CardDescription className="text-base">We'll reply within 1 business day with a calendar invite.</CardDescription>
               </CardHeader>
               <CardContent>
                 <ContactForm />

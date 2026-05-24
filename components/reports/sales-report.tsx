@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
-import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail } from "lucide-react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail, ReceiptText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -10,7 +10,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
-import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
+import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates, normalizePaymentModeLabel } from "@/lib/sale-payment-lines"
+import { getSaleAdjustmentSummary } from "@/lib/sale-adjustments"
 import { getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST, formatDateIST } from "@/lib/date-utils"
 import { Calendar } from "@/components/ui/calendar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -18,14 +19,22 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { CursorTooltip } from "@/components/ui/cursor-tooltip"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
-import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, ProductsAPI, type SalesSummaryData } from "@/lib/api"
+import { SalesAPI, ServicesAPI, StaffDirectoryAPI, ReportsAPI, ProductsAPI, SettingsAPI, type SalesSummaryData } from "@/lib/api"
 import { ServiceListReport, type ServiceListControlledFilters, type DatePeriod as ServiceListDatePeriod } from "@/components/reports/service-list-report"
 import { ProductListReport } from "@/components/reports/product-list-report"
+import {
+  CashMovementReport,
+  type CashMovementReportHandle,
+} from "@/components/reports/cash-movement-report"
+import { GstReport, type GstReportHandle } from "@/components/reports/gst-report"
+import { AnalyticsDonutChart, type AnalyticsDonutSlice } from "@/components/analytics/analytics-donut-chart"
+import { CASH_MOVEMENT_TYPE_OPTIONS } from "@/lib/cash-movements"
 import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
 import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
+import { useAuth } from "@/lib/auth-context"
 
 /** Sale.time is typically "HH:mm" (24h). Returns "hh:mm AM/PM" with zero-padded hour. */
 function formatBillTimeStringTo12h(time24: string | undefined | null): string | null {
@@ -94,9 +103,35 @@ interface SalesRecord {
   staffName: string
   tipStaffId?: string
   tipStaffName?: string
+  tipLines?: Array<{ staffId?: string; staffName?: string; amount: number }>
   isEdited?: boolean // Track if bill has been edited
   editedAt?: Date | string
   items?: Array<{ type: string; [key: string]: unknown }>
+  billChangeCreditedToWallet?: number
+}
+
+function expandSaleTipAllocations(sale: SalesRecord): { staffId: string; staffName: string; amount: number }[] {
+  const raw = sale.tipLines
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .map((l) => ({
+        staffId: String(l.staffId || "").trim(),
+        staffName: String(l.staffName || "").trim(),
+        amount: Math.max(0, Number(l.amount) || 0),
+      }))
+      .filter((l) => l.amount > 0.005 && (l.staffId || l.staffName))
+  }
+  const tip = sale.tip || 0
+  if (tip > 0.005 && (sale.tipStaffId || sale.tipStaffName)) {
+    return [
+      {
+        staffId: String(sale.tipStaffId || "").trim(),
+        staffName: (sale.tipStaffName || "").trim() || "—",
+        amount: tip,
+      },
+    ]
+  }
+  return []
 }
 
 function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
@@ -112,6 +147,24 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
     tip: (sale.tip as number) || 0,
     tipStaffId: sale.tipStaffId != null ? String(sale.tipStaffId) : undefined,
     tipStaffName: sale.tipStaffName as string | undefined,
+    tipLines: Array.isArray(sale.tipLines)
+      ? (sale.tipLines as Record<string, unknown>[]).map((l) => {
+          const sid = l.staffId
+          const staffIdStr =
+            sid != null
+              ? String(
+                  typeof sid === "object" && sid !== null && "_id" in sid
+                    ? (sid as { _id?: unknown })._id
+                    : sid,
+                )
+              : ""
+          return {
+            staffId: staffIdStr || undefined,
+            staffName: l.staffName != null ? String(l.staffName) : undefined,
+            amount: Math.max(0, Number(l.amount) || 0),
+          }
+        })
+      : undefined,
     netTotal: Number(sale.netTotal ?? 0),
     taxAmount: Number(sale.taxAmount ?? 0),
     grossTotal: Number(sale.grossTotal ?? 0),
@@ -121,6 +174,12 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
     items: (sale.items as SalesRecord["items"]) || [],
     isEdited: sale.isEdited === true || !!sale.editedAt,
     editedAt: sale.editedAt as Date | string | undefined,
+    billChangeCreditedToWallet:
+      sale.billChangeCreditedToWallet != null ? Number(sale.billChangeCreditedToWallet) : undefined,
+    loyaltyPointsRedeemed:
+      sale.loyaltyPointsRedeemed != null ? Number(sale.loyaltyPointsRedeemed) : undefined,
+    loyaltyDiscountAmount:
+      sale.loyaltyDiscountAmount != null ? Number(sale.loyaltyDiscountAmount) : undefined,
   }
 }
 
@@ -137,6 +196,7 @@ const REPORT_TYPES = [
   "appointment-list",
   "deleted-invoice",
   "unpaid-part-paid",
+  "cash-movement",
 ] as const
 
 export function SalesReport() {
@@ -145,6 +205,9 @@ export function SalesReport() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const { hasAccess: canExport } = useFeature("data_export")
+  const { hasPermission } = useAuth()
+  const canEditSale = hasPermission("sales", "edit")
+  const canDeleteSale = hasPermission("sales", "delete")
   const [reportType, setReportTypeState] = useState("sales")
 
   useEffect(() => {
@@ -198,9 +261,9 @@ export function SalesReport() {
   const [selectedSale, setSelectedSale] = useState<SalesRecord | null>(null)
   const [salesPageIndex, setSalesPageIndex] = useState(0)
   const [salesPageSize, setSalesPageSize] = useState(10)
-  /** Sales stat card: combined count by default; click for partial vs unpaid breakdown */
-  const [showPartialUnpaidBreakdown, setShowPartialUnpaidBreakdown] = useState(false)
-
+  /** Sales stat card: click Cash Collected for service vs wallet breakdown */
+  const [showCashCollectedBreakdown, setShowCashCollectedBreakdown] = useState(false)
+  const [showOnlineCashCollectedBreakdown, setShowOnlineCashCollectedBreakdown] = useState(false)
   // Service List filters (when report type is service-list; shown in same bar)
   const [serviceListDatePeriod, setServiceListDatePeriod] = useState<ServiceListDatePeriod>("today")
   const [serviceListDateRange, setServiceListDateRange] = useState<{ from?: Date; to?: Date }>({})
@@ -249,6 +312,19 @@ export function SalesReport() {
   }>({ count: 0, totalOutstanding: 0 })
   const [unpaidPartPaidLoading, setUnpaidPartPaidLoading] = useState(false)
 
+  // Cash Movement report filters
+  const [cashMovementDatePeriod, setCashMovementDatePeriod] = useState<DatePeriod>("today")
+  const [cashMovementDateRange, setCashMovementDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [cashMovementTypeFilter, setCashMovementTypeFilter] = useState<string>("all")
+  const [cashMovementDirectionFilter, setCashMovementDirectionFilter] = useState<string>("all")
+  const cashMovementReportRef = useRef<CashMovementReportHandle>(null)
+
+  // GST report filters
+  const [gstDatePeriod, setGstDatePeriod] = useState<DatePeriod>("currentMonth")
+  const [gstDateRange, setGstDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [gstBusinessGstin, setGstBusinessGstin] = useState("")
+  const gstReportRef = useRef<GstReportHandle>(null)
+
   // Staff Tip report: payouts (for Mark as Paid)
   const [tipPayouts, setTipPayouts] = useState<{ staffId: string; staffName: string; amount: number; paidAt: string }[]>([])
   const [tipPayoutsLoading, setTipPayoutsLoading] = useState(false)
@@ -261,11 +337,14 @@ export function SalesReport() {
     totalSalesCash: number
     totalSalesOnline: number
     totalSalesCard: number
+    totalSalesWallet?: number
+    totalSalesRewardPoint?: number
     duesCollected: number
     cashDuesCollected?: number
     cashExpense: number
     pettyCashExpense?: number
     tipCollected: number
+    cashAddedToWallet?: number
     cashBalance: number
     openingBalance?: number
     closingBalance?: number
@@ -273,6 +352,24 @@ export function SalesReport() {
     customersWithDue?: number
   } | null>(null)
   const [summaryReportLoading, setSummaryReportLoading] = useState(false)
+
+  const paymentModeBreakdown = useMemo(() => {
+    if (!summaryData) {
+      return { modes: [] as { label: string; value: number; fill: string }[], chartSlices: [] as AnalyticsDonutSlice[], total: 0 }
+    }
+    const modes = [
+      { label: "Cash", value: summaryData.totalSalesCash, fill: "#10b981" },
+      { label: "Online", value: summaryData.totalSalesOnline, fill: "#3b82f6" },
+      { label: "Card", value: summaryData.totalSalesCard, fill: "#8b5cf6" },
+      { label: "Wallet", value: summaryData.totalSalesWallet ?? 0, fill: "#f59e0b" },
+      { label: "Reward Point", value: summaryData.totalSalesRewardPoint ?? 0, fill: "#f43f5e" },
+    ]
+    const chartSlices: AnalyticsDonutSlice[] = modes
+      .filter((m) => m.value > 0.005)
+      .map((m) => ({ name: m.label, value: Math.round(m.value * 100) / 100, fill: m.fill }))
+    const total = modes.reduce((sum, m) => sum + m.value, 0)
+    return { modes, chartSlices, total }
+  }, [summaryData])
 
   /** Ref for sales list: reset page when filter key changes (avoids stale page + fetch race). */
   const prevSalesFilterKeyRef = useRef<string | null>(null)
@@ -592,6 +689,50 @@ export function SalesReport() {
     }
   }
 
+  const handleCashMovementDatePeriodChange = (period: DatePeriod) => {
+    setCashMovementDatePeriod(period)
+    if (period === "custom") {
+      setCashMovementDateRange(getDateRangeFromPeriod("last7days"))
+    } else if (period !== "all") {
+      setCashMovementDateRange(getDateRangeFromPeriod(period))
+    } else {
+      setCashMovementDateRange({})
+    }
+  }
+
+  const handleExportCashMovementXLS = () => {
+    toast({ title: "Export", description: "Downloading cash movement Excel...", duration: 2500 })
+    cashMovementReportRef.current?.exportExcel()
+  }
+
+  const handleGstDatePeriodChange = (period: DatePeriod) => {
+    setGstDatePeriod(period)
+    if (period === "custom") {
+      setGstDateRange(getDateRangeFromPeriod("last30days"))
+    } else if (period !== "all") {
+      setGstDateRange(getDateRangeFromPeriod(period))
+    } else {
+      setGstDateRange({})
+    }
+  }
+
+  useEffect(() => {
+    if (reportType !== "gst") return
+    let cancelled = false
+    SettingsAPI.getBusinessSettings()
+      .then((res) => {
+        if (cancelled) return
+        const data = (res?.data || {}) as { gstNumber?: string }
+        setGstBusinessGstin(String(data.gstNumber || ""))
+      })
+      .catch(() => {
+        if (!cancelled) setGstBusinessGstin("")
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reportType])
+
   useEffect(() => {
     if (reportType !== "service-list") return
     let cancelled = false
@@ -839,8 +980,10 @@ export function SalesReport() {
   const staffTipSales =
     reportType === "staff-tip" && staffTipDateRange && staffTipDateRange.from != null && staffTipDateRange.to != null
       ? staffTipData.filter((sale) => {
-          const hasTip = !!(sale.tip && sale.tip > 0) && (sale.tipStaffId || sale.tipStaffName)
-          const matchesStaff = staffTipFilter === "all" || sale.tipStaffId === staffTipFilter
+          const allocs = expandSaleTipAllocations(sale)
+          const hasTip = allocs.length > 0
+          const matchesStaff =
+            staffTipFilter === "all" || allocs.some((a) => a.staffId === staffTipFilter)
           return hasTip && matchesStaff
         })
       : []
@@ -866,27 +1009,32 @@ export function SalesReport() {
   const staffTipAggregated = (() => {
     const map = new Map<string, { staffId: string; staffName: string; tipAmount: number; cashTipAmount: number; nonCashTipAmount: number; paymentModes: string[] }>()
     staffTipSales.forEach((sale) => {
-      const id = (sale.tipStaffId || sale.tipStaffName || "").toString()
-      const name = sale.tipStaffName || (salesStaff.find((s) => s._id === sale.tipStaffId)?.name) || "—"
-      const tipAmt = sale.tip || 0
       const mode = getTipPaymentMode(sale)
       const isCash = mode === "Cash"
-      const existing = map.get(id)
-      if (existing) {
-        existing.tipAmount += tipAmt
-        if (isCash) existing.cashTipAmount += tipAmt
-        else existing.nonCashTipAmount += tipAmt
-        if (!existing.paymentModes.includes(mode)) existing.paymentModes.push(mode)
-      } else {
-        map.set(id, {
-          staffId: id,
-          staffName: name,
-          tipAmount: tipAmt,
-          cashTipAmount: isCash ? tipAmt : 0,
-          nonCashTipAmount: isCash ? 0 : tipAmt,
-          paymentModes: [mode]
-        })
-      }
+      expandSaleTipAllocations(sale).forEach((alloc) => {
+        const id = (alloc.staffId || alloc.staffName || "—").toString()
+        const name =
+          alloc.staffName ||
+          (salesStaff.find((s) => s._id === alloc.staffId || String(s._id) === alloc.staffId)?.name) ||
+          "—"
+        const tipAmt = alloc.amount
+        const existing = map.get(id)
+        if (existing) {
+          existing.tipAmount += tipAmt
+          if (isCash) existing.cashTipAmount += tipAmt
+          else existing.nonCashTipAmount += tipAmt
+          if (!existing.paymentModes.includes(mode)) existing.paymentModes.push(mode)
+        } else {
+          map.set(id, {
+            staffId: id,
+            staffName: name,
+            tipAmount: tipAmt,
+            cashTipAmount: isCash ? tipAmt : 0,
+            nonCashTipAmount: isCash ? 0 : tipAmt,
+            paymentModes: [mode],
+          })
+        }
+      })
     })
     return Array.from(map.values()).sort((a, b) => b.tipAmount - a.tipAmount)
   })()
@@ -926,9 +1074,11 @@ export function SalesReport() {
     }
   }
 
-  // Reset partial/unpaid card when filters change
+
+  // Reset stat card breakdowns when filters change
   useEffect(() => {
-    setShowPartialUnpaidBreakdown(false)
+    setShowCashCollectedBreakdown(false)
+    setShowOnlineCashCollectedBreakdown(false)
   }, [debouncedSearchTerm, paymentFilter, statusFilter, staffTipFilter, datePeriod, dateRange])
 
   // Pagination for the sales table (server-side; order matches API — newest saved bill first)
@@ -946,26 +1096,11 @@ export function SalesReport() {
   const unpaidValue = summaryStats?.unpaidValue ?? 0
   const tipsCollected = summaryStats?.tips ?? 0
   const cashCollected = summaryStats?.cashCollected ?? 0
+  const serviceCashCollected = summaryStats?.serviceCashCollected ?? cashCollected
+  const walletCashCollected = summaryStats?.walletCashCollected ?? 0
   const onlineCashCollected = summaryStats?.onlineCash ?? 0
-
-  const cashCollectedTooltip =
-    paymentFilter === "all"
-      ? "Cash payments only"
-      : paymentFilter === "Cash"
-        ? "Filtered: Cash only"
-        : paymentFilter === "Wallet"
-          ? "Filtered: bills with prepaid wallet payment"
-        : "All cash payments"
-  const onlineCashCollectedTooltip =
-    paymentFilter === "all"
-      ? "Card + Online/Paytm"
-      : paymentFilter === "Card"
-        ? "Filtered: Card only"
-        : paymentFilter === "Online"
-          ? "Filtered: Online only"
-        : paymentFilter === "Wallet"
-          ? "Filtered: bills with prepaid wallet payment"
-        : "All online payments"
+  const cardCollected = summaryStats?.cardCollected ?? onlineCashCollected
+  const onlinePayCollected = summaryStats?.onlinePayCollected ?? 0
 
   const salesStatSkeleton = <div className="h-8 w-24 max-w-full bg-slate-200 rounded animate-pulse" aria-hidden />
 
@@ -1420,7 +1555,9 @@ export function SalesReport() {
         setIsDeleteDialogOpen(false)
         setSelectedSale(null)
         setDeleteSaleReason("")
-        
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("appointments-refresh"))
+        }
         toast({
           title: "Sale Deleted",
           description: `Sale record for ${selectedSale.customerName} has been successfully deleted.`,
@@ -1493,11 +1630,21 @@ export function SalesReport() {
   const getTotalPaid = (sale: SalesRecord, forceFull = false) => {
     const fullPaid = sale.paymentStatus?.paidAmount ?? sale.payments?.reduce((s, p) => s + (p.amount || 0), 0) ?? 0
     if (forceFull || paymentFilter === "all") return fullPaid
+    const filterLabel = normalizePaymentModeLabel(paymentFilter)
     if (sale.payments && sale.payments.length > 0) {
-      const filteredPayment = sale.payments.find(payment => payment.mode === paymentFilter)
-      return filteredPayment ? filteredPayment.amount : 0
+      const filteredTotal = sale.payments
+        .filter((payment) => normalizePaymentModeLabel(payment.mode) === filterLabel)
+        .reduce((s, p) => s + (p.amount || 0), 0)
+      if (filteredTotal > 0) return filteredTotal
     }
-    return sale.paymentMode === paymentFilter ? fullPaid : 0
+    if (filterLabel === "Reward Point") {
+      const pts = Math.floor(Number(sale.loyaltyPointsRedeemed) || 0)
+      const disc = Math.max(0, Number(sale.loyaltyDiscountAmount) || 0)
+      if (pts > 0 && disc > 0.005) return disc
+    }
+    const legacyModes = sale.paymentMode.split(",").map((m) => normalizePaymentModeLabel(m.trim()))
+    if (legacyModes.includes(filterLabel)) return fullPaid
+    return 0
   }
 
   return (
@@ -1528,6 +1675,8 @@ export function SalesReport() {
                   <SelectItem value="appointment-list">Appointment List</SelectItem>
                   <SelectItem value="deleted-invoice">Deleted Invoice</SelectItem>
                   <SelectItem value="unpaid-part-paid">Unpaid/Part-Paid</SelectItem>
+                  <SelectItem value="cash-movement">Cash Movement</SelectItem>
+                  <SelectItem value="gst">GST Report</SelectItem>
                 </SelectContent>
               </Select>
               {reportType === "summary" && (
@@ -1660,6 +1809,7 @@ export function SalesReport() {
                       <SelectItem value="Card">Card</SelectItem>
                       <SelectItem value="Online">Online</SelectItem>
                       <SelectItem value="Wallet">Wallet</SelectItem>
+                      <SelectItem value="Reward Point">Reward Point</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -2088,6 +2238,154 @@ export function SalesReport() {
                   )}
                 </>
               )}
+              {reportType === "cash-movement" && (
+                <>
+                  <Select value={cashMovementDatePeriod} onValueChange={(v: DatePeriod) => handleCashMovementDatePeriodChange(v)}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="last7days">Last 7 days</SelectItem>
+                      <SelectItem value="last30days">Last 30 days</SelectItem>
+                      <SelectItem value="currentMonth">Current month</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {cashMovementDatePeriod === "custom" && (
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {cashMovementDateRange?.from ? format(cashMovementDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={cashMovementDateRange?.from}
+                            onSelect={(d) => setCashMovementDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (cashMovementDateRange?.to ? d > cashMovementDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {cashMovementDateRange?.to ? format(cashMovementDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={cashMovementDateRange?.to}
+                            onSelect={(d) => setCashMovementDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (cashMovementDateRange?.from ? d < cashMovementDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                  <Select value={cashMovementTypeFilter} onValueChange={setCashMovementTypeFilter}>
+                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All types</SelectItem>
+                      {CASH_MOVEMENT_TYPE_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={cashMovementDirectionFilter} onValueChange={setCashMovementDirectionFilter}>
+                    <SelectTrigger className="w-32 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Direction" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="in">Cash in</SelectItem>
+                      <SelectItem value="out">Cash out</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </>
+              )}
+              {reportType === "gst" && (
+                <>
+                  <Select value={gstDatePeriod} onValueChange={(v: DatePeriod) => handleGstDatePeriodChange(v)}>
+                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Date" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Today</SelectItem>
+                      <SelectItem value="yesterday">Yesterday</SelectItem>
+                      <SelectItem value="last7days">Last 7 days</SelectItem>
+                      <SelectItem value="last30days">Last 30 days</SelectItem>
+                      <SelectItem value="currentMonth">Current month</SelectItem>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="custom">Custom range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {gstDatePeriod === "custom" && (
+                    <div className="flex items-center gap-2">
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {gstDateRange?.from ? format(gstDateRange.from, "dd MMM yyyy") : "From"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={gstDateRange?.from}
+                            onSelect={(d) => setGstDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                            disabled={(d) => d > new Date() || (gstDateRange?.to ? d > gstDateRange.to : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                            <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                            <span className="truncate">
+                              {gstDateRange?.to ? format(gstDateRange.to, "dd MMM yyyy") : "To"}
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar
+                            mode="single"
+                            selected={gstDateRange?.to}
+                            onSelect={(d) => setGstDateRange((r) => ({ from: r?.from, to: d }))}
+                            disabled={(d) => d > new Date() || (gstDateRange?.from ? d < gstDateRange.from : false)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  )}
+                  {gstBusinessGstin ? (
+                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                      GSTIN: {gstBusinessGstin}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                      No GSTIN — set in Business Settings
+                    </Badge>
+                  )}
+                </>
+              )}
               {reportType === "unpaid-part-paid" && (
                 <>
                   <Select value={unpaidPartPaidDatePeriod} onValueChange={(v: DatePeriod) => handleUnpaidPartPaidDatePeriodChange(v)}>
@@ -2169,7 +2467,7 @@ export function SalesReport() {
                   View Unpaid Bills
                 </Button>
               )}
-              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid") && (
+              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement" || reportType === "gst") && (
                 canExport ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -2265,6 +2563,37 @@ export function SalesReport() {
                           <DropdownMenuItem onClick={handleExportUnpaidPartPaidPDF} className="cursor-pointer">
                             <Mail className="h-4 w-4 mr-2" />
                             Export via Email (PDF)
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {reportType === "cash-movement" && (
+                        <DropdownMenuItem onClick={handleExportCashMovementXLS} className="cursor-pointer">
+                          <FileSpreadsheet className="h-4 w-4 mr-2" />
+                          Export as Excel
+                        </DropdownMenuItem>
+                      )}
+                      {reportType === "gst" && (
+                        <>
+                          <DropdownMenuItem
+                            onClick={() => gstReportRef.current?.exportCsv()}
+                            className="cursor-pointer"
+                          >
+                            <FileText className="h-4 w-4 mr-2" />
+                            CSV (per bill)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => gstReportRef.current?.exportXlsx()}
+                            className="cursor-pointer"
+                          >
+                            <FileSpreadsheet className="h-4 w-4 mr-2" />
+                            Excel (summary + detail)
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => gstReportRef.current?.exportJson()}
+                            className="cursor-pointer"
+                          >
+                            <ReceiptText className="h-4 w-4 mr-2" />
+                            GSTR-1 B2CS JSON
                           </DropdownMenuItem>
                         </>
                       )}
@@ -2437,6 +2766,12 @@ export function SalesReport() {
                           total: (bill.grossTotal || 0) + (bill.tip || 0),
                           tip: bill.tip || 0,
                           tipStaffName: bill.tipStaffName,
+                          tipLines: Array.isArray(bill.tipLines)
+                            ? bill.tipLines.map((tl: { staffName?: string; amount?: number }) => ({
+                                staffName: tl.staffName,
+                                amount: Math.max(0, Number(tl.amount) || 0),
+                              }))
+                            : undefined,
                           payments: (bill.payments || []).map((p: any) => ({ type: (p.mode || p.type || "cash").toLowerCase(), amount: p.amount })),
                           staffName: bill.staffName,
                           taxBreakdown: bill.taxBreakdown,
@@ -2607,6 +2942,24 @@ export function SalesReport() {
             </>
           )}
         </div>
+      ) : reportType === "cash-movement" ? (
+        <CashMovementReport
+          ref={cashMovementReportRef}
+          controlledFilters={{
+            datePeriod: cashMovementDatePeriod,
+            dateRange: cashMovementDateRange,
+            typeFilter: cashMovementTypeFilter,
+            directionFilter: cashMovementDirectionFilter,
+          }}
+        />
+      ) : reportType === "gst" ? (
+        <GstReport
+          ref={gstReportRef}
+          controlledFilters={{
+            datePeriod: gstDatePeriod,
+            dateRange: gstDateRange,
+          }}
+        />
       ) : reportType === "service-list" ? (
         <ServiceListReport
           controlledFilters={{
@@ -2711,6 +3064,25 @@ export function SalesReport() {
                       <span className="text-slate-600">Tip Collected</span>
                       <span className="font-semibold text-emerald-600">₹{summaryData.tipCollected.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
                     </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 flex items-center gap-1.5">
+                        Cash Added to wallet
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs p-3">
+                            <p className="text-sm">
+                              Cash received at checkout but credited to the client&apos;s prepaid wallet (e.g. bill change
+                              added to wallet balance).
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="font-semibold text-indigo-600">
+                        ₹{(summaryData.cashAddedToWallet ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -2764,142 +3136,175 @@ export function SalesReport() {
                     <CreditCard className="h-4 w-4 text-indigo-500" />
                     Payment Mode Breakdown
                   </h3>
-                  {summaryData.totalSales > 0 ? (
+                  {paymentModeBreakdown.total > 0 ? (
                     <div className="space-y-4">
-                      {[
-                        { label: "Cash", value: summaryData.totalSalesCash, color: "bg-emerald-500" },
-                        { label: "Online", value: summaryData.totalSalesOnline, color: "bg-blue-500" },
-                        { label: "Card", value: summaryData.totalSalesCard, color: "bg-violet-500" },
-                      ].map(({ label, value, color }) => (
-                        <div key={label}>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="text-slate-600">{label}</span>
-                            <span className="font-medium text-slate-900">₹{value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                          </div>
-                          <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${color} transition-all duration-500`}
-                              style={{ width: `${Math.min(100, (value / summaryData.totalSales) * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      ))}
+                      <AnalyticsDonutChart
+                        data={paymentModeBreakdown.chartSlices}
+                        emptyMessage="No payment data for this period."
+                        formatTooltip={(value) =>
+                          `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+                        }
+                        innerRadius={0}
+                        outerRadius={88}
+                      />
+                      <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                        {paymentModeBreakdown.modes.map(({ label, value, fill }) => (
+                          <li key={label} className="flex items-center justify-between gap-2 min-w-0">
+                            <span className="flex items-center gap-2 text-slate-600 min-w-0">
+                              <span
+                                className="h-2.5 w-2.5 rounded-full shrink-0"
+                                style={{ backgroundColor: fill }}
+                                aria-hidden
+                              />
+                              <span className="truncate">{label}</span>
+                            </span>
+                            <span className="font-medium text-slate-900 tabular-nums shrink-0">
+                              ₹{value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   ) : (
                     <p className="text-slate-400 text-sm">No payment data for this period.</p>
                   )}
                 </div>
 
-                {/* Section C: Expenses */}
-                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                    <Wallet className="h-4 w-4 text-indigo-500" />
-                    Expenses
-                  </h3>
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600 flex items-center gap-1.5">
-                        Cash Expense
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs p-3">
-                            <p className="text-sm">Cash paid out for expenses during this period (e.g. supplies, misc).</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </span>
-                      <span className={`font-semibold ${summaryData.cashExpense > 0 ? "text-red-600" : "text-slate-900"}`}>
-                        ₹{summaryData.cashExpense.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600 flex items-center gap-1.5">
-                        Petty Cash Expense
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs p-3">
-                            <p className="text-sm">Expenses paid from the petty cash wallet during this period.</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </span>
-                      <span className={`font-semibold ${(summaryData.pettyCashExpense ?? 0) > 0 ? "text-red-600" : "text-slate-900"}`}>
-                        ₹{(summaryData.pettyCashExpense ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Section D: Final Settlement (single day) / Total Cash Balance (date range) */}
+                {/* Section C + D: Expenses & Final Settlement (stacked) */}
                 {(() => {
-                  const isSummarySingleDay = datePeriod === "today" || datePeriod === "yesterday" ||
-                    (datePeriod === "custom" && dateRange.from && dateRange.to && toDateStringIST(dateRange.from) === toDateStringIST(dateRange.to))
-                  const expectedCashInDrawer = (summaryData.openingBalance ?? 0) + summaryData.totalSalesCash + (summaryData.cashDuesCollected ?? 0) - summaryData.cashExpense
+                  const isSummarySingleDay =
+                    datePeriod === "today" ||
+                    datePeriod === "yesterday" ||
+                    (datePeriod === "custom" &&
+                      dateRange.from &&
+                      dateRange.to &&
+                      toDateStringIST(dateRange.from) === toDateStringIST(dateRange.to))
+                  const expectedCashInDrawer =
+                    (summaryData.openingBalance ?? 0) +
+                    summaryData.totalSalesCash +
+                    (summaryData.cashDuesCollected ?? 0) -
+                    summaryData.cashExpense
                   const cashBalance = summaryData.closingBalance ?? summaryData.cashBalance ?? 0
                   const diff = Math.abs(cashBalance - expectedCashInDrawer)
-                  const cashBalanceColor = diff < 0.01 ? "text-emerald-600" : cashBalance < expectedCashInDrawer ? "text-red-600" : "text-orange-600"
+                  const cashBalanceColor =
+                    diff < 0.01
+                      ? "text-emerald-600"
+                      : cashBalance < expectedCashInDrawer
+                        ? "text-red-600"
+                        : "text-orange-600"
                   return (
-                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                    <Banknote className="h-4 w-4 text-indigo-500" />
-                    {isSummarySingleDay ? "Final Settlement" : "Total Cash Balance"}
-                  </h3>
-                  <div className="space-y-4">
-                    {isSummarySingleDay ? (
-                          <>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-600 flex items-center gap-1.5">
-                                Expected Cash in Drawer
+                    <div className="flex flex-col gap-4">
+                      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+                        <h3 className="text-sm font-semibold text-slate-800 mb-2.5 flex items-center gap-2">
+                          <Wallet className="h-4 w-4 text-indigo-500" />
+                          Expenses
+                        </h3>
+                        <div className="space-y-2.5 text-sm">
+                          <div className="flex justify-between items-center gap-3">
+                            <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                              Cash Expense
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs p-3">
+                                  <p className="text-sm">Cash paid out for expenses during this period (e.g. supplies, misc).</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </span>
+                            <span
+                              className={`font-semibold tabular-nums shrink-0 ${summaryData.cashExpense > 0 ? "text-red-600" : "text-slate-900"}`}
+                            >
+                              ₹{summaryData.cashExpense.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center gap-3">
+                            <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                              Petty Cash Expense
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs p-3">
+                                  <p className="text-sm">Expenses paid from the petty cash wallet during this period.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </span>
+                            <span
+                              className={`font-semibold tabular-nums shrink-0 ${(summaryData.pettyCashExpense ?? 0) > 0 ? "text-red-600" : "text-slate-900"}`}
+                            >
+                              ₹{(summaryData.pettyCashExpense ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+                        <h3 className="text-sm font-semibold text-slate-800 mb-2.5 flex items-center gap-2">
+                          <Banknote className="h-4 w-4 text-indigo-500" />
+                          {isSummarySingleDay ? "Final Settlement" : "Total Cash Balance"}
+                        </h3>
+                        <div className="space-y-2.5 text-sm">
+                          {isSummarySingleDay ? (
+                            <>
+                              <div className="flex justify-between items-center gap-3">
+                                <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                                  Expected Cash in Drawer
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-xs p-3">
+                                      <p className="text-sm">
+                                        Opening Balance + Cash Sales + Cash Dues Collected − Cash Expenses
+                                      </p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </span>
+                                <span className="font-semibold text-slate-900 tabular-nums shrink-0">
+                                  ₹{expectedCashInDrawer.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center gap-3 pt-2.5 border-t border-slate-100">
+                                <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                                  Cash Balance
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-xs p-3">
+                                      <p className="text-sm">
+                                        Closing balance recorded in the cash registry when the shift was closed.
+                                      </p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </span>
+                                <span className={`font-bold text-base tabular-nums shrink-0 ${cashBalanceColor}`}>
+                                  ₹{cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex justify-between items-center gap-3">
+                              <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                                Total Cash Balance
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                                    <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
                                   </TooltipTrigger>
                                   <TooltipContent side="top" className="max-w-xs p-3">
-                                    <p className="text-sm">Opening Balance + Cash Sales + Cash Dues Collected − Cash Expenses</p>
+                                    <p className="text-sm">Total cash balance across the selected date range.</p>
                                   </TooltipContent>
                                 </Tooltip>
                               </span>
-                              <span className="font-semibold text-slate-900">₹{expectedCashInDrawer.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                            </div>
-                            <div className="flex justify-between items-center pt-3 border-t border-slate-100">
-                              <span className="text-slate-600 flex items-center gap-1.5">
-                                Cash Balance
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top" className="max-w-xs p-3">
-                                    <p className="text-sm">Closing balance recorded in the cash registry when the shift was closed.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </span>
-                              <span className={`font-bold text-lg ${cashBalanceColor}`}>
+                              <span className={`font-bold text-base tabular-nums shrink-0 ${cashBalanceColor}`}>
                                 ₹{cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                               </span>
                             </div>
-                          </>
-                    ) : (
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-600 flex items-center gap-1.5">
-                          Total Cash Balance
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs p-3">
-                              <p className="text-sm">Total cash balance across the selected date range.</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </span>
-                        <span className={`font-bold text-lg ${cashBalanceColor}`}>
-                          ₹{cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                        </span>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                </div>
+                    </div>
                   )
                 })()}
               </div>
@@ -2995,32 +3400,10 @@ export function SalesReport() {
 
         <CursorTooltip
           wrapperClassName="h-full min-h-0"
-          wrapperTabIndex={-1}
           className="text-center"
-          content={
-            showPartialUnpaidBreakdown
-              ? "Click the card to show combined partial + unpaid count."
-              : "Partial + unpaid bill count for current filters. Click the card to see partial vs unpaid."
-          }
+          content="Bills with partial payment vs fully unpaid for current filters."
         >
-          <Card
-            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
-            role="button"
-            tabIndex={0}
-            aria-expanded={showPartialUnpaidBreakdown}
-            aria-label={
-              showPartialUnpaidBreakdown
-                ? "Partial and unpaid breakdown. Activate to show combined count."
-                : "Partial and unpaid combined count. Activate to show breakdown."
-            }
-            onClick={() => setShowPartialUnpaidBreakdown((v) => !v)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault()
-                setShowPartialUnpaidBreakdown((v) => !v)
-              }
-            }}
-          >
+          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
               <CardTitle className="text-sm font-medium text-gray-900">Partial/Unpaid Payments</CardTitle>
               <div className="p-2 bg-gray-100 rounded-lg">
@@ -3030,21 +3413,21 @@ export function SalesReport() {
             <CardContent>
               {salesStatsLoading ? (
                 salesStatSkeleton
-              ) : !showPartialUnpaidBreakdown ? (
-                <div className="space-y-1">
-                  <div className="text-2xl font-bold text-gray-900">{partialSales + unpaidSales}</div>
-                  <p className="text-xs font-medium text-gray-500">Partial + Unpaid</p>
-                  <p className="text-xs text-gray-400">Click for breakdown</p>
-                </div>
               ) : (
-                <div className="flex flex-wrap gap-6">
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Partial</p>
-                    <p className="text-2xl font-bold text-gray-900">{partialSales}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Unpaid</p>
-                    <p className="text-2xl font-bold text-gray-900">{unpaidSales}</p>
+                <div className="space-y-2">
+                  <div className="text-2xl font-bold text-gray-900">{partialSales + unpaidSales}</div>
+                  <div className="flex flex-nowrap items-center justify-between gap-2 text-xs text-gray-600">
+                    <span className="truncate">
+                      Partial{" "}
+                      <span className="font-semibold text-gray-900">{partialSales}</span>
+                    </span>
+                    <span className="shrink-0 text-gray-300" aria-hidden>
+                      ·
+                    </span>
+                    <span className="truncate text-right">
+                      Unpaid{" "}
+                      <span className="font-semibold text-gray-900">{unpaidSales}</span>
+                    </span>
                   </div>
                 </div>
               )}
@@ -3096,8 +3479,29 @@ export function SalesReport() {
           </Card>
         </CursorTooltip>
 
-        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content={cashCollectedTooltip}>
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          wrapperTabIndex={-1}
+          className="text-center"
+          content={
+            showCashCollectedBreakdown
+              ? "Click to show combined cash total."
+              : "Service cash from bills; wallet cash is change credited to prepaid wallet. Click for breakdown."
+          }
+        >
+          <Card
+            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+            role="button"
+            tabIndex={0}
+            aria-expanded={showCashCollectedBreakdown}
+            onClick={() => setShowCashCollectedBreakdown((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                setShowCashCollectedBreakdown((v) => !v)
+              }
+            }}
+          >
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
               <CardTitle className="text-sm font-medium text-gray-900">Cash Collected</CardTitle>
               <div className="p-2 bg-gray-100 rounded-lg">
@@ -3105,15 +3509,52 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">
-                {salesStatsLoading ? salesStatSkeleton : `₹${cashCollected.toFixed(2)}`}
-              </div>
+              {salesStatsLoading ? (
+                salesStatSkeleton
+              ) : !showCashCollectedBreakdown ? (
+                <div className="space-y-1">
+                  <div className="text-2xl font-bold text-gray-900">₹{cashCollected.toFixed(2)}</div>
+                  <p className="text-xs text-gray-400">Click for breakdown</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Service Cash</p>
+                    <p className="text-xl font-bold text-gray-900">₹{serviceCashCollected.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Wallet Cash</p>
+                    <p className="text-xl font-bold text-gray-900">₹{walletCashCollected.toFixed(2)}</p>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </CursorTooltip>
 
-        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content={onlineCashCollectedTooltip}>
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          wrapperTabIndex={-1}
+          className="text-center"
+          content={
+            showOnlineCashCollectedBreakdown
+              ? "Click to show combined online total."
+              : "Card and online/UPI payments for current filters. Click for breakdown."
+          }
+        >
+          <Card
+            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+            role="button"
+            tabIndex={0}
+            aria-expanded={showOnlineCashCollectedBreakdown}
+            onClick={() => setShowOnlineCashCollectedBreakdown((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                setShowOnlineCashCollectedBreakdown((v) => !v)
+              }
+            }}
+          >
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
               <CardTitle className="text-sm font-medium text-gray-900">Online Cash Collected</CardTitle>
               <div className="p-2 bg-gray-100 rounded-lg">
@@ -3121,9 +3562,25 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">
-                {salesStatsLoading ? salesStatSkeleton : `₹${onlineCashCollected.toFixed(2)}`}
-              </div>
+              {salesStatsLoading ? (
+                salesStatSkeleton
+              ) : !showOnlineCashCollectedBreakdown ? (
+                <div className="space-y-1">
+                  <div className="text-2xl font-bold text-gray-900">₹{onlineCashCollected.toFixed(2)}</div>
+                  <p className="text-xs text-gray-400">Click for breakdown</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Card</p>
+                    <p className="text-xl font-bold text-gray-900">₹{cardCollected.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Online</p>
+                    <p className="text-xl font-bold text-gray-900">₹{onlinePayCollected.toFixed(2)}</p>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </CursorTooltip>
@@ -3204,13 +3661,32 @@ export function SalesReport() {
                     )}
                   </span>
                 </TableHead>
+                <TableHead className="font-semibold text-slate-800">
+                  <span className="inline-flex items-center gap-1">
+                    Adjustments
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex cursor-help">
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400" />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs">
+                          <p className="text-sm">
+                            Change credited to prepaid wallet or other non-bill adjustments at checkout.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </span>
+                </TableHead>
                 <TableHead className="font-semibold text-slate-800">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {salesListLoading ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-16 text-slate-500">
+                  <TableCell colSpan={10} className="text-center py-16 text-slate-500">
                     <div className="flex flex-col items-center gap-3">
                       <div className="h-8 w-8 border-2 border-slate-300 border-t-blue-600 rounded-full animate-spin" />
                       <span className="text-sm">Loading sales…</span>
@@ -3219,7 +3695,7 @@ export function SalesReport() {
                 </TableRow>
               ) : paginatedSales.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-12 text-slate-500">
+                  <TableCell colSpan={10} className="text-center py-12 text-slate-500">
                     No sales records found for the selected filters.
                   </TableCell>
                 </TableRow>
@@ -3259,6 +3735,28 @@ export function SalesReport() {
                     <TableCell className="text-slate-600">₹{getGST(sale).toFixed(2)}</TableCell>
                     <TableCell className="font-semibold text-green-700">₹{getTotalPaid(sale).toFixed(2)}</TableCell>
                     <TableCell>
+                      {(() => {
+                        const adj = getSaleAdjustmentSummary(sale)
+                        if (!adj.hasAdjustment) {
+                          return <span className="text-slate-400">—</span>
+                        }
+                        return (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-violet-100 text-violet-800 border border-violet-200 cursor-help">
+                                  {adj.displayLabel}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <p className="text-sm">{adj.tooltip}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )
+                      })()}
+                    </TableCell>
+                    <TableCell>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" className="h-8 w-8 p-0 hover:bg-slate-100 rounded-lg transition-colors duration-200">
@@ -3282,25 +3780,29 @@ export function SalesReport() {
                               <Eye className="mr-2 h-4 w-4 text-blue-600" />
                               <span className="text-slate-700">View Bill Details</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleEditBill(sale)} className="hover:bg-amber-50">
-                              <Edit className="mr-2 h-4 w-4 text-amber-600" />
-                              <span className="text-slate-700">Edit Bill</span>
-                            </DropdownMenuItem>
-                            {sale.items && sale.items.some((item: any) => item.type === 'product') && (
+                            {canEditSale && (
+                              <DropdownMenuItem onClick={() => handleEditBill(sale)} className="hover:bg-amber-50">
+                                <Edit className="mr-2 h-4 w-4 text-amber-600" />
+                                <span className="text-slate-700">Edit Bill</span>
+                              </DropdownMenuItem>
+                            )}
+                            {canEditSale && sale.items && sale.items.some((item: any) => item.type === 'product') && (
                               <DropdownMenuItem onClick={() => handleExchangeBill(sale)} className="hover:bg-blue-50">
                                 <RefreshCw className="mr-2 h-4 w-4 text-blue-600" />
                                 <span className="text-slate-700">Exchange Products</span>
                               </DropdownMenuItem>
                             )}
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                setTimeout(() => handleDeleteSale(sale), 0)
-                              }}
-                              className="text-red-600 hover:bg-red-50"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </DropdownMenuItem>
+                            {canDeleteSale && (
+                              <DropdownMenuItem
+                                onSelect={() => {
+                                  setTimeout(() => handleDeleteSale(sale), 0)
+                                }}
+                                className="text-red-600 hover:bg-red-50"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                     </TableCell>
@@ -3393,6 +3895,18 @@ export function SalesReport() {
                 <div>
                   <label className="text-sm font-medium text-muted-foreground">Total Paid</label>
                   <p className="text-2xl font-bold text-green-600">₹{getTotalPaid(selectedBill, true).toFixed(2)}</p>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground">Adjustments</label>
+                  {(() => {
+                    const adj = getSaleAdjustmentSummary(selectedBill)
+                    if (!adj.hasAdjustment) {
+                      return <p className="text-lg text-muted-foreground">—</p>
+                    }
+                    return (
+                      <p className="text-lg font-semibold text-violet-700">{adj.displayLabel}</p>
+                    )
+                  })()}
                 </div>
               </div>
               {selectedBill.payments && selectedBill.payments.length > 0 && (

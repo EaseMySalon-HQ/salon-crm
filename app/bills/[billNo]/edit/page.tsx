@@ -280,8 +280,8 @@ export default function EditBillPage() {
 
   if (loading || !sale) {
     return (
-      <ProtectedRoute requiredModule="sales">
-        <ProtectedLayout requiredModule="sales">
+      <ProtectedRoute requiredModule="sales" requiredFeature="edit">
+        <ProtectedLayout requiredModule="sales" requiredFeature="edit">
           <div className="min-h-screen bg-gray-50 flex items-center justify-center">
             <div className="text-center">
               <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
@@ -294,8 +294,8 @@ export default function EditBillPage() {
   }
 
   return (
-    <ProtectedRoute requiredModule="sales">
-      <ProtectedLayout requiredModule="sales">
+    <ProtectedRoute requiredModule="sales" requiredFeature="edit">
+      <ProtectedLayout requiredModule="sales" requiredFeature="edit">
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-5xl mx-auto space-y-6">
         <div className="flex items-center justify-between">

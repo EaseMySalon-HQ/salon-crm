@@ -1,13 +1,14 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Search, Edit, Trash2, Plus, Scissors, Download, FileText, FileSpreadsheet, ChevronDown, Upload } from "lucide-react"
+import { Search, Edit, Trash2, Plus, Scissors, Download, FileText, FileSpreadsheet, ChevronDown, Upload, Layers } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { ServiceForm } from "./service-form"
+import { BundleServiceForm } from "./bundle-service-form"
 import { ServicesAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { useCurrency } from "@/hooks/use-currency"
@@ -15,10 +16,9 @@ import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { ServiceImportModal } from "./service-import-modal"
-import jsPDF from "jspdf"
-import autoTable from "jspdf-autotable"
-import * as XLSX from "xlsx"
+import { downloadTablePdf, downloadTableXlsx } from "@/lib/inventory-lists-export"
 import { format } from "date-fns"
+import { cn } from "@/lib/utils"
 
 export function ServicesTable() {
   const { formatAmount } = useCurrency()
@@ -26,14 +26,18 @@ export function ServicesTable() {
   const { hasAccess: canExport } = useFeature("data_export")
   const [searchTerm, setSearchTerm] = useState("")
   const [isAddServiceOpen, setIsAddServiceOpen] = useState(false)
+  const [isAddBundleOpen, setIsAddBundleOpen] = useState(false)
   const [isEditServiceOpen, setIsEditServiceOpen] = useState(false)
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false)
   const [selectedService, setSelectedService] = useState<any>(null)
   const [services, setServices] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
 
-  const canManageServices = user?.role === "admin" || user?.role === "manager"
+  const canCreateService = hasPermission("services", "create")
+  const canEditService = hasPermission("services", "edit")
+  const canDeleteService = hasPermission("services", "delete")
+  const canShowActions = canEditService || canDeleteService
 
   const fetchServices = async () => {
     try {
@@ -80,6 +84,11 @@ export function ServicesTable() {
           window.dispatchEvent(new CustomEvent('service-added'))
         } else {
           console.error('Delete failed:', response.error)
+          toast({
+            title: "Cannot delete",
+            description: typeof response.error === "string" ? response.error : "Delete failed.",
+            variant: "destructive",
+          })
         }
       } catch (error) {
         console.error('Failed to delete service:', error)
@@ -90,58 +99,78 @@ export function ServicesTable() {
   const filteredServices = services.filter(
     (service) =>
       service.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      service.category.toLowerCase().includes(searchTerm.toLowerCase()),
+      (service.category || "").toLowerCase().includes(searchTerm.toLowerCase()),
   )
 
-  const handleExportPDF = async () => {
-    toast({ title: "Export requested", description: "Generating services report PDF...", duration: 3000 })
-    try {
-      const { ReportsAPI } = await import('@/lib/api');
-      const result = await ReportsAPI.exportServices('pdf', {
-        search: searchTerm || undefined
-      });
-      
-      if (result && result.success) {
-        toast({
-          title: "Export Successful",
-          description: result.message || "Services report has been generated and sent to admin email(s)",
-        });
-      } else {
-        throw new Error(result?.error || 'Export failed');
-      }
-    } catch (error: any) {
-      console.error("PDF export error:", error);
+  const handleExportPDF = () => {
+    if (filteredServices.length === 0) {
       toast({
-        title: "Export Failed",
-        description: error?.message || "Failed to export PDF. Please try again.",
-        variant: "destructive"
-      });
+        title: "Nothing to export",
+        description: "No services match the current filter.",
+        variant: "destructive",
+      })
+      return
+    }
+    try {
+      const headers = ["Name", "Category", "Duration", "Price", "Type", "Description"]
+      const rows: (string | number)[][] = filteredServices.map((s) => [
+        String(s.name || ""),
+        String(s.category || "—"),
+        s.duration != null && s.duration !== "" ? `${s.duration} min` : "—",
+        formatAmount(Number(s.price) || 0),
+        s.serviceKind === "bundle" ? "Bundle" : "Service",
+        String(s.description || "")
+          .replace(/\s+/g, " ")
+          .slice(0, 500),
+      ])
+      const subtitle = searchTerm.trim() ? `Filtered: “${searchTerm.trim()}”` : undefined
+      downloadTablePdf(
+        "Service directory",
+        subtitle,
+        `services-export-${format(new Date(), "yyyy-MM-dd-HHmm")}`,
+        headers,
+        rows,
+        true
+      )
+      toast({ title: "Export complete", description: "PDF download started." })
+    } catch (error: unknown) {
+      console.error("PDF export error:", error)
+      toast({
+        title: "Export failed",
+        description: error instanceof Error ? error.message : "Could not generate PDF.",
+        variant: "destructive",
+      })
     }
   }
 
-  const handleExportXLS = async () => {
-    toast({ title: "Export requested", description: "Generating services report Excel...", duration: 3000 })
-    try {
-      const { ReportsAPI } = await import('@/lib/api');
-      const result = await ReportsAPI.exportServices('xlsx', {
-        search: searchTerm || undefined
-      });
-      
-      if (result && result.success) {
-        toast({
-          title: "Export Successful",
-          description: result.message || "Services report has been generated and sent to admin email(s)",
-        });
-      } else {
-        throw new Error(result?.error || 'Export failed');
-      }
-    } catch (error: any) {
-      console.error("XLS export error:", error);
+  const handleExportXLS = () => {
+    if (filteredServices.length === 0) {
       toast({
-        title: "Export Failed",
-        description: error?.message || "Failed to export Excel file. Please try again.",
-        variant: "destructive"
-      });
+        title: "Nothing to export",
+        description: "No services match the current filter.",
+        variant: "destructive",
+      })
+      return
+    }
+    try {
+      const headers = ["Service Name", "Category", "Duration (min)", "Price", "Type", "Description"]
+      const rows: (string | number)[][] = filteredServices.map((s) => [
+        String(s.name || ""),
+        String(s.category || ""),
+        s.duration != null && s.duration !== "" ? Number(s.duration) : "",
+        Number(s.price) || 0,
+        s.serviceKind === "bundle" ? "Bundle" : "Service",
+        String(s.description || ""),
+      ])
+      downloadTableXlsx(`services-export-${format(new Date(), "yyyy-MM-dd-HHmm")}`, "Services", headers, rows)
+      toast({ title: "Export complete", description: "Excel download started." })
+    } catch (error: unknown) {
+      console.error("Excel export error:", error)
+      toast({
+        title: "Export failed",
+        description: error instanceof Error ? error.message : "Could not generate Excel file.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -205,7 +234,7 @@ export function ServicesTable() {
             </Button>
           )}
           
-          {canManageServices && (
+          {canCreateService && (
             <>
               <Button 
                 onClick={() => setIsImportDialogOpen(true)}
@@ -228,6 +257,24 @@ export function ServicesTable() {
                     <DialogTitle>Add New Service</DialogTitle>
                   </DialogHeader>
                   <ServiceForm onClose={() => setIsAddServiceOpen(false)} />
+                </DialogContent>
+              </Dialog>
+
+              <Dialog open={isAddBundleOpen} onOpenChange={setIsAddBundleOpen}>
+                <DialogTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="h-10 px-4 border-violet-300 text-violet-800 hover:bg-violet-50 hover:border-violet-400 transition-all duration-300"
+                  >
+                    <Layers className="h-4 w-4 mr-2" />
+                    Add Bundle Service
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>New bundle</DialogTitle>
+                  </DialogHeader>
+                  <BundleServiceForm onClose={() => setIsAddBundleOpen(false)} />
                 </DialogContent>
               </Dialog>
             </>
@@ -257,13 +304,13 @@ export function ServicesTable() {
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Duration</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Price</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Description</TableHead>
-                {canManageServices && <TableHead className="px-4 py-3 text-center font-semibold text-gray-700 w-[100px]">Actions</TableHead>}
+                {canShowActions && <TableHead className="px-4 py-3 text-center font-semibold text-gray-700 w-[100px]">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={canManageServices ? 6 : 5} className="text-center py-8">
+                  <TableCell colSpan={canShowActions ? 6 : 5} className="text-center py-8">
                     <div className="flex flex-col items-center space-y-2">
                       <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
                       <p className="text-gray-600 text-sm">Loading services...</p>
@@ -272,7 +319,7 @@ export function ServicesTable() {
                 </TableRow>
               ) : filteredServices.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={canManageServices ? 6 : 5} className="text-center py-8">
+                  <TableCell colSpan={canShowActions ? 6 : 5} className="text-center py-8">
                     <div className="flex flex-col items-center space-y-2">
                       <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
                         <Scissors className="h-6 w-6 text-gray-400" />
@@ -285,7 +332,9 @@ export function ServicesTable() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredServices.map((service, index) => (
+                filteredServices.map((service, index) => {
+                  const isBundle = service.serviceKind === "bundle"
+                  return (
                   <TableRow 
                     key={service._id || service.id} 
                     className={`hover:bg-gray-50/50 transition-colors duration-200 ${
@@ -294,11 +343,29 @@ export function ServicesTable() {
                   >
                     <TableCell className="px-4 py-3">
                       <div className="flex items-center space-x-2">
-                        <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
-                          <Scissors className="h-4 w-4 text-white" />
+                        <div
+                          className={cn(
+                            "w-8 h-8 rounded-lg flex items-center justify-center",
+                            isBundle
+                              ? "bg-gradient-to-br from-violet-500 to-fuchsia-600"
+                              : "bg-gradient-to-br from-indigo-500 to-purple-600"
+                          )}
+                        >
+                          {isBundle ? (
+                            <Layers className="h-4 w-4 text-white" />
+                          ) : (
+                            <Scissors className="h-4 w-4 text-white" />
+                          )}
                         </div>
                         <div>
-                          <div className="font-medium text-gray-900">{service.name}</div>
+                          <div className="font-medium text-gray-900 flex items-center gap-2 flex-wrap">
+                            {service.name}
+                            {isBundle ? (
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                Bundle
+                              </Badge>
+                            ) : null}
+                          </div>
                           <div className="text-xs text-gray-500">ID: {service._id?.slice(-6) || service.id}</div>
                         </div>
                       </div>
@@ -324,30 +391,35 @@ export function ServicesTable() {
                         )}
                       </div>
                     </TableCell>
-                    {canManageServices && (
+                    {canShowActions && (
                       <TableCell className="px-4 py-3">
                         <div className="flex items-center justify-center space-x-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEditService(service)}
-                            className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteService(service._id || service.id)}
-                            className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-600 transition-colors duration-200"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {canEditService && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditService(service)}
+                              className="h-8 w-8 p-0 hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {canDeleteService && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteService(service._id || service.id)}
+                              className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-600 transition-colors duration-200"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     )}
                   </TableRow>
-                ))
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -355,19 +427,31 @@ export function ServicesTable() {
       </div>
 
       {/* Edit Service Dialog */}
-      {canManageServices && (
+      {canEditService && (
         <Dialog open={isEditServiceOpen} onOpenChange={setIsEditServiceOpen}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Edit Service</DialogTitle>
+              <DialogTitle>
+                {selectedService?.serviceKind === "bundle" ? "Edit bundle" : "Edit Service"}
+              </DialogTitle>
             </DialogHeader>
-            <ServiceForm 
-              service={selectedService} 
-              onClose={() => {
-                setIsEditServiceOpen(false)
-                setSelectedService(null)
-              }} 
-            />
+            {selectedService?.serviceKind === "bundle" ? (
+              <BundleServiceForm
+                service={selectedService}
+                onClose={() => {
+                  setIsEditServiceOpen(false)
+                  setSelectedService(null)
+                }}
+              />
+            ) : (
+              <ServiceForm
+                service={selectedService}
+                onClose={() => {
+                  setIsEditServiceOpen(false)
+                  setSelectedService(null)
+                }}
+              />
+            )}
           </DialogContent>
         </Dialog>
       )}

@@ -1,6 +1,7 @@
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
+const { ensureWalkInClient } = require('../lib/ensure-walk-in-client');
 
 /**
  * Middleware to set up business-specific database models
@@ -54,6 +55,43 @@ const setupBusinessDatabase = async (req, res, next) => {
     const businessModels = modelFactory.getCachedBusinessModels(businessConnection);
     logger.debug('🔍 Business models created:', Object.keys(businessModels));
     
+    if (!businessConnection.supplierPayableIndexRepairPromise) {
+      const SupplierPayable = businessModels.SupplierPayable;
+      businessConnection.supplierPayableIndexRepairPromise = (async () => {
+        try {
+          const col = SupplierPayable.collection;
+          const list = await col.indexes();
+          for (const idx of list) {
+            const key = idx.key || {};
+            const isPoKey = key.branchId === 1 && key.purchaseOrderId === 1;
+            const isPiKey = key.branchId === 1 && key.purchaseInvoiceId === 1;
+            if (
+              idx.name !== '_id_' &&
+              ((isPoKey || isPiKey) && idx.unique && !idx.partialFilterExpression)
+            ) {
+              await col.dropIndex(idx.name);
+              logger.info(`SupplierPayable: dropped legacy unique index ${idx.name}`);
+            }
+          }
+          await SupplierPayable.syncIndexes();
+        } catch (e) {
+          logger.warn('SupplierPayable index repair skipped or failed:', e.message);
+        }
+      })();
+    }
+    await businessConnection.supplierPayableIndexRepairPromise;
+
+    if (!businessConnection.ensureWalkInClientPromise) {
+      businessConnection.ensureWalkInClientPromise = (async () => {
+        try {
+          await ensureWalkInClient(businessModels, businessId);
+        } catch (e) {
+          logger.warn('ensureWalkInClient failed:', e.message);
+        }
+      })();
+    }
+    await businessConnection.ensureWalkInClientPromise;
+
     // Attach models to request object
     req.businessModels = businessModels;
     req.businessConnection = businessConnection;

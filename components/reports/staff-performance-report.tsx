@@ -267,9 +267,31 @@ export function StaffPerformanceReport() {
       try {
         const { startDate, endDate } = getPerformanceFilterBounds(datePeriod, dateRange)
 
-        // Paged fetch avoids one huge response; N sequential calls for large DBs. Long-term: server aggregates by staff/range.
-        const [allSales, servicesResponse, productsResponse] = await Promise.all([
-          SalesAPI.getAllMergePages({ batchSize: 500 }),
+        const salesRangeParams =
+          datePeriod === "all"
+            ? {}
+            : {
+                dateFrom: format(startDate, "yyyy-MM-dd"),
+                dateTo: format(endDate, "yyyy-MM-dd"),
+              }
+
+        const previousMonthParams =
+          datePeriod === "currentMonth"
+            ? (() => {
+                const now = new Date()
+                return {
+                  dateFrom: format(new Date(now.getFullYear(), now.getMonth() - 1, 1), "yyyy-MM-dd"),
+                  dateTo: format(new Date(now.getFullYear(), now.getMonth(), 0), "yyyy-MM-dd"),
+                }
+              })()
+            : null
+
+        // Keep sales fetches bounded by the selected period so the report does not page through all bills.
+        const [allSales, previousMonthSalesResponse, servicesResponse, productsResponse] = await Promise.all([
+          SalesAPI.getAllMergePages({ ...salesRangeParams, batchSize: 500 }),
+          previousMonthParams
+            ? SalesAPI.getAllMergePages({ ...previousMonthParams, batchSize: 500 })
+            : Promise.resolve([]),
           ServicesAPI.getAll({ limit: 2000 }),
           ProductsAPI.getAll({ limit: 2000 })
         ])
@@ -279,7 +301,7 @@ export function StaffPerformanceReport() {
           productsResponse?.success && Array.isArray(productsResponse.data) ? productsResponse.data : []
 
         if (Array.isArray(allSales)) {
-          // Filter sales by date range
+          // Keep the local filter as a final guard in case legacy API data has timezone drift.
           const filteredSales = allSales.filter((sale: any) => {
             const saleDate = new Date(sale.date)
             return saleDate >= startDate && saleDate <= endDate
@@ -290,21 +312,19 @@ export function StaffPerformanceReport() {
 
           setSalesData(filteredSales)
 
-          // Also fetch previous month's data for comparison (only for current month view)
-          let previousMonthSales: any[] = []
-          if (datePeriod === "currentMonth") {
+          const previousMonthSales = Array.isArray(previousMonthSalesResponse)
+            ? previousMonthSalesResponse
+            : []
+          if (datePeriod === "currentMonth" && previousMonthSales.length > 0) {
             const now = new Date()
             const prevStartDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
             const prevEndDate = new Date(now.getFullYear(), now.getMonth(), 0)
-            
-            try {
-              const prevFilteredSales = allSales.filter((sale: any) => {
-                const saleDate = new Date(sale.date)
-                return saleDate >= prevStartDate && saleDate <= prevEndDate
-              })
-              previousMonthSales = prevFilteredSales
-            } catch (error) {
-              console.warn('Could not fetch previous month data:', error)
+
+            for (let i = previousMonthSales.length - 1; i >= 0; i--) {
+              const saleDate = new Date(previousMonthSales[i].date)
+              if (saleDate < prevStartDate || saleDate > prevEndDate) {
+                previousMonthSales.splice(i, 1)
+              }
             }
           }
 

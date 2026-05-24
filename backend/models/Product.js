@@ -78,6 +78,11 @@ const productSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  /** Data URL or HTTPS URL for product photo (optional). */
+  imageUrl: {
+    type: String,
+    default: ''
+  },
   isActive: {
     type: Boolean,
     default: true

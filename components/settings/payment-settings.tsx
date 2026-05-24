@@ -8,13 +8,12 @@ import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI } from "@/lib/api"
 import { useInvalidatePaymentSettings } from "@/lib/queries/payment-settings"
+import { useAuth } from "@/lib/auth-context"
 import {
   mergePaymentConfiguration,
   type PaymentConfiguration,
 } from "@/lib/payment-redemption-eligibility"
-import { Settings, Wallet, Gift, Receipt } from "lucide-react"
-
-type WalletFlags = PaymentConfiguration["walletRedemption"]
+import { Settings, Receipt, Lock } from "lucide-react"
 
 function ToggleRow({
   label,
@@ -36,6 +35,8 @@ function ToggleRow({
 }
 
 export function PaymentSettings() {
+  const { hasPermission } = useAuth()
+  const canEdit = hasPermission("payment_settings", "edit")
   const [settings, setSettings] = useState({
     processingFee: "2.9",
     enableProcessingFees: true,
@@ -72,32 +73,6 @@ export function PaymentSettings() {
     }
   }
 
-  const patchPaymentConfig = (patch: Partial<PaymentConfiguration>) => {
-    setSettings((s) => ({
-      ...s,
-      paymentConfiguration: mergePaymentConfiguration({ ...s.paymentConfiguration, ...patch }),
-    }))
-  }
-
-  const patchWallet = (patch: Partial<WalletFlags>) => {
-    setSettings((s) => ({
-      ...s,
-      paymentConfiguration: mergePaymentConfiguration({
-        ...s.paymentConfiguration,
-        walletRedemption: { ...s.paymentConfiguration.walletRedemption, ...patch },
-      }),
-    }))
-  }
-
-  const patchReward = (patch: Partial<WalletFlags>) => {
-    setSettings((s) => ({
-      ...s,
-      paymentConfiguration: mergePaymentConfiguration({
-        ...s.paymentConfiguration,
-        rewardPointRedemption: { ...s.paymentConfiguration.rewardPointRedemption, ...patch },
-      }),
-    }))
-  }
 
   const patchBilling = (patch: Partial<PaymentConfiguration["billingRedemption"]>) => {
     setSettings((s) => ({
@@ -233,7 +208,8 @@ export function PaymentSettings() {
               <div>
                 <h3 className="text-lg font-semibold text-slate-800">Redemption Rules</h3>
                 <p className="text-slate-600 text-sm">
-                  Control where prepaid wallet and reward points can reduce the bill. Applies per salon.
+                  Billing options for wallet and reward points at checkout. Line-type rules are under Settings →
+                  Prepaid wallet and Reward points.
                 </p>
               </div>
             </div>
@@ -250,7 +226,7 @@ export function PaymentSettings() {
                   onCheckedChange={(v) => patchBilling({ allowRedemptionInBilling: v })}
                 />
                 <ToggleRow
-                  label="Allow wallet and reward points both to be redeemed while billing"
+                  label="Allow combining wallet balance and reward points in a single bill"
                   checked={pc.billingRedemption.allowWalletAndPointsTogether !== false}
                   disabled={pc.billingRedemption.allowRedemptionInBilling === false}
                   onCheckedChange={(v) => patchBilling({ allowWalletAndPointsTogether: v })}
@@ -260,88 +236,21 @@ export function PaymentSettings() {
                   checkout (Quick Sale).
                 </p>
               </div>
-
-              <div className="rounded-xl border border-amber-200/80 p-4 bg-amber-50/20">
-                <div className="flex items-center gap-2 mb-3">
-                  <Wallet className="h-4 w-4 text-amber-800" />
-                  <h4 className="text-sm font-semibold text-slate-800">Prepaid wallet redemption</h4>
-                </div>
-                <ToggleRow
-                  label="Allow wallet redemption (master)"
-                  checked={pc.walletRedemption.enabled !== false}
-                  onCheckedChange={(v) => patchWallet({ enabled: v })}
-                />
-                <div className={pc.walletRedemption.enabled === false ? "opacity-50 pointer-events-none" : ""}>
-                  <ToggleRow
-                    label="Allow wallet redemption for Services"
-                    checked={pc.walletRedemption.services !== false}
-                    onCheckedChange={(v) => patchWallet({ services: v })}
-                  />
-                  <ToggleRow
-                    label="Allow wallet redemption for Products"
-                    checked={pc.walletRedemption.products !== false}
-                    onCheckedChange={(v) => patchWallet({ products: v })}
-                  />
-                  <ToggleRow
-                    label="Allow wallet redemption for Packages"
-                    checked={pc.walletRedemption.packages !== false}
-                    onCheckedChange={(v) => patchWallet({ packages: v })}
-                  />
-                  <ToggleRow
-                    label="Allow wallet redemption for Memberships"
-                    checked={pc.walletRedemption.memberships !== false}
-                    onCheckedChange={(v) => patchWallet({ memberships: v })}
-                  />
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-violet-200/80 p-4 bg-violet-50/20">
-                <div className="flex items-center gap-2 mb-3">
-                  <Gift className="h-4 w-4 text-violet-800" />
-                  <h4 className="text-sm font-semibold text-slate-800">Reward points redemption</h4>
-                </div>
-                <ToggleRow
-                  label="Allow reward point redemption (master)"
-                  checked={pc.rewardPointRedemption.enabled !== false}
-                  onCheckedChange={(v) => patchReward({ enabled: v })}
-                />
-                <div
-                  className={
-                    pc.rewardPointRedemption.enabled === false ? "opacity-50 pointer-events-none" : ""
-                  }
-                >
-                  <ToggleRow
-                    label="Allow reward point redemption for Services"
-                    checked={pc.rewardPointRedemption.services !== false}
-                    onCheckedChange={(v) => patchReward({ services: v })}
-                  />
-                  <ToggleRow
-                    label="Allow reward point redemption for Products"
-                    checked={pc.rewardPointRedemption.products !== false}
-                    onCheckedChange={(v) => patchReward({ products: v })}
-                  />
-                  <ToggleRow
-                    label="Allow reward point redemption for Packages"
-                    checked={pc.rewardPointRedemption.packages !== false}
-                    onCheckedChange={(v) => patchReward({ packages: v })}
-                  />
-                  <ToggleRow
-                    label="Allow reward point redemption for Memberships"
-                    checked={pc.rewardPointRedemption.memberships !== false}
-                    onCheckedChange={(v) => patchReward({ memberships: v })}
-                  />
-                </div>
-              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end items-center gap-3">
+        {!canEdit && (
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            <Lock className="h-3 w-3" /> You don't have permission to edit payment settings
+          </span>
+        )}
         <Button
           onClick={() => void handleSave()}
-          disabled={isSaving}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+          disabled={isSaving || !canEdit}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium disabled:opacity-60"
         >
           {isSaving ? "Saving..." : "Save Changes"}
         </Button>

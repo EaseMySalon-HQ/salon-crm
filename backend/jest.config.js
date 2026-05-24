@@ -8,6 +8,8 @@ module.exports = {
     '**/tests/auth/**/*.test.js',
     '**/tests/sales/**/*.test.js',
     '**/tests/dashboard/**/*.test.js',
+    '**/tests/lib/**/*.test.js',
+    '**/tests/middleware/**/*.test.js',
   ],
   testTimeout: 120000
 };

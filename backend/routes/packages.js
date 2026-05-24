@@ -324,6 +324,12 @@ router.post('/client-packages/:id/redeem', auth, async (req, res) => {
       return fail(res, 400, minCheck.message, ['MIN_SERVICE_COUNT_NOT_MET']);
     }
 
+    const redeemedServiceIds = await packageSvc.getRedeemedServiceIdSet(existing._id, PackageRedemption);
+    const dupCheck = packageSvc.validateServicesNotAlreadyRedeemed(services, redeemedServiceIds);
+    if (!dupCheck.valid) {
+      return fail(res, 409, dupCheck.message, ['SERVICE_ALREADY_REDEEMED']);
+    }
+
     // ── Step 3: Atomic decrement — prevents concurrent double-redemption
     const updated = await ClientPackage.findOneAndUpdate(
       {

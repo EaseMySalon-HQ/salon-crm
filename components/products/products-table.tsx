@@ -7,7 +7,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, Search, MoreHorizontal, Edit, Trash2, Package, Download, FileText, FileSpreadsheet, ChevronDown, Filter, Minus, Upload } from "lucide-react"
 import { ProductsAPI } from "@/lib/api"
@@ -23,6 +30,30 @@ import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
 import { format } from "date-fns"
+
+function ProductTableThumb({ imageUrl }: { imageUrl?: string | null }) {
+  const [broken, setBroken] = useState(false)
+  const src = typeof imageUrl === "string" ? imageUrl.trim() : ""
+  if (!src || broken) {
+    return (
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 shadow-sm">
+        <Package className="h-4 w-4 text-white" aria-hidden />
+      </div>
+    )
+  }
+  return (
+    // Data URLs / arbitrary HTTPS URLs from product records — not Next/Image optimized sources
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      width={36}
+      height={36}
+      className="h-9 w-9 shrink-0 rounded-lg object-cover bg-slate-100 shadow-sm ring-1 ring-slate-200/90"
+      onError={() => setBroken(true)}
+    />
+  )
+}
 
 interface ProductsTableProps {
   productTypeFilter?: string
@@ -54,9 +85,12 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
   const [selectedProduct, setSelectedProduct] = useState<any>(null)
   const [products, setProducts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
 
-  const canManageProducts = user?.role === "admin" || user?.role === "manager"
+  const canCreateProduct = hasPermission("products", "create")
+  const canEditProduct = hasPermission("products", "edit")
+  const canDeleteProduct = hasPermission("products", "delete")
+  const canShowProductActions = canEditProduct || canDeleteProduct
 
   // Handle switching from add to edit mode
   const handleSwitchToEdit = (product: any) => {
@@ -311,7 +345,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
             </Button>
           )}
           
-          {canManageProducts && (
+          {canCreateProduct && (
             <>
               <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
                 <DialogTrigger asChild>
@@ -321,14 +355,15 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                   </Button>
                 </DialogTrigger>
                 <DialogContent
-                  className="max-w-2xl"
+                  className="flex max-h-[92vh] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
                   onCloseAutoFocus={(e) => e.preventDefault()}
                 >
-                  <DialogHeader>
+                  <DialogHeader className="sr-only">
                     <DialogTitle>Add New Product</DialogTitle>
+                    <DialogDescription>Add a new product to your inventory.</DialogDescription>
                   </DialogHeader>
-                  <ProductForm 
-                    onClose={() => setIsAddDialogOpen(false)} 
+                  <ProductForm
+                    onClose={() => setIsAddDialogOpen(false)}
                     onProductUpdated={fetchProducts}
                     onSwitchToEdit={handleSwitchToEdit}
                   />
@@ -373,7 +408,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
         </div>
 
         {/* Edit Product Dialog — open/sync like Radix controlled + selection (avoids stuck overlay when unmounting) */}
-        {canManageProducts && (
+        {canEditProduct && (
           <Dialog
             open={Boolean(isEditDialogOpen && selectedProduct)}
             onOpenChange={(open) => {
@@ -384,11 +419,12 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
             }}
           >
             <DialogContent
-              className="max-w-2xl"
+              className="flex max-h-[92vh] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl"
               onCloseAutoFocus={(e) => e.preventDefault()}
             >
-              <DialogHeader>
+              <DialogHeader className="sr-only">
                 <DialogTitle>Edit Product</DialogTitle>
+                <DialogDescription>Update product details and inventory.</DialogDescription>
               </DialogHeader>
               {selectedProduct ? (
                 <ProductForm
@@ -430,13 +466,13 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Stock</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">Price</TableHead>
                 <TableHead className="px-4 py-3 text-left font-semibold text-gray-700">SKU/Barcode</TableHead>
-                {canManageProducts && <TableHead className="px-4 py-3 text-center font-semibold text-gray-700 w-[70px]">Actions</TableHead>}
+                {canShowProductActions && <TableHead className="px-4 py-3 text-center font-semibold text-gray-700 w-[70px]">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow key="loading">
-                  <TableCell colSpan={canManageProducts ? 8 : 7} className="text-center py-8">
+                  <TableCell colSpan={canShowProductActions ? 8 : 7} className="text-center py-8">
                     <div className="flex flex-col items-center space-y-2">
                       <div className="w-6 h-6 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
                       <p className="text-gray-600 text-sm">Loading products...</p>
@@ -445,7 +481,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                 </TableRow>
               ) : filteredProducts.length === 0 ? (
                 <TableRow key="empty">
-                  <TableCell colSpan={canManageProducts ? 8 : 7} className="text-center py-8">
+                  <TableCell colSpan={canShowProductActions ? 8 : 7} className="text-center py-8">
                     <div className="flex flex-col items-center space-y-2">
                       <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
                         <Package className="h-6 w-6 text-gray-400" />
@@ -466,11 +502,9 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                     }`}
                   >
                     <TableCell className="px-4 py-3">
-                      <div className="flex items-center space-x-2">
-                        <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
-                          <Package className="h-4 w-4 text-white" />
-                        </div>
-                        <div>
+                      <div className="flex items-center gap-3">
+                        <ProductTableThumb imageUrl={(product as { imageUrl?: string }).imageUrl} />
+                        <div className="min-w-0">
                           <div className="font-medium text-gray-900">{product.name}</div>
                           <div className="text-xs text-gray-500">ID: {product._id?.slice(-6) || product.id}</div>
                         </div>
@@ -535,7 +569,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                         {product.barcode || product.sku || '—'}
                       </div>
                     </TableCell>
-                    {canManageProducts && (
+                    {canShowProductActions && (
                       <TableCell className="px-4 py-3">
                         <div className="flex items-center justify-center">
                           <DropdownMenu modal={false}>
@@ -545,20 +579,24 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-36">
-                              <DropdownMenuItem 
-                                onClick={() => handleEditProduct(product)}
-                                className="cursor-pointer hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
-                              >
-                                <Edit className="mr-2 h-4 w-4" />
-                                Edit
-                              </DropdownMenuItem>
-                              <DropdownMenuItem 
-                                className="text-red-600 cursor-pointer hover:bg-red-50 hover:text-red-700 transition-colors duration-200"
-                                onClick={() => handleDeleteProduct(product._id || product.id)}
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Delete
-                              </DropdownMenuItem>
+                              {canEditProduct && (
+                                <DropdownMenuItem 
+                                  onClick={() => handleEditProduct(product)}
+                                  className="cursor-pointer hover:bg-blue-50 hover:text-blue-600 transition-colors duration-200"
+                                >
+                                  <Edit className="mr-2 h-4 w-4" />
+                                  Edit
+                                </DropdownMenuItem>
+                              )}
+                              {canDeleteProduct && (
+                                <DropdownMenuItem 
+                                  className="text-red-600 cursor-pointer hover:bg-red-50 hover:text-red-700 transition-colors duration-200"
+                                  onClick={() => handleDeleteProduct(product._id || product.id)}
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  Delete
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>

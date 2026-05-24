@@ -3,6 +3,8 @@ const emailService = require('../services/email-service');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
+const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
+const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
 
 /**
  * Send daily summary emails to all businesses
@@ -21,6 +23,10 @@ async function sendDailySummaries() {
     
     for (const business of businesses) {
       try {
+        if (isPlatformEmailDisabled(business)) {
+          logger.debug(`Skipping daily summary for ${business.name} — platform email disabled`);
+          continue;
+        }
         const emailSettings = business.settings?.emailNotificationSettings;
         
         // Check if daily summary is enabled
@@ -114,6 +120,9 @@ async function sendDailySummaries() {
             else if (s.paymentMode === 'Online') totalSalesOnline += amt;
             else if (s.paymentMode === 'Card') totalSalesCard += amt;
           }
+          const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+          totalSalesCash += walletCashAdd;
+          cashAmt += walletCashAdd;
           if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
         });
         // 7. Dues collected (payments recorded today via paymentHistory)
@@ -244,6 +253,10 @@ async function sendWeeklySummaries() {
     
     for (const business of businesses) {
       try {
+        if (isPlatformEmailDisabled(business)) {
+          logger.debug(`Skipping weekly summary for ${business.name} — platform email disabled`);
+          continue;
+        }
         const emailSettings = business.settings?.emailNotificationSettings;
         
         // Check if weekly summary is enabled
@@ -484,7 +497,7 @@ async function expireMembershipSubscriptions() {
         const { MembershipSubscription } = businessModels;
 
         const result = await MembershipSubscription.updateMany(
-          { status: 'ACTIVE', expiryDate: { $lt: today } },
+          { status: 'ACTIVE', expiryDate: { $ne: null, $lt: today } },
           { $set: { status: 'EXPIRED' } }
         );
 
@@ -563,6 +576,10 @@ async function checkLowInventory() {
     
     for (const business of businesses) {
       try {
+        if (isPlatformEmailDisabled(business)) {
+          logger.debug(`Skipping low inventory email for ${business.name} — platform email disabled`);
+          continue;
+        }
         const emailSettings = business.settings?.emailNotificationSettings;
         
         // Check if low inventory alerts are enabled

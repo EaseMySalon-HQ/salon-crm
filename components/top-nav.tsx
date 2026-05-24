@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
-import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet } from "lucide-react"
+import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet, AlertTriangle, CreditCard } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -22,7 +22,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
-import { SettingsAPI, ClientsAPI, WalletAPI } from "@/lib/api"
+import { SettingsAPI, ClientsAPI, WalletAPI, type NotificationFeedItem } from "@/lib/api"
+import { STALE_TIME } from "@/lib/queries/staleness"
+import { useNotificationsFeed } from "@/lib/queries/notifications"
 import { Input } from "@/components/ui/input"
 import { useTodayOnlineSales } from "@/hooks/use-today-online-sales"
 import { ExpenseForm } from "@/components/expenses/expense-form"
@@ -49,6 +51,98 @@ interface TopNavProps {
   rightSlot?: React.ReactNode
 }
 
+/** v2 entries are `alertId::fingerprint` so the same logical alert can reappear when server counts update. */
+const DISMISSED_ALERTS_STORAGE_PREFIX = "salon-ems-alerts-dismissed-v2:"
+
+function notificationDismissStorageKey(item: NotificationFeedItem): string {
+  return `${item.id}::${item.fingerprint}`
+}
+
+function NotificationRowIcon({ type }: { type: NotificationFeedItem["type"] }) {
+  switch (type) {
+    case "low_stock":
+      return (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100">
+          <AlertTriangle className="h-4 w-4 text-amber-700" aria-hidden />
+        </div>
+      )
+    case "membership_expiry":
+      return (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-100">
+          <CreditCard className="h-4 w-4 text-sky-700" aria-hidden />
+        </div>
+      )
+    case "package_expiry":
+      return (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-100">
+          <Receipt className="h-4 w-4 text-violet-700" aria-hidden />
+        </div>
+      )
+    default:
+      return (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+          <Bell className="h-4 w-4 text-slate-600" aria-hidden />
+        </div>
+      )
+  }
+}
+
+/** Ref gate: Radix `DropdownMenuItem` still fires `onSelect` when a nested button is clicked; bypass navigation for "Mark as read". */
+function NotificationAlertMenuRow({
+  item,
+  router,
+  onMarkRead,
+}: {
+  item: NotificationFeedItem
+  router: ReturnType<typeof useRouter>
+  onMarkRead: (item: NotificationFeedItem) => void
+}) {
+  const skipNavigateOnSelectRef = useRef(false)
+
+  return (
+    <DropdownMenuItem
+      className="group/alert relative mx-2 my-1 flex cursor-pointer gap-3 rounded-lg px-3 py-2.5 items-start focus:bg-slate-50"
+      onSelect={(event) => {
+        if (skipNavigateOnSelectRef.current) {
+          skipNavigateOnSelectRef.current = false
+          event.preventDefault()
+          return
+        }
+        router.push(item.href)
+      }}
+    >
+      <NotificationRowIcon type={item.type} />
+      <div className="min-w-0 flex-1 space-y-0.5 text-left pr-1">
+        <p className="text-sm font-semibold text-slate-800 leading-tight">{item.title}</p>
+        <p className="text-xs text-slate-600 leading-snug">{item.body}</p>
+      </div>
+      <button
+        type="button"
+        aria-label={`Mark "${item.title}" as read`}
+        className="shrink-0 self-center whitespace-nowrap rounded px-1.5 py-1 text-xs font-medium text-slate-500 opacity-0 transition-opacity hover:text-slate-800 hover:underline group-hover/alert:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 pointer-events-auto"
+        onPointerDown={() => {
+          skipNavigateOnSelectRef.current = true
+        }}
+        onPointerDownCapture={() => {
+          skipNavigateOnSelectRef.current = true
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            skipNavigateOnSelectRef.current = true
+          }
+        }}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          onMarkRead(item)
+        }}
+      >
+        Mark as read
+      </button>
+    </DropdownMenuItem>
+  )
+}
+
 export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const { user, logout } = useAuth()
   const router = useRouter()
@@ -56,6 +150,75 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const [showCashRegistryModal, setShowCashRegistryModal] = useState(false)
   const { amount: todayOnlineSales } = useTodayOnlineSales(showCashRegistryModal)
   const queryClient = useQueryClient()
+
+  const {
+    data: notificationItems = [],
+    isPending: notificationsPending,
+    isError: notificationsError,
+  } = useNotificationsFeed()
+
+  const notificationBranchKey = user?.branchId ?? user?._id ?? "none"
+  const dismissedAlertsStorageKey = `${DISMISSED_ALERTS_STORAGE_PREFIX}${notificationBranchKey}`
+  const [dismissedAlertKeys, setDismissedAlertKeys] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    if (typeof window === "undefined" || notificationBranchKey === "none") return
+    try {
+      const raw = sessionStorage.getItem(dismissedAlertsStorageKey)
+      if (!raw) {
+        setDismissedAlertKeys(new Set())
+        return
+      }
+      const ids = JSON.parse(raw) as unknown
+      if (Array.isArray(ids) && ids.every((x) => typeof x === "string")) {
+        /** Only persisted `id::fingerprint` keys; ignore stale v1 plain ids */
+        const v2 = ids.filter((k) => k.includes("::"))
+        setDismissedAlertKeys(new Set(v2))
+      }
+    } catch {
+      setDismissedAlertKeys(new Set())
+    }
+  }, [dismissedAlertsStorageKey, notificationBranchKey])
+
+  const persistDismissedAlertKeys = (next: Set<string>) => {
+    try {
+      if (next.size === 0) {
+        sessionStorage.removeItem(dismissedAlertsStorageKey)
+      } else {
+        sessionStorage.setItem(dismissedAlertsStorageKey, JSON.stringify([...next]))
+      }
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }
+
+  const markAlertRead = (alert: NotificationFeedItem) => {
+    const key = notificationDismissStorageKey(alert)
+    setDismissedAlertKeys((prev) => {
+      if (prev.has(key)) return prev
+      const next = new Set(prev)
+      next.add(key)
+      persistDismissedAlertKeys(next)
+      return next
+    })
+  }
+
+  const markAllAlertsRead = () => {
+    setDismissedAlertKeys((prev) => {
+      const next = new Set(prev)
+      for (const item of notificationItems) {
+        next.add(notificationDismissStorageKey(item))
+      }
+      persistDismissedAlertKeys(next)
+      return next
+    })
+  }
+
+  const visibleNotificationItems = notificationItems.filter((item) => !dismissedAlertKeys.has(notificationDismissStorageKey(item)))
+  const notifCount = visibleNotificationItems.length
+  const badgeLabel =
+    notifCount > 9 ? "9+" : notifCount > 0 ? String(notifCount) : ""
+
   const { data: businessSettingsData, isLoading: isLoadingBusinessName } = useQuery({
     queryKey: ["settings", "business"],
     queryFn: async () => {
@@ -65,7 +228,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
       }
       return response.data
     },
-    staleTime: 5 * 60_000,
+    staleTime: STALE_TIME.businessSettings,
     enabled: !!user,
   })
   const businessName = businessSettingsData?.name || "EaseMySalon"
@@ -79,7 +242,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
       }
       return res.data
     },
-    staleTime: 30_000,
+    staleTime: STALE_TIME.walletBalance,
     refetchOnWindowFocus: true,
     enabled: !!user,
     retry: 1,
@@ -120,7 +283,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
           else setClientResults([])
         })
         .catch(() => setClientResults([]))
-    }, 280)
+    }, 350)
     return () => clearTimeout(t)
   }, [clientSearch])
 
@@ -319,20 +482,91 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
 
           {rightSlot}
           
-          {/* Notifications */}
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            className="relative p-2.5 hover:bg-gradient-to-r hover:from-amber-50 hover:to-yellow-50 transition-all duration-300 transform hover:scale-105 hover:shadow-md rounded-lg group"
-          >
-            <Bell className="h-4 w-4 text-gray-600 group-hover:text-amber-600 transition-colors duration-300" />
-            <Badge
-              variant="destructive"
-              className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center text-xs p-0 animate-pulse shadow-lg group-hover:animate-bounce transition-all duration-300"
+          {/* Notifications — server-derived alerts (inventory & expiries) */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-haspopup="menu"
+                aria-label="Alerts and notifications"
+                className="relative p-2.5 hover:bg-gradient-to-r hover:from-amber-50 hover:to-yellow-50 transition-all duration-300 transform hover:scale-105 hover:shadow-md rounded-lg group"
+              >
+                <Bell className="h-4 w-4 text-gray-600 group-hover:text-amber-600 transition-colors duration-300" />
+                {!notificationsPending && badgeLabel ? (
+                  <Badge
+                    variant="destructive"
+                    className="absolute -top-1 -right-1 min-h-5 min-w-5 px-0 flex items-center justify-center text-[10px] font-bold p-0 shadow-md group-hover:animate-none"
+                  >
+                    {badgeLabel}
+                  </Badge>
+                ) : null}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="w-[min(22rem,calc(100vw-2rem))] border-0 shadow-xl bg-white/95 backdrop-blur-sm rounded-xl p-0"
             >
-              1
-            </Badge>
-          </Button>
+              <div className="px-4 py-3 border-b border-slate-100">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-slate-800">Alerts</p>
+                  {!notificationsPending && !notificationsError && notifCount > 0 ? (
+                    <button
+                      type="button"
+                      className="shrink-0 text-xs font-medium text-slate-500 hover:text-slate-900 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded px-1 -mr-1"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        markAllAlertsRead()
+                      }}
+                    >
+                      Mark all as read
+                    </button>
+                  ) : null}
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">Operational reminders from your salon data.</p>
+              </div>
+              <div className="max-h-80 overflow-y-auto py-2">
+                {notificationsPending ? (
+                  <div className="px-4 py-8 text-center text-sm text-slate-500">Loading alerts…</div>
+                ) : notificationsError ? (
+                  <div className="px-4 py-8 text-center text-sm text-red-600">Could not load alerts. Try again later.</div>
+                ) : notifCount === 0 ? (
+                  <div className="px-4 py-8 text-center text-sm text-slate-500">
+                    {notificationItems.length > 0 ? (
+                      <>
+                        <p>You marked all current alerts as read.</p>
+                        <p className="mt-2 text-xs text-slate-400">
+                          They will show again automatically when counts change for that alert type.
+                        </p>
+                      </>
+                    ) : (
+                      <p>You're all caught up — no actionable alerts right now.</p>
+                    )}
+                  </div>
+                ) : (
+                  visibleNotificationItems.map((item) => (
+                    <NotificationAlertMenuRow
+                      key={item.id}
+                      item={item}
+                      router={router}
+                      onMarkRead={markAlertRead}
+                    />
+                  ))
+                )}
+              </div>
+              <DropdownMenuSeparator className="my-0" />
+              <DropdownMenuItem
+                className="cursor-pointer mx-2 mb-2 justify-center text-xs font-medium text-slate-600 focus:text-slate-800"
+                onSelect={(e) => {
+                  e.preventDefault()
+                  queryClient.invalidateQueries({ queryKey: ["notifications", "feed"] })
+                }}
+              >
+                Refresh alerts
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {/* User Menu */}
           <DropdownMenu>

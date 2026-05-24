@@ -17,13 +17,6 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   Accordion,
   AccordionContent,
   AccordionItem,
@@ -47,13 +40,13 @@ import {
   Check,
   X,
   Shield,
-  SlidersHorizontal,
   Building2,
   CreditCard,
   Bell,
   Wallet,
   DollarSign,
   Calculator,
+  MessageSquare,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StaffAPI } from "@/lib/api"
@@ -94,6 +87,16 @@ const ACCESS_LEVELS: { value: AccessLevel; label: string; color: string }[] = [
 ]
 // Mixed state: some nested full, some none - show Full Access in orange
 const MIXED_ACCESS = { label: "Full Access", color: "bg-orange-50 text-orange-700 border-orange-200" }
+
+// Core feature toggles shown on each module / settings sub-category
+const CORE_FEATURES = [
+  { id: "view", label: "View" },
+  { id: "create", label: "Create" },
+  { id: "edit", label: "Edit" },
+  { id: "delete", label: "Delete" },
+] as const
+
+type CoreFeature = (typeof CORE_FEATURES)[number]["id"]
 
 const accessLevelToPermissions = (module: string, level: AccessLevel): Permission[] => {
   const features = ["view", "create", "edit", "delete", "manage"] as const
@@ -248,6 +251,7 @@ const SETTINGS_CATEGORIES = [
   { id: "payment_settings", label: "Payment Settings", icon: CreditCard, adminOnly: true },
   { id: "pos_settings", label: "POS Settings", icon: Receipt, adminOnly: true },
   { id: "notification_settings", label: "Notifications", icon: Bell, adminOnly: false },
+  { id: "feedback", label: "Feedback Management", icon: MessageSquare, adminOnly: false },
   { id: "plan_billing", label: "Plan & Billing", icon: Wallet, adminOnly: true },
   { id: "membership", label: "Membership", icon: CreditCard, adminOnly: false },
   { id: "services", label: "Services", icon: Wrench, adminOnly: false },
@@ -299,6 +303,7 @@ function buildRoleTemplate(role: "admin" | "manager" | "staff"): Permission[] {
       "currency_settings",
       "tax_settings",
       "notification_settings",
+      "feedback",
     ]
     managerModules.forEach((mod) => {
       features.forEach((f) => perms.push({ module: mod, feature: f, enabled: true }))
@@ -332,13 +337,16 @@ const ROLE_TEMPLATES = {
 export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: StaffPermissionsModalProps) {
   const [permissions, setPermissions] = useState<Permission[]>([])
   const [selectedRole, setSelectedRole] = useState<"admin" | "manager" | "staff" | "custom">("staff")
-  const [showAdvanced, setShowAdvanced] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [initialPermissions, setInitialPermissions] = useState<Permission[]>([])
   const [adminChangeWarningOpen, setAdminChangeWarningOpen] = useState(false)
   const [cashRegisterConfirmOpen, setCashRegisterConfirmOpen] = useState(false)
   const [pendingRole, setPendingRole] = useState<"admin" | "manager" | "staff" | "custom" | null>(null)
-  const [pendingModuleChange, setPendingModuleChange] = useState<{ module: string; level: AccessLevel } | null>(null)
+  const [pendingFeatureToggle, setPendingFeatureToggle] = useState<{
+    module: string
+    feature: CoreFeature
+    enabled: boolean
+  } | null>(null)
   const { toast } = useToast()
 
   useEffect(() => {
@@ -402,24 +410,77 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
     }
   }
 
-  const handleAccessLevelChange = (module: string, level: AccessLevel) => {
+  const getCorePermissionEnabled = (module: string, feature: CoreFeature) => {
+    return permissions.find((p) => p.module === module && p.feature === feature)?.enabled ?? false
+  }
+
+  const handleCoreFeatureToggle = (module: string, feature: CoreFeature, enabled: boolean) => {
     if (isLocked) return
-    if (module === "cash_registry" && level === "none") {
-      const current = permissionsToAccessLevel(permissions, module)
-      if (current !== "none") {
-        setPendingModuleChange({ module, level })
+    // Cash Register guardrail: turning off "view" removes all access
+    if (module === "cash_registry" && feature === "view" && !enabled) {
+      const hasAnyAccess = (["view", "create", "edit", "delete"] as const).some((f) =>
+        getCorePermissionEnabled(module, f)
+      )
+      if (hasAnyAccess) {
+        setPendingFeatureToggle({ module, feature, enabled })
         setCashRegisterConfirmOpen(true)
         return
       }
     }
-    applyAccessLevelChange(module, level)
+    applyCoreFeatureToggle(module, feature, enabled)
   }
 
-  const applyAccessLevelChange = (module: string, level: AccessLevel) => {
-    setPendingModuleChange(null)
+  const applyCoreFeatureToggle = (module: string, feature: CoreFeature, enabled: boolean) => {
+    setPendingFeatureToggle(null)
     setCashRegisterConfirmOpen(false)
-    const updates = accessLevelToPermissions(module, level)
-    setPermissions((prev) => mergePermissions(prev, updates))
+    setPermissions((prev) => {
+      const next = [...prev]
+      const setFeature = (f: string, val: boolean) => {
+        const idx = next.findIndex((p) => p.module === module && p.feature === f)
+        if (idx >= 0) next[idx] = { ...next[idx], enabled: val }
+        else next.push({ module, feature: f, enabled: val })
+      }
+
+      const syncReportsViewFlags = (val: boolean) => {
+        setFeature("view_financial_reports", val)
+        setFeature("view_staff_commission", val)
+      }
+
+      setFeature(feature, enabled)
+
+      // Create / Edit imply lower-level access when turned ON (Delete and View-off behavior stays separate below)
+      if (enabled) {
+        if (feature === "create") {
+          setFeature("view", true)
+          if (module === "reports") syncReportsViewFlags(true)
+        } else if (feature === "edit") {
+          setFeature("view", true)
+          setFeature("create", true)
+          if (module === "reports") syncReportsViewFlags(true)
+        }
+      }
+
+      // View OFF clears Create and Edit (not Delete — independent). cash_registry uses the stricter full clear below.
+      if (feature === "view" && !enabled && module !== "cash_registry") {
+        setFeature("create", false)
+        setFeature("edit", false)
+      }
+
+      // "manage" is an admin-grade action that follows "delete"
+      if (feature === "delete") setFeature("manage", enabled)
+      // Turning off "view" for cash_registry clears every related permission
+      if (module === "cash_registry" && feature === "view" && !enabled) {
+        setFeature("create", false)
+        setFeature("edit", false)
+        setFeature("delete", false)
+        setFeature("manage", false)
+      }
+      // Reports view toggle mirrors the granular report-view sub-features
+      if (module === "reports" && feature === "view") {
+        syncReportsViewFlags(enabled)
+      }
+      return next
+    })
     setSelectedRole("custom")
   }
 
@@ -427,13 +488,39 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
     if (isLocked) return
     const backendFeature = FEATURE_TO_BACKEND[featureId] ?? "view"
     setPermissions((prev) => {
-      const existing = prev.find((p) => p.module === module && p.feature === backendFeature)
-      if (existing) {
-        return prev.map((p) =>
-          p.module === module && p.feature === backendFeature ? { ...p, enabled } : p
-        )
+      const next = [...prev]
+      const setFeature = (f: string, val: boolean) => {
+        const idx = next.findIndex((p) => p.module === module && p.feature === f)
+        if (idx >= 0) next[idx] = { ...next[idx], enabled: val }
+        else next.push({ module, feature: f, enabled: val })
       }
-      return [...prev, { module, feature: backendFeature, enabled }]
+
+      const existing = next.find((p) => p.module === module && p.feature === backendFeature)
+      if (existing) {
+        const idx = next.findIndex((p) => p.module === module && p.feature === backendFeature)
+        next[idx] = { ...next[idx], enabled }
+      } else {
+        next.push({ module, feature: backendFeature, enabled })
+      }
+
+      // Same implications as core row toggles when enabling create/edit
+      if (enabled) {
+        if (backendFeature === "create") {
+          setFeature("view", true)
+          if (module === "reports") {
+            setFeature("view_financial_reports", true)
+            setFeature("view_staff_commission", true)
+          }
+        } else if (backendFeature === "edit") {
+          setFeature("view", true)
+          setFeature("create", true)
+          if (module === "reports") {
+            setFeature("view_financial_reports", true)
+            setFeature("view_staff_commission", true)
+          }
+        }
+      }
+      return next
     })
     setSelectedRole("custom")
   }
@@ -497,33 +584,17 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
       <Dialog open={isOpen} onOpenChange={onClose}>
         <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0 bg-slate-50/95">
           <DialogHeader className="px-6 pt-6 pb-4 shrink-0 border-b border-slate-200 bg-white/80">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-white rounded-xl shadow-sm border border-slate-100">
-                  <Shield className="h-5 w-5 text-indigo-600" />
-                </div>
-                <div>
-                  <DialogTitle className="text-lg font-semibold text-slate-900">
-                    Staff Permissions
-                  </DialogTitle>
-                  <DialogDescription className="text-slate-600 text-sm">
-                    Hybrid role-based access for {staff.name}
-                  </DialogDescription>
-                </div>
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-white rounded-xl shadow-sm border border-slate-100">
+                <Shield className="h-5 w-5 text-indigo-600" />
               </div>
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="advanced-controls"
-                  checked={showAdvanced}
-                  onCheckedChange={setShowAdvanced}
-                />
-                <label
-                  htmlFor="advanced-controls"
-                  className="text-sm text-slate-600 flex items-center gap-1.5 cursor-pointer"
-                >
-                  <SlidersHorizontal className="h-4 w-4" />
-                  Show Advanced Controls
-                </label>
+              <div>
+                <DialogTitle className="text-lg font-semibold text-slate-900">
+                  Staff Permissions
+                </DialogTitle>
+                <DialogDescription className="text-slate-600 text-sm">
+                  Hybrid role-based access for {staff.name}
+                </DialogDescription>
               </div>
             </div>
           </DialogHeader>
@@ -661,31 +732,29 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
                         </AccordionTrigger>
                         <AccordionContent className="px-4 pb-4 pt-0">
                           <div className="space-y-4 pt-2">
-                            {/* Page-level dropdown */}
+                            {/* Page-level core feature toggles */}
                             {!isSettings && (
-                              <div className="flex items-center justify-between py-2">
-                                <span className="text-sm text-slate-600">Access Level</span>
-                                <Select
-                                  value={level}
-                                  onValueChange={(v) => handleAccessLevelChange(backendModule, v as AccessLevel)}
-                                  disabled={disabled}
-                                >
-                                  <SelectTrigger className={cn("w-[150px] h-9", disabled && "opacity-60")}>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {ACCESS_LEVELS.map((opt) => (
-                                      <SelectItem key={opt.value} value={opt.value}>
-                                        {opt.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                              <div className="grid grid-cols-4 gap-2 py-2">
+                                {CORE_FEATURES.map((f) => (
+                                  <div
+                                    key={f.id}
+                                    className="flex items-center justify-between gap-2 py-2 px-3 rounded-md bg-slate-50 border border-slate-100"
+                                  >
+                                    <span className="text-sm text-slate-700">{f.label}</span>
+                                    <Switch
+                                      checked={getCorePermissionEnabled(backendModule, f.id)}
+                                      onCheckedChange={(checked) =>
+                                        handleCoreFeatureToggle(backendModule, f.id, checked)
+                                      }
+                                      disabled={disabled}
+                                    />
+                                  </div>
+                                ))}
                               </div>
                             )}
 
-                            {/* Feature-level controls (when Show Advanced is ON) */}
-                            {showAdvanced && mod.hasFeatureLevel && mod.features && (
+                            {/* Feature-level controls (always shown) */}
+                            {mod.hasFeatureLevel && mod.features && (
                               <div className="mt-4 pt-4 border-t border-slate-200 bg-slate-50/50 rounded-lg p-4 -mx-1">
                                 <p className="text-xs font-medium text-slate-500 mb-3">Feature Permissions</p>
                                 <div className="space-y-2">
@@ -708,42 +777,39 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
 
                             {/* Settings nested categories */}
                             {isSettings && (
-                              <div className="space-y-3 mt-2">
+                              <div className="space-y-4 mt-2">
                                 {SETTINGS_CATEGORIES.map((setCat) => {
                                   const SetIcon = setCat.icon
-                                  const setLevel = getModuleAccessLevel(setCat.id)
+                                  const setDisabled = setCat.adminOnly && selectedRole !== "admin"
                                   return (
                                     <div
                                       key={setCat.id}
-                                      className="flex items-center justify-between py-2 pl-4 border-l-2 border-slate-200"
+                                      className="py-2 pl-4 border-l-2 border-slate-200"
                                     >
-                                      <div className="flex items-center gap-2">
+                                      <div className="flex items-center gap-2 mb-2">
                                         <SetIcon className="h-4 w-4 text-slate-500" />
                                         <span className="text-sm font-medium text-slate-800">{setCat.label}</span>
                                         {setCat.adminOnly && selectedRole !== "admin" && (
-                                          <Lock className="h-3.5 w-3.5 text-amber-500" title="Admin Only" />
+                                          <Lock className="h-3.5 w-3.5 text-amber-500" />
                                         )}
                                       </div>
-                                      <Select
-                                        value={setLevel}
-                                        onValueChange={(v) => {
-                                          const updates = accessLevelToPermissions(setCat.id, v as AccessLevel)
-                                          setPermissions((prev) => mergePermissions(prev, updates))
-                                          setSelectedRole("custom")
-                                        }}
-                                        disabled={setCat.adminOnly && selectedRole !== "admin"}
-                                      >
-                                        <SelectTrigger className={cn("w-[140px] h-8 text-sm", (setCat.adminOnly && selectedRole !== "admin") && "opacity-60")}>
-                                          <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {ACCESS_LEVELS.map((opt) => (
-                                            <SelectItem key={opt.value} value={opt.value}>
-                                              {opt.label}
-                                            </SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
+                                      <div className={cn("grid grid-cols-4 gap-2", setDisabled && "opacity-60")}>
+                                        {CORE_FEATURES.map((f) => (
+                                          <div
+                                            key={f.id}
+                                            className="flex items-center justify-between gap-2 py-1.5 px-2.5 rounded-md bg-slate-50 border border-slate-100"
+                                          >
+                                            <span className="text-sm text-slate-700">{f.label}</span>
+                                            <Switch
+                                              checked={getCorePermissionEnabled(setCat.id, f.id)}
+                                              onCheckedChange={(checked) =>
+                                                handleCoreFeatureToggle(setCat.id, f.id, checked)
+                                              }
+                                              disabled={setDisabled || isLocked}
+                                            />
+                                          </div>
+                                        ))}
+                                      </div>
                                     </div>
                                   )
                                 })}
@@ -820,9 +886,16 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingModuleChange(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => setPendingFeatureToggle(null)}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => pendingModuleChange && applyAccessLevelChange(pendingModuleChange.module, pendingModuleChange.level)}
+              onClick={() =>
+                pendingFeatureToggle &&
+                applyCoreFeatureToggle(
+                  pendingFeatureToggle.module,
+                  pendingFeatureToggle.feature,
+                  pendingFeatureToggle.enabled
+                )
+              }
               className="bg-red-600 hover:bg-red-700"
             >
               Remove Access

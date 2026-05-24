@@ -94,6 +94,16 @@ async function getInvoicePrefix() {
   );
 }
 
+async function getPlanInvoicePrefix() {
+  const invoiceSettings = await loadInvoiceSettings();
+  return (
+    firstNonEmpty(
+      invoiceSettings.planInvoicePrefix,
+      process.env.INVOICE_PLAN_PREFIX
+    ) || 'EMS/SUB'
+  );
+}
+
 function buildBuyerContext(business) {
   const addr = business?.address || {};
   const addressLines = [
@@ -433,6 +443,14 @@ async function sendWalletRechargeInvoice({ transactionId, triggeredByEmail } = {
     }
     const { pdfBuffer, invoiceNumber, context, business } = built;
 
+    const { isPlatformEmailDisabled } = require('./business-email-policy');
+    if (isPlatformEmailDisabled(business)) {
+      logger.info(
+        `[wallet-invoice] Skipping invoice email — platform policy for business ${business._id}`
+      );
+      return { success: true, skippedEmail: true, invoiceNumber };
+    }
+
     const recipients = Array.from(
       new Set(
         [business?.contact?.email, triggeredByEmail]
@@ -509,6 +527,7 @@ module.exports = {
     getSellerContext,
     buildBuyerContext,
     getInvoicePrefix,
+    getPlanInvoicePrefix,
     fiscalYearContext,
     sanitizePrefix,
     formatInvoiceNumber,

@@ -31,6 +31,7 @@ const {
   gstFilingBodySchema,
   gstStatusBodySchema,
 } = require('../validation/schemas');
+const { stateCode: resolveStateCode } = require('../lib/india-state-codes');
 
 // ──────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -336,6 +337,17 @@ router.post(
         return res.send(csv);
       }
 
+      if (format === 'gstr1_json') {
+        const json = buildGstr1Json(rows, body);
+        const fp = json.fp || 'GSTR1';
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="gstr1-${fp}.json"`
+        );
+        return res.send(JSON.stringify(json, null, 2));
+      }
+
       if (format === 'gstr1') {
         const wb = XLSX.utils.book_new();
 
@@ -450,6 +462,144 @@ function isoDate(d) {
   const m = String(dt.getMonth() + 1).padStart(2, '0');
   const day = String(dt.getDate()).padStart(2, '0');
   return `${day}-${m}-${y}`;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// GSTR-1 JSON builder
+// ──────────────────────────────────────────────────────────────────────────
+
+/** YYYY-MM → MMYYYY (GSTN `fp` field). */
+function fpFromPeriod(period) {
+  const m = String(period || '').match(/^(\d{4})-(\d{2})$/);
+  if (!m) return '';
+  return `${m[2]}${m[1]}`;
+}
+
+function fpFromDate(d) {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(dt.getTime())) return '';
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  return `${m}${y}`;
+}
+
+function rupees2(paise) {
+  return Number((Math.round(Number(paise) || 0) / 100).toFixed(2));
+}
+
+/**
+ * Build a GSTR-1 offline-tool JSON payload from a list of Invoice docs.
+ *
+ * B2B   → grouped by buyer GSTIN, one invoice per `inv`, single line item
+ *         (this billing surface charges a single rate per invoice).
+ * B2CS  → aggregated per (rate, place-of-supply, intra/inter-state).
+ *
+ * Top-level `gstin` is read from the **seller** of the first row (all rows
+ * share the same EaseMySalon GSTIN). `fp` falls back to the period filter,
+ * else the period of the first invoice in the export.
+ */
+function buildGstr1Json(rows, body = {}) {
+  const sellerGstin = rows.find(r => r.seller?.gstin)?.seller?.gstin || '';
+  const fp =
+    fpFromPeriod(body.period) ||
+    (rows[0] ? fpFromDate(rows[0].invoiceDate) : '') ||
+    fpFromDate(new Date());
+
+  const gtPaise = rows.reduce((s, r) => s + Number(r.grandTotalPaise || 0), 0);
+
+  // ── B2B ──────────────────────────────────────────────────────────────
+  const b2bByGstin = new Map();
+  for (const r of rows) {
+    if ((r.buyer?.type || '') !== 'B2B') continue;
+    const ctin = String(r.buyer?.gstin || '').trim().toUpperCase();
+    if (!ctin) continue;
+    const pos =
+      resolveStateCode(r.buyer?.stateCode) ||
+      resolveStateCode(r.buyer?.state) ||
+      resolveStateCode(r.placeOfSupply) ||
+      '';
+
+    const ratePct = Math.round((Number(r.gstRate) || 0) * 100);
+    const inv = {
+      inum: r.invoiceNumber,
+      idt: isoDate(r.invoiceDate),
+      val: rupees2(r.grandTotalPaise),
+      pos,
+      rchrg: 'N',
+      inv_typ: 'R',
+      itms: [
+        {
+          num: 1,
+          itm_det: {
+            rt: ratePct,
+            txval: rupees2(r.taxableValuePaise),
+            iamt: rupees2(r.igstPaise),
+            camt: rupees2(r.cgstPaise),
+            samt: rupees2(r.sgstPaise),
+            csamt: 0,
+          },
+        },
+      ],
+    };
+
+    if (!b2bByGstin.has(ctin)) {
+      b2bByGstin.set(ctin, { ctin, inv: [] });
+    }
+    b2bByGstin.get(ctin).inv.push(inv);
+  }
+
+  // ── B2CS (small B2C, aggregated by rate × pos × supply-type) ─────────
+  const b2csMap = new Map();
+  for (const r of rows) {
+    if ((r.buyer?.type || '') !== 'B2C') continue;
+    const ratePct = Math.round((Number(r.gstRate) || 0) * 100);
+    const pos =
+      resolveStateCode(r.placeOfSupply) ||
+      resolveStateCode(r.buyer?.stateCode) ||
+      resolveStateCode(r.buyer?.state) ||
+      '';
+    const supplyType = r.intraState ? 'INTRA' : 'INTER';
+    const key = `${supplyType}|${pos}|${ratePct}`;
+
+    if (!b2csMap.has(key)) {
+      b2csMap.set(key, {
+        sply_ty: supplyType,
+        rt: ratePct,
+        typ: 'OE',
+        pos,
+        txvalPaise: 0,
+        iamtPaise: 0,
+        camtPaise: 0,
+        samtPaise: 0,
+      });
+    }
+    const agg = b2csMap.get(key);
+    agg.txvalPaise += Number(r.taxableValuePaise || 0);
+    agg.iamtPaise += Number(r.igstPaise || 0);
+    agg.camtPaise += Number(r.cgstPaise || 0);
+    agg.samtPaise += Number(r.sgstPaise || 0);
+  }
+
+  const b2cs = Array.from(b2csMap.values()).map(a => ({
+    sply_ty: a.sply_ty,
+    rt: a.rt,
+    typ: a.typ,
+    pos: a.pos,
+    txval: rupees2(a.txvalPaise),
+    iamt: rupees2(a.iamtPaise),
+    camt: rupees2(a.camtPaise),
+    samt: rupees2(a.samtPaise),
+    csamt: 0,
+  }));
+
+  return {
+    gstin: sellerGstin,
+    fp,
+    gt: rupees2(gtPaise),
+    cur_gt: 0,
+    b2b: Array.from(b2bByGstin.values()),
+    b2cs,
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────────

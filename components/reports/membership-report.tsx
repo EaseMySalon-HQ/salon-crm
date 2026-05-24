@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { CreditCard, DollarSign, CalendarDays, Settings, Download, ChevronDown, FileSpreadsheet, Users } from "lucide-react"
+import { CreditCard, DollarSign, CalendarDays, Settings, Download, ChevronDown, FileSpreadsheet, Users, ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 import { ReportsAPI, MembershipAPI } from "@/lib/api"
 import { MembershipPlansTable } from "@/components/membership/membership-plans-table"
 import { useToast } from "@/hooks/use-toast"
@@ -18,6 +18,9 @@ import { cn } from "@/lib/utils"
 type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "all"
 
 type MembershipStatusFilter = "all" | "active" | "expired" | "cancelled"
+
+const MEMBERSHIP_SEARCH_DEBOUNCE_MS = 400
+const DEFAULT_PAGE_SIZE = 25
 
 function getDateRangeFromPeriod(period: DatePeriod): { from?: Date; to?: Date } {
   const now = new Date()
@@ -81,20 +84,31 @@ export function MembershipReport() {
   const [plans, setPlans] = useState<any[]>([])
   const [subscriptions, setSubscriptions] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [subscriptionsLoading, setSubscriptionsLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [planFilter, setPlanFilter] = useState<string>("all")
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("all")
   const [statusFilter, setStatusFilter] = useState<MembershipStatusFilter>("active")
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+  const [totalRows, setTotalRows] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+  const [filteredMembershipRevenue, setFilteredMembershipRevenue] = useState(0)
 
   const formatAmount = (amount: number) => `₹${amount.toFixed(2)}`
 
-  /** Plan price totals for the same subscription rows as the table (date period, status, plan, search). */
-  const filteredMembershipRevenue = useMemo(
-    () => subscriptions.reduce((sum, s) => sum + (Number(s.planId?.price) || 0), 0),
-    [subscriptions]
-  )
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), MEMBERSHIP_SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [searchQuery])
+
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedSearch, planFilter, datePeriod, statusFilter, pageSize])
 
   const fetchSubscriptions = useCallback(async () => {
+    setSubscriptionsLoading(true)
     try {
       const range = getDateRangeFromPeriod(datePeriod)
       const statusParam =
@@ -108,17 +122,33 @@ export function MembershipReport() {
 
       const res = await MembershipAPI.getSubscriptions({
         planId: planFilter && planFilter !== "all" ? planFilter : undefined,
-        search: searchQuery.trim() || undefined,
+        search: debouncedSearch || undefined,
         status: statusParam,
         dateFrom: range.from ? range.from.toISOString() : undefined,
         dateTo: range.to ? range.to.toISOString() : undefined,
+        page,
+        limit: pageSize,
       })
-      if (res?.success && Array.isArray(res.data)) setSubscriptions(res.data)
-      else setSubscriptions([])
+      if (res?.success && Array.isArray(res.data)) {
+        setSubscriptions(res.data)
+        setTotalRows(res.total ?? res.data.length)
+        setTotalPages(Math.max(1, res.totalPages ?? 1))
+        setFilteredMembershipRevenue(Number(res.totalRevenue) || 0)
+      } else {
+        setSubscriptions([])
+        setTotalRows(0)
+        setTotalPages(1)
+        setFilteredMembershipRevenue(0)
+      }
     } catch {
       setSubscriptions([])
+      setTotalRows(0)
+      setTotalPages(1)
+      setFilteredMembershipRevenue(0)
+    } finally {
+      setSubscriptionsLoading(false)
     }
-  }, [planFilter, searchQuery, datePeriod, statusFilter])
+  }, [planFilter, debouncedSearch, datePeriod, statusFilter, page, pageSize])
 
   const fetchSubscriptionsRef = useRef(fetchSubscriptions)
   fetchSubscriptionsRef.current = fetchSubscriptions
@@ -153,8 +183,45 @@ export function MembershipReport() {
   }, [])
 
   useEffect(() => {
-    if (!loading) fetchSubscriptions()
+    if (!loading) void fetchSubscriptions()
   }, [loading, fetchSubscriptions])
+
+  const buildSubscriptionQueryParams = useCallback(
+    (pageNum: number, limit: number) => {
+      const range = getDateRangeFromPeriod(datePeriod)
+      const statusParam =
+        statusFilter === "all"
+          ? "ALL"
+          : statusFilter === "active"
+            ? "ACTIVE"
+            : statusFilter === "expired"
+              ? "EXPIRED"
+              : "CANCELLED"
+      return {
+        planId: planFilter && planFilter !== "all" ? planFilter : undefined,
+        search: debouncedSearch || undefined,
+        status: statusParam,
+        dateFrom: range.from ? range.from.toISOString() : undefined,
+        dateTo: range.to ? range.to.toISOString() : undefined,
+        page: pageNum,
+        limit,
+      }
+    },
+    [planFilter, debouncedSearch, datePeriod, statusFilter]
+  )
+
+  const fetchAllSubscriptionsForExport = useCallback(async () => {
+    const batchSize = 500
+    const first = await MembershipAPI.getSubscriptions(buildSubscriptionQueryParams(1, batchSize))
+    if (!first?.success || !Array.isArray(first.data)) return []
+    const all = [...first.data]
+    const pages = Math.max(1, first.totalPages ?? 1)
+    for (let p = 2; p <= pages; p += 1) {
+      const res = await MembershipAPI.getSubscriptions(buildSubscriptionQueryParams(p, batchSize))
+      if (res?.success && Array.isArray(res.data)) all.push(...res.data)
+    }
+    return all
+  }, [buildSubscriptionQueryParams])
 
   const refreshData = () => {
     const fetchData = async () => {
@@ -182,8 +249,8 @@ export function MembershipReport() {
     fetchData()
   }
 
-  const handleExport = () => {
-    const rows = subscriptions.map((s) => ({
+  const handleExport = async () => {
+    const rows = (await fetchAllSubscriptionsForExport()).map((s) => ({
       customer: s.customerId?.name || "—",
       phone: s.customerId?.phone || "—",
       email: s.customerId?.email || "—",
@@ -208,8 +275,11 @@ export function MembershipReport() {
     a.download = `membership-active-members-${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
-    toast({ title: "Export complete", description: "Active members list exported as CSV." })
+    toast({ title: "Export complete", description: `${rows.length} membership row(s) exported as CSV.` })
   }
+
+  const pageStartRow = totalRows === 0 ? 0 : (page - 1) * pageSize + 1
+  const pageEndRow = totalRows === 0 ? 0 : Math.min(page * pageSize, totalRows)
 
   useEffect(() => {
     const handler = () => refreshData()
@@ -374,14 +444,45 @@ export function MembershipReport() {
 
       {/* Active Members Table */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-6">
-          <div className="mb-4">
-            <h2 className="text-lg font-semibold text-slate-900">Memberships</h2>
-            <p className="text-sm text-slate-500 mt-0.5">
-              Start date within the selected period (All time = no date filter). Status filters by subscription state;
-              Active means valid through expiry date.
-            </p>
+        <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-slate-50 border-b border-gray-200">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Memberships</h2>
+              <p className="text-sm text-slate-500 mt-0.5">
+                Start date within the selected period (All time = no date filter). Status filters by subscription state;
+                Active means valid through expiry date.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
+              <span>
+                {subscriptionsLoading
+                  ? "Loading…"
+                  : totalRows > 0
+                    ? `Showing ${pageStartRow}-${pageEndRow} of ${totalRows.toLocaleString()}`
+                    : "No memberships"}
+              </span>
+              <div className="flex items-center gap-2">
+                <span>Rows per page:</span>
+                <Select
+                  value={String(pageSize)}
+                  disabled={subscriptionsLoading}
+                  onValueChange={(v) => setPageSize(parseInt(v, 10))}
+                >
+                  <SelectTrigger className="h-8 w-[90px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10</SelectItem>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
           </div>
+        </div>
+        <div className="p-6 pt-4">
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -396,7 +497,14 @@ export function MembershipReport() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {subscriptions.length === 0 ? (
+                {subscriptionsLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-12 text-slate-500">
+                      <Loader2 className="h-8 w-8 mx-auto mb-3 animate-spin text-slate-400" />
+                      <p className="text-sm">Loading memberships…</p>
+                    </TableCell>
+                  </TableRow>
+                ) : subscriptions.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-12 text-slate-500">
                       <Users className="h-12 w-12 mx-auto mb-4 text-slate-300" />
@@ -443,6 +551,37 @@ export function MembershipReport() {
               </TableBody>
             </Table>
           </div>
+
+          {!subscriptionsLoading && totalRows > 0 && (
+            <div className="flex items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-100">
+              <p className="text-xs text-slate-500">
+                {totalRows.toLocaleString()} membership{totalRows === 1 ? "" : "s"}
+                {totalPages > 1 ? ` · Page ${page} of ${totalPages}` : ""}
+              </p>
+              {totalPages > 1 && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

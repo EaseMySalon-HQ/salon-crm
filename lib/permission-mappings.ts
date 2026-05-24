@@ -8,7 +8,7 @@
  *
  * === SETTINGS CATEGORIES (staff-permissions-modal) ===
  * general_settings, business_settings, appointment_settings, currency_settings, tax_settings,
- * payment_settings, pos_settings, notification_settings, plan_billing
+ * payment_settings, pos_settings, notification_settings, plan_billing, feedback
  *
  * === REPORTS GRANULAR ===
  * view_financial_reports → Sales tab, Expense tab, Unpaid Bills
@@ -21,7 +21,7 @@
  * /clients, /clients/new, /clients/[id] → clients
  * /leads → lead_management
  * /services, /services/new → services
- * /products, /products/new → products
+ * /products, /products/new → products; /purchase-invoices/* (redirects into Settings → Products → Suppliers & orders)
  * /cash-registry → cash_registry
  * /analytics → analytics
  * /reports, /reports/unpaid-bills → reports
@@ -32,7 +32,7 @@
  * general → general_settings, business → business_settings, appointments → appointment_settings,
  * currency → currency_settings, tax → tax_settings, payments → payment_settings,
  * pos → pos_settings, notifications → notification_settings, whatsapp-integration → notification_settings,
- * plan-billing → plan_billing
+ * plan-billing → plan_billing, feedback → feedback
  */
 
 // Sidebar/route: permission module for page-level access (check "view" feature)
@@ -50,14 +50,10 @@ export const ROUTE_PERMISSION_MAP: Record<string, string> = {
   "/whatsapp/campaigns": "campaigns",
   "/whatsapp/inbox": "campaigns",
   "/membership": "membership",
-  "/packages": "packages",
-  "/packages/new": "packages",
-  "/packages/sell": "packages",
-  "/packages/reports": "packages",
-  "/redeem": "packages",
-  "/wallet/sell": "packages",
+  "/wallet/sell": "sales",
   "/services": "services",
   "/products": "products",
+  "/purchase-invoices": "products",
   "/cash-registry": "cash_registry",
   "/analytics": "analytics",
   "/reports": "reports",
@@ -80,13 +76,14 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   notifications: "notification_settings",
   "plan-billing": "plan_billing",
   membership: "membership",
-  packages: "packages",
-  "prepaid-wallet": "packages",
+  packages: "sales",
+  "prepaid-wallet": "payment_settings",
   services: "services",
   products: "products",
   "channel-usage": "notification_settings",
   "whatsapp-integration": "notification_settings",
   recharge: "plan_billing",
+  feedback: "feedback",
 }
 
 // All settings modules (for "has any settings access" check)

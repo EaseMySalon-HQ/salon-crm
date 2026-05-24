@@ -54,6 +54,9 @@ const businessSchema = new mongoose.Schema({
       allowOnlineBooking: { type: Boolean, default: false }
     },
     
+    /** When true, platform admin has disabled all tenant operational email for this business */
+    platformEmailDisabled: { type: Boolean, default: false },
+
     // Notification Settings
     notifications: {
       emailNotifications: { type: Boolean, default: true },
@@ -64,12 +67,12 @@ const businessSchema = new mongoose.Schema({
     
     // Email Notification Configuration
     emailNotificationSettings: {
-      enabled: { type: Boolean, default: false },
+      enabled: { type: Boolean, default: true },
       // Staff members selected to receive notifications
       recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }],
       // Daily Summary Configuration
       dailySummary: {
-        enabled: { type: Boolean, default: false },
+        enabled: { type: Boolean, default: true },
         // When to send daily summary emails:
         // - 'fixedTime': at a specific time of day (uses scheduler)
         // - 'afterClosing': when the day's cash registry status is verified (triggered on verify)
@@ -79,16 +82,16 @@ const businessSchema = new mongoose.Schema({
       },
       // Weekly Summary Configuration
       weeklySummary: {
-        enabled: { type: Boolean, default: false },
+        enabled: { type: Boolean, default: true },
         day: { type: String, enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'], default: 'sunday' },
         time: { type: String, default: '20:00' }, // HH:mm format
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
       },
       // Appointment Notifications
       appointmentNotifications: {
-        enabled: { type: Boolean, default: false },
-        newAppointments: { type: Boolean, default: false },
-        cancellations: { type: Boolean, default: false },
+        enabled: { type: Boolean, default: true },
+        newAppointments: { type: Boolean, default: true },
+        cancellations: { type: Boolean, default: true },
         noShows: { type: Boolean, default: false },
         reminders: { type: Boolean, default: false },
         reminderHoursBefore: { type: Number, default: 24 },
@@ -96,7 +99,7 @@ const businessSchema = new mongoose.Schema({
       },
       // Receipt Notifications
       receiptNotifications: {
-        enabled: { type: Boolean, default: false },
+        enabled: { type: Boolean, default: true },
         sendToClients: { type: Boolean, default: true },
         sendToStaff: { type: Boolean, default: false },
         highValueThreshold: { type: Number, default: 0 }, // Alert if receipt > this amount
@@ -104,15 +107,15 @@ const businessSchema = new mongoose.Schema({
       },
       // Export Notifications
       exportNotifications: {
-        enabled: { type: Boolean, default: false },
+        enabled: { type: Boolean, default: true },
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
       },
       // System Alerts
       systemAlerts: {
-        enabled: { type: Boolean, default: false },
-        lowInventory: { type: Boolean, default: false },
-        paymentFailures: { type: Boolean, default: false },
-        systemErrors: { type: Boolean, default: false },
+        enabled: { type: Boolean, default: true },
+        lowInventory: { type: Boolean, default: true },
+        paymentFailures: { type: Boolean, default: true },
+        systemErrors: { type: Boolean, default: true },
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
       }
     },
@@ -284,6 +287,8 @@ const businessSchema = new mongoose.Schema({
     redeemPointsStep: { type: Number, default: 100, min: 1 },
     redeemRupeeStep: { type: Number, default: 10, min: 0 },
     minRedeemPoints: { type: Number, default: 100, min: 0 },
+    /** Minimum eligible bill subtotal (₹) before reward points may be redeemed; 0 = no minimum. */
+    minBillAmountForRedemption: { type: Number, default: 0, min: 0 },
     maxRedeemPercentOfBill: { type: Number, default: 20, min: 0, max: 100 },
     /** Exclude prepaid_wallet lines from eligible spend for earning (synced with earnPointsOnPrepaidPlan) */
     earnOnWalletPurchaseLines: { type: Boolean, default: false },

@@ -6,11 +6,15 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI } from "@/lib/api"
-import { Settings, Upload, Image, X, Building2, Receipt } from "lucide-react"
+import { useAuth } from "@/lib/auth-context"
+import { Settings, Upload, Image, X, Building2, Receipt, Lock } from "lucide-react"
 
 export function BusinessSettings() {
+  const { hasPermission } = useAuth()
+  const canEdit = hasPermission("business_settings", "edit") || hasPermission("general_settings", "edit")
   const [businessInfo, setBusinessInfo] = useState({
     name: "",
     email: "",
@@ -20,6 +24,8 @@ export function BusinessSettings() {
     state: "",
     zipCode: "",
     googleMapsUrl: "",
+    googleReviewUrl: "",
+    allowFeedbackResubmission: false,
     website: "",
     description: "",
     socialMedia: "",
@@ -42,7 +48,13 @@ export function BusinessSettings() {
     try {
       const response = await SettingsAPI.getBusinessSettings()
       if (response.success) {
-        setBusinessInfo(response.data)
+        const d = response.data
+        setBusinessInfo((prev) => ({
+          ...prev,
+          ...d,
+          googleReviewUrl: d.googleReviewUrl ?? "",
+          allowFeedbackResubmission: d.allowFeedbackResubmission === true,
+        }))
       }
     } catch (error) {
       console.error('Error loading business settings:', error)
@@ -336,6 +348,42 @@ export function BusinessSettings() {
                 Optional. Full link (e.g. https://maps.app.goo.gl/rwY2PmLdcE4TNo8w9) or only the short code after maps.app.goo.gl/ — used for WhatsApp buttons and directions.
               </p>
             </div>
+
+            <div className="space-y-3">
+              <Label htmlFor="googleReviewUrl" className="text-sm font-medium text-slate-700">
+                Google Review URL
+              </Label>
+              <Input
+                id="googleReviewUrl"
+                type="url"
+                inputMode="url"
+                value={businessInfo.googleReviewUrl || ""}
+                onChange={(e) => setBusinessInfo({ ...businessInfo, googleReviewUrl: e.target.value })}
+                placeholder="https://g.page/... or Google review link"
+                className="border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-500">
+                Optional. Shown to customers only after they leave 5-star feedback so they can post on Google.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="allowFeedbackResubmission" className="text-sm font-medium text-slate-800">
+                  Allow feedback resubmission
+                </Label>
+                <p className="text-xs text-slate-500">
+                  When on, customers can change their rating for the same invoice link more than once.
+                </p>
+              </div>
+              <Switch
+                id="allowFeedbackResubmission"
+                checked={businessInfo.allowFeedbackResubmission === true}
+                onCheckedChange={(checked) =>
+                  setBusinessInfo({ ...businessInfo, allowFeedbackResubmission: checked })
+                }
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -460,11 +508,16 @@ export function BusinessSettings() {
       </div>
 
       {/* Save Button */}
-      <div className="flex justify-end">
-        <Button 
-          onClick={handleSave} 
-          disabled={isSaving}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+      <div className="flex justify-end items-center gap-3">
+        {!canEdit && (
+          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+            <Lock className="h-3 w-3" /> You don't have permission to edit business settings
+          </span>
+        )}
+        <Button
+          onClick={handleSave}
+          disabled={isSaving || !canEdit}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium disabled:opacity-60"
         >
           {isSaving ? "Saving..." : "Save Changes"}
         </Button>

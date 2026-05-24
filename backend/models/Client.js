@@ -87,6 +87,11 @@ const clientSchema = new mongoose.Schema({
      */
     waMarketingOptOut: { type: Boolean, default: false },
     waMarketingOptOutAt: { type: Date, default: null }
+  },
+  /** System placeholder profile for anonymous walk-ins (see backend/lib/ensure-walk-in-client.js). */
+  isWalkIn: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

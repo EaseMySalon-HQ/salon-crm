@@ -1,13 +1,14 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Users, CalendarDays, PieChart, Settings, Package, Clock, DollarSign, CreditCard, AlertCircle } from "lucide-react"
+import { CalendarDays, PieChart, Settings, Package, Clock, DollarSign, CreditCard, AlertCircle, RotateCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { cn } from "@/lib/utils"
 import { useDashboardInit } from "@/lib/queries/dashboard"
+import { invalidateDashboard } from "@/lib/queries/invalidate"
 
 interface ServiceStats {
   totalServices: number
@@ -22,8 +23,10 @@ interface ProductStats {
   categories: number
 }
 
-export function DashboardStatsCards() {
-  const { data, isPending, isError, refetch } = useDashboardInit()
+export function DashboardStatsCards({ metricsRange = "today" }: { metricsRange?: "today" | "last7days" }) {
+  const { data, isPending, isError, refetch } = useDashboardInit({ metricsRange })
+  const metricsRangeLabel = metricsRange === "last7days" ? "Last 7 days" : "Today"
+  const [showRetentionBreakdown, setShowRetentionBreakdown] = useState(false)
 
   const safeFormatAmount = (amount: number) => {
     return `₹${amount.toFixed(2)}`
@@ -31,13 +34,29 @@ export function DashboardStatsCards() {
 
   const stats = data?.todayStats
     ? {
-        totalClients: data.todayStats.totalClients ?? 0,
+        totalRevenueFromReceipts: data.todayStats.totalRevenueFromReceipts ?? 0,
+        totalReceipts: data.todayStats.totalReceipts ?? 0,
+        clientRetentionRate: data.todayStats.clientRetentionRate ?? 0,
+        retentionTotalClientsWithSale: data.todayStats.retentionTotalClientsWithSale ?? 0,
+        retentionReturningClients: data.todayStats.retentionReturningClients ?? 0,
+        retentionOneTimeClients: data.todayStats.retentionOneTimeClients ?? 0,
         totalAppointments: data.todayStats.todaysAppointmentCount ?? 0,
         totalRevenue: data.todayStats.todaysCompletedRevenue ?? 0,
-        totalServices: data.todayStats.totalServices ?? 0,
       }
-    : { totalClients: 0, totalAppointments: 0, totalRevenue: 0, totalServices: 0 }
+    : {
+        totalRevenueFromReceipts: 0,
+        totalReceipts: 0,
+        clientRetentionRate: 0,
+        retentionTotalClientsWithSale: 0,
+        retentionReturningClients: 0,
+        retentionOneTimeClients: 0,
+        totalAppointments: 0,
+        totalRevenue: 0,
+      }
 
+  const averageTicketValue = stats.totalReceipts > 0
+    ? stats.totalRevenueFromReceipts / stats.totalReceipts
+    : 0
   if (isPending) {
     return (
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
@@ -75,14 +94,14 @@ export function DashboardStatsCards() {
     <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
       <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-          <CardTitle className="text-sm font-medium text-gray-900">Total Clients</CardTitle>
+          <CardTitle className="text-sm font-medium text-gray-900">Total Revenue</CardTitle>
           <div className="p-2 bg-gray-100 rounded-lg">
-            <Users className="h-4 w-4 text-gray-600" />
+            <PieChart className="h-4 w-4 text-gray-600" />
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="text-2xl font-bold text-gray-900">{stats.totalClients}</div>
-          <p className="text-sm text-gray-500">Active clients</p>
+          <div className="text-2xl font-bold text-gray-900">{safeFormatAmount(stats.totalRevenue)}</div>
+          <p className="text-sm text-gray-500">{metricsRangeLabel}</p>
         </CardContent>
       </Card>
       
@@ -95,33 +114,202 @@ export function DashboardStatsCards() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="text-2xl font-bold text-gray-900">{stats.totalAppointments}</div>
-          <p className="text-sm text-gray-500">Today</p>
+          <p className="text-sm text-gray-500">{metricsRangeLabel}</p>
         </CardContent>
       </Card>
       
       <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-          <CardTitle className="text-sm font-medium text-gray-900">Total Revenue</CardTitle>
+          <CardTitle className="text-sm font-medium text-gray-900">Average Ticket Value</CardTitle>
           <div className="p-2 bg-gray-100 rounded-lg">
-            <PieChart className="h-4 w-4 text-gray-600" />
+            <DollarSign className="h-4 w-4 text-gray-600" />
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="text-2xl font-bold text-gray-900">{safeFormatAmount(stats.totalRevenue)}</div>
-          <p className="text-sm text-gray-500">Today</p>
+          <div className="text-2xl font-bold text-gray-900">{safeFormatAmount(averageTicketValue)}</div>
+          <p className="text-sm text-gray-500">Average amount spent per client per visit</p>
         </CardContent>
       </Card>
       
-      <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-          <CardTitle className="text-sm font-medium text-gray-900">Total Services</CardTitle>
-          <div className="p-2 bg-gray-100 rounded-lg">
-            <Settings className="h-4 w-4 text-gray-600" />
+      <Card
+        role="button"
+        tabIndex={0}
+        onClick={() => setShowRetentionBreakdown((prev) => !prev)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault()
+            setShowRetentionBreakdown((prev) => !prev)
+          }
+        }}
+        className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 cursor-pointer"
+      >
+        <div className="relative min-h-[176px]">
+          <div className="pointer-events-none absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white/90 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+            <RotateCw className="h-3 w-3" />
+            Flip
           </div>
+          <div
+            className="relative h-full w-full transition-transform duration-500 [transform-style:preserve-3d]"
+            style={{ transform: showRetentionBreakdown ? "rotateY(180deg)" : "rotateY(0deg)" }}
+          >
+            <div className="[backface-visibility:hidden]">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+                <CardTitle className="text-sm font-medium text-gray-900">Client Retention Rate</CardTitle>
+                <div className="p-2 bg-gray-100 rounded-lg">
+                  <Settings className="h-4 w-4 text-gray-600" />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="text-2xl font-bold text-gray-900">{stats.clientRetentionRate.toFixed(1)}%</div>
+                <p className="text-sm text-gray-500">Percentage of clients who come back; key to long-term growth</p>
+              </CardContent>
+            </div>
+
+            <div className="absolute inset-0 [transform:rotateY(180deg)] [backface-visibility:hidden]">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-gray-900">Retention Breakdown</CardTitle>
+                <div className="p-2 bg-gray-100 rounded-lg">
+                  <Settings className="h-4 w-4 text-gray-600" />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-2.5 pt-1">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">Returning clients</span>
+                  <span className="font-semibold text-gray-900">{stats.retentionReturningClients}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-600">One-time clients</span>
+                  <span className="font-semibold text-gray-900">{stats.retentionOneTimeClients}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm border-t border-gray-200 pt-2">
+                  <span className="text-gray-600">Total buying clients</span>
+                  <span className="font-semibold text-gray-900">{stats.retentionTotalClientsWithSale}</span>
+                </div>
+              </CardContent>
+            </div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+export function DashboardTopPerformersCards() {
+  const { data, isPending, isError, refetch } = useDashboardInit()
+
+  const safeFormatAmount = (amount: number) => `₹${amount.toFixed(2)}`
+  const topServices: Array<{ serviceName: string; thisMonth: number; lastMonth: number }> = Array.isArray(data?.topPerformers?.topServices)
+    ? data.topPerformers.topServices
+    : []
+  const topStaff: Array<{ staffName: string; thisMonth: number; lastMonth: number }> = Array.isArray(data?.topPerformers?.topStaff)
+    ? data.topPerformers.topStaff
+    : []
+
+  if (isPending) {
+    return (
+      <div className="grid gap-6 lg:grid-cols-2">
+        {[1, 2].map((i) => (
+          <Card key={i}>
+            <CardHeader className="space-y-2">
+              <div className="h-4 w-32 bg-gray-200 rounded animate-pulse" />
+              <div className="h-3 w-40 bg-gray-200 rounded animate-pulse" />
+            </CardHeader>
+            <CardContent>
+              <div className="h-36 bg-gray-100 rounded animate-pulse" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex gap-2 text-amber-900 text-sm">
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <span>Could not load top performers. Try again.</span>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="shrink-0 border-amber-300" onClick={() => refetch()}>
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-semibold text-gray-900">Top 5 Services</CardTitle>
+          <p className="text-xs text-gray-500">Ranked by this month usage</p>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="text-2xl font-bold text-gray-900">{stats.totalServices}</div>
-          <p className="text-sm text-gray-500">Active services</p>
+        <CardContent>
+          {topServices.length === 0 ? (
+            <p className="text-sm text-gray-500">No service data available.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 text-xs text-gray-500">
+                    <th className="py-2 text-left font-medium">Service Name</th>
+                    <th className="py-2 text-right font-medium">This Month</th>
+                    <th className="py-2 text-right font-medium">Last Month</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topServices.slice(0, 5).map((row, idx) => (
+                    <tr key={`${row.serviceName}-${idx}`} className="border-b border-gray-100 last:border-b-0">
+                      <td className="py-2.5 text-gray-800">{row.serviceName || "Service"}</td>
+                      <td className="py-2.5 text-right font-semibold text-gray-900">
+                        {(Number(row.thisMonth) || 0).toLocaleString("en-IN")}
+                      </td>
+                      <td className="py-2.5 text-right text-gray-600">
+                        {(Number(row.lastMonth) || 0).toLocaleString("en-IN")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-semibold text-gray-900">Top 5 Staff</CardTitle>
+          <p className="text-xs text-gray-500">Ranked by this month revenue</p>
+        </CardHeader>
+        <CardContent>
+          {topStaff.length === 0 ? (
+            <p className="text-sm text-gray-500">No staff revenue data available.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 text-xs text-gray-500">
+                    <th className="py-2 text-left font-medium">Staff Name</th>
+                    <th className="py-2 text-right font-medium">This Month</th>
+                    <th className="py-2 text-right font-medium">Last Month</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topStaff.slice(0, 5).map((row, idx) => (
+                    <tr key={`${row.staffName}-${idx}`} className="border-b border-gray-100 last:border-b-0">
+                      <td className="py-2.5 text-gray-800">{row.staffName || "Unassigned"}</td>
+                      <td className="py-2.5 text-right font-semibold text-gray-900">
+                        {safeFormatAmount(Number(row.thisMonth) || 0)}
+                      </td>
+                      <td className="py-2.5 text-right text-gray-600">
+                        {safeFormatAmount(Number(row.lastMonth) || 0)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -234,7 +422,7 @@ export function ServiceStatsCards() {
 
   useEffect(() => {
     const handleServiceAdded = () => {
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "init"] })
+      invalidateDashboard(queryClient)
     }
     window.addEventListener("service-added", handleServiceAdded)
     return () => window.removeEventListener("service-added", handleServiceAdded)
@@ -360,7 +548,7 @@ export function ProductStatsCards({
 
   useEffect(() => {
     const handleProductAdded = () => {
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "init"] })
+      invalidateDashboard(queryClient)
     }
     window.addEventListener("product-added", handleProductAdded)
     return () => window.removeEventListener("product-added", handleProductAdded)

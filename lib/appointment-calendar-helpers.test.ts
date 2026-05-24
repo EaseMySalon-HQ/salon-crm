@@ -3,10 +3,73 @@ import {
   getServiceDisplayNames,
   getAppointmentTotalDurationList,
   getAppointmentTotalDurationGrid,
+  getAppointmentGridWindowMinutes,
   getBookingGroupSiblings,
   collectSaleLinesFromAppointmentCard,
   buildRaiseSaleAppointmentPayload,
+  getAppointmentStatusPillClass,
+  getAppointmentStatusSheetHeaderClass,
+  saleRecordIsPartialPayment,
+  getAppointmentEditAppearanceStatus,
+  getAppointmentIdsForCardStatusUpdate,
 } from "./appointment-calendar-helpers"
+
+describe("saleRecordIsPartialPayment", () => {
+  it("is true when paid and remaining are both positive", () => {
+    expect(
+      saleRecordIsPartialPayment({
+        paymentStatus: { paidAmount: 100, remainingAmount: 50 },
+      })
+    ).toBe(true)
+    expect(saleRecordIsPartialPayment({ paymentStatus: { paidAmount: 0, remainingAmount: 100 } })).toBe(false)
+    expect(saleRecordIsPartialPayment({ paymentStatus: { paidAmount: 100, remainingAmount: 0 } })).toBe(false)
+  })
+})
+
+describe("getAppointmentEditAppearanceStatus", () => {
+  it("overlays partial_payment when sale is partial and appointment is active", () => {
+    expect(
+      getAppointmentEditAppearanceStatus("scheduled", {
+        paymentStatus: { paidAmount: 50, remainingAmount: 50 },
+      })
+    ).toBe("partial_payment")
+    expect(
+      getAppointmentEditAppearanceStatus("completed", {
+        paymentStatus: { paidAmount: 50, remainingAmount: 50 },
+      })
+    ).toBe("completed")
+  })
+
+  it("returns base status when there is no linked sale", () => {
+    expect(getAppointmentEditAppearanceStatus("arrived", null)).toBe("arrived")
+  })
+})
+
+describe("getAppointmentStatusSheetHeaderClass", () => {
+  it("uses header bar tone tokens per status", () => {
+    expect(getAppointmentStatusSheetHeaderClass("scheduled")).toContain("slate-100")
+    expect(getAppointmentStatusSheetHeaderClass("confirmed")).toContain("cyan-100")
+    expect(getAppointmentStatusSheetHeaderClass("missed")).toContain("rose-100")
+  })
+})
+
+describe("getAppointmentStatusPillClass", () => {
+  it("uses calendar tone tokens per status", () => {
+    expect(getAppointmentStatusPillClass("scheduled")).toContain("slate-100")
+    expect(getAppointmentStatusPillClass("confirmed")).toContain("cyan-100")
+    expect(getAppointmentStatusPillClass("arrived")).toContain("blue-100")
+    expect(getAppointmentStatusPillClass("service_started")).toContain("indigo-100")
+    expect(getAppointmentStatusPillClass("completed")).toContain("emerald-100")
+    expect(getAppointmentStatusPillClass("missed")).toContain("rose-100")
+    expect(getAppointmentStatusPillClass("cancelled")).toContain("red-100")
+    expect(getAppointmentStatusPillClass("cancelled_at_billing")).toContain("zinc-100")
+  })
+
+  it("defaults empty to scheduled tone", () => {
+    expect(getAppointmentStatusPillClass(null)).toContain("slate-100")
+    expect(getAppointmentStatusPillClass("")).toContain("slate-100")
+  })
+})
 
 describe("getServiceDisplayNames", () => {
   it("returns primary + additional service names", () => {
@@ -59,17 +122,59 @@ describe("getAppointmentTotalDurationGrid", () => {
   })
 })
 
+describe("getAppointmentGridWindowMinutes", () => {
+  it("returns local start/end minutes when startAt/endAt match date", () => {
+    const win = getAppointmentGridWindowMinutes({
+      date: "2026-06-05",
+      startAt: new Date(2026, 5, 5, 2, 20, 0),
+      endAt: new Date(2026, 5, 5, 2, 35, 0),
+    })
+    expect(win).toEqual({ startM: 140, endM: 155 })
+  })
+
+  it("returns null when date mismatches startAt calendar day", () => {
+    expect(
+      getAppointmentGridWindowMinutes({
+        date: "2026-06-06",
+        startAt: new Date(2026, 5, 5, 10, 0, 0),
+        endAt: new Date(2026, 5, 5, 11, 0, 0),
+      })
+    ).toBeNull()
+  })
+})
+
 describe("getBookingGroupSiblings", () => {
-  const a = { _id: "a", bookingGroupId: "g1" as string | null }
-  const b = { _id: "b", bookingGroupId: "g1" as string | null }
-  const c = { _id: "c", bookingGroupId: null as string | null }
+  const a = { _id: "a", bookingGroupId: "g1" as string | null, date: "2026-05-22" }
+  const b = { _id: "b", bookingGroupId: "g1" as string | null, date: "2026-05-22" }
+  const c = { _id: "c", bookingGroupId: null as string | null, date: "2026-05-22" }
+  const d = { _id: "d", bookingGroupId: "g1" as string | null, date: "2026-05-23" }
 
   it("returns only anchor when no bookingGroupId", () => {
     expect(getBookingGroupSiblings([a, b, c], c)).toEqual([c])
   })
 
-  it("returns all members of the same group", () => {
-    expect(getBookingGroupSiblings([a, b, c], a)).toEqual([a, b])
+  it("returns same-day members of the group", () => {
+    expect(getBookingGroupSiblings([a, b, d], a)).toEqual([a, b])
+  })
+
+  it("excludes siblings on a different calendar date", () => {
+    expect(getBookingGroupSiblings([a, b, d], d)).toEqual([d])
+  })
+})
+
+describe("getAppointmentIdsForCardStatusUpdate", () => {
+  const loaded = [
+    { _id: "a1", bookingGroupId: "g1", date: "2026-05-22" },
+    { _id: "a2", bookingGroupId: "g1", date: "2026-05-22" },
+    { _id: "a3", bookingGroupId: "g1", date: "2026-05-23" },
+  ]
+
+  it("syncs arrived only to same-day group siblings", () => {
+    expect(getAppointmentIdsForCardStatusUpdate(loaded[0], loaded, "arrived")).toEqual(["a1", "a2"])
+  })
+
+  it("service_started updates only the acted-on card", () => {
+    expect(getAppointmentIdsForCardStatusUpdate(loaded[0], loaded, "service_started")).toEqual(["a1"])
   })
 })
 

@@ -25,22 +25,38 @@ const authStaff = [authenticateToken, setupBusinessDatabase, requireStaff];
 const authManager = [authenticateToken, setupBusinessDatabase, requireManager];
 const authMainStaff = [authenticateToken, setupMainDatabase, requireStaff];
 const authMainManager = [authenticateToken, setupMainDatabase, requireManager];
+const authMainBusinessStaff = [authenticateToken, setupMainDatabase, setupBusinessDatabase, requireStaff];
+const authMainBusinessManager = [authenticateToken, setupMainDatabase, setupBusinessDatabase, requireManager];
+
+async function loadClientWalletSettingsPayload(req) {
+  const Business = req.mainModels.Business;
+  const b = await Business.findById(req.user.branchId).select('clientWalletSettings').lean();
+  const settings = walletSvc.mergeClientWalletSettings(b?.clientWalletSettings);
+  const { mergePaymentConfiguration } = require('../lib/payment-redemption-eligibility');
+  let walletRedemption = mergePaymentConfiguration(null).walletRedemption;
+  const { BusinessSettings } = req.businessModels || {};
+  if (BusinessSettings) {
+    const bs = await BusinessSettings.findOne().select('paymentConfiguration').lean();
+    if (bs) {
+      walletRedemption = mergePaymentConfiguration(bs.paymentConfiguration).walletRedemption;
+    }
+  }
+  return { ...settings, walletRedemption };
+}
 
 // ── Business rules (main DB) ───────────────────────────────────────────────
 
-router.get('/settings', authMainStaff, async (req, res) => {
+router.get('/settings', authMainBusinessStaff, async (req, res) => {
   try {
-    const Business = req.mainModels.Business;
-    const b = await Business.findById(req.user.branchId).select('clientWalletSettings').lean();
-    const settings = walletSvc.mergeClientWalletSettings(b?.clientWalletSettings);
-    return ok(res, settings);
+    const payload = await loadClientWalletSettingsPayload(req);
+    return ok(res, payload);
   } catch (e) {
     logger.error('[client-wallet] GET settings', e);
     return fail(res, 500, e.message);
   }
 });
 
-router.put('/settings', authMainManager, async (req, res) => {
+router.put('/settings', authMainBusinessManager, async (req, res) => {
   try {
     const Business = req.mainModels.Business;
     const allowed = [
@@ -56,9 +72,30 @@ router.put('/settings', authMainManager, async (req, res) => {
     for (const k of allowed) {
       if (req.body[k] !== undefined) patch[`clientWalletSettings.${k}`] = req.body[k];
     }
-    await Business.updateOne({ _id: req.user.branchId }, { $set: patch });
-    const b = await Business.findById(req.user.branchId).select('clientWalletSettings').lean();
-    return ok(res, walletSvc.mergeClientWalletSettings(b?.clientWalletSettings), 'Settings updated');
+    if (Object.keys(patch).length > 0) {
+      await Business.updateOne({ _id: req.user.branchId }, { $set: patch });
+    }
+
+    if (req.body.walletRedemption !== undefined && typeof req.body.walletRedemption === 'object') {
+      const { BusinessSettings } = req.businessModels;
+      const { mergePaymentConfiguration } = require('../lib/payment-redemption-eligibility');
+      const settingsDoc = await BusinessSettings.findOne();
+      if (settingsDoc) {
+        const existing = mergePaymentConfiguration(settingsDoc.paymentConfiguration);
+        settingsDoc.paymentConfiguration = mergePaymentConfiguration({
+          ...existing,
+          walletRedemption: {
+            ...existing.walletRedemption,
+            ...req.body.walletRedemption,
+          },
+        });
+        settingsDoc.markModified('paymentConfiguration');
+        await settingsDoc.save();
+      }
+    }
+
+    const payload = await loadClientWalletSettingsPayload(req);
+    return ok(res, payload, 'Settings updated');
   } catch (e) {
     logger.error('[client-wallet] PUT settings', e);
     return fail(res, 500, e.message);
@@ -73,6 +110,23 @@ router.get('/liability', authStaff, async (req, res) => {
     return ok(res, summary);
   } catch (e) {
     logger.error('[client-wallet] liability', e);
+    return fail(res, 500, e.message);
+  }
+});
+
+router.get('/liability/clients', authStaff, async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(Math.max(1, Number(req.query.limit) || 25), 100);
+    const data = await walletSvc.listClientLiability(req.user.branchId, req.businessModels, {
+      search,
+      page,
+      limit,
+    });
+    return ok(res, data);
+  } catch (e) {
+    logger.error('[client-wallet] liability/clients', e);
     return fail(res, 500, e.message);
   }
 });
@@ -187,7 +241,7 @@ router.post('/redeem', authStaff, async (req, res) => {
     if (saleId && mongoose.Types.ObjectId.isValid(String(saleId))) {
       const { Sale, BusinessSettings } = req.businessModels;
       if (Sale && BusinessSettings) {
-        const sale = await Sale.findById(saleId).select('items payments loyaltyPointsRedeemed').lean();
+        const sale = await Sale.findById(saleId).select('items payments loyaltyPointsRedeemed discount').lean();
         if (sale) {
           const {
             mergePaymentConfiguration,
@@ -196,7 +250,8 @@ router.post('/redeem', authStaff, async (req, res) => {
           } = require('../lib/payment-redemption-eligibility');
           const payDoc = await BusinessSettings.findOne().select('paymentConfiguration').lean();
           const payCfg = mergePaymentConfiguration(payDoc?.paymentConfiguration);
-          const eligibleWallet = eligibleRedemptionSubtotal(sale.items || [], payCfg, 'wallet');
+          const redeemOpts = { cartDiscountAmount: Number(sale.discount) || 0 };
+          const eligibleWallet = eligibleRedemptionSubtotal(sale.items || [], payCfg, 'wallet', redeemOpts);
           const walletOnSale = sumWalletPayments(sale.payments);
           const loyOnSale = Math.floor(Number(sale.loyaltyPointsRedeemed) || 0);
           if (payCfg.billingRedemption?.allowWalletAndPointsTogether === false && loyOnSale > 0 && amt > 0.02) {
@@ -231,6 +286,27 @@ router.post('/redeem', authStaff, async (req, res) => {
   } catch (e) {
     const status = e.status || 500;
     logger.error('[client-wallet] redeem', e);
+    return fail(res, status, e.message);
+  }
+});
+
+/** Manager: open first wallet for client (no plan / sale) — optional opening balance */
+router.post('/open-balance-wallet', authManager, async (req, res) => {
+  try {
+    const { clientId, amount, reason } = req.body;
+    if (!clientId) return fail(res, 400, 'clientId is required');
+    const out = await walletSvc.openBalanceWalletForClient({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+      staffUser: req.user,
+      clientId: String(clientId),
+      amount: amount != null ? Number(amount) : 0,
+      reason: reason || '',
+    });
+    return ok(res, out, 'Wallet opened');
+  } catch (e) {
+    const status = e.status || 500;
+    logger.error('[client-wallet] open-balance-wallet', e);
     return fail(res, status, e.message);
   }
 });
@@ -278,7 +354,7 @@ router.post('/credit-change', authStaff, async (req, res) => {
   }
 });
 
-/** Staff: no wallet yet — open one from an active prepaid plan template and credit bill change */
+/** Staff: no wallet yet — open a balance wallet and credit bill change / overpayment */
 router.post('/credit-change-open-wallet', authStaff, async (req, res) => {
   try {
     const { clientId, amount, saleId, billNo } = req.body;

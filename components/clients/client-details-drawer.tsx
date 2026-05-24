@@ -18,6 +18,11 @@ export interface ClientDetailsDrawerProps {
   initialExpandProfile?: boolean
   /** Start profile form in edit mode (used with initialExpandProfile) */
   initialEditMode?: boolean
+  /**
+   * Raise sheet overlay + panel above nested shells (e.g. appointment checkout drawer at z-100
+   * or modal checkout). Outside click still dismisses this sheet only.
+   */
+  stackAboveAncestorChrome?: boolean
 }
 
 function normalizeClientForPanel(c: Client): Client {
@@ -31,6 +36,7 @@ export function ClientDetailsDrawer({
   client,
   initialExpandProfile = false,
   initialEditMode = false,
+  stackAboveAncestorChrome = false,
 }: ClientDetailsDrawerProps) {
   const [profileExpanded, setProfileExpanded] = useState(false)
   const [profileEditing, setProfileEditing] = useState(false)
@@ -68,9 +74,11 @@ export function ClientDetailsDrawer({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
+        overlayClassName={stackAboveAncestorChrome ? "z-[125]" : undefined}
         className={cn(
           "w-full overflow-hidden p-0 flex flex-col transition-[max-width] duration-200",
           profileExpanded ? "sm:max-w-4xl" : "sm:max-w-xl",
+          stackAboveAncestorChrome && "z-[130]",
         )}
       >
         <div className="flex h-full min-h-0 overflow-hidden flex-col flex-1">

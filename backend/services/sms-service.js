@@ -226,7 +226,7 @@ class SMSService {
     });
   }
 
-  async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink }) {
+  async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink, feedbackLink }) {
     if (!this.initialized) await this.initialize();
     if (!this.enabled) return { success: false, error: 'SMS service not configured' };
 
@@ -244,7 +244,8 @@ class SMSService {
       businessName: String(businessName),
       total,
       receiptNumber: String(receiptNumber || ''),
-      receiptLink: String(receiptLink || '')
+      receiptLink: String(receiptLink || ''),
+      feedbackLink: String(feedbackLink || '')
     };
 
     const mapping = this.config?.receiptVariableMapping && typeof this.config.receiptVariableMapping === 'object'

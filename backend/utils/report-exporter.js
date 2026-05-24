@@ -1,131 +1,360 @@
 const XLSX = require('xlsx');
 const PDFDocument = require('pdfkit');
 const { logger } = require('./logger');
+const { billChangeCreditedToWalletCashAddition } = require('./bill-change-wallet-cash');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { toDateStringIST } = require('./date-utils');
+const { throwIfPlatformEmailDisabled } = require('../lib/business-email-policy');
 
 /**
- * Helper function to add a styled header to PDF
+ * Report export delivery: all tenant Users with role admin (login admins) plus Staff with
+ * role manager/staff who have email on and preferences.allowReportsDelivery.
  */
-function addPDFHeader(doc, title, subtitle = null) {
-  // Header background
-  doc.rect(0, 0, doc.page.width, 80)
-     .fillColor('#1e40af')
-     .fill();
-  
-  // Title
-  doc.fillColor('#ffffff')
-     .fontSize(24)
-     .font('Helvetica-Bold')
-     .text(title, 50, 30, { align: 'center', width: doc.page.width - 100 });
-  
-  if (subtitle) {
-    doc.fontSize(12)
-       .font('Helvetica')
-       .text(subtitle, 50, 60, { align: 'center', width: doc.page.width - 100 });
+async function getReportExportRecipientList(branchId, mainConnection, businessModels) {
+  const User = mainConnection.model('User', require('../models/User').schema);
+  const { Staff } = businessModels;
+  const [adminUsers, reportStaff] = await Promise.all([
+    User.find({
+      branchId,
+      role: 'admin',
+      email: { $exists: true, $ne: '' },
+    }).lean(),
+    Staff.find({
+      branchId,
+      role: { $in: ['manager', 'staff'] },
+      isActive: true,
+      email: { $exists: true, $ne: '' },
+      'emailNotifications.enabled': true,
+      'emailNotifications.preferences.allowReportsDelivery': true,
+    })
+      .select('email')
+      .lean(),
+  ]);
+  const seen = new Set();
+  const recipients = [];
+  for (const u of adminUsers) {
+    const e = (u.email || '').trim().toLowerCase();
+    if (e && !seen.has(e)) {
+      seen.add(e);
+      recipients.push({ email: u.email.trim() });
+    }
   }
-  
-  // Reset fill color
-  doc.fillColor('#000000');
-  
-  return 100; // Return Y position after header
+  for (const s of reportStaff) {
+    const e = (s.email || '').trim().toLowerCase();
+    if (e && !seen.has(e)) {
+      seen.add(e);
+      recipients.push({ email: s.email.trim() });
+    }
+  }
+  return recipients;
 }
 
 /**
- * Helper function to add a summary box
+ * Shared PDF design tokens used by all report exports.
+ * Keep these in sync with the rest of the product styling (slate + blue accent).
  */
-function addSummaryBox(doc, x, y, label, value, color = '#3b82f6', boxWidth = null) {
-  if (!boxWidth) {
-    boxWidth = (doc.page.width - 100) / 2;
+const PDF_THEME = {
+  accent: '#2563EB',      // blue-600 – stripes, accent bar, table header underline
+  accentSoft: '#DBEAFE',  // blue-100 – tint backgrounds (reserved)
+  textPrimary: '#0F172A', // slate-900 – titles, values, body text
+  textMuted: '#475569',   // slate-600 – subtitles, secondary labels
+  textSubtle: '#94A3B8',  // slate-400 – footer chrome
+  border: '#E2E8F0',      // slate-200 – cards, table dividers
+  rowAlt: '#F8FAFC',      // slate-50 – zebra rows
+  headerBg: '#F1F5F9',    // slate-100 – table header background
+  cardBg: '#FFFFFF',
+};
+
+const PDF_MARGIN = 50;
+
+/** PDF standard fonts (Helvetica) omit ₹ (U+20B9); viewers often draw a bogus glyph resembling a superscript "1". */
+const PDF_RS = 'Rs. ';
+
+function pdfRsAmount(amount) {
+  const n = Number(amount);
+  return `${PDF_RS}${Number.isFinite(n) ? n.toFixed(2) : '0.00'}`;
+}
+
+/**
+ * Paint page chrome (top accent bar + bottom brand/page-number).
+ *
+ * Every text call here uses `lineBreak: true, height: ...` — PDFKit will
+ * silently auto-paginate any `.text` near the page bottom unless a height
+ * is bounded, which would cascade pages and break the layout.
+ */
+function _paintPageChrome(doc) {
+  const w = doc.page.width;
+  const h = doc.page.height;
+
+  doc.save();
+  doc.rect(0, 0, w, 3).fill(PDF_THEME.accent);
+  doc.restore();
+
+  const footerY = h - 18;
+  const halfW = (w - PDF_MARGIN * 2) / 2;
+
+  doc.save();
+  doc.fillColor(PDF_THEME.textSubtle).font('Helvetica').fontSize(7.5);
+  doc.text('EaseMySalon', PDF_MARGIN, footerY, {
+    width: halfW,
+    align: 'left',
+    lineBreak: true,
+    height: 10,
+  });
+  const pageNo = doc._emsPageCount || 1;
+  doc.text(`Page ${pageNo}`, w / 2, footerY, {
+    width: halfW,
+    align: 'right',
+    lineBreak: true,
+    height: 10,
+  });
+  doc.restore();
+
+  doc.fillColor(PDF_THEME.textPrimary).font('Helvetica').fontSize(10);
+}
+
+/**
+ * Hook chrome onto every page exactly once per document.
+ *
+ * We listen for `pageAdded` (so any new page – ours or one PDFKit creates
+ * internally – gets the same chrome), with a re-entry guard so chrome
+ * painting itself can never trigger more `pageAdded` events.
+ */
+function _attachPageChromeOnce(doc) {
+  if (doc._emsChromeAttached) return;
+  doc._emsChromeAttached = true;
+  doc._emsPaintingChrome = false;
+  doc._emsPageCount = 1;
+
+  doc.on('pageAdded', () => {
+    if (doc._emsPaintingChrome) return;
+    doc._emsPaintingChrome = true;
+    try {
+      doc._emsPageCount += 1;
+      _paintPageChrome(doc);
+    } finally {
+      doc._emsPaintingChrome = false;
+    }
+  });
+
+  doc._emsPaintingChrome = true;
+  try {
+    _paintPageChrome(doc);
+  } finally {
+    doc._emsPaintingChrome = false;
   }
-  const boxHeight = 50;
-  
-  // Box background
-  doc.rect(x, y, boxWidth, boxHeight)
-     .fillColor(color)
-     .fill();
-  
-  // Label
-  doc.fillColor('#ffffff')
-     .fontSize(10)
-     .font('Helvetica')
-     .text(label, x + 10, y + 10, { width: boxWidth - 20 });
-  
-  // Value
-  doc.fontSize(18)
+}
+
+/** Explicit page break – chrome is painted by the `pageAdded` listener. */
+function _addPageWithChrome(doc) {
+  doc.addPage();
+}
+
+/**
+ * Cover-style header drawn on the first page of every report.
+ * Returns the Y coordinate where body content should begin.
+ */
+function addPDFHeader(doc, title, subtitle = null) {
+  _attachPageChromeOnce(doc);
+  const x = PDF_MARGIN;
+  const w = doc.page.width - PDF_MARGIN * 2;
+  let y = 32;
+
+  doc.fillColor(PDF_THEME.textPrimary)
      .font('Helvetica-Bold')
-     .text(value, x + 10, y + 25, { width: boxWidth - 20 });
-  
-  // Reset fill color
-  doc.fillColor('#000000');
-  
+     .fontSize(20)
+     .text(String(title || ''), x, y, {
+       width: w,
+       align: 'left',
+       lineBreak: true,
+       height: 30,
+     });
+  y = doc.y;
+
+  if (subtitle) {
+    doc.fillColor(PDF_THEME.textMuted)
+       .font('Helvetica')
+       .fontSize(9.5)
+       .text(String(subtitle), x, y + 3, {
+         width: w,
+         align: 'left',
+         lineBreak: true,
+         height: 14,
+       });
+    y = doc.y;
+  }
+
+  doc.save();
+  doc.rect(x, y + 10, w, 0.6).fill(PDF_THEME.border);
+  doc.restore();
+
+  doc.fillColor(PDF_THEME.textPrimary).font('Helvetica').fontSize(10);
+  return y + 24;
+}
+
+/**
+ * Card-style summary tile: white card with subtle border + colored left stripe.
+ * Signature preserved for backward compatibility with existing call sites.
+ */
+function addSummaryBox(doc, x, y, label, value, color = PDF_THEME.accent, boxWidth = null) {
+  if (!boxWidth) {
+    boxWidth = (doc.page.width - PDF_MARGIN * 2) / 2;
+  }
+  const boxHeight = 58;
+
+  // Card + border
+  doc.save();
+  doc.roundedRect(x, y, boxWidth, boxHeight, 6)
+     .lineWidth(0.6)
+     .fillAndStroke(PDF_THEME.cardBg, PDF_THEME.border);
+  doc.restore();
+
+  // Accent stripe (left edge)
+  doc.save();
+  doc.rect(x, y, 3, boxHeight).fill(color);
+  doc.restore();
+
+  doc.fillColor(PDF_THEME.textMuted)
+     .font('Helvetica')
+     .fontSize(8)
+     .text(String(label || '').toUpperCase(), x + 14, y + 12, {
+       width: boxWidth - 22,
+       characterSpacing: 0.6,
+       lineBreak: true,
+       height: 11,
+     });
+
+  doc.fillColor(PDF_THEME.textPrimary)
+     .font('Helvetica-Bold')
+     .fontSize(16)
+     .text(String(value == null ? '' : value), x + 14, y + 28, {
+       width: boxWidth - 22,
+       lineBreak: true,
+       height: 20,
+     });
+
+  doc.fillColor(PDF_THEME.textPrimary).font('Helvetica').fontSize(10);
   return boxHeight;
 }
 
 /**
- * Helper function to add a table with headers
+ * Modern table renderer used by every export.
+ *
+ * options:
+ *   colWidths    number[]      Relative widths per column (auto-scaled to page width)
+ *   headerAligns ('left'|'center'|'right')[]  Optional per-column header alignment
+ *   rowAligns    ('left'|'center'|'right')[]  Optional per-column row alignment
+ *
+ * Backward compatible: legacy options (headerColor / rowColor / textColor) are
+ * accepted but no longer used – the helper now follows the shared theme.
  */
 function addTable(doc, startY, headers, rows, options = {}) {
-  const { headerColor = '#1e40af', rowColor = '#f3f4f6', textColor = '#000000' } = options;
-  const colWidths = options.colWidths || [];
-  const pageWidth = doc.page.width - 100;
+  _attachPageChromeOnce(doc);
+
+  const pageWidth = doc.page.width - PDF_MARGIN * 2;
   const numCols = headers.length;
-  const colWidth = colWidths.length === numCols 
-    ? colWidths 
+
+  const providedWidths = Array.isArray(options.colWidths) && options.colWidths.length === numCols
+    ? options.colWidths
     : Array(numCols).fill(pageWidth / numCols);
-  
+
+  // Normalize requested widths to fit the page exactly, preserving ratios.
+  const sumWidths = providedWidths.reduce((sum, w) => sum + (Number(w) || 0), 0);
+  const scale = sumWidths > 0 ? pageWidth / sumWidths : 1;
+  const widths = providedWidths.map((w) => (Number(w) || 0) * scale);
+
+  const headerAligns = Array.isArray(options.headerAligns) ? options.headerAligns : null;
+  const rowAligns = Array.isArray(options.rowAligns) ? options.rowAligns : null;
+
+  const padX = 6;
+  const padY = 6;
+  const headerHeight = 26;
+  const minRowHeight = 22;
+  const maxRowHeight = 60; // cap to ~3-4 lines per cell to keep layout sane
+  // Reserve space at bottom for chrome footer + small per-export footers
+  const bottomLimit = doc.page.height - 50;
+
   let y = startY;
-  const rowHeight = 25;
-  const headerHeight = 30;
-  
-  // Table header
-  let x = 50;
-  doc.rect(x, y, pageWidth, headerHeight)
-     .fillColor(headerColor)
-     .fill();
-  
-  doc.fillColor('#ffffff')
-     .fontSize(11)
-     .font('Helvetica-Bold');
-  
-  headers.forEach((header, i) => {
-    const cellX = x + colWidth.slice(0, i).reduce((sum, w) => sum + w, 0);
-    doc.text(header, cellX + 5, y + 8, { width: colWidth[i] - 10, align: 'left' });
-  });
-  
-  doc.fillColor(textColor);
-  y += headerHeight;
-  
-  // Table rows
-  rows.forEach((row, rowIndex) => {
-    if (y + rowHeight > doc.page.height - 50) {
-      doc.addPage();
-      y = 50;
-    }
-    
-    // Alternate row color
-    if (rowIndex % 2 === 0) {
-      doc.rect(50, y, pageWidth, rowHeight)
-         .fillColor(rowColor)
-         .fill();
-    }
-    
-    doc.fontSize(9)
-       .font('Helvetica');
-    
-    row.forEach((cell, i) => {
-      const cellX = 50 + colWidth.slice(0, i).reduce((sum, w) => sum + w, 0);
-      doc.fillColor(textColor)
-         .text(String(cell || ''), cellX + 5, y + 7, { width: colWidth[i] - 10, align: 'left' });
+
+  const drawHeader = () => {
+    doc.save();
+    doc.rect(PDF_MARGIN, y, pageWidth, headerHeight).fill(PDF_THEME.headerBg);
+    doc.rect(PDF_MARGIN, y + headerHeight - 0.8, pageWidth, 0.8).fill(PDF_THEME.accent);
+    doc.restore();
+
+    doc.fillColor(PDF_THEME.textPrimary)
+       .font('Helvetica-Bold')
+       .fontSize(9.5);
+
+    let x = PDF_MARGIN;
+    headers.forEach((header, i) => {
+      const align = (headerAligns && headerAligns[i]) || 'left';
+      const cw = Math.max(12, widths[i] - padX * 2);
+      doc.text(String(header == null ? '' : header), x + padX, y + 8, {
+        width: cw,
+        align,
+        lineBreak: true,
+        height: headerHeight - 12,
+      });
+      x += widths[i];
     });
-    
-    y += rowHeight;
+
+    y += headerHeight;
+  };
+
+  drawHeader();
+  doc.fillColor(PDF_THEME.textPrimary).font('Helvetica').fontSize(9);
+
+  rows.forEach((row, rowIndex) => {
+    // Measure tallest cell so multi-line content doesn't clip
+    let cellHeight = minRowHeight;
+    for (let i = 0; i < numCols; i++) {
+      const text = String(row[i] == null ? '' : row[i]);
+      const cw = Math.max(12, widths[i] - padX * 2);
+      const h = doc.heightOfString(text, { width: cw });
+      cellHeight = Math.max(cellHeight, h + padY * 2);
+    }
+    cellHeight = Math.min(cellHeight, maxRowHeight);
+
+    if (y + cellHeight > bottomLimit) {
+      _addPageWithChrome(doc);
+      y = PDF_MARGIN;
+      drawHeader();
+      doc.fillColor(PDF_THEME.textPrimary).font('Helvetica').fontSize(9);
+    }
+
+    // Zebra fill
+    if (rowIndex % 2 === 0) {
+      doc.save();
+      doc.rect(PDF_MARGIN, y, pageWidth, cellHeight).fill(PDF_THEME.rowAlt);
+      doc.restore();
+    }
+
+    // Row text – bounded height stops PDFKit from auto-paginating per cell
+    let x = PDF_MARGIN;
+    for (let i = 0; i < numCols; i++) {
+      const align = (rowAligns && rowAligns[i]) || 'left';
+      const cw = Math.max(12, widths[i] - padX * 2);
+      doc.fillColor(PDF_THEME.textPrimary)
+         .text(String(row[i] == null ? '' : row[i]), x + padX, y + padY, {
+           width: cw,
+           align,
+           lineBreak: true,
+           height: cellHeight - padY * 2,
+         });
+      x += widths[i];
+    }
+
+    // Row separator
+    doc.save();
+    doc.rect(PDF_MARGIN, y + cellHeight - 0.3, pageWidth, 0.3).fill(PDF_THEME.border);
+    doc.restore();
+
+    y += cellHeight;
   });
-  
-  // Reset fill color
-  doc.fillColor('#000000');
-  
+
+  doc.fillColor(PDF_THEME.textPrimary).font('Helvetica').fontSize(10);
   return y;
 }
 
@@ -163,17 +392,12 @@ async function exportProductsReport({ branchId, format = 'xlsx', filters = {} })
     // Get business info
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
+    if (business) throwIfPlatformEmailDisabled(business);
     
-    // Get admin users
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    // Report export recipients (admins + staff opted in)
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
     
     let attachment;
@@ -241,10 +465,7 @@ async function exportProductsReport({ branchId, format = 'xlsx', filters = {} })
       const boxWidth = (doc.page.width - 100) / 2;
       const boxHeight = addSummaryBox(doc, 50, y, 'Total Products', totalProducts.toString(), '#3b82f6', boxWidth);
       addSummaryBox(doc, 50 + boxWidth + 10, y, 'Low Stock Items', lowStock.toString(), lowStock > 0 ? '#ef4444' : '#10b981', boxWidth);
-      y += boxHeight + 20;
-      
-      doc.addPage();
-      y = 50;
+      y += boxHeight + 16;
       
       // Table headers and data
       const headers = ['#', 'Product Name', 'Category', 'Stock', 'Price', 'Status'];
@@ -253,7 +474,7 @@ async function exportProductsReport({ branchId, format = 'xlsx', filters = {} })
         product.name || 'N/A',
         product.category || 'N/A',
         (product.stock || 0).toString(),
-        `₹${(product.price || 0).toFixed(2)}`,
+        pdfRsAmount(product.price || 0),
         (product.stock || 0) < (product.minimumStock || product.minStock || 0) ? '⚠️ Low' : '✓ OK'
       ]);
       
@@ -263,7 +484,7 @@ async function exportProductsReport({ branchId, format = 'xlsx', filters = {} })
       // Footer
       doc.fontSize(8)
          .fillColor('#6b7280')
-         .text(`Total Inventory Value: ₹${totalValue.toFixed(2)}`, 50, doc.page.height - 30, { align: 'center', width: doc.page.width - 100 });
+         .text(`Total Inventory Value: ${pdfRsAmount(totalValue)}`, 50, doc.page.height - 36, { align: 'center', width: doc.page.width - 100, lineBreak: true, height: 12 });
       
       doc.end();
       
@@ -280,22 +501,22 @@ async function exportProductsReport({ branchId, format = 'xlsx', filters = {} })
       };
     }
     
-    // Send email to all admin users
-    for (const admin of adminUsers) {
+    // Send export to all recipients (admins + staff with allow reports delivery)
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType: exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        logger.debug(`✅ Products report sent to ${admin.email}`);
+        logger.debug(`✅ Products report sent to ${recipient.email}`);
       } catch (emailError) {
-        logger.error(`❌ Error sending products report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending products report to ${recipient.email}:`, emailError);
       }
     }
     
-    return { success: true, message: `Products report sent to admin email(s)` };
+    return { success: true, message: `Products report sent to recipient(s)` };
   } catch (error) {
     logger.error('Error exporting products report:', error);
     throw error;
@@ -336,17 +557,12 @@ async function exportSalesReport({ branchId, format = 'xlsx', filters = {} }) {
     // Get business info
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
+    if (business) throwIfPlatformEmailDisabled(business);
     
-    // Get admin users
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    // Report export recipients (admins + staff opted in)
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
     
     let attachment;
@@ -418,22 +634,19 @@ async function exportSalesReport({ branchId, format = 'xlsx', filters = {} }) {
       // Summary boxes
       y += 20;
       const boxWidth = (doc.page.width - 100) / 4;
-      const boxHeight = addSummaryBox(doc, 50, y, 'Total Revenue', `₹${totalRevenue.toFixed(2)}`, '#10b981', boxWidth);
+      const boxHeight = addSummaryBox(doc, 50, y, 'Total Revenue', pdfRsAmount(totalRevenue), '#10b981', boxWidth);
       addSummaryBox(doc, 50 + boxWidth + 10, y, 'Completed', completedSales.toString(), '#3b82f6', boxWidth);
       addSummaryBox(doc, 50 + (boxWidth + 10) * 2, y, 'Partial', partialSales.toString(), '#f59e0b', boxWidth);
       addSummaryBox(doc, 50 + (boxWidth + 10) * 3, y, 'Unpaid', unpaidSales.toString(), '#ef4444', boxWidth);
-      y += boxHeight + 20;
-      
-      doc.addPage();
-      y = 50;
+      y += boxHeight + 16;
       
       // Table
       const headers = ['Bill No', 'Customer', 'Date', 'Amount', 'Status', 'Payment'];
-      const rows = sales.slice(0, 100).map(sale => [
+      const rows = sales.map((sale) => [
         sale.billNo || 'N/A',
         (sale.customerName || 'N/A').substring(0, 20),
         sale.date ? new Date(sale.date).toLocaleDateString() : 'N/A',
-        `₹${(sale.grossTotal || 0).toFixed(2)}`,
+        pdfRsAmount(sale.grossTotal || 0),
         sale.status || 'N/A',
         sale.paymentMode || 'N/A'
       ]);
@@ -441,16 +654,10 @@ async function exportSalesReport({ branchId, format = 'xlsx', filters = {} }) {
       const colWidths = [60, 120, 80, 80, 60, 80];
       y = addTable(doc, y, headers, rows, { colWidths });
       
-      if (sales.length > 100) {
-        doc.fontSize(10)
-           .fillColor('#6b7280')
-           .text(`... and ${sales.length - 100} more sales`, 50, y + 10, { align: 'center', width: doc.page.width - 100 });
-      }
-      
       // Footer
       doc.fontSize(8)
          .fillColor('#6b7280')
-         .text(`Total Sales: ${sales.length} | Total Revenue: ₹${totalRevenue.toFixed(2)}`, 50, doc.page.height - 30, { align: 'center', width: doc.page.width - 100 });
+         .text(`Total Sales: ${sales.length} | Total Revenue: ${pdfRsAmount(totalRevenue)}`, 50, doc.page.height - 36, { align: 'center', width: doc.page.width - 100, lineBreak: true, height: 12 });
       
       doc.end();
       
@@ -471,22 +678,22 @@ async function exportSalesReport({ branchId, format = 'xlsx', filters = {} }) {
       throw new Error(`Unsupported format: ${format}. Supported formats: xlsx, pdf`);
     }
     
-    // Send email to all admin users
-    for (const admin of adminUsers) {
+    // Send export to all recipients (admins + staff with allow reports delivery)
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType: exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        logger.debug(`✅ Sales report sent to ${admin.email}`);
+        logger.debug(`✅ Sales report sent to ${recipient.email}`);
       } catch (emailError) {
-        logger.error(`❌ Error sending sales report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending sales report to ${recipient.email}:`, emailError);
       }
     }
     
-    return { success: true, message: `Sales report sent to admin email(s)` };
+    return { success: true, message: `Sales report sent to recipient(s)` };
   } catch (error) {
     logger.error('Error exporting sales report:', error);
     throw error;
@@ -520,16 +727,11 @@ async function exportServicesReport({ branchId, format = 'xlsx', filters = {} })
     
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
+    if (business) throwIfPlatformEmailDisabled(business);
     
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
     
     let attachment;
@@ -583,11 +785,8 @@ async function exportServicesReport({ branchId, format = 'xlsx', filters = {} })
       y += 20;
       const boxWidth = (doc.page.width - 100) / 2;
       const boxHeight = addSummaryBox(doc, 50, y, 'Total Services', totalServices.toString(), '#3b82f6', boxWidth);
-      addSummaryBox(doc, 50 + boxWidth + 10, y, 'Average Price', `₹${avgPrice.toFixed(2)}`, '#10b981', boxWidth);
-      y += boxHeight + 20;
-      
-      doc.addPage();
-      y = 50;
+      addSummaryBox(doc, 50 + boxWidth + 10, y, 'Average Price', pdfRsAmount(avgPrice), '#10b981', boxWidth);
+      y += boxHeight + 16;
       
       // Table
       const headers = ['#', 'Service Name', 'Category', 'Price', 'Duration', 'Status'];
@@ -595,7 +794,7 @@ async function exportServicesReport({ branchId, format = 'xlsx', filters = {} })
         (index + 1).toString(),
         service.name || 'N/A',
         service.category || 'N/A',
-        `₹${(service.price || 0).toFixed(2)}`,
+        pdfRsAmount(service.price || 0),
         service.duration ? `${service.duration} min` : 'N/A',
         service.status || 'active'
       ]);
@@ -606,7 +805,7 @@ async function exportServicesReport({ branchId, format = 'xlsx', filters = {} })
       // Footer
       doc.fontSize(8)
          .fillColor('#6b7280')
-         .text(`Total Services: ${totalServices}`, 50, doc.page.height - 30, { align: 'center', width: doc.page.width - 100 });
+         .text(`Total Services: ${totalServices}`, 50, doc.page.height - 36, { align: 'center', width: doc.page.width - 100, lineBreak: true, height: 12 });
       
       doc.end();
       
@@ -626,21 +825,21 @@ async function exportServicesReport({ branchId, format = 'xlsx', filters = {} })
       throw new Error(`Unsupported format: ${format}. Supported formats: xlsx, pdf`);
     }
     
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType: exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        logger.debug(`✅ Services report sent to ${admin.email}`);
+        logger.debug(`✅ Services report sent to ${recipient.email}`);
       } catch (emailError) {
-        logger.error(`❌ Error sending services report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending services report to ${recipient.email}:`, emailError);
       }
     }
     
-    return { success: true, message: `Services report sent to admin email(s)` };
+    return { success: true, message: `Services report sent to recipient(s)` };
   } catch (error) {
     logger.error('Error exporting services report:', error);
     throw error;
@@ -678,16 +877,11 @@ async function exportClientsReport({ branchId, format = 'xlsx', filters = {} }) 
     
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
+    if (business) throwIfPlatformEmailDisabled(business);
     
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
     
     let attachment;
@@ -740,10 +934,7 @@ async function exportClientsReport({ branchId, format = 'xlsx', filters = {} }) 
       const boxWidth = (doc.page.width - 100) / 2;
       const boxHeight = addSummaryBox(doc, 50, y, 'Total Clients', totalClients.toString(), '#3b82f6', boxWidth);
       addSummaryBox(doc, 50 + boxWidth + 10, y, 'Active Clients', activeClients.toString(), '#10b981', boxWidth);
-      y += boxHeight + 20;
-      
-      doc.addPage();
-      y = 50;
+      y += boxHeight + 16;
       
       // Table
       const headers = ['#', 'Client Name', 'Phone', 'Email', 'Status'];
@@ -761,7 +952,7 @@ async function exportClientsReport({ branchId, format = 'xlsx', filters = {} }) 
       // Footer
       doc.fontSize(8)
          .fillColor('#6b7280')
-         .text(`Total Clients: ${totalClients} | Active: ${activeClients}`, 50, doc.page.height - 30, { align: 'center', width: doc.page.width - 100 });
+         .text(`Total Clients: ${totalClients} | Active: ${activeClients}`, 50, doc.page.height - 36, { align: 'center', width: doc.page.width - 100, lineBreak: true, height: 12 });
       
       doc.end();
       
@@ -781,21 +972,21 @@ async function exportClientsReport({ branchId, format = 'xlsx', filters = {} }) 
       throw new Error(`Unsupported format: ${format}. Supported formats: xlsx, pdf`);
     }
     
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType: exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        logger.debug(`✅ Clients report sent to ${admin.email}`);
+        logger.debug(`✅ Clients report sent to ${recipient.email}`);
       } catch (emailError) {
-        logger.error(`❌ Error sending clients report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending clients report to ${recipient.email}:`, emailError);
       }
     }
     
-    return { success: true, message: `Clients report sent to admin email(s)` };
+    return { success: true, message: `Clients report sent to recipient(s)` };
   } catch (error) {
     logger.error('Error exporting clients report:', error);
     throw error;
@@ -835,16 +1026,11 @@ async function exportExpenseReport({ branchId, format = 'xlsx', filters = {} }) 
     
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
+    if (business) throwIfPlatformEmailDisabled(business);
     
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
     
     let attachment;
@@ -901,12 +1087,9 @@ async function exportExpenseReport({ branchId, format = 'xlsx', filters = {} }) 
       
       y += 20;
       const boxWidth = (doc.page.width - 100) / 2;
-      const boxHeight = addSummaryBox(doc, 50, y, 'Total Expenses', `₹${totalExpenses.toFixed(2)}`, '#ef4444', boxWidth);
-      addSummaryBox(doc, 50 + boxWidth + 10, y, 'Average Expense', `₹${avgExpense.toFixed(2)}`, '#f59e0b', boxWidth);
-      y += boxHeight + 20;
-      
-      doc.addPage();
-      y = 50;
+      const boxHeight = addSummaryBox(doc, 50, y, 'Total Expenses', pdfRsAmount(totalExpenses), '#ef4444', boxWidth);
+      addSummaryBox(doc, 50 + boxWidth + 10, y, 'Average Expense', pdfRsAmount(avgExpense), '#f59e0b', boxWidth);
+      y += boxHeight + 16;
       
       // Table
       const headers = ['#', 'Category', 'Description', 'Date', 'Amount', 'Payment Method'];
@@ -915,7 +1098,7 @@ async function exportExpenseReport({ branchId, format = 'xlsx', filters = {} }) 
         expense.category || 'N/A',
         (expense.description || '').substring(0, 30),
         expense.date ? new Date(expense.date).toLocaleDateString() : 'N/A',
-        `₹${(expense.amount || 0).toFixed(2)}`,
+        pdfRsAmount(expense.amount || 0),
         expense.paymentMethod || 'N/A'
       ]);
       
@@ -925,7 +1108,7 @@ async function exportExpenseReport({ branchId, format = 'xlsx', filters = {} }) 
       // Footer
       doc.fontSize(8)
          .fillColor('#6b7280')
-         .text(`Total Expenses: ₹${totalExpenses.toFixed(2)} | Records: ${expenses.length}`, 50, doc.page.height - 30, { align: 'center', width: doc.page.width - 100 });
+         .text(`Total Expenses: ${pdfRsAmount(totalExpenses)} | Records: ${expenses.length}`, 50, doc.page.height - 36, { align: 'center', width: doc.page.width - 100, lineBreak: true, height: 12 });
       
       doc.end();
       
@@ -945,21 +1128,21 @@ async function exportExpenseReport({ branchId, format = 'xlsx', filters = {} }) 
       throw new Error(`Unsupported format: ${format}. Supported formats: xlsx, pdf`);
     }
     
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType: exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        logger.debug(`✅ Expense report sent to ${admin.email}`);
+        logger.debug(`✅ Expense report sent to ${recipient.email}`);
       } catch (emailError) {
-        logger.error(`❌ Error sending expense report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending expense report to ${recipient.email}:`, emailError);
       }
     }
     
-    return { success: true, message: `Expense report sent to admin email(s)` };
+    return { success: true, message: `Expense report sent to recipient(s)` };
   } catch (error) {
     logger.error('Error exporting expense report:', error);
     throw error;
@@ -983,16 +1166,11 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
     
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
+    if (business) throwIfPlatformEmailDisabled(business);
     
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
     
     const reportType = filters.reportType || 'summary';
@@ -1087,6 +1265,7 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
                 !(s.paymentMode || '').toLowerCase().includes('card') &&
                 !(s.paymentMode || '').toLowerCase().includes('online');
             }
+            cashAmt += billChangeCreditedToWalletCashAddition(s);
             const tip = s.tip || 0;
             cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
           });
@@ -1231,21 +1410,18 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
         y += 20;
         const boxWidth = (doc.page.width - 100) / 3;
         const boxHeight = addSummaryBox(doc, 50, y, 'Total Days', totalDays.toString(), '#3b82f6', boxWidth);
-        addSummaryBox(doc, 50 + boxWidth + 10, y, 'Avg Opening', `₹${avgOpening.toFixed(2)}`, '#10b981', boxWidth);
-        addSummaryBox(doc, 50 + (boxWidth + 10) * 2, y, 'Avg Closing', `₹${avgClosing.toFixed(2)}`, '#f59e0b', boxWidth);
-        y += boxHeight + 20;
-        
-        doc.addPage();
-        y = 50;
+        addSummaryBox(doc, 50 + boxWidth + 10, y, 'Avg Opening', pdfRsAmount(avgOpening), '#10b981', boxWidth);
+        addSummaryBox(doc, 50 + (boxWidth + 10) * 2, y, 'Avg Closing', pdfRsAmount(avgClosing), '#f59e0b', boxWidth);
+        y += boxHeight + 16;
         
         // Table
         const headers = ['#', 'Date', 'Opening Balance', 'Closing Balance', 'Difference'];
         const rows = summaries.map((summary, index) => [
           (index + 1).toString(),
           new Date(summary.date).toLocaleDateString(),
-          `₹${summary.openingBalance.toFixed(2)}`,
-          `₹${summary.closingBalance.toFixed(2)}`,
-          `₹${(summary.closingBalance - summary.openingBalance).toFixed(2)}`
+          pdfRsAmount(summary.openingBalance),
+          pdfRsAmount(summary.closingBalance),
+          pdfRsAmount(summary.closingBalance - summary.openingBalance)
         ]);
         
         const colWidths = [30, 100, 120, 120, 100];
@@ -1259,10 +1435,7 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
         const boxWidth = (doc.page.width - 100) / 2;
         const boxHeight = addSummaryBox(doc, 50, y, 'Total Entries', totalEntries.toString(), '#3b82f6', boxWidth);
         addSummaryBox(doc, 50 + boxWidth + 10, y, 'Verified', verifiedEntries.toString(), '#10b981', boxWidth);
-        y += boxHeight + 20;
-        
-        doc.addPage();
-        y = 50;
+        y += boxHeight + 16;
         
         // Table
         const headers = ['#', 'Date', 'Shift', 'Opening', 'Closing', 'Status'];
@@ -1270,8 +1443,8 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
           (index + 1).toString(),
           entry.date ? new Date(entry.date).toLocaleDateString() : 'N/A',
           entry.shiftType === 'opening' ? 'Opening' : 'Closing',
-          `₹${(entry.openingBalance || 0).toFixed(2)}`,
-          `₹${(entry.closingBalance || 0).toFixed(2)}`,
+          pdfRsAmount(entry.openingBalance || 0),
+          pdfRsAmount(entry.closingBalance || 0),
           entry.isVerified ? '✓ Verified' : '⏳ Pending'
         ]);
         
@@ -1282,7 +1455,7 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
       // Footer
       doc.fontSize(8)
          .fillColor('#6b7280')
-         .text(`Generated: ${new Date().toLocaleString()}`, 50, doc.page.height - 30, { align: 'center', width: doc.page.width - 100 });
+         .text(`Generated: ${new Date().toLocaleString()}`, 50, doc.page.height - 36, { align: 'center', width: doc.page.width - 100, lineBreak: true, height: 12 });
       
       doc.end();
       
@@ -1302,21 +1475,21 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
       throw new Error(`Unsupported format: ${format}. Supported formats: xlsx, pdf`);
     }
     
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType: exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
-        logger.debug(`✅ Cash registry report sent to ${admin.email}`);
+        logger.debug(`✅ Cash registry report sent to ${recipient.email}`);
       } catch (emailError) {
-        logger.error(`❌ Error sending cash registry report to ${admin.email}:`, emailError);
+        logger.error(`❌ Error sending cash registry report to ${recipient.email}:`, emailError);
       }
     }
     
-    return { success: true, message: `Cash registry report sent to admin email(s)` };
+    return { success: true, message: `Cash registry report sent to recipient(s)` };
   } catch (error) {
     logger.error('Error exporting cash registry report:', error);
     throw error;
@@ -1414,6 +1587,9 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
         else if (s.paymentMode === 'Online') totalSalesOnline += amt;
         else if (s.paymentMode === 'Card') totalSalesCard += amt;
       }
+      const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
+      totalSalesCash += walletCashAdd;
+      cashAmt += walletCashAdd;
       if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
     });
     let duesCollected = 0;
@@ -1466,14 +1642,10 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    if (business) throwIfPlatformEmailDisabled(business);
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
 
     const periodText = `${dateFrom.toLocaleDateString()} - ${dateTo.toLocaleDateString()}`;
@@ -1515,16 +1687,16 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
       const metrics = [
         ['Total Bill Count', String(summaryData.totalBillCount)],
         ['Total Customer Count', String(summaryData.totalCustomerCount)],
-        ['Total Sales', `₹${fmt(summaryData.totalSales)}`],
-        ['Total Sales (Cash)', `₹${fmt(summaryData.totalSalesCash)}`],
-        ['Total Sales (Online)', `₹${fmt(summaryData.totalSalesOnline)}`],
-        ['Total Sales (Card)', `₹${fmt(summaryData.totalSalesCard)}`],
-        ['Dues Collected', `₹${fmt(summaryData.duesCollected)}`],
-        ['Cash Expense', `₹${fmt(summaryData.cashExpense)}`],
-        ['Petty Cash Expense', `₹${fmt(summaryData.pettyCashExpense)}`],
-        ['Tip Collected', `₹${fmt(summaryData.tipCollected)}`],
-        ['Cash Balance', `₹${fmt(summaryData.cashBalance)}`],
-        ['Total Due (Outstanding)', `₹${fmt(summaryData.totalDue)}`],
+        ['Total Sales', `${PDF_RS}${fmt(summaryData.totalSales)}`],
+        ['Total Sales (Cash)', `${PDF_RS}${fmt(summaryData.totalSalesCash)}`],
+        ['Total Sales (Online)', `${PDF_RS}${fmt(summaryData.totalSalesOnline)}`],
+        ['Total Sales (Card)', `${PDF_RS}${fmt(summaryData.totalSalesCard)}`],
+        ['Dues Collected', `${PDF_RS}${fmt(summaryData.duesCollected)}`],
+        ['Cash Expense', `${PDF_RS}${fmt(summaryData.cashExpense)}`],
+        ['Petty Cash Expense', `${PDF_RS}${fmt(summaryData.pettyCashExpense)}`],
+        ['Tip Collected', `${PDF_RS}${fmt(summaryData.tipCollected)}`],
+        ['Cash Balance', `${PDF_RS}${fmt(summaryData.cashBalance)}`],
+        ['Total Due (Outstanding)', `${PDF_RS}${fmt(summaryData.totalDue)}`],
         ['Customers with Due', String(summaryData.customersWithDue)]
       ];
       const headers = ['Metric', 'Value'];
@@ -1540,19 +1712,19 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
       throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
     }
 
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
       } catch (emailError) {
-        logger.error('Error sending summary export to', admin.email, emailError);
+        logger.error('Error sending summary export to', recipient.email, emailError);
       }
     }
-    return { success: true, message: 'Summary report sent to admin email(s)' };
+    return { success: true, message: 'Summary report sent to recipient(s)' };
   } catch (error) {
     logger.error('Error exporting summary report:', error);
     throw error;
@@ -1565,26 +1737,24 @@ async function exportSummaryReport({ branchId, format = 'xlsx', filters = {} }) 
 async function exportStaffPerformanceReport({ branchId, format = 'xlsx', filters = {}, data = [] }) {
   try {
     const mainConnection = await databaseManager.getMainConnection();
+    const businessDb = await databaseManager.getConnection(branchId, mainConnection);
+    const businessModels = modelFactory.createBusinessModels(businessDb);
     const emailService = require('../services/email-service');
     if (!emailService.initialized) {
       await emailService.initialize();
     }
 
-    const { dateFrom, dateTo, periodLabel, currencySymbol = '₹' } = filters;
+    const { dateFrom, dateTo, periodLabel } = filters;
     const periodText = periodLabel || (dateFrom && dateTo
       ? `${new Date(dateFrom).toLocaleDateString()} - ${new Date(dateTo).toLocaleDateString()}`
       : 'Period: N/A');
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    if (business) throwIfPlatformEmailDisabled(business);
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
 
     const totalRevenue = data.reduce((sum, r) => sum + (r.totalRevenue || 0), 0);
@@ -1598,7 +1768,7 @@ async function exportStaffPerformanceReport({ branchId, format = 'xlsx', filters
     let fileName;
     const exportType = 'Staff Performance Report';
 
-    const fmt = (amount) => (amount != null ? `${currencySymbol}${Number(amount).toFixed(2)}` : '—');
+    const fmt = (amount) => (amount != null ? pdfRsAmount(amount) : '—');
 
     if (format === 'xlsx') {
       const rows = data.map((r) => ({
@@ -1675,19 +1845,19 @@ async function exportStaffPerformanceReport({ branchId, format = 'xlsx', filters
       throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
     }
 
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
       } catch (emailError) {
-        logger.error('Error sending staff performance export to', admin.email, emailError);
+        logger.error('Error sending staff performance export to', recipient.email, emailError);
       }
     }
-    return { success: true, message: 'Staff performance report sent to admin email(s)' };
+    return { success: true, message: 'Staff performance report sent to recipient(s)' };
   } catch (error) {
     logger.error('Error exporting staff performance report:', error);
     throw error;
@@ -1791,14 +1961,10 @@ async function exportServiceListReport({ branchId, format = 'xlsx', filters = {}
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    if (business) throwIfPlatformEmailDisabled(business);
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
 
     let attachment;
@@ -1841,8 +2007,8 @@ async function exportServiceListReport({ branchId, format = 'xlsx', filters = {}
       const tableRows = rows.map((r) => [
         r.billNo,
         r.service,
-        `₹${Number(r.price).toFixed(2)}`,
-        `₹${Number(r.total).toFixed(2)}`,
+        pdfRsAmount(r.price),
+        pdfRsAmount(r.total),
         String(r.quantity),
         r.staff,
         `${r.durationMinutes} min`,
@@ -1863,19 +2029,19 @@ async function exportServiceListReport({ branchId, format = 'xlsx', filters = {}
       throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
     }
 
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
       } catch (emailError) {
-        logger.error('Error sending service list export to', admin.email, emailError);
+        logger.error('Error sending service list export to', recipient.email, emailError);
       }
     }
-    return { success: true, message: 'Service list report sent to admin email(s)' };
+    return { success: true, message: 'Service list report sent to recipient(s)' };
   } catch (error) {
     logger.error('Error exporting service list report:', error);
     throw error;
@@ -1959,14 +2125,10 @@ async function exportProductListReport({ branchId, format = 'xlsx', filters = {}
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    if (business) throwIfPlatformEmailDisabled(business);
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
 
     let attachment;
@@ -2008,8 +2170,8 @@ async function exportProductListReport({ branchId, format = 'xlsx', filters = {}
       const tableRows = rows.map((r) => [
         r.billNo,
         r.product,
-        `₹${Number(r.price).toFixed(2)}`,
-        `₹${Number(r.total).toFixed(2)}`,
+        pdfRsAmount(r.price),
+        pdfRsAmount(r.total),
         String(r.quantity),
         r.staff,
         r.customer,
@@ -2030,19 +2192,19 @@ async function exportProductListReport({ branchId, format = 'xlsx', filters = {}
       throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
     }
 
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
       } catch (emailError) {
-        logger.error('Error sending product list export to', admin.email, emailError);
+        logger.error('Error sending product list export to', recipient.email, emailError);
       }
     }
-    return { success: true, message: 'Product list report sent to admin email(s)' };
+    return { success: true, message: 'Product list report sent to recipient(s)' };
   } catch (error) {
     logger.error('Error exporting product list report:', error);
     throw error;
@@ -2161,14 +2323,10 @@ async function exportAppointmentListReport({ branchId, format = 'xlsx', filters 
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    if (business) throwIfPlatformEmailDisabled(business);
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
 
     let attachment;
@@ -2203,7 +2361,7 @@ async function exportAppointmentListReport({ branchId, format = 'xlsx', filters 
         r.customerName,
         r.createdAt,
         r.startDate,
-        `₹${Number(r.price).toFixed(2)}`,
+        pdfRsAmount(r.price),
         r.status,
         r.paymentStatus
       ]);
@@ -2218,19 +2376,19 @@ async function exportAppointmentListReport({ branchId, format = 'xlsx', filters 
       throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
     }
 
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
       } catch (emailError) {
-        logger.error('Error sending appointment list export to', admin.email, emailError);
+        logger.error('Error sending appointment list export to', recipient.email, emailError);
       }
     }
-    return { success: true, message: 'Appointment list report sent to admin email(s)' };
+    return { success: true, message: 'Appointment list report sent to recipient(s)' };
   } catch (error) {
     logger.error('Error exporting appointment list report:', error);
     throw error;
@@ -2274,14 +2432,10 @@ async function exportUnpaidPartPaidReport({ branchId, format = 'xlsx', filters =
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    if (business) throwIfPlatformEmailDisabled(business);
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
 
     let attachment;
@@ -2318,9 +2472,9 @@ async function exportUnpaidPartPaidReport({ branchId, format = 'xlsx', filters =
         r.billNo,
         r.customerName,
         r.date,
-        `₹${Number(r.invoiceAmount).toFixed(2)}`,
-        `₹${Number(r.duesSettledInPeriod).toFixed(2)}`,
-        `₹${Number(r.outstandingAmount).toFixed(2)}`,
+        pdfRsAmount(r.invoiceAmount),
+        pdfRsAmount(r.duesSettledInPeriod),
+        pdfRsAmount(r.outstandingAmount),
         r.status
       ]);
       const colWidths = [68, 84, 68, 64, 68, 64, 56];
@@ -2334,19 +2488,19 @@ async function exportUnpaidPartPaidReport({ branchId, format = 'xlsx', filters =
       throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
     }
 
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
       } catch (emailError) {
-        logger.error('Error sending unpaid/part-paid export to', admin.email, emailError);
+        logger.error('Error sending unpaid/part-paid export to', recipient.email, emailError);
       }
     }
-    return { success: true, message: 'Unpaid/Part-Paid report sent to admin email(s)' };
+    return { success: true, message: 'Unpaid/Part-Paid report sent to recipient(s)' };
   } catch (error) {
     logger.error('Error exporting unpaid/part-paid report:', error);
     throw error;
@@ -2386,14 +2540,10 @@ async function exportDeletedInvoicesReport({ branchId, format = 'xlsx', filters 
 
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const business = await Business.findById(branchId);
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: branchId,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    if (adminUsers.length === 0) {
-      throw new Error('No admin email found to send export to');
+    if (business) throwIfPlatformEmailDisabled(business);
+    const recipients = await getReportExportRecipientList(branchId, mainConnection, businessModels);
+    if (recipients.length === 0) {
+      throw new Error('No recipient email found to send export to. Ensure an admin user has an email, or enable "Allow reports delivery" for a staff member with email notifications on.');
     }
 
     let attachment;
@@ -2428,7 +2578,7 @@ async function exportDeletedInvoicesReport({ branchId, format = 'xlsx', filters 
         r.date,
         r.reason,
         r.cancelledBy,
-        `₹${Number(r.grossTotal).toFixed(2)}`
+        pdfRsAmount(r.grossTotal)
       ]);
       const colWidths = [100, 80, 120, 80, 80];
       y = addTable(doc, y, headers, tableRows, { colWidths });
@@ -2441,19 +2591,19 @@ async function exportDeletedInvoicesReport({ branchId, format = 'xlsx', filters 
       throw new Error(`Unsupported format: ${format}. Supported: xlsx, pdf`);
     }
 
-    for (const admin of adminUsers) {
+    for (const recipient of recipients) {
       try {
         await emailService.sendExportReady({
-          to: admin.email,
+          to: recipient.email,
           exportType,
           businessName: business?.name || 'Business',
           attachments: [attachment]
         });
       } catch (emailError) {
-        logger.error('Error sending deleted invoice export to', admin.email, emailError);
+        logger.error('Error sending deleted invoice export to', recipient.email, emailError);
       }
     }
-    return { success: true, message: 'Deleted invoice report sent to admin email(s)' };
+    return { success: true, message: 'Deleted invoice report sent to recipient(s)' };
   } catch (error) {
     logger.error('Error exporting deleted invoice report:', error);
     throw error;

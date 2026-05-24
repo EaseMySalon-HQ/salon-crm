@@ -1,4 +1,5 @@
 const { getStartOfDayIST, getEndOfDayIST } = require('./date-utils');
+const { billChangeCreditedToWalletCashAddition } = require('./bill-change-wallet-cash');
 
 /**
  * Closing rows are often saved with openingBalance: 0 from the client modal; the real opening
@@ -88,6 +89,7 @@ async function computeDayCashLedger({ Sale, Expense, branchId, registryDate }) {
         isAllCash = true;
       }
     }
+    cashAmt += billChangeCreditedToWalletCashAddition(sale);
     const tip = sale.tip || 0;
     cashFromNewBills += cashAmt - (isAllCash ? tip : 0);
   });
@@ -117,4 +119,136 @@ async function computeDayCashLedger({ Sale, Expense, branchId, registryDate }) {
   return { cashCollected, expenseValue };
 }
 
-module.exports = { computeDayCashLedger, resolveOpeningBalanceForRegistryDay };
+/**
+ * Cash movements for drawer reconciliation (not expenses).
+ *
+ * @param {object} opts
+ * @param {import('mongoose').Model} opts.CashMovement
+ * @param {import('mongoose').Types.ObjectId|string} opts.branchId
+ * @param {Date|string} opts.registryDate
+ * @returns {Promise<{ cashIn: number, cashOut: number }>}
+ */
+async function computeDayCashMovements({ CashMovement, branchId, registryDate }) {
+  if (!CashMovement) return { cashIn: 0, cashOut: 0 };
+  const startOfDay = getStartOfDayIST(registryDate);
+  const endOfDay = getEndOfDayIST(registryDate);
+
+  const movements = await CashMovement.find({
+    branchId,
+    date: { $gte: startOfDay, $lt: endOfDay },
+    status: 'active',
+  }).lean();
+
+  let cashIn = 0;
+  let cashOut = 0;
+  movements.forEach((m) => {
+    const amt = Number(m.amount) || 0;
+    if (m.direction === 'in') cashIn += amt;
+    else cashOut += amt;
+  });
+  return { cashIn, cashOut };
+}
+
+/**
+ * Expected physical cash in drawer for reconciliation.
+ */
+function computeExpectedCashBalance({
+  opening = 0,
+  cashCollected = 0,
+  expenseValue = 0,
+  cashIn = 0,
+  cashOut = 0,
+}) {
+  return (
+    Number(opening) +
+    Number(cashCollected) -
+    Number(expenseValue) +
+    Number(cashIn) -
+    Number(cashOut)
+  );
+}
+
+/**
+ * Card + Online totals for one IST calendar day — aligned with cash-registry-report
+ * getEntryOnlineSales (invoice-day Card/Online + paymentHistory Card/Online on payment date).
+ *
+ * @param {object} opts
+ * @param {import('mongoose').Model} opts.Sale
+ * @param {import('mongoose').Types.ObjectId|string} opts.branchId
+ * @param {Date|string} opts.registryDate
+ * @returns {Promise<number>}
+ */
+async function computeDayOnlineSales({ Sale, branchId, registryDate }) {
+  if (!Sale) return 0;
+  const startOfDay = getStartOfDayIST(registryDate);
+  const endOfDay = getEndOfDayIST(registryDate);
+
+  const salesToday = await Sale.find({
+    branchId,
+    date: { $gte: startOfDay, $lt: endOfDay },
+    status: { $nin: ['cancelled', 'Cancelled'] },
+  }).lean();
+
+  const salesWithOnlineDuesToday = await Sale.find({
+    branchId,
+    paymentHistory: {
+      $elemMatch: {
+        date: { $gte: startOfDay, $lt: endOfDay },
+      },
+    },
+    status: { $nin: ['cancelled', 'Cancelled'] },
+  }).lean();
+
+  let total = 0;
+
+  const addFromInvoiceDay = (sale) => {
+    if (sale.payments && sale.payments.length > 0) {
+      sale.payments.forEach((p) => {
+        const mode = p.mode || p.type || '';
+        if (mode === 'Card' || mode === 'Online') {
+          total += Number(p.amount) || 0;
+        }
+      });
+    } else {
+      const pm = sale.paymentMode || '';
+      if (pm === 'Card' || pm === 'Online') {
+        total += Number(sale.netTotal || sale.grossTotal || 0) || 0;
+      }
+    }
+  };
+
+  const addFromPaymentHistory = (sale) => {
+    (sale.paymentHistory || []).forEach((ph) => {
+      if (!ph) return;
+      const method = (ph.method || '').toLowerCase();
+      if (method !== 'card' && method !== 'online') return;
+      const phDate = ph.date ? new Date(ph.date) : null;
+      if (phDate && phDate >= startOfDay && phDate < endOfDay) {
+        total += Number(ph.amount) || 0;
+      }
+    });
+  };
+
+  const todayIds = new Set(salesToday.map((s) => s._id.toString()));
+
+  salesToday.forEach((sale) => {
+    addFromInvoiceDay(sale);
+    addFromPaymentHistory(sale);
+  });
+
+  salesWithOnlineDuesToday.forEach((sale) => {
+    if (!todayIds.has(sale._id.toString())) {
+      addFromPaymentHistory(sale);
+    }
+  });
+
+  return total;
+}
+
+module.exports = {
+  computeDayCashLedger,
+  computeDayCashMovements,
+  computeExpectedCashBalance,
+  computeDayOnlineSales,
+  resolveOpeningBalanceForRegistryDay,
+};

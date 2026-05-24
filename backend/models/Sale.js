@@ -35,7 +35,9 @@ const itemSchema = new mongoose.Schema({
   // Price per unit excluding GST (for receipt display)
   priceExcludingGST: { type: Number },
   // Applicable tax rate % (for receipt display)
-  taxRate: { type: Number }
+  taxRate: { type: Number },
+  /** For bills linked to a booking: pre-booked service vs checkout add-on (reports / receipts). Server-set only. */
+  lineSource: { type: String, enum: ['appointment', 'walk_in'], required: false }
 }, { _id: false });
 
 const paymentHistorySchema = new mongoose.Schema({
@@ -44,6 +46,12 @@ const paymentHistorySchema = new mongoose.Schema({
   method: { type: String, enum: ['Cash', 'Card', 'Online', 'Wallet'], required: true },
   notes: { type: String, default: '' },
   collectedBy: { type: String, default: '' }
+}, { _id: false });
+
+const saleTipLineSchema = new mongoose.Schema({
+  staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff', required: true },
+  staffName: { type: String, default: '' },
+  amount: { type: Number, required: true, min: 0 },
 }, { _id: false });
 
 const saleSchema = new mongoose.Schema({
@@ -91,6 +99,8 @@ const saleSchema = new mongoose.Schema({
   tip: { type: Number, default: 0, min: 0 },
   tipStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff', default: null },
   tipStaffName: { type: String, default: '' },
+  /** Split tips: receipt + staff-tip report use each row; tip / tipStaffId remain totals + first recipient for legacy. */
+  tipLines: { type: [saleTipLineSchema], default: [] },
 
   staffName: { type: String, required: true },
   items: [itemSchema],
@@ -112,6 +122,12 @@ const saleSchema = new mongoose.Schema({
     type: String, 
     unique: true,
     sparse: true // Allows null values but enforces uniqueness when present
+  },
+  /** Opaque token for public feedback page (per invoice). */
+  feedbackToken: {
+    type: String,
+    unique: true,
+    sparse: true,
   },
   // Assign membership on checkout (Quick Sale flow)
   planToAssignId: { type: mongoose.Schema.Types.ObjectId, ref: 'MembershipPlan', default: null },
@@ -160,12 +176,17 @@ saleSchema.pre('save', function(next) {
     }
   }
   
-  // Generate shareToken if it doesn't exist (for public receipt access)
-  if (!this.shareToken) {
+  // Generate shareToken / feedbackToken if missing (public receipt / feedback links)
+  if (!this.shareToken || !this.feedbackToken) {
     const crypto = require('crypto');
-    this.shareToken = crypto.randomBytes(32).toString('hex');
+    if (!this.shareToken) {
+      this.shareToken = crypto.randomBytes(32).toString('hex');
+    }
+    if (!this.feedbackToken) {
+      this.feedbackToken = crypto.randomBytes(32).toString('hex');
+    }
   }
-  
+
   next()
 });
 

@@ -29,7 +29,25 @@ export function FinanceInvoiceGstPage() {
       })
       if (res.ok) {
         const data = await res.json()
-        setSettings(data.data || {})
+        const loaded = data.data || {}
+        const inv =
+          typeof loaded.invoice === "object" && loaded.invoice !== null
+            ? loaded.invoice
+            : {}
+        setSettings({
+          ...loaded,
+          invoice: {
+            ...inv,
+            planInvoicePrefix:
+              typeof inv.planInvoicePrefix === "string" && inv.planInvoicePrefix
+                ? inv.planInvoicePrefix
+                : "EMS/SUB",
+            invoicePrefix:
+              typeof inv.invoicePrefix === "string" && inv.invoicePrefix
+                ? inv.invoicePrefix
+                : "EMS/WLT",
+          },
+        })
       }
     } catch (e) {
       console.error("Failed to load admin settings:", e)
@@ -41,7 +59,13 @@ export function FinanceInvoiceGstPage() {
   }, [loadSettings])
 
   const handleInvoiceChange = (invoice: object) => {
-    setSettings((prev) => ({ ...prev, invoice }))
+    setSettings((prev) => ({
+      ...prev,
+      invoice: {
+        ...(typeof prev.invoice === "object" && prev.invoice !== null ? prev.invoice : {}),
+        ...invoice,
+      },
+    }))
     setHasUnsavedChanges(true)
   }
 

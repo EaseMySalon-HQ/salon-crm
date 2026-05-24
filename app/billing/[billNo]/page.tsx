@@ -62,9 +62,13 @@ export default function BillingPage() {
     }
   }, [billNo, mode, router, toast])
 
+  // Edit / Exchange both mutate an existing bill, so require sales.edit.
+  // Create mode falls back to sales.create (matches quick-sale entry).
+  const requiredFeature = mode === "create" ? "create" : "edit"
+
   return (
-    <ProtectedRoute requiredModule="sales">
-      <ProtectedLayout requiredModule="sales">
+    <ProtectedRoute requiredModule="sales" requiredFeature={requiredFeature}>
+      <ProtectedLayout requiredModule="sales" requiredFeature={requiredFeature}>
         <QuickSale mode={mode} initialSale={initialSale} billLoading={loading} />
       </ProtectedLayout>
     </ProtectedRoute>

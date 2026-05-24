@@ -18,7 +18,7 @@ export type GstSource = "wallet" | "plan" | "all"
 export type GstProvider = "razorpay" | "stripe" | "zoho" | "system" | "all"
 export type GstStatus = "generated" | "reported" | "filed" | "all"
 export type GstBuyerType = "B2B" | "B2C" | "all"
-export type GstExportFormat = "csv" | "xlsx" | "gstr1"
+export type GstExportFormat = "csv" | "xlsx" | "gstr1" | "gstr1_json"
 
 export interface GstInvoiceRow {
   _id: string
@@ -240,7 +240,9 @@ export class AdminGstAPI {
         ? "gst-invoices.csv"
         : format === "gstr1"
           ? "gstr1.xlsx"
-          : "gst-invoices.xlsx"
+          : format === "gstr1_json"
+            ? "gstr1.json"
+            : "gst-invoices.xlsx"
     const filename = match?.[1] || fallback
 
     const url = URL.createObjectURL(blob)
@@ -290,5 +292,146 @@ export class AdminGstAPI {
     a.remove()
     URL.revokeObjectURL(url)
     return filename
+  }
+}
+
+// ── Platform leads ───────────────────────────────────────────────────────
+
+export type PlatformLeadStatus = "new" | "follow-up" | "converted" | "lost"
+export type PlatformLeadSource =
+  | "walk-in"
+  | "phone"
+  | "website"
+  | "social"
+  | "referral"
+  | "other"
+
+export interface PlatformLeadRow {
+  _id: string
+  name: string
+  salonName?: string
+  city?: string
+  branchCount?: string
+  preferredDemoTime?: string
+  phone: string
+  email?: string
+  source: PlatformLeadSource
+  status: PlatformLeadStatus
+  gender?: string
+  interestedIn?: string
+  assignedAdminId?: { _id: string; name?: string; firstName?: string; lastName?: string; email?: string } | string
+  followUpDate?: string
+  notes?: string
+  convertedToBusinessId?: { _id: string; name?: string; businessName?: string } | string
+  convertedAt?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface PlatformLeadActivityRow {
+  _id: string
+  leadId: string
+  activityType: string
+  performedByName: string
+  description: string
+  previousValue?: unknown
+  newValue?: unknown
+  field?: string
+  details?: Record<string, unknown>
+  createdAt: string
+}
+
+export interface AdminLeadAssignee {
+  _id: string
+  name: string
+  email: string
+}
+
+export interface AdminLeadsListResponse {
+  data: PlatformLeadRow[]
+  pagination: { page: number; limit: number; total: number; pages: number }
+}
+
+async function adminJsonEnvelope<T>(
+  path: string,
+  init: RequestInit = {}
+): Promise<{ success: boolean; data: T; pagination?: AdminLeadsListResponse["pagination"]; error?: string }> {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: adminRequestHeaders({
+      "Content-Type": "application/json",
+      ...(init.headers as Record<string, string> | undefined),
+    }),
+  })
+  const payload = await res.json().catch(() => ({}))
+  if (!res.ok || payload?.success === false) {
+    const message =
+      payload?.error ||
+      (typeof payload?.details === "object"
+        ? JSON.stringify(payload.details)
+        : "Request failed")
+    throw new Error(message)
+  }
+  return payload as { success: boolean; data: T; pagination?: AdminLeadsListResponse["pagination"] }
+}
+
+export class AdminLeadsAPI {
+  static async list(params?: {
+    page?: number
+    limit?: number
+    search?: string
+    status?: string
+    assignedAdminId?: string
+    source?: string
+    startDate?: string
+    endDate?: string
+  }): Promise<AdminLeadsListResponse> {
+    const payload = await adminJsonEnvelope<PlatformLeadRow[]>(
+      `/admin/leads${buildQuery(params as Record<string, unknown>)}`
+    )
+    return {
+      data: payload.data,
+      pagination: payload.pagination || { page: 1, limit: 50, total: payload.data.length, pages: 1 },
+    }
+  }
+
+  static getById(id: string): Promise<PlatformLeadRow> {
+    return adminJson<PlatformLeadRow>(`/admin/leads/${encodeURIComponent(id)}`)
+  }
+
+  static getActivities(id: string): Promise<PlatformLeadActivityRow[]> {
+    return adminJson<PlatformLeadActivityRow[]>(
+      `/admin/leads/${encodeURIComponent(id)}/activities`
+    )
+  }
+
+  static listAssignees(): Promise<AdminLeadAssignee[]> {
+    return adminJson<AdminLeadAssignee[]>(`/admin/leads/assignees`)
+  }
+
+  static create(data: Record<string, unknown>): Promise<PlatformLeadRow> {
+    return adminJson<PlatformLeadRow>(`/admin/leads`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  static update(id: string, data: Record<string, unknown>): Promise<PlatformLeadRow> {
+    return adminJson<PlatformLeadRow>(`/admin/leads/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+
+  static convert(id: string, businessId: string): Promise<PlatformLeadRow> {
+    return adminJson<PlatformLeadRow>(`/admin/leads/${encodeURIComponent(id)}/convert`, {
+      method: "POST",
+      body: JSON.stringify({ businessId }),
+    })
+  }
+
+  static delete(id: string): Promise<void> {
+    return adminJson(`/admin/leads/${encodeURIComponent(id)}`, { method: "DELETE" })
   }
 }

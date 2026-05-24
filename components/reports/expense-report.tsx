@@ -51,7 +51,7 @@ export function ExpenseReport() {
   const [isViewLogsOpen, setIsViewLogsOpen] = useState(false)
   const [addPettyCashAmount, setAddPettyCashAmount] = useState("")
   const [addPettyCashDate, setAddPettyCashDate] = useState(format(new Date(), "yyyy-MM-dd"))
-  const [pettyCashLogs, setPettyCashLogs] = useState<{ type: string; amount: number; date: string }[]>([])
+  const [pettyCashLogs, setPettyCashLogs] = useState<{ type: string; amount: number; date: string; label?: string }[]>([])
   const [pettyCashLogsLoading, setPettyCashLogsLoading] = useState(false)
 
   const fetchExpenses = async () => {
@@ -868,6 +868,7 @@ export function ExpenseReport() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Type</TableHead>
+                    <TableHead>Source</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                     <TableHead>Date</TableHead>
                   </TableRow>
@@ -879,6 +880,9 @@ export function ExpenseReport() {
                         <Badge variant={log.type === "add" ? "default" : "secondary"}>
                           {log.type === "add" ? "Added" : "Deducted"}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {log.label || (log.type === "add" ? "Manual add" : "—")}
                       </TableCell>
                       <TableCell className={`text-right font-mono ${log.amount >= 0 ? "text-green-600" : "text-red-600"}`}>
                         {log.amount >= 0 ? "+" : ""}{formatAmount(log.amount)}

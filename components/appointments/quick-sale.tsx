@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react"
+import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from "react"
 import { useSearchParams } from "next/navigation"
 import {
   Search,
@@ -30,7 +30,7 @@ import {
   ChevronUp,
   Edit,
   RefreshCw,
-  Package as PackageIcon,
+  ShoppingBag,
   AlertCircle,
   Wallet,
   Gift,
@@ -89,7 +89,6 @@ import {
   AppointmentsAPI,
   BlockTimeAPI,
   MembershipAPI,
-  PackagesAPI,
   ClientWalletAPI,
   ClientsAPI,
   RewardPointsAPI,
@@ -98,23 +97,47 @@ import { previewRedemptionLive } from "@/lib/reward-points-preview"
 import {
   mergePaymentConfiguration,
   eligibleRedemptionSubtotal,
+  type PaymentRedemptionLine,
 } from "@/lib/payment-redemption-eligibility"
 import type { RewardPointsSettings } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
+import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay } from "@/lib/walk-in-client"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
 import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
-import { computePackageLineTotal } from "@/lib/package-tax"
+import { effectiveMembershipPlanDiscountPercent } from "@/lib/membership-plan-discount"
 import { useRouter } from "next/navigation"
-import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
+import {
+  buildReceiptPaymentsFromSale,
+  buildSalePaymentModeFromCheckout,
+  formatPaymentRecordedDateLabel,
+  getSalePaymentLinesWithDates,
+} from "@/lib/sale-payment-lines"
+import type { RaiseSaleLinkageSnapshot } from "@/lib/quick-sale-helpers"
+import type { CheckoutTipLine } from "@/components/appointments/service-checkout-dialog"
 import {
   decodeQuickSaleAppointmentParam,
   extractAppointmentIdsFromPayload,
   resolveAppointmentIdsToComplete,
+  calendarYmdLocal,
+  raiseSaleLinkageSnapshotFromCheckoutState,
+  areRaiseSaleLinkageSnapshotsEqual,
+  isLikelyMongoObjectId,
+  walletExpiryEndMs,
+  filterWalletsForQuickSaleDisplay,
+  billNotesForCustomerDisplay,
+  pickWalletIdForChangeCredit,
 } from "@/lib/quick-sale-helpers"
+import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import type { ClientWalletLedgerRow } from "@/lib/client-wallet-ledger"
 import { flattenClientWalletLedger, walletActivityStatusDisplay } from "@/lib/client-wallet-ledger"
+
+function cloneCheckoutTipLines(lines: CheckoutTipLine[]): CheckoutTipLine[] {
+  return lines.map((l) => ({ ...l }))
+}
+
+const quickSaleTipModalSelectContentClass = "!z-[9999]"
 
 // Mock data for customers
 // const mockCustomers = [
@@ -219,8 +242,10 @@ interface ServiceItem {
   total: number
   isMembershipFree?: boolean
   membershipDiscountPercent?: number
-  /** Covered by prepaid package — show 100% discount, not ₹0 list price with 0% off */
-  isPackageRedemption?: boolean
+  /** Prefilled from appointment (Raise Sale / Continue to payment) — only qty, price, discount editable */
+  appointmentLineLocked?: boolean
+  /** Expanded from a catalog bundle — membership free / plan % off does not apply */
+  fromBundle?: boolean
 }
 
 interface ProductItem {
@@ -231,6 +256,7 @@ interface ProductItem {
   price: number
   discount: number
   total: number
+  appointmentLineLocked?: boolean
 }
 
 interface MembershipItem {
@@ -242,17 +268,8 @@ interface MembershipItem {
   quantity: number
   total: number
   staffId: string
-}
-
-interface PackageItem {
-  id: string
-  packageId: string
-  packageName: string
-  totalSittings: number
-  price: number
-  quantity: number
-  total: number
-  staffId: string
+  discount?: number
+  appointmentLineLocked?: boolean
 }
 
 /** Client prepaid wallet plan sold as a POS line (same bill as services/products). */
@@ -266,13 +283,19 @@ interface PrepaidPlanItem {
   quantity: number
   price: number
   total: number
+  /** Line discount % (0–100) before tax, same semantics as products. */
+  discount?: number
+  appointmentLineLocked?: boolean
+}
+
+/** List price × qty after line-level percent discount (0–100), before tax helpers. */
+function addonLineTaxableBase(unitPrice: number, quantity: number, discountPercent?: number): number {
+  const gross = Math.max(0, Number(unitPrice) || 0) * Math.max(1, Math.floor(Number(quantity) || 1))
+  const d = Math.min(100, Math.max(0, Number(discountPercent) || 0))
+  return gross * (1 - d / 100)
 }
 
 type BillingMode = "create" | "edit" | "exchange"
-
-function isLikelyMongoObjectId(id: string | null | undefined): boolean {
-  return !!id && /^[a-f\d]{24}$/i.test(String(id))
-}
 
 /** Unique staff names on a sale (header + line items + multi-staff contributions). */
 function collectStaffNamesFromSale(sale: any): string {
@@ -359,7 +382,7 @@ function getAvailableStaffIds(
   timeStr: string,
   durationMinutes: number,
   appointments: any[],
-  blockTimes: any[],
+  _blockTimes: any[],
   allStaffIds: string[],
   considerAllAppointments = false
 ): string[] {
@@ -383,35 +406,7 @@ function getAvailableStaffIds(
     }
   }
 
-  // Block times that apply on this date
-  for (const block of blockTimes) {
-    if (!blockAppliesOnDate(block, dateStr)) continue
-    const blockStaffId = block.staffId?._id || block.staffId?.id || block.staffId
-    if (!blockStaffId) continue
-    const blockStartM = parseTimeToMinutes(block.startTime || "0:00")
-    const blockEndM = parseTimeToMinutes(block.endTime || "23:59")
-    if (blockEndM <= startM || blockStartM >= endM) continue
-    busyStaffIds.add(String(blockStaffId))
-  }
-
   return allStaffIds.filter((id) => !busyStaffIds.has(String(id)))
-}
-
-function walletExpiryEndMs(w: any): number {
-  const raw = w?.effectiveExpiryDate ?? w?.expiryDate
-  if (!raw) return 0
-  const t = new Date(raw).getTime()
-  return Number.isFinite(t) ? t : 0
-}
-
-function pickWalletIdForChangeCredit(usableWallets: any[], selectedWalletId: string): string | null {
-  if (!usableWallets?.length) return null
-  if (selectedWalletId) {
-    const hit = usableWallets.find((w) => String(w._id) === String(selectedWalletId))
-    if (hit) return String(hit._id)
-  }
-  const sorted = [...usableWallets].sort((a, b) => walletExpiryEndMs(a) - walletExpiryEndMs(b))
-  return sorted[0] ? String(sorted[0]._id) : null
 }
 
 /** When customer overpays and change is credited to wallet, trim recorded payments to sale due total (cash → card → online). */
@@ -473,22 +468,6 @@ function buildRecordedPaymentsForCheckout(options: {
   return { payments, changeToCredit, recordedPaidTotal }
 }
 
-/**
- * Active prepaid wallets with usable balance for Quick Sale (payment picker + header balance).
- * Uses effective or plan expiry, case-insensitive status, and a short grace window for clock/API skew.
- */
-function filterWalletsForQuickSaleDisplay(wallets: any[] | undefined, nowMs: number = Date.now()): any[] {
-  if (!wallets?.length) return []
-  const GRACE_MS = 120_000
-  return wallets.filter((w) => {
-    if (String(w.status || "").toLowerCase() !== "active") return false
-    if (Number(w.remainingBalance) <= 0) return false
-    const end = walletExpiryEndMs(w)
-    if (!end) return false
-    return end >= nowMs - GRACE_MS
-  })
-}
-
 /** Prefer soonest-expiring wallet so staff rarely need to pick when multiple exist. */
 function pickDefaultClientWalletId(wallets: any[]): string {
   if (!wallets?.length) return ""
@@ -545,6 +524,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [linkedAppointmentId, setLinkedAppointmentId] = useState<string | null>(null)
   const [linkedAppointmentIds, setLinkedAppointmentIds] = useState<string[]>([])
   const [linkedAppointmentTime, setLinkedAppointmentTime] = useState<string | null>(null)
+  /** Raise Sale URL prefill only: compare checkout to this; drift → save without appointmentId / completion. */
+  const raiseSaleLinkageBaselineRef = useRef<RaiseSaleLinkageSnapshot | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
@@ -556,8 +537,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [discountValue, setDiscountValue] = useState(0)
   const [discountPercentage, setDiscountPercentage] = useState(0)
   const [giftVoucher, setGiftVoucher] = useState("")
-  const [tip, setTip] = useState(0)
-  const [tipStaffId, setTipStaffId] = useState<string | null>(null)
+  const [tipLines, setTipLines] = useState<CheckoutTipLine[]>([])
+  const tip = useMemo(
+    () => tipLines.reduce((a, l) => a + Math.max(0, Number(l.amount) || 0), 0),
+    [tipLines]
+  )
+  const tipStaffId = useMemo((): string | null => {
+    const first = tipLines.find((l) => Math.max(0, Number(l.amount) || 0) > 0)
+    const id = first?.staffId != null ? String(first.staffId).trim() : ""
+    return id || null
+  }, [tipLines])
   const [isGlobalDiscountActive, setIsGlobalDiscountActive] = useState(false)
   const [isValueDiscountActive, setIsValueDiscountActive] = useState(false)
   const [cashAmount, setCashAmount] = useState(0)
@@ -572,6 +561,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   /** When wallet and reward cannot stack, user picks one redemption method for this bill. */
   const [exclusiveRedemptionMethod, setExclusiveRedemptionMethod] = useState<"wallet" | "reward" | null>(null)
   const [clientWalletsRaw, setClientWalletsRaw] = useState<any[]>([])
+  const [clientWalletsHydrated, setClientWalletsHydrated] = useState(false)
+  const [loyaltyBalanceHydrated, setLoyaltyBalanceHydrated] = useState(false)
   const [clientWalletSettings, setClientWalletSettings] = useState<{
     allowCouponStacking?: boolean
     combineMultipleWallets?: boolean
@@ -584,6 +575,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [walletLedgerLoading, setWalletLedgerLoading] = useState(false)
   const [walletLedgerRows, setWalletLedgerRows] = useState<ClientWalletLedgerRow[]>([])
   const [remarks, setRemarks] = useState("")
+  /** From Service Checkout → Continue to payment: lines & totals are sealed; only payment entry is allowed. */
+  const [appointmentPricingFinalized, setAppointmentPricingFinalized] = useState(false)
+  /** Service checkout can send finalized pricing with reward redemption; allow points UI in that case. */
+  const [finalizeRewardFromCheckout, setFinalizeRewardFromCheckout] = useState(false)
+  const appointmentCheckoutPaymentMethodRef = useRef<string | null>(null)
+  const appointmentCheckoutPaymentAppliedRef = useRef(false)
   const [isOldQuickSale, setIsOldQuickSale] = useState(false)
   const [currentReceipt, setCurrentReceipt] = useState<any | null>(null)
   const [showReceiptDialog, setShowReceiptDialog] = useState(false)
@@ -613,7 +610,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [showDuesDialog, setShowDuesDialog] = useState(false)
   const [unpaidBills, setUnpaidBills] = useState<any[]>([])
   const [showDuesPaymentModal, setShowDuesPaymentModal] = useState(false)
+  const [paymentCollectionPresentation, setPaymentCollectionPresentation] = useState<"dialog" | "sheet">("dialog")
   const [selectedBillForPayment, setSelectedBillForPayment] = useState<any>(null)
+  /** True when PaymentCollectionModal was opened from payRemainingSaleId deep-link — do not reopen Settle Dues on close. */
+  const skipReopenDuesAfterPaymentModalRef = useRef(false)
   const [newCustomer, setNewCustomer] = useState({
     firstName: "",
     lastName: "",
@@ -632,7 +632,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   /** When opening wallet-change confirm from edit-reason dialog, pass reason into checkout */
   const [creditCheckoutReasonOverride, setCreditCheckoutReasonOverride] = useState<string | null>(null)
   const [showTipModal, setShowTipModal] = useState(false)
-  const [tempTipAmount, setTempTipAmount] = useState(0)
+  const [tipDraftLines, setTipDraftLines] = useState<CheckoutTipLine[]>([])
   const [editReason, setEditReason] = useState("")
   const [showEditReasonModal, setShowEditReasonModal] = useState(false)
   const [tempEditReason, setTempEditReason] = useState("")
@@ -648,18 +648,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // Plans for membership section (fetched when customer selected)
   const [plans, setPlans] = useState<Array<{ _id: string; id?: string; planName: string; price: number; durationInDays: number }>>([])
 
-  // Add Items section: membership | package | gift-voucher | prepaid (none selected by default)
+  // Add Items section: gift-voucher | prepaid (none selected by default)
   const [addItemSection, setAddItemSection] = useState<'gift-voucher' | 'prepaid' | null>(null)
 
   // Membership items (rows added from Membership section)
   const [membershipItems, setMembershipItems] = useState<MembershipItem[]>([])
-  const [packageItems, setPackageItems] = useState<PackageItem[]>([])
-  const [packagesCatalog, setPackagesCatalog] = useState<any[]>([])
-  /** Set when opening Quick Sale from client panel package redemption; triggers post-checkout redeem API. */
-  const [pendingPackageRedemption, setPendingPackageRedemption] = useState<{
-    clientPackageId: string
-    serviceIds: string[]
-  } | null>(null)
 
   // State for services and products from API
   const [services, setServices] = useState<any[]>([])
@@ -688,13 +681,19 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }, {})
   const categoryOrder = Object.keys(servicesByCategory).sort((a, b) => a.localeCompare(b))
 
-  // Filtered products (search by name or category)
+  // Filtered products (search by name, category, barcode, or SKU)
   const filteredProductsForDropdown = products.filter(product => {
     const q = productDropdownSearch.toLowerCase().trim()
     if (!q) return true
     const nameMatch = product.name?.toLowerCase().includes(q)
     const categoryMatch = product.category?.toLowerCase().includes(q)
-    return nameMatch || categoryMatch
+    const barcodeMatch = String(product.barcode || "")
+      .toLowerCase()
+      .includes(q)
+    const skuMatch = String(product.sku || "")
+      .toLowerCase()
+      .includes(q)
+    return nameMatch || categoryMatch || barcodeMatch || skuMatch
   })
 
   // Group filtered products by category for dropdown display
@@ -722,46 +721,106 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
 
     if (type === "service") {
-      const basePrice = item.price || 0
-      let discount = 0
-      let total = basePrice
-      let isMembershipFree = false
-      let membershipDiscountPercent = 0
+      const expanded = isBundleService(item) ? expandBundleToLines(item, services) : null
+      if (isBundleService(item) && (!expanded || expanded.length === 0)) {
+        toast({
+          title: "Bundle error",
+          description: "Could not expand bundle services. Refresh and try again.",
+          variant: "destructive",
+        })
+        setServiceDropdownSearch("")
+        return
+      }
 
-      if (membershipData?.plan && membershipData?.usageSummary) {
-        const svcId = String(item._id || item.id)
-        const usage = membershipData.usageSummary.find((u: any) => String(u.serviceId || u.serviceId?._id) === svcId)
-        const plan = membershipData.plan
-        if (usage && usage.remaining > 0) {
-          discount = 100
-          total = 0
-          isMembershipFree = true
-          membershipDiscountPercent = 100
-        } else if (plan?.discountPercentage > 0) {
-          discount = plan.discountPercentage
-          membershipDiscountPercent = plan.discountPercentage
-          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-          const applyTax = item.taxApplicable && taxSettings?.enableTax !== false
-          total = computeLineTotalAndTaxForAdd(basePrice, discount, serviceTaxRate, applyTax)
+      const lines =
+        expanded && expanded.length > 0
+          ? expanded.map((line) => {
+              const child = services.find((s) => String(s._id || s.id) === line.serviceId)
+              return {
+                serviceId: line.serviceId,
+                name: line.name,
+                duration: line.duration,
+                price: line.price,
+                taxApplicable: child?.taxApplicable,
+              }
+            })
+          : [
+              {
+                serviceId: String(item._id || item.id),
+                name: item.name || "Service",
+                duration: Number(item.duration) || 0,
+                price: item.price || 0,
+                taxApplicable: item.taxApplicable,
+              },
+            ]
+
+      setServiceItems((prev) => {
+        const priceInclusiveOfTaxInner = paymentSettings?.priceInclusiveOfTax !== false
+        const computeLineTotalAndTaxForAddInner = (
+          baseAmount: number,
+          discountPct: number,
+          taxRate: number,
+          applyTax: boolean
+        ): number => {
+          const discountedAmount = baseAmount * (1 - (discountPct || 0) / 100)
+          if (!applyTax) return discountedAmount
+          if (priceInclusiveOfTaxInner) return discountedAmount
+          return discountedAmount + (discountedAmount * taxRate) / 100
         }
-      } else {
-        const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-        const applyTax = item.taxApplicable && taxSettings?.enableTax !== false
-        total = computeLineTotalAndTaxForAdd(basePrice, 0, serviceTaxRate, applyTax)
-      }
 
-      const newItem: ServiceItem = {
-        id: Date.now().toString(),
-        serviceId: item._id || item.id,
-        staffId: "",
-        quantity: 1,
-        price: basePrice,
-        discount,
-        total,
-        isMembershipFree,
-        membershipDiscountPercent,
-      }
-      setServiceItems([...serviceItems, newItem])
+        const ts = Date.now()
+        const next = [...prev]
+        const skipMembership = !!(expanded && expanded.length > 0)
+        for (let i = 0; i < lines.length; i++) {
+          const row = lines[i]
+          const basePrice = row.price || 0
+          let discount = 0
+          let isMembershipFree = false
+          let membershipDiscountPercent = 0
+          let total: number
+          const applyTaxRow = row.taxApplicable && taxSettings?.enableTax !== false
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+
+          if (skipMembership) {
+            total = computeLineTotalAndTaxForAddInner(basePrice, 0, serviceTaxRate, applyTaxRow)
+          } else if (membershipData?.plan && membershipData?.usageSummary) {
+            const svcId = String(row.serviceId)
+            const usage = membershipData.usageSummary.find(
+              (u: any) => String(u.serviceId || u.serviceId?._id) === svcId
+            )
+            const plan = membershipData.plan
+            if (usage && usage.remaining > 0) {
+              discount = 100
+              total = 0
+              isMembershipFree = true
+              membershipDiscountPercent = 100
+            } else if (effectiveMembershipPlanDiscountPercent(plan, svcId) > 0) {
+              const d = effectiveMembershipPlanDiscountPercent(plan, svcId)
+              discount = d
+              membershipDiscountPercent = d
+              total = computeLineTotalAndTaxForAddInner(basePrice, discount, serviceTaxRate, applyTaxRow)
+            } else {
+              total = computeLineTotalAndTaxForAddInner(basePrice, 0, serviceTaxRate, applyTaxRow)
+            }
+          } else {
+            total = computeLineTotalAndTaxForAddInner(basePrice, 0, serviceTaxRate, applyTaxRow)
+          }
+
+          next.push({
+            id: `${ts}-${i}-${Math.random().toString(36).slice(2, 9)}`,
+            serviceId: row.serviceId,
+            staffId: "",
+            quantity: 1,
+            price: basePrice,
+            discount,
+            total,
+            isMembershipFree,
+            membershipDiscountPercent,
+            ...(skipMembership ? { fromBundle: true as const } : {}),
+          })
+        }
+        return next
+      })
     } else if (type === "product") {
       const basePrice = item.price || 0
       const productForTax = products.find((p) => (p._id || p.id) === (item._id || item.id)) || item
@@ -1062,20 +1121,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       }
     }
 
-    const fetchPackagesCatalog = async () => {
-      try {
-        const response = await PackagesAPI.getAll({ status: "ACTIVE", limit: 500 })
-        if (response.success) {
-          setPackagesCatalog(response.data?.packages || [])
-        }
-      } catch (error) {
-        console.error('Failed to fetch packages:', error)
-      }
-    }
-
     fetchServices()
     fetchProducts()
-    fetchPackagesCatalog()
     fetchStaff()
     fetchBusinessSettings()
     fetchPOSSettings()
@@ -1213,6 +1260,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               quantity: item.quantity || 1,
               price: item.price || 0,
               total: item.total || (item.price || 0) * (item.quantity || 1),
+              discount: Number(item.discount) || 0,
             })
           }
         })
@@ -1272,13 +1320,31 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       }
 
       // Set tip amount and tip staff (if any)
-      if (initialSale.tip && initialSale.tip > 0) {
-        setTip(Number(initialSale.tip))
+      if (Array.isArray(initialSale.tipLines) && initialSale.tipLines.length > 0) {
+        setTipLines(
+          initialSale.tipLines
+            .map((tl: { staffId?: unknown; amount?: unknown }, idx: number) => ({
+              id: `tip-init-${idx}-${Date.now()}`,
+              staffId: String(
+                typeof tl.staffId === "object" && tl.staffId && (tl.staffId as { _id?: string })._id
+                  ? (tl.staffId as { _id?: string })._id
+                  : tl.staffId || "",
+              ).trim(),
+              amount: Number(tl.amount) || 0,
+            }))
+            .filter((l: CheckoutTipLine) => l.staffId && l.amount > 0),
+        )
+      } else if (initialSale.tip && initialSale.tip > 0) {
         const tipStaff = initialSale.tipStaffId
-        const tipStaffIdStr = typeof tipStaff === "object" && tipStaff?._id ? tipStaff._id : String(tipStaff || "")
-        if (tipStaffIdStr) {
-          setTipStaffId(tipStaffIdStr)
-        }
+        const tipStaffIdStr =
+          typeof tipStaff === "object" && tipStaff?._id ? tipStaff._id : String(tipStaff || "")
+        setTipLines([
+          {
+            id: `tip-init-${Date.now()}`,
+            staffId: String(tipStaffIdStr || "").trim(),
+            amount: Number(initialSale.tip),
+          },
+        ])
       }
 
       // Set linked appointment
@@ -1305,8 +1371,40 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         const { primaryId, linkedIds } = extractAppointmentIdsFromPayload(rawAppointment)
         if (primaryId) setLinkedAppointmentId(primaryId)
         if (linkedIds.length > 0) setLinkedAppointmentIds(linkedIds)
+        if (!primaryId) raiseSaleLinkageBaselineRef.current = null
 
         const appointmentData = rawAppointment as any
+        setAppointmentPricingFinalized(appointmentData.appointmentPricingFinalized === true)
+
+        const rawPm = appointmentData.checkoutPreferredPaymentMethod
+        const normalizedPm =
+          rawPm != null && String(rawPm).trim() !== ""
+            ? String(rawPm).trim().toLowerCase()
+            : null
+        const isKnownPm =
+          normalizedPm === "cash" ||
+          normalizedPm === "card" ||
+          normalizedPm === "online" ||
+          normalizedPm === "wallet" ||
+          normalizedPm === "reward"
+        if (isKnownPm) {
+          appointmentCheckoutPaymentMethodRef.current = normalizedPm
+          appointmentCheckoutPaymentAppliedRef.current = false
+        } else {
+          appointmentCheckoutPaymentMethodRef.current = null
+        }
+        setFinalizeRewardFromCheckout(
+          appointmentData.appointmentPricingFinalized === true && normalizedPm === "reward"
+        )
+
+        if (
+          Array.isArray(appointmentData.products) &&
+          appointmentData.products.length > 0 &&
+          loadingProducts
+        ) {
+          return
+        }
+
         if (appointmentData.time) {
           setLinkedAppointmentTime(appointmentData.time)
         }
@@ -1338,12 +1436,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           }
         }
 
-        // Set date and notes from new appointment form
+        // Set date from new appointment form (notes merged after items — see checkoutSaleNote / tips)
         if (appointmentData.date) {
           setSelectedDate(new Date(appointmentData.date))
-        }
-        if (appointmentData.notes) {
-          setRemarks(appointmentData.notes)
         }
 
         // Find and add service(s) - support both single service (from calendar) and multiple (from new appointment form)
@@ -1359,20 +1454,33 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               const staffMember = staff.find(s =>
                 (s._id || s.id) === svcData.staffId
               )
+              const qty = Math.max(1, Math.floor(Number(svcData.quantity) || 1))
+              const unitPrice = Number(svcData.price) || Number(service.price) || 0
+              const baseAmount = unitPrice * qty
+              const discPct = Math.min(100, Math.max(0, Number(svcData.discount) || 0))
+              const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+              const applyTax = taxSettings?.enableTax !== false && service.taxApplicable === true
+              const { total: lineTotal } = computeLineTotalAndTax(
+                baseAmount,
+                discPct,
+                serviceTaxRate,
+                applyTax
+              )
               serviceItemsToAdd.push({
                 id: Date.now().toString() + Math.random(),
                 serviceId: service._id || service.id,
                 staffId: svcData.staffId || "",
-                quantity: 1,
-                price: svcData.price ?? service.price ?? 0,
-                discount: 0,
-                total: svcData.price ?? service.price ?? 0,
+                quantity: qty,
+                price: unitPrice,
+                discount: discPct,
+                total: lineTotal,
                 staffContributions: (svcData.staffId && staffMember) ? [{
                   staffId: svcData.staffId,
                   staffName: staffMember.name || svcData.staffName || "",
                   percentage: 100,
-                  amount: svcData.price ?? service.price ?? 0
-                }] : []
+                  amount: lineTotal
+                }] : [],
+                appointmentLineLocked: true,
               })
               console.log("Pre-filled service:", service.name)
             }
@@ -1386,34 +1494,273 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             const staffMember = staff.find(s =>
               (s._id || s.id) === appointmentData.staffId
             )
+            const qty = Math.max(1, Math.floor(Number(appointmentData.quantity) || 1))
+            const unitPrice = Number(appointmentData.servicePrice) || Number(service.price) || 0
+            const baseAmount = unitPrice * qty
+            const discPct = Math.min(100, Math.max(0, Number(appointmentData.discount) || 0))
+            const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+            const applyTax = taxSettings?.enableTax !== false && service.taxApplicable === true
+            const { total: lineTotal } = computeLineTotalAndTax(
+              baseAmount,
+              discPct,
+              serviceTaxRate,
+              applyTax
+            )
             serviceItemsToAdd.push({
               id: Date.now().toString(),
               serviceId: service._id || service.id,
               staffId: appointmentData.staffId || "",
-              quantity: 1,
-              price: service.price || appointmentData.servicePrice || 0,
-              discount: 0,
-              total: service.price || appointmentData.servicePrice || 0,
+              quantity: qty,
+              price: unitPrice,
+              discount: discPct,
+              total: lineTotal,
               staffContributions: (appointmentData.staffId && staffMember) ? [{
                 staffId: appointmentData.staffId,
                 staffName: staffMember.name || appointmentData.staffName || "",
                 percentage: 100,
-                amount: service.price || appointmentData.servicePrice || 0
-              }] : []
+                amount: lineTotal
+              }] : [],
+              appointmentLineLocked: true,
             })
             console.log("Pre-filled service:", service.name)
           }
+        }
+
+        const productItemsToAdd: ProductItem[] = []
+        const productsFromPayload = appointmentData.products
+        const priceInclusiveOfTaxPrefill = paymentSettings?.priceInclusiveOfTax !== false
+        const lineTotalForProductPrefill = (
+          baseAmount: number,
+          discountPct: number,
+          taxRate: number,
+          applyTax: boolean
+        ): number => {
+          const discountedAmount = baseAmount * (1 - (discountPct || 0) / 100)
+          if (!applyTax) return discountedAmount
+          if (priceInclusiveOfTaxPrefill) return discountedAmount
+          return discountedAmount + (discountedAmount * taxRate) / 100
+        }
+
+        if (Array.isArray(productsFromPayload) && productsFromPayload.length > 0 && products.length > 0) {
+          for (const pData of productsFromPayload) {
+            const product = products.find(
+              (p) => String(p._id || p.id) === String(pData.productId)
+            )
+            if (!product) continue
+            const basePrice = Number(pData.price) || Number(product.price) || 0
+            const qty = Math.max(1, Math.floor(Number(pData.quantity) || 1))
+            let productTaxRate = 18
+            if (product?.taxCategory && taxSettings) {
+              switch (product.taxCategory) {
+                case "essential":
+                  productTaxRate = taxSettings.essentialProductRate || 5
+                  break
+                case "intermediate":
+                  productTaxRate = taxSettings.intermediateProductRate || 12
+                  break
+                case "standard":
+                  productTaxRate = taxSettings.standardProductRate || 18
+                  break
+                case "luxury":
+                  productTaxRate = taxSettings.luxuryProductRate || 28
+                  break
+                case "exempt":
+                  productTaxRate = taxSettings.exemptProductRate || 0
+                  break
+              }
+            }
+            const applyTax = taxSettings?.enableTax !== false
+            const baseAmount = basePrice * qty
+            const discPct = Math.min(100, Math.max(0, Number(pData.discount) || 0))
+            const lineTotal = lineTotalForProductPrefill(baseAmount, discPct, productTaxRate, applyTax)
+            productItemsToAdd.push({
+              id: `${Date.now()}-${Math.random()}`,
+              productId: product._id || product.id,
+              staffId: pData.staffId || "",
+              quantity: qty,
+              price: basePrice,
+              discount: discPct,
+              total: lineTotal,
+              appointmentLineLocked: true,
+            })
+            console.log("Pre-filled product:", product.name)
+          }
+        }
+
+        let membershipPlansResolved: any[] = []
+        if (Array.isArray(appointmentData.memberships) && appointmentData.memberships.length > 0) {
+          const plansRes = await MembershipAPI.getPlans({ isActive: true })
+          if (plansRes.success && Array.isArray(plansRes.data)) {
+            membershipPlansResolved = plansRes.data.filter((p: any) => p.isActive !== false)
+          }
+        }
+
+        let prepaidPlansResolved: any[] = []
+        if (Array.isArray(appointmentData.prepaidPlans) && appointmentData.prepaidPlans.length > 0) {
+          const pwRes = await ClientWalletAPI.listPlans({ status: "active" })
+          if (pwRes.success && pwRes.data?.plans) {
+            prepaidPlansResolved = pwRes.data.plans
+          }
+        }
+
+        if (membershipPlansResolved.length > 0) {
+          setPlans(membershipPlansResolved as any)
+        }
+        if (prepaidPlansResolved.length > 0) {
+          setPrepaidWalletPlansForIssue(prepaidPlansResolved)
+        }
+
+        const membershipItemsToAdd: MembershipItem[] = []
+        if (Array.isArray(appointmentData.memberships) && appointmentData.memberships.length > 0) {
+          for (const mData of appointmentData.memberships) {
+            const plan = membershipPlansResolved.find(
+              (p) => String(p._id || p.id) === String(mData.planId)
+            )
+            if (!plan) continue
+            const unitPrice = Number(mData.price) || Number(plan.price) || 0
+            const qty = Math.max(1, Math.floor(Number(mData.quantity) || 1))
+            const discPct = Math.min(100, Math.max(0, Number(mData.discount) || 0))
+            const base = addonLineTaxableBase(unitPrice, qty, discPct)
+            const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { total } = computeMembershipPlanLineTotal(base, {
+              membershipTaxRate: mRate,
+              enableTax: taxSettings?.enableTax !== false,
+              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+            })
+            membershipItemsToAdd.push({
+              id: `${Date.now()}-${Math.random()}`,
+              planId: String(plan._id || plan.id),
+              planName: mData.planName || plan.planName || "Membership",
+              price: unitPrice,
+              durationInDays: Number(plan.durationInDays) || Number(mData.durationInDays) || 0,
+              quantity: qty,
+              total,
+              staffId: mData.staffId || "",
+              discount: discPct,
+              appointmentLineLocked: true,
+            })
+            console.log("Pre-filled membership:", plan.planName)
+          }
+        }
+
+        const prepaidPlanItemsToAdd: PrepaidPlanItem[] = []
+        if (Array.isArray(appointmentData.prepaidPlans) && appointmentData.prepaidPlans.length > 0) {
+          for (const prData of appointmentData.prepaidPlans) {
+            const wPlan = prepaidPlansResolved.find(
+              (p) => String(p._id || p.id) === String(prData.planId)
+            )
+            if (!wPlan) continue
+            const unitPrice = Number(prData.price) || Number(wPlan.payAmount) || 0
+            const qty = Math.max(1, Math.floor(Number(prData.quantity) || 1))
+            const discPct = Math.min(100, Math.max(0, Number(prData.discount) || 0))
+            const base = addonLineTaxableBase(unitPrice, qty, discPct)
+            const prepaidRate =
+              taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+            const { total } = computeMembershipPlanLineTotal(base, {
+              membershipTaxRate: prepaidRate,
+              enableTax: taxSettings?.enableTax !== false,
+              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+            })
+            prepaidPlanItemsToAdd.push({
+              id: `${Date.now()}-${Math.random()}`,
+              planId: String(wPlan._id || wPlan.id),
+              planName: prData.planName || wPlan.name || "Prepaid",
+              creditAmount: Number(wPlan.creditAmount) || Number(prData.creditAmount) || 0,
+              validityDays: Number(wPlan.validityDays) || Number(prData.validityDays) || 0,
+              staffId: prData.staffId || "",
+              quantity: qty,
+              price: unitPrice,
+              total,
+              discount: discPct,
+              appointmentLineLocked: true,
+            })
+            console.log("Pre-filled prepaid plan:", wPlan.name)
+          }
+        }
+
+        if (primaryId) {
+          const dateYmd =
+            appointmentData.date != null && appointmentData.date !== ""
+              ? calendarYmdLocal(new Date(appointmentData.date))
+              : calendarYmdLocal(new Date())
+          raiseSaleLinkageBaselineRef.current = raiseSaleLinkageSnapshotFromCheckoutState({
+            clientId: String(appointmentData.clientId ?? "").trim(),
+            dateYYYYMMDD: dateYmd,
+            remarksNormalized: String(appointmentData.notes ?? "").trim(),
+            serviceLines: serviceItemsToAdd.map((si) => ({
+              serviceId: String(si.serviceId ?? ""),
+              staffId: String(si.staffId ?? ""),
+              quantity: Math.max(1, Math.floor(Number(si.quantity) || 1)),
+            })),
+            extraProducts: productItemsToAdd.length,
+            extraMemberships: membershipItemsToAdd.filter((m) => m.planId).length,
+            extraPackages: 0,
+            extraPrepaid: prepaidPlanItemsToAdd.filter((p) => p.planId).length,
+          })
         }
 
         if (serviceItemsToAdd.length > 0) {
           setServiceItems(serviceItemsToAdd)
         }
 
-        // Clear the URL parameter after reading it
-        if (typeof window !== 'undefined') {
+        if (productItemsToAdd.length > 0) {
+          setProductItems(productItemsToAdd)
+        }
+
+        if (membershipItemsToAdd.length > 0) {
+          setMembershipItems(membershipItemsToAdd)
+        }
+
+        if (prepaidPlanItemsToAdd.length > 0) {
+          setPrepaidPlanItems(prepaidPlanItemsToAdd)
+          if (appointmentData.appointmentPricingFinalized === true) {
+            setAddItemSection("prepaid")
+          }
+        }
+
+        let mergedRemarks = appointmentData.notes ? String(appointmentData.notes).trim() : ""
+        const tipsPayload = appointmentData.checkoutTips
+        if (Array.isArray(tipsPayload) && tipsPayload.length > 0) {
+          const tipEntries = tipsPayload
+            .map((t: { staffId?: string; amount?: unknown }) => ({
+              staffId: String(t.staffId || ""),
+              amount: Math.max(0, Number(t.amount) || 0),
+            }))
+            .filter((t) => t.staffId && t.amount > 0)
+          if (tipEntries.length > 0) {
+            setTipLines(
+              tipEntries.map((t, idx) => ({
+                id: `tip-appt-${idx}-${Date.now()}`,
+                staffId: t.staffId,
+                amount: t.amount,
+              }))
+            )
+          }
+        }
+
+        const cdpct = Number(appointmentData.cartDiscountPercent)
+        if (Number.isFinite(cdpct) && cdpct > 0) {
+          setDiscountPercentage(Math.min(100, Math.max(0, cdpct)))
+          setIsGlobalDiscountActive(true)
+          setIsValueDiscountActive(false)
+        } else {
+          const cdf = Number(appointmentData.cartDiscountFixed)
+          if (Number.isFinite(cdf) && cdf > 0) {
+            setDiscountValue(cdf)
+            setIsValueDiscountActive(true)
+            setIsGlobalDiscountActive(false)
+          }
+        }
+
+        if (mergedRemarks) {
+          setRemarks(mergedRemarks)
+        }
+
+        // Clear the URL parameter after reading it (use router.replace so Next history state is preserved — Back returns to prior page)
+        if (typeof window !== "undefined") {
           const url = new URL(window.location.href)
-          url.searchParams.delete('appointment')
-          window.history.replaceState({}, '', url.toString())
+          url.searchParams.delete("appointment")
+          router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false })
         }
       } catch (error) {
         console.error('Failed to parse appointment data:', error)
@@ -1422,7 +1769,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     
     // Call the async function
     prefillAppointmentData()
-  }, [searchParams, services, clients, staff])
+  }, [searchParams, services, clients, staff, products, loadingProducts, taxSettings, paymentSettings, router])
 
   // Pre-fill form from lead data in URL
   useEffect(() => {
@@ -1500,11 +1847,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           }
         }
 
-        // Clear the URL parameter after reading it
-        if (typeof window !== 'undefined') {
+        // Clear the URL parameter after reading it (use router.replace so Next history state is preserved)
+        if (typeof window !== "undefined") {
           const url = new URL(window.location.href)
-          url.searchParams.delete('lead')
-          window.history.replaceState({}, '', url.toString())
+          url.searchParams.delete("lead")
+          router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false })
         }
       } catch (error) {
         console.error('Failed to parse lead data:', error)
@@ -1513,147 +1860,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     
     // Call the async function
     prefillLeadData()
-  }, [searchParams, services, clients, staff])
-
-  // Pre-fill from client panel: package service redemption (₹0 — prepaid with package)
-  useEffect(() => {
-    const raw = searchParams.get("packageRedeem")
-    if (!raw || services.length === 0 || clients.length === 0 || staff.length === 0) return
-
-    const prefillPackageRedeem = async () => {
-      try {
-        const data = JSON.parse(atob(decodeURIComponent(raw))) as {
-          clientId: string
-          clientPackageId: string
-          serviceIds: string[]
-          staffId?: string | null
-          packageName?: string
-        }
-        if (!data.clientId || !data.clientPackageId || !Array.isArray(data.serviceIds)) return
-
-        const client = clients.find(
-          c => String(c._id || c.id) === String(data.clientId)
-        )
-        if (client) {
-          setSelectedCustomer(client)
-          setCustomerSearch(client.name)
-          const customerId = client._id || client.id
-          if (customerId) await fetchCustomerStats(String(customerId))
-        }
-
-        const staffIdStr = data.staffId ? String(data.staffId) : ""
-        const staffMember = staffIdStr
-          ? staff.find(s => String(s._id || s.id) === staffIdStr)
-          : null
-        const firstStaff = staff[0]
-        const staffToUse = staffMember
-          ? staffIdStr
-          : firstStaff
-            ? String(firstStaff._id || firstStaff.id)
-            : ""
-
-        const serviceItemsToAdd: ServiceItem[] = []
-        for (const sid of data.serviceIds) {
-          const service = services.find(s => String(s._id || s.id) === String(sid))
-          if (!service) continue
-          const sidFinal = String(service._id || service.id)
-          const basePrice = Number(service.price) || 0
-          serviceItemsToAdd.push({
-            id: `${Date.now()}-${Math.random()}`,
-            serviceId: sidFinal,
-            staffId: staffToUse,
-            quantity: 1,
-            price: basePrice,
-            discount: 100,
-            total: 0,
-            isPackageRedemption: true,
-            staffContributions:
-              staffToUse && staffMember
-                ? [
-                    {
-                      staffId: staffToUse,
-                      staffName: staffMember.name || "",
-                      percentage: 100,
-                      amount: 0,
-                    },
-                  ]
-                : staffToUse && firstStaff && String(firstStaff._id || firstStaff.id) === staffToUse
-                  ? [
-                      {
-                        staffId: staffToUse,
-                        staffName: firstStaff.name || "",
-                        percentage: 100,
-                        amount: 0,
-                      },
-                    ]
-                  : [],
-          })
-        }
-
-        if (serviceItemsToAdd.length > 0) {
-          setServiceItems(serviceItemsToAdd)
-          setRemarks(
-            `Package redemption — ${data.packageName?.trim() || "Package"} (prepaid)`
-          )
-          setPendingPackageRedemption({
-            clientPackageId: String(data.clientPackageId),
-            serviceIds: data.serviceIds.map(s => String(s)),
-          })
-          setCashAmount(0)
-          setCardAmount(0)
-          setOnlineAmount(0)
-          setTip(0)
-          setTipStaffId(null)
-        }
-
-        if (typeof window !== "undefined") {
-          const url = new URL(window.location.href)
-          url.searchParams.delete("packageRedeem")
-          window.history.replaceState({}, "", url.toString())
-        }
-      } catch (error) {
-        console.error("Failed to parse packageRedeem data:", error)
-      }
-    }
-
-    prefillPackageRedeem()
-  }, [searchParams, services, clients, staff])
-
-  // Open Quick Sale for client wallet issue: /quick-sale?clientId=...&prepaidWallet=1
-  useEffect(() => {
-    const cid = searchParams.get("clientId")
-    const openPrepaid = searchParams.get("prepaidWallet") === "1"
-    if (!cid || !isLikelyMongoObjectId(cid)) return
-
-    const run = async () => {
-      try {
-        let client = clients.find((c) => String(c._id || c.id) === String(cid))
-        if (!client) {
-          const res = await ClientsAPI.getById(cid)
-          if (res.success && res.data) client = res.data as Client
-        }
-        if (client) {
-          setSelectedCustomer(client as Client)
-          setCustomerSearch(client.name || "")
-          const customerId = client._id || client.id
-          if (customerId) await fetchCustomerStats(String(customerId))
-        }
-        if (openPrepaid) {
-          setAddItemSection("prepaid")
-        }
-        if (typeof window !== "undefined") {
-          const url = new URL(window.location.href)
-          url.searchParams.delete("clientId")
-          url.searchParams.delete("prepaidWallet")
-          window.history.replaceState({}, "", url.toString())
-        }
-      } catch (e) {
-        console.error("Quick Sale clientId prefill:", e)
-      }
-    }
-
-    void run()
-  }, [searchParams, clients])
+  }, [searchParams, services, clients, staff, router])
 
   useEffect(() => {
     if (addItemSection !== "prepaid") return
@@ -1691,6 +1898,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           quantity: 1,
           price: 0,
           total: 0,
+          discount: 0,
         },
       ]
     })
@@ -1699,27 +1907,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // In production, prefill data should come from URL params or API
   // No localStorage dependency for critical business functionality
 
-  // Once services load, trigger price/total autofill (package redemption: every row; else legacy: first row only)
+  // Once services load, trigger price/total autofill on the first row (legacy behavior).
   useEffect(() => {
     if (services.length === 0 || serviceItems.length === 0) return
-    for (const row of serviceItems) {
-      if (!row.serviceId || !row.isPackageRedemption) continue
-      const svc = services.find((s) => s._id === row.serviceId || s.id === row.serviceId)
-      if (svc) updateServiceItem(row.id, "serviceId" as any, row.serviceId)
-    }
     const first = serviceItems[0]
-    if (first?.serviceId && !first.isPackageRedemption) {
+    if (first?.serviceId) {
       const svc = services.find((s) => s._id === first.serviceId || s.id === first.serviceId)
       if (svc) updateServiceItem(first.id, "serviceId" as any, first.serviceId)
     }
   }, [services])
 
-  // Filter customers based on search (matches from start)
-  const filteredCustomers = clients.filter(
-    (client) =>
-      client.name.toLowerCase().startsWith(customerSearch.toLowerCase()) ||
-      client.phone.startsWith(customerSearch) ||
-      (client.email && client.email.toLowerCase().startsWith(customerSearch.toLowerCase())),
+  // Filter customers based on search (matches from start); empty search shows Walk-in only
+  const filteredCustomers = useMemo(
+    () => customerDropdownList(clients, customerSearch),
+    [clients, customerSearch],
   )
 
   // Get the correct customer ID (handles both id and _id properties)
@@ -1803,8 +2004,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       const phoneValue = value.replace(/\D/g, '').slice(0, 10)
       setCustomerSearch(phoneValue)
     } else if (value.length === 0) {
-      // Allow empty string
       setCustomerSearch(value)
+      setSelectedCustomer(null)
     } else {
       // Allow text for name/email search (contains letters or special chars)
       setCustomerSearch(value)
@@ -1937,7 +2138,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }
 
   // Fetch unpaid/partially paid bills for the customer
-  const fetchUnpaidBills = async (customerPhone: string) => {
+  const fetchUnpaidBills = useCallback(async (customerPhone: string) => {
     try {
       const salesResponse = await SalesAPI.getByClient(customerPhone)
       if (salesResponse.success) {
@@ -1976,10 +2177,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         variant: "destructive",
       })
     }
-  }
+  }, [toast])
 
   // Handle collect payment button click
   const handleCollectPayment = (bill: any) => {
+    setPaymentCollectionPresentation("dialog")
     setSelectedBillForPayment(bill)
     setShowDuesDialog(false) // Close dues dialog first
     setShowDuesPaymentModal(true)
@@ -1987,6 +2189,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
   // Handle payment collected successfully
   const handlePaymentCollected = async () => {
+    const openedFromRemainingDeepLink = skipReopenDuesAfterPaymentModalRef.current
     // Refresh unpaid bills list
     if (selectedCustomer) {
       await fetchUnpaidBills(selectedCustomer.phone || '')
@@ -1996,10 +2199,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         await fetchCustomerStats(customerId)
       }
     }
-    // Close payment modal and reopen dues dialog
     setShowDuesPaymentModal(false)
     setSelectedBillForPayment(null)
-    setShowDuesDialog(true)
+    if (!openedFromRemainingDeepLink) {
+      setShowDuesDialog(true)
+    }
+    // When opened via payRemainingSaleId, keep skipReopen… true until PaymentCollectionModal onClose clears it (avoids reopening Settle Dues after success).
   }
 
   // Fetch membership when customer or bill date changes (expiry is evaluated against bill date)
@@ -2053,16 +2258,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     if (!cid || !isLikelyMongoObjectId(cid)) {
       setLoyaltyBalance(0)
       setLoyaltyPointsInput(0)
+      setLoyaltyBalanceHydrated(true)
       return
     }
+    setLoyaltyBalanceHydrated(false)
     let cancelled = false
-    ClientsAPI.getById(cid)
+    void ClientsAPI.getById(cid)
       .then((res) => {
         if (cancelled || !res.success || !res.data) return
         setLoyaltyBalance(Number((res.data as any).rewardPointsBalance) || 0)
       })
       .catch(() => {
         if (!cancelled) setLoyaltyBalance(0)
+      })
+      .finally(() => {
+        if (!cancelled) setLoyaltyBalanceHydrated(true)
       })
     return () => {
       cancelled = true
@@ -2075,12 +2285,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       setClientWalletsRaw([])
       setSelectedWalletId("")
       setWalletPayAmount(0)
+      setClientWalletsHydrated(true)
       return
     }
     setSelectedWalletId("")
     setWalletPayAmount(0)
+    setClientWalletsHydrated(false)
     let cancelled = false
-    ClientWalletAPI.getClientWallets(cid)
+    void ClientWalletAPI.getClientWallets(cid)
       .then((res) => {
         if (cancelled || !res.success || !res.data?.wallets) return
         const usable = filterWalletsForQuickSaleDisplay(res.data.wallets as any[])
@@ -2092,6 +2304,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           setClientWalletsRaw([])
           setSelectedWalletId("")
         }
+      })
+      .finally(() => {
+        if (!cancelled) setClientWalletsHydrated(true)
       })
     return () => {
       cancelled = true
@@ -2132,9 +2347,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const showClientWalletBalanceCard =
     Number.isFinite(totalClientWalletBalance) && totalClientWalletBalance > 0
 
-  /** Invoices that have non-empty sale `notes`. */
+  /** Invoices that have customer-visible sale notes (appointment + sale remarks only, not tip metadata). */
   const customerBillsWithNotes = useMemo(
-    () => customerBills.filter((b) => String(b.notes ?? "").trim().length > 0),
+    () => customerBills.filter((b) => billNotesForCustomerDisplay(b.notes).length > 0),
     [customerBills]
   )
 
@@ -2167,20 +2382,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // Apply membership pricing when membership loads, catalog changes, or line qty/service changes.
   // Included services: free units use plan balance first; extra qty is charged at plan discount %.
   useEffect(() => {
+    if (appointmentPricingFinalized) return
     if (!membershipData?.plan) {
       setServiceItems((items) =>
         items.map((item) => {
-          if (item.isPackageRedemption) {
-            const service = services.find((s) => (s._id || s.id) === item.serviceId)
-            const basePrice = service?.price ?? item.price
-            const baseAmount = basePrice * item.quantity
+          if (item.fromBundle) {
+            const baseAmount = item.price * item.quantity
             const serviceTaxRate = taxSettings?.serviceTaxRate || 5
             const applyTax = isServiceTaxable(item)
-            const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
+            const { total } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, serviceTaxRate, applyTax)
             return {
               ...item,
-              price: basePrice,
-              discount: 100,
               total,
               isMembershipFree: false,
               membershipDiscountPercent: 0,
@@ -2199,10 +2411,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       return
     }
     setServiceItems((prev) => applyMembershipPricingRef.current(prev))
-  }, [membershipData, paymentSettings?.priceInclusiveOfTax, services, taxSettings, membershipServiceSnapshot])
+  }, [
+    appointmentPricingFinalized,
+    membershipData,
+    paymentSettings?.priceInclusiveOfTax,
+    services,
+    taxSettings,
+    membershipServiceSnapshot,
+  ])
 
   // Fetch customer statistics including visits, revenue, and last visit
-  const fetchCustomerStats = async (customerId: string) => {
+  const fetchCustomerStats = useCallback(async (customerId: string) => {
     console.log('🔍 Fetching customer stats for ID:', customerId)
     try {
       // First get the customer object to get the name
@@ -2249,7 +2468,82 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     } catch (error) {
       console.error('❌ Error fetching customer statistics:', error)
     }
-  }
+  }, [clients])
+
+  // Open Quick Sale for client wallet / settle dues: ?clientId=...&prepaidWallet=1 | &collectDues=1 | &payRemainingSaleId=...
+  useEffect(() => {
+    const cid = searchParams.get("clientId")
+    if (!cid || !isLikelyMongoObjectId(cid)) return
+    const openPrepaid = searchParams.get("prepaidWallet") === "1"
+    const collectDues = searchParams.get("collectDues") === "1"
+    const payRemainingRaw = searchParams.get("payRemainingSaleId")
+    const payRemainingSaleId =
+      payRemainingRaw && isLikelyMongoObjectId(String(payRemainingRaw).trim())
+        ? String(payRemainingRaw).trim()
+        : ""
+
+    const run = async () => {
+      try {
+        let client = clients.find((c) => String(c._id || c.id) === String(cid))
+        if (!client) {
+          const res = await ClientsAPI.getById(cid)
+          if (res.success && res.data) client = res.data as Client
+        }
+        if (client) {
+          setSelectedCustomer(client as Client)
+          setCustomerSearch(client.name || "")
+          const customerId = String(client._id || client.id || "")
+          const inList = clients.some((c) => String(c._id || c.id) === customerId)
+          if (customerId && inList) {
+            await fetchCustomerStats(customerId)
+          }
+          if (payRemainingSaleId) {
+            const saleRes = await SalesAPI.getById(payRemainingSaleId)
+            if (saleRes?.success && saleRes?.data) {
+              const saleDoc = saleRes.data as any
+              const remaining = Number(saleDoc?.paymentStatus?.remainingAmount ?? 0) || 0
+              if (remaining > 0.02) {
+                skipReopenDuesAfterPaymentModalRef.current = true
+                setPaymentCollectionPresentation("sheet")
+                setSelectedBillForPayment(saleDoc)
+                setShowDuesPaymentModal(true)
+              } else {
+                toast({
+                  title: "Nothing to collect",
+                  description: "This invoice has no remaining balance.",
+                })
+              }
+            } else {
+              toast({
+                title: "Invoice not found",
+                description: "Could not load the bill for payment.",
+                variant: "destructive",
+              })
+            }
+          } else if (collectDues) {
+            const phone = (client as Client).phone?.trim()
+            if (phone) await fetchUnpaidBills(phone)
+            setShowDuesDialog(true)
+          }
+        }
+        if (openPrepaid) {
+          setAddItemSection("prepaid")
+        }
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href)
+          url.searchParams.delete("clientId")
+          url.searchParams.delete("prepaidWallet")
+          url.searchParams.delete("collectDues")
+          url.searchParams.delete("payRemainingSaleId")
+          router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false })
+        }
+      } catch (e) {
+        console.error("Quick Sale clientId prefill:", e)
+      }
+    }
+
+    void run()
+  }, [searchParams, clients, router, fetchUnpaidBills, fetchCustomerStats, toast])
 
   // Fetch customer bills for Bill Activity dialog and inline Customer notes panel
   const fetchCustomerBills = async (customerPhone: string) => {
@@ -2569,7 +2863,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setMembershipItems((items) =>
       items.map((m) => {
         if (!m.planId) return m
-        const base = m.price * m.quantity
+        const base = addonLineTaxableBase(m.price, m.quantity, m.discount)
         const mRate = taxSettings.membershipTaxRate ?? taxSettings.serviceTaxRate ?? 5
         const { total } = computeMembershipPlanLineTotal(base, {
           membershipTaxRate: mRate,
@@ -2582,29 +2876,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   }, [
     taxSettings?.enableTax,
     taxSettings?.membershipTaxRate,
-    taxSettings?.serviceTaxRate,
-    paymentSettings?.priceInclusiveOfTax,
-  ])
-
-  // Recompute package line totals when tax mode or package rate changes
-  useEffect(() => {
-    if (!taxSettings) return
-    setPackageItems((items) =>
-      items.map((p) => {
-        if (!p.packageId) return p
-        const base = p.price * p.quantity
-        const pRate = taxSettings.packageTaxRate ?? taxSettings.serviceTaxRate ?? 5
-        const { total } = computePackageLineTotal(base, {
-          packageTaxRate: pRate,
-          enableTax: taxSettings.enableTax !== false,
-          priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
-        })
-        return { ...p, total }
-      })
-    )
-  }, [
-    taxSettings?.enableTax,
-    taxSettings?.packageTaxRate,
     taxSettings?.serviceTaxRate,
     paymentSettings?.priceInclusiveOfTax,
   ])
@@ -2710,13 +2981,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       durationInDays: 0,
       quantity: 1,
       total: 0,
+      discount: 0,
     }
     setMembershipItems([...membershipItems, newItem])
   }
 
   // Remove membership item
   const removeMembershipItem = (id: string) => {
-    setMembershipItems((items) => items.filter((item) => item.id !== id))
+    setMembershipItems((items) =>
+      items.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   // Update membership item
@@ -2724,6 +2998,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setMembershipItems((items) =>
       items.map((item) => {
         if (item.id !== id) return item
+        if (item.appointmentLineLocked) {
+          if (appointmentPricingFinalized) return item
+          if (field !== "quantity" && field !== "price") {
+            return item
+          }
+        }
         const updated = { ...item, [field]: value }
         if (field === "planId" && value) {
           const plan = plans.find((p) => (p._id || p.id) === value)
@@ -2731,7 +3011,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.planName = plan.planName
             updated.price = plan.price ?? 0
             updated.durationInDays = plan.durationInDays ?? 0
-            const base = updated.price * updated.quantity
+            const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
             const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
             const { total } = computeMembershipPlanLineTotal(base, {
               membershipTaxRate: mRate,
@@ -2741,7 +3021,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.total = total
           }
         } else if (field === "quantity") {
-          const base = updated.price * updated.quantity
+          const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
           const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
           const { total } = computeMembershipPlanLineTotal(base, {
             membershipTaxRate: mRate,
@@ -2749,63 +3029,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
           })
           updated.total = total
-        }
-        return updated
-      })
-    )
-  }
-
-  const addPackageItem = () => {
-    if (packagesCatalog.length === 0) {
-      toast({
-        title: "No Packages Available",
-        description: "Create active packages under Packages, or check your connection.",
-        variant: "destructive",
-      })
-      return
-    }
-    const newItem: PackageItem = {
-      id: Date.now().toString(),
-      packageId: "",
-      packageName: "",
-      totalSittings: 0,
-      price: 0,
-      quantity: 1,
-      total: 0,
-      staffId: "",
-    }
-    setPackageItems([...packageItems, newItem])
-  }
-
-  const removePackageItem = (id: string) => {
-    setPackageItems((items) => items.filter((item) => item.id !== id))
-  }
-
-  const updatePackageItem = (id: string, field: keyof PackageItem, value: any) => {
-    setPackageItems((items) =>
-      items.map((item) => {
-        if (item.id !== id) return item
-        const updated = { ...item, [field]: value }
-        if (field === "packageId" && value) {
-          const pkg = packagesCatalog.find((p) => (p._id || p.id) === value)
-          if (pkg) {
-            updated.packageName = pkg.name || ""
-            updated.totalSittings = pkg.total_sittings ?? 0
-            updated.price = Number(pkg.total_price) || 0
-            const base = updated.price * updated.quantity
-            const pRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-            const { total } = computePackageLineTotal(base, {
-              packageTaxRate: pRate,
-              enableTax: taxSettings?.enableTax !== false,
-              priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
-            })
-            updated.total = total
-          }
-        } else if (field === "quantity") {
-          const base = updated.price * updated.quantity
-          const pRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-          const { total } = computePackageLineTotal(base, {
-            packageTaxRate: pRate,
+        } else if (field === "price") {
+          const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
+          const mRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const { total } = computeMembershipPlanLineTotal(base, {
+            membershipTaxRate: mRate,
             enableTax: taxSettings?.enableTax !== false,
             priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
           })
@@ -2827,18 +3055,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       quantity: 1,
       price: 0,
       total: 0,
+      discount: 0,
     }
     setPrepaidPlanItems((rows) => [...rows, newItem])
   }
 
   const removePrepaidPlanItem = (id: string) => {
-    setPrepaidPlanItems((rows) => rows.filter((item) => item.id !== id))
+    setPrepaidPlanItems((rows) =>
+      rows.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   const updatePrepaidPlanItem = (id: string, field: keyof PrepaidPlanItem, value: any) => {
     setPrepaidPlanItems((rows) =>
       rows.map((item) => {
         if (item.id !== id) return item
+        if (item.appointmentLineLocked) {
+          if (appointmentPricingFinalized) return item
+          if (field !== "quantity" && field !== "price") {
+            return item
+          }
+        }
         const updated: PrepaidPlanItem = { ...item, [field]: value }
         if (field === "planId" && value) {
           const plan = prepaidWalletPlansForIssue.find((p) => String(p._id) === String(value))
@@ -2847,7 +3084,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             updated.price = Number(plan.payAmount) || 0
             updated.creditAmount = Number(plan.creditAmount) || 0
             updated.validityDays = Number(plan.validityDays) || 0
-            const base = updated.price * updated.quantity
+            const base = addonLineTaxableBase(updated.price, updated.quantity, updated.discount)
             const prepaidRate =
               taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
             const { total } = computeMembershipPlanLineTotal(base, {
@@ -2857,6 +3094,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             })
             updated.total = total
           }
+        } else if (field === "quantity" || field === "price") {
+          const q = Math.max(1, Math.floor(Number(updated.quantity) || 1))
+          updated.quantity = q
+          const base = addonLineTaxableBase(Number(updated.price), q, updated.discount)
+          const prepaidRate =
+            taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
+          const { total } = computeMembershipPlanLineTotal(base, {
+            membershipTaxRate: prepaidRate,
+            enableTax: taxSettings?.enableTax !== false,
+            priceInclusiveOfTax: paymentSettings?.priceInclusiveOfTax !== false,
+          })
+          updated.total = total
         }
         return updated
       })
@@ -2869,10 +3118,95 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     console.log('Service ID:', id)
     console.log('Field:', field)
     console.log('Value:', value)
+
+    // Bundle expansion (same as appointment form + addToCart): one row becomes N child service lines.
+    if (field === "serviceId" && value) {
+      const chosenCatalog = services.find((s) => String(s._id || s.id) === String(value))
+      if (chosenCatalog && isBundleService(chosenCatalog)) {
+        setServiceItems((items) => {
+          const idx = items.findIndex((i) => i.id === id)
+          if (idx < 0) return items
+          const template = items[idx]
+          if (template.appointmentLineLocked) {
+            if (appointmentPricingFinalized) return items
+            return items
+          }
+          const expanded = expandBundleToLines(chosenCatalog, services)
+          if (expanded.length === 0) {
+            toast({
+              title: "Bundle error",
+              description: "Could not expand bundle services. Refresh and try again.",
+              variant: "destructive",
+            })
+            return items
+          }
+          const rowData = expanded.map((line) => {
+            const child = services.find((s) => String(s._id || s.id) === line.serviceId)
+            return {
+              serviceId: line.serviceId,
+              price: line.price,
+              taxApplicable: child?.taxApplicable,
+            }
+          })
+          const priceInclusiveInner = paymentSettings?.priceInclusiveOfTax !== false
+          const computeLineTotalForExpand = (
+            baseAmount: number,
+            discountPct: number,
+            taxRate: number,
+            applyTax: boolean
+          ): number => {
+            const discountedAmount = baseAmount * (1 - (discountPct || 0) / 100)
+            if (!applyTax) return discountedAmount
+            if (priceInclusiveInner) return discountedAmount
+            return discountedAmount + (discountedAmount * taxRate) / 100
+          }
+          const ts = Date.now()
+          const newRows: ServiceItem[] = rowData.map((row, i) => {
+            const basePrice = row.price || 0
+
+            const applyTaxRow = row.taxApplicable && taxSettings?.enableTax !== false
+            const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+            const total = computeLineTotalForExpand(basePrice * 1, 0, serviceTaxRate, applyTaxRow)
+
+            return {
+              id: `${ts}-${i}-${Math.random().toString(36).slice(2, 9)}`,
+              serviceId: row.serviceId,
+              staffId: template.staffId,
+              staffContributions: template.staffContributions
+                ? template.staffContributions.map((c) => ({ ...c }))
+                : [],
+              quantity: 1,
+              price: basePrice,
+              discount: 0,
+              total,
+              isMembershipFree: false,
+              membershipDiscountPercent: 0,
+              appointmentLineLocked: template.appointmentLineLocked,
+              fromBundle: true,
+            }
+          })
+          return [...items.slice(0, idx), ...newRows, ...items.slice(idx + 1)]
+        })
+        setServiceDropdownSearch("")
+        setActiveServiceDropdown(null)
+        setTimeout(() => recalculateDiscounts(), 0)
+        return
+      }
+    }
+
     setServiceItems((items) =>
       items.map((item) => {
         if (item.id === id) {
+          if (item.appointmentLineLocked) {
+            if (appointmentPricingFinalized) return item
+            if (field !== "quantity" && field !== "price" && field !== "discount") {
+              return item
+            }
+          }
           const updatedItem = { ...item, [field]: value }
+          if (field === "serviceId") {
+            updatedItem.fromBundle = false
+          }
 
           // Auto-fill price when service is selected (Price = base cost, Disc = membership discount %, Total = after discount)
           if (field === "serviceId" && value) {
@@ -2883,35 +3217,24 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               let isMembershipFree = false
               let membershipDiscountPercent = 0
 
-              if (item.isPackageRedemption) {
-                updatedItem.price = basePrice
-                updatedItem.discount = 100
-                updatedItem.isMembershipFree = false
-                updatedItem.membershipDiscountPercent = 0
-                const baseAmount = updatedItem.price * updatedItem.quantity
-                const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-                const applyTax = isServiceTaxable(updatedItem)
-                const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
-                updatedItem.total = total
-              } else if (membershipData?.plan && membershipData?.usageSummary) {
+              if (membershipData?.plan && membershipData?.usageSummary) {
                 const usage = membershipData.usageSummary.find((u: any) => String(u.serviceId || u.serviceId?._id) === String(value))
                 const plan = membershipData.plan
                 if (usage && usage.remaining > 0) {
                   discount = 100
                   isMembershipFree = true
                   membershipDiscountPercent = 100
-                } else if (plan?.discountPercentage > 0) {
-                  discount = plan.discountPercentage
-                  membershipDiscountPercent = plan.discountPercentage
+                } else if (effectiveMembershipPlanDiscountPercent(plan, String(value)) > 0) {
+                  const d = effectiveMembershipPlanDiscountPercent(plan, String(value))
+                  discount = d
+                  membershipDiscountPercent = d
                 }
               }
 
-              if (!item.isPackageRedemption) {
-                updatedItem.price = basePrice
-                updatedItem.discount = discount
-                updatedItem.isMembershipFree = isMembershipFree
-                updatedItem.membershipDiscountPercent = membershipDiscountPercent
-              }
+              updatedItem.price = basePrice
+              updatedItem.discount = discount
+              updatedItem.isMembershipFree = isMembershipFree
+              updatedItem.membershipDiscountPercent = membershipDiscountPercent
             }
           }
 
@@ -2944,6 +3267,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setProductItems((items) =>
       items.map((item) => {
         if (item.id === id) {
+          if (item.appointmentLineLocked) {
+            if (appointmentPricingFinalized) return item
+            if (field !== "quantity" && field !== "price" && field !== "discount") {
+              return item
+            }
+          }
           const updatedItem = { ...item, [field]: value }
 
           // Auto-fill price when product is selected
@@ -2988,12 +3317,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
   // Remove service item
   const removeServiceItem = (id: string) => {
-    setServiceItems((items) => items.filter((item) => item.id !== id))
+    setServiceItems((items) =>
+      items.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   // Remove product item
   const removeProductItem = (id: string) => {
-    setProductItems((items) => items.filter((item) => item.id !== id))
+    setProductItems((items) =>
+      items.filter((item) => item.id !== id || item.appointmentLineLocked)
+    )
   }
 
   /** Per included service: plan remaining minus *free* units allocated on this bill (same order as applyMembershipPricingRef). */
@@ -3036,6 +3369,34 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       ? serviceItems.reduce((sum, item) => sum + (item.price * item.quantity * (item.discount || 0)) / 100, 0) +
         productItems.reduce((sum, item) => sum + (item.price * item.quantity * (item.discount || 0)) / 100, 0)
       : 0
+
+  const globalCartDiscountActiveQuick = discountValue > 0 || discountPercentage > 0
+
+  /**
+   * Pre-tax membership benefit on services (free included units or plan % off).
+   * When a cart-level %/₹ discount is active, line % is re-proportioned — show membership only in that case via line totals + Discounts.
+   */
+  const membershipServiceDiscountPreTax = !globalCartDiscountActiveQuick
+    ? serviceItems.reduce((sum, item) => {
+        if (!item.serviceId) return sum
+        if (!item.isMembershipFree && (item.membershipDiscountPercent ?? 0) <= 0) return sum
+        const base = item.price * item.quantity
+        return sum + (base * (item.discount || 0)) / 100
+      }, 0)
+    : 0
+
+  const lineLevelDiscountNonMembership =
+    discountValue === 0 && discountPercentage === 0
+      ? serviceItems.reduce((sum, item) => {
+          if (!item.serviceId) return sum
+          if (item.isMembershipFree || (item.membershipDiscountPercent ?? 0) > 0) return sum
+          return sum + (item.price * item.quantity * (item.discount || 0)) / 100
+        }, 0) +
+        productItems.reduce((sum, item) => sum + (item.price * item.quantity * (item.discount || 0)) / 100, 0)
+      : 0
+
+  const billingDiscountsExclMembershipPreTax = globalDiscount + lineLevelDiscountNonMembership
+
   const totalDiscount = globalDiscount + lineLevelDiscount
   
   // Calculate tax breakdown for billing summary
@@ -3125,7 +3486,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       membershipData.usageSummary.map((u: any) => [String(u.serviceId || u.serviceId?._id), u])
     )
     const plan = membershipData.plan
-    const discountPct = plan?.discountPercentage || 0
 
     const remaining: Record<string, number> = {}
     usageMap.forEach((u: any, sid: string) => {
@@ -3134,27 +3494,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
     return items.map((item) => {
       if (!item.serviceId) return item
-      if (item.isPackageRedemption) {
-        const service = services.find((s) => (s._id || s.id) === item.serviceId)
-        const basePrice = service?.price ?? item.price
+      if (item.fromBundle) {
+        const basePrice = item.price
         const qty = Number(item.quantity)
         const q = Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 1
         const baseAmount = basePrice * q
         const serviceTaxRate = taxSettings?.serviceTaxRate || 5
         const applyTax = isServiceTaxable(item)
-        const { total } = computeLineTotalAndTax(baseAmount, 100, serviceTaxRate, applyTax)
+        const disc = item.discount ?? 0
+        const { total } = computeLineTotalAndTax(baseAmount, disc, serviceTaxRate, applyTax)
         return {
           ...item,
-          price: basePrice,
           quantity: q,
-          discount: 100,
+          price: basePrice,
+          discount: disc,
           total,
           isMembershipFree: false,
           membershipDiscountPercent: 0,
         }
       }
-
       const sid = String(item.serviceId)
+      const discountPct = effectiveMembershipPlanDiscountPercent(plan, sid)
       const u = usageMap.get(sid)
       const service = services.find((s) => (s._id || s.id) === item.serviceId)
       const basePrice = service?.price ?? item.price
@@ -3259,34 +3619,76 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     const discountPct = item.discount ?? 0
     return baseAmount * (1 - discountPct / 100)
   }
-  
+
+  /** Cart value / % discount is applied to tax-inclusive line totals — GST must be derived from final `item.total`. */
+  const globalCartDiscountActive = discountValue > 0 || discountPercentage > 0
+
+  const taxAmountFromFinalLineTotal = (lineTotal: number, taxRate: number) => {
+    const t = Number(lineTotal) || 0
+    const r = Number(taxRate) || 0
+    if (t <= 0 || r <= 0) return 0
+    return t - t / (1 + r / 100)
+  }
+
   // Calculate service tax (Inclusive: extract from price; Excluded: add on top)
-  const serviceTax = (taxSettings?.enableTax !== false) ? serviceItems.reduce((sum, item) => {
-    if (!isServiceTaxable(item)) return sum
-    const baseAmount = item.price * item.quantity
-    const serviceTaxRate = taxSettings?.serviceTaxRate || 5
-    const { taxAmount } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, serviceTaxRate, true)
-    return sum + taxAmount
-  }, 0) : 0
-  
+  const serviceTax =
+    taxSettings?.enableTax !== false
+      ? serviceItems.reduce((sum, item) => {
+          if (!isServiceTaxable(item)) return sum
+          const baseAmount = item.price * item.quantity
+          const serviceTaxRate = taxSettings?.serviceTaxRate || 5
+          if (globalCartDiscountActive) {
+            return sum + taxAmountFromFinalLineTotal(item.total, serviceTaxRate)
+          }
+          const { taxAmount } = computeLineTotalAndTax(
+            baseAmount,
+            item.discount ?? 0,
+            serviceTaxRate,
+            true
+          )
+          return sum + taxAmount
+        }, 0)
+      : 0
+
   // Calculate product tax (Inclusive: extract from price; Excluded: add on top)
-  const productTax = (taxSettings?.enableTax !== false) ? productItems.reduce((sum, item) => {
-    const baseAmount = item.price * item.quantity
-    const product = products.find((p) => p._id === item.productId || p.id === item.productId)
-    let productTaxRate = 18
-    if (product?.taxCategory && taxSettings) {
-      switch (product.taxCategory) {
-        case 'essential': productTaxRate = taxSettings.essentialProductRate || 5; break
-        case 'intermediate': productTaxRate = taxSettings.intermediateProductRate || 12; break
-        case 'standard': productTaxRate = taxSettings.standardProductRate || 18; break
-        case 'luxury': productTaxRate = taxSettings.luxuryProductRate || 28; break
-        case 'exempt': productTaxRate = taxSettings.exemptProductRate || 0; break
-      }
-    }
-    const applyTax = taxSettings?.enableTax !== false
-    const { taxAmount } = computeLineTotalAndTax(baseAmount, item.discount ?? 0, productTaxRate, applyTax)
-    return sum + taxAmount
-  }, 0) : 0
+  const productTax =
+    taxSettings?.enableTax !== false
+      ? productItems.reduce((sum, item) => {
+          const baseAmount = item.price * item.quantity
+          const product = products.find((p) => p._id === item.productId || p.id === item.productId)
+          let productTaxRate = 18
+          if (product?.taxCategory && taxSettings) {
+            switch (product.taxCategory) {
+              case "essential":
+                productTaxRate = taxSettings.essentialProductRate || 5
+                break
+              case "intermediate":
+                productTaxRate = taxSettings.intermediateProductRate || 12
+                break
+              case "standard":
+                productTaxRate = taxSettings.standardProductRate || 18
+                break
+              case "luxury":
+                productTaxRate = taxSettings.luxuryProductRate || 28
+                break
+              case "exempt":
+                productTaxRate = taxSettings.exemptProductRate || 0
+                break
+            }
+          }
+          const applyTax = taxSettings?.enableTax !== false
+          if (globalCartDiscountActive) {
+            return sum + taxAmountFromFinalLineTotal(item.total, productTaxRate)
+          }
+          const { taxAmount } = computeLineTotalAndTax(
+            baseAmount,
+            item.discount ?? 0,
+            productTaxRate,
+            applyTax
+          )
+          return sum + taxAmount
+        }, 0)
+      : 0
 
   const membershipTax =
     taxSettings?.enableTax !== false
@@ -3295,19 +3697,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           .reduce((sum, m) => {
             const baseAmount = m.price * m.quantity
             const membershipTaxRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, membershipTaxRate, membershipTaxRate > 0)
-            return sum + taxAmount
-          }, 0)
-      : 0
-
-  const packageTax =
-    taxSettings?.enableTax !== false
-      ? packageItems
-          .filter((p) => p.packageId)
-          .reduce((sum, p) => {
-            const baseAmount = p.price * p.quantity
-            const packageTaxRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, packageTaxRate > 0)
+            const disc = m.discount ?? 0
+            const { taxAmount } = computeLineTotalAndTax(
+              baseAmount,
+              disc,
+              membershipTaxRate,
+              membershipTaxRate > 0
+            )
             return sum + taxAmount
           }, 0)
       : 0
@@ -3320,24 +3716,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             const baseAmount = p.price * p.quantity
             const prepaidTaxRate =
               taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-            const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, prepaidTaxRate, prepaidTaxRate > 0)
+            const disc = p.discount ?? 0
+            const { taxAmount } = computeLineTotalAndTax(
+              baseAmount,
+              disc,
+              prepaidTaxRate,
+              prepaidTaxRate > 0
+            )
             return sum + taxAmount
           }, 0)
       : 0
 
-  const totalTax = serviceTax + productTax + membershipTax + packageTax + prepaidWalletTax
+  const totalTax = serviceTax + productTax + membershipTax + prepaidWalletTax
   
   // Service Total (for billing display) = sum of (price × qty) for services only
   const billingServiceTotal = serviceItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
   // Product Total (for billing display) = sum of (price × qty) for products only
   const billingProductTotal = productItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
-  // Membership / Package sidebar totals: pre-tax (price × qty), same as Plan total / Package total columns
+  // Membership / prepaid sidebar totals: pre-tax (price × qty), same as Plan total columns
   const billingMembershipTotal = membershipItems
     .filter((m) => m.planId)
     .reduce((sum, m) => sum + m.price * m.quantity, 0)
-  const billingPackageTotal = packageItems
-    .filter((p) => p.packageId)
-    .reduce((sum, p) => sum + p.price * p.quantity, 0)
   const billingPrepaidTotal = prepaidPlanItems
     .filter((p) => p.planId)
     .reduce((sum, p) => sum + p.price * p.quantity, 0)
@@ -3345,12 +3744,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const billingItemTotal = billingServiceTotal + billingProductTotal
   // Discounts = Manual + Global (both line-level and global discount)
   const discounts = totalDiscount
-  // Sub Total (pre-tax): all lines — services, products, membership, package — then discounts (matches Sub Total + GST ≈ Total when tax is exclusive)
+  // Sub Total (pre-tax): all lines — services, products, membership, prepaid — then discounts (matches Sub Total + GST ≈ Total when tax is exclusive)
   const subTotal =
     billingServiceTotal +
     billingProductTotal +
     billingMembershipTotal +
-    billingPackageTotal +
     billingPrepaidTotal -
     discounts
   
@@ -3433,9 +3831,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       }
       
       const baseAmount = item.price * item.quantity
-      const discountedAmount = getDiscountedBase(baseAmount, item.discount, productTaxRate)
-      const gstAmount = (discountedAmount * productTaxRate) / 100
-      
+      let gstAmount: number
+      if (globalCartDiscountActive) {
+        gstAmount = taxAmountFromFinalLineTotal(Number(item.total) || 0, productTaxRate)
+      } else {
+        const discountedAmount = getDiscountedBase(baseAmount, item.discount, productTaxRate)
+        gstAmount = (discountedAmount * productTaxRate) / 100
+      }
+
       const existing = categoryMap.get(categoryKey) || 0
       categoryMap.set(categoryKey, existing + gstAmount)
     })
@@ -3483,11 +3886,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     })
   }
 
-  // Base bill (services/products) total = subtotal + membership items + package items
+  // Base bill (services/products) total = subtotal + membership items + prepaid items
   // Note: When value/percentage discount is active, item.total already has the proportional discount baked in,
   // so we must NOT subtract globalDiscount again (that would double-apply the discount).
   const membershipTotal = membershipItems.reduce((sum, item) => sum + item.total, 0)
-  const packageTotal = packageItems.reduce((sum, item) => sum + item.total, 0)
   const prepaidPlanTotal = prepaidPlanItems.reduce((sum, item) => sum + item.total, 0)
 
   const payCfgMerged = useMemo(
@@ -3498,29 +3900,52 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const stackWalletAndReward = payCfgMerged.billingRedemption.allowWalletAndPointsTogether !== false
 
   const redemptionLineItems = useMemo(() => {
-    const lines: { type: string; total: number }[] = []
+    const globalCartDiscountActive = discountValue > 0 || discountPercentage > 0
+    const lineDiscounted = (item: {
+      discount?: number
+      isMembershipFree?: boolean
+      membershipDiscountPercent?: number
+    }) =>
+      globalCartDiscountActive ||
+      (item.discount ?? 0) > 0 ||
+      !!item.isMembershipFree ||
+      (item.membershipDiscountPercent ?? 0) > 0
+
+    const lines: PaymentRedemptionLine[] = []
     for (const it of serviceItems) {
       if (!it.serviceId) continue
-      lines.push({ type: "service", total: Number(it.total) || 0 })
+      lines.push({
+        type: "service",
+        total: Number(it.total) || 0,
+        discount: it.discount ?? 0,
+        isMembershipFree: it.isMembershipFree,
+        membershipDiscountPercent: it.membershipDiscountPercent,
+        isDiscounted: lineDiscounted(it),
+      })
     }
     for (const it of productItems) {
       if (!it.productId) continue
-      lines.push({ type: "product", total: Number(it.total) || 0 })
+      lines.push({
+        type: "product",
+        total: Number(it.total) || 0,
+        discount: it.discount ?? 0,
+        isDiscounted: lineDiscounted(it),
+      })
     }
     for (const it of membershipItems) {
       if (!it.planId) continue
-      lines.push({ type: "membership", total: Number(it.total) || 0 })
-    }
-    for (const it of packageItems) {
-      if (!it.packageId) continue
-      lines.push({ type: "package", total: Number(it.total) || 0 })
+      lines.push({
+        type: "membership",
+        total: Number(it.total) || 0,
+        isDiscounted: globalCartDiscountActive,
+      })
     }
     for (const it of prepaidPlanItems) {
       if (!it.planId) continue
       lines.push({ type: "prepaid_wallet", total: Number(it.total) || 0 })
     }
     return lines
-  }, [serviceItems, productItems, membershipItems, packageItems, prepaidPlanItems])
+  }, [serviceItems, productItems, membershipItems, prepaidPlanItems, discountValue, discountPercentage])
 
   const eligibleWalletSubtotal = useMemo(() => {
     if (!allowBillingRedemption) return 0
@@ -3560,15 +3985,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     eligibleRewardSubtotalRounded,
   ])
 
-  const showRedemptionSection = hasWalletRedemptionSlot || hasRewardRedemptionSlot
+  /** Appointment checkout seals line-level pricing unless reward was chosen in service checkout. */
+  const hasRewardRedemptionSlotForUi =
+    hasRewardRedemptionSlot && (!appointmentPricingFinalized || finalizeRewardFromCheckout)
+
+  const showRedemptionSection = hasWalletRedemptionSlot || hasRewardRedemptionSlotForUi
   const showExclusiveRedemptionPicker =
-    allowBillingRedemption && !stackWalletAndReward && hasWalletRedemptionSlot && hasRewardRedemptionSlot
+    allowBillingRedemption &&
+    !stackWalletAndReward &&
+    hasWalletRedemptionSlot &&
+    hasRewardRedemptionSlotForUi
 
   const showWalletInput =
     hasWalletRedemptionSlot &&
-    (stackWalletAndReward || !hasRewardRedemptionSlot || exclusiveRedemptionMethod === "wallet")
+    (stackWalletAndReward || !hasRewardRedemptionSlotForUi || exclusiveRedemptionMethod === "wallet")
   const showRewardInput =
-    hasRewardRedemptionSlot &&
+    hasRewardRedemptionSlotForUi &&
     (stackWalletAndReward || !hasWalletRedemptionSlot || exclusiveRedemptionMethod === "reward")
 
   const hasAnyBillLineForRedemption = redemptionLineItems.length > 0
@@ -3583,7 +4015,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     eligibleRewardSubtotalRounded <= 0 &&
     payCfgMerged.rewardPointRedemption.enabled !== false
 
-  const baseTotal = subtotal + membershipTotal + packageTotal + prepaidPlanTotal
+  const baseTotal = subtotal + membershipTotal + prepaidPlanTotal
   const baseRounded = Math.round(baseTotal)
   const roundOff = baseRounded - baseTotal
   const loyaltyPreview = useMemo(() => {
@@ -3660,7 +4092,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
   useEffect(() => {
     if (!hasRewardRedemptionSlot) setLoyaltyPointsInput(0)
-  }, [hasRewardRedemptionSlot])
+    else if (appointmentPricingFinalized && !finalizeRewardFromCheckout) setLoyaltyPointsInput(0)
+  }, [hasRewardRedemptionSlot, appointmentPricingFinalized, finalizeRewardFromCheckout])
+
+  useEffect(() => {
+    if (!appointmentPricingFinalized) return
+    if (finalizeRewardFromCheckout) return
+    setExclusiveRedemptionMethod((prev) => (prev === "reward" ? "wallet" : prev))
+  }, [appointmentPricingFinalized, finalizeRewardFromCheckout])
 
   useEffect(() => {
     if (exclusiveRedemptionMethod === "wallet") setLoyaltyPointsInput(0)
@@ -3694,22 +4133,135 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const validServiceForCheckout = serviceItems.filter((item) => item.serviceId)
   const validProductForCheckout = productItems.filter((item) => item.productId)
   const validMembershipSaleLines = membershipItems.filter((m) => m.planId)
-  const validPackageForCheckout = packageItems.filter((p) => p.packageId)
   const validPrepaidPlanForCheckout = prepaidPlanItems.filter((p) => p.planId)
   const membershipFreeServicesOnly =
     validServiceForCheckout.length > 0 &&
     validProductForCheckout.length === 0 &&
     validMembershipSaleLines.length === 0 &&
-    validPackageForCheckout.length === 0 &&
     validPrepaidPlanForCheckout.length === 0 &&
     validServiceForCheckout.every(
       (item) => item.isMembershipFree === true && Math.abs(item.total) < 0.005
     )
 
+  const hasAnyCheckoutLine =
+    validServiceForCheckout.length > 0 ||
+    validProductForCheckout.length > 0 ||
+    validMembershipSaleLines.length > 0 ||
+    validPrepaidPlanForCheckout.length > 0
+
+  const rewardPointsFullyCoverCheckout =
+    loyaltyPointsInput > 0 &&
+    loyaltyPreview.ok &&
+    (loyaltyPreview.pointsToRedeem ?? 0) > 0 &&
+    roundedTotal <= 0.005
+
   const allowZeroTotalCheckout =
     roundedTotal <= 0 &&
-    validServiceForCheckout.length > 0 &&
-    (pendingPackageRedemption != null || membershipFreeServicesOnly)
+    hasAnyCheckoutLine &&
+    (membershipFreeServicesOnly || rewardPointsFullyCoverCheckout)
+
+  useEffect(() => {
+    const method = appointmentCheckoutPaymentMethodRef.current
+    if (!method || appointmentCheckoutPaymentAppliedRef.current) return
+    if (!selectedCustomer) return
+    if (!(roundedTotal > 0 || allowZeroTotalCheckout)) return
+    if (method === "wallet" && !clientWalletsHydrated) return
+    if (method === "reward" && !loyaltyBalanceHydrated) return
+
+    const applyCash = (due: number) => {
+      const d = Math.max(0, due)
+      setCashAmount(d)
+      setCardAmount(0)
+      setOnlineAmount(0)
+    }
+
+    const needExclusive =
+      !stackWalletAndReward && hasWalletRedemptionSlot && hasRewardRedemptionSlotForUi
+
+    if (method === "cash") {
+      setWalletPayAmount(0)
+      setLoyaltyPointsInput(0)
+      applyCash(roundedTotal)
+    } else if (method === "card") {
+      setWalletPayAmount(0)
+      setLoyaltyPointsInput(0)
+      setCashAmount(0)
+      setCardAmount(Math.max(0, roundedTotal))
+      setOnlineAmount(0)
+    } else if (method === "online") {
+      setWalletPayAmount(0)
+      setLoyaltyPointsInput(0)
+      setCashAmount(0)
+      setCardAmount(0)
+      setOnlineAmount(Math.max(0, roundedTotal))
+    } else if (method === "wallet") {
+      setLoyaltyPointsInput(0)
+      if (needExclusive) setExclusiveRedemptionMethod("wallet")
+      if (
+        !hasWalletRedemptionSlot ||
+        walletRedemptionTileDisabled ||
+        !selectedWalletId ||
+        !clientWallets?.length
+      ) {
+        setWalletPayAmount(0)
+        applyCash(roundedTotal)
+      } else {
+        const w = clientWallets.find((x: any) => String(x._id) === String(selectedWalletId))
+        const wAmt = w
+          ? Math.min(
+              Number(w.remainingBalance),
+              Math.max(0, Math.min(roundedTotal, eligibleWalletSubtotal))
+            )
+          : 0
+        setWalletPayAmount(wAmt)
+        applyCash(Math.max(0, roundedTotal - wAmt))
+      }
+    } else if (method === "reward") {
+      setWalletPayAmount(0)
+      if (needExclusive) setExclusiveRedemptionMethod("reward")
+      if (
+        !rewardPointsSettings?.enabled ||
+        loyaltyBalance <= 0 ||
+        rewardRedemptionBlockedByItems ||
+        payCfgMerged.rewardPointRedemption.enabled === false
+      ) {
+        applyCash(roundedTotal)
+      } else {
+        const capSubtotal = allowBillingRedemption ? eligibleRewardSubtotalRounded : baseRounded
+        const prev = previewRedemptionLive(rewardPointsSettings, capSubtotal, 9e9, loyaltyBalance)
+        if (prev.ok && prev.pointsToRedeem > 0) {
+          setLoyaltyPointsInput(prev.pointsToRedeem)
+          applyCash(Math.max(0, baseRounded - prev.discountRupees + tip))
+        } else {
+          applyCash(roundedTotal)
+        }
+      }
+    }
+
+    appointmentCheckoutPaymentAppliedRef.current = true
+    appointmentCheckoutPaymentMethodRef.current = null
+  }, [
+    selectedCustomer,
+    roundedTotal,
+    allowZeroTotalCheckout,
+    clientWalletsHydrated,
+    loyaltyBalanceHydrated,
+    hasWalletRedemptionSlot,
+    hasRewardRedemptionSlotForUi,
+    stackWalletAndReward,
+    walletRedemptionTileDisabled,
+    selectedWalletId,
+    clientWallets,
+    eligibleWalletSubtotal,
+    rewardPointsSettings,
+    loyaltyBalance,
+    rewardRedemptionBlockedByItems,
+    payCfgMerged.rewardPointRedemption.enabled,
+    allowBillingRedemption,
+    eligibleRewardSubtotalRounded,
+    baseRounded,
+    tip,
+  ])
 
   // Generate receipt number with proper increment.
   // No fallback to cached number - if the API fails after retries, we surface the error
@@ -3802,40 +4354,36 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
     const validServiceItems = serviceItems.filter((item) => item.serviceId)
     const validProductItems = productItems.filter((item) => item.productId)
-    const validPackageItems = packageItems.filter((p) => p.packageId)
     const validPrepaidPlanItems = prepaidPlanItems.filter((p) => p.planId)
 
     if (
       validServiceItems.length === 0 &&
       validProductItems.length === 0 &&
       membershipItems.filter((m) => m.planId).length === 0 &&
-      validPackageItems.length === 0 &&
       validPrepaidPlanItems.length === 0
     ) {
       toast({
         title: "No Items",
-        description: "Please add at least one service, product, membership plan, package, or prepaid plan",
+        description: "Please add at least one service, product, membership plan, or prepaid plan",
         variant: "destructive",
       })
       return
     }
 
-    if (validPackageItems.length > 0 || validPrepaidPlanItems.length > 0) {
+    if (validPrepaidPlanItems.length > 0) {
       const cid = getCustomerId(selectedCustomer)
       if (!isLikelyMongoObjectId(cid || undefined)) {
         toast({
           title: "Customer Required",
           description:
-            validPrepaidPlanItems.length > 0
-              ? "Select an existing customer from search to sell prepaid wallet plans on this bill."
-              : "Select an existing customer from search to sell packages on this bill.",
+            "Select an existing customer from search to sell prepaid wallet plans on this bill.",
           variant: "destructive",
         })
         return
       }
     }
 
-    // ₹0 allowed for package redemption (prepaid) or membership-included–only services (see allowZeroTotalCheckout)
+    // ₹0 allowed for membership-included–only services (see allowZeroTotalCheckout)
     if (roundedTotal <= 0 && !allowZeroTotalCheckout) {
       toast({
         title: "Invalid Amount",
@@ -3944,15 +4492,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       }
       const combinedSources = (wSel as { _combinedSources?: any[] })._combinedSources
       const stackingOk =
+        payCfgMerged.walletRedemption.allowOnDiscountedItems !== false ||
         clientWalletSettings?.allowCouponStacking ||
         (Array.isArray(combinedSources) && combinedSources.length > 0
           ? combinedSources.every((sw) => sw.planSnapshot?.allowCouponStacking)
           : wSel.planSnapshot?.allowCouponStacking)
       if (hasBillDiscount && !stackingOk) {
         toast({
-          title: "Discount stacking not allowed",
+          title: "Wallet not allowed with discounts",
           description:
-            "Turn off bill discounts or enable stacking in Prepaid wallet settings / plan to use a wallet with discounts.",
+            "Enable “Allow redemption on discounted items” in Prepaid wallet → Redemption rules, or use a plan that allows discount stacking.",
           variant: "destructive",
         })
         return
@@ -4013,16 +4562,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       toast({
         title: "Staff Required",
         description: "Please select staff for all membership plans before checkout",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const packageWithoutStaff = validPackageItems.filter((p) => !p.staffId)
-    if (validPackageItems.length > 0 && packageWithoutStaff.length > 0) {
-      toast({
-        title: "Staff Required",
-        description: "Please select staff for all package lines before checkout",
         variant: "destructive",
       })
       return
@@ -4201,25 +4740,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             sgst: 0,
             totalWithTax: m.total,
           })),
-        ...packageItems
-          .filter((p) => p.packageId)
-          .map((p) => ({
-            id: p.id,
-            name: `${p.packageName} (${p.totalSittings} sittings)`,
-            type: "package" as const,
-            quantity: p.quantity,
-            price: p.price,
-            discount: 0,
-            discountType: "percentage" as const,
-            hsnSacCode: "",
-            staffId: p.staffId || staff[0]?._id || staff[0]?.id || "",
-            staffName: (p.staffId ? staff.find((s) => (s._id || s.id) === p.staffId)?.name : null) || staff[0]?.name || "Unassigned Staff",
-            total: p.total,
-            taxAmount: 0,
-            cgst: 0,
-            sgst: 0,
-            totalWithTax: p.total,
-          })),
         ...prepaidPlanItems
           .filter((p) => p.planId)
           .map((p) => ({
@@ -4259,8 +4779,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       
       // Calculate tax breakdown from individual items (uses Inclusive/Excluded logic via computeLineTotalAndTax)
       let calculatedTax = 0
-      // Base bill amount (for sales/revenue) = subtotal + membership + packages (discount already baked into item totals)
-      const baseTotalForSale = subtotal + membershipTotal + packageTotal + prepaidPlanTotal
+      // Base bill amount (for sales/revenue) = subtotal + membership + prepaid (discount already baked into item totals)
+      const baseTotalForSale = subtotal + membershipTotal + prepaidPlanTotal
       const roundedBaseTotalForSale = Math.round(baseTotalForSale)
       const roundOff = roundedBaseTotalForSale - baseTotalForSale
       // calculatedTotal = bill amount used for sales/grossTotal (EXCLUDES tip)
@@ -4307,19 +4827,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               .reduce((sum, m) => {
                 const baseAmount = m.price * m.quantity
                 const membershipTaxRate = taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, membershipTaxRate, membershipTaxRate > 0)
-                return sum + taxAmount
-              }, 0)
-          : 0
-
-      const packageTaxCheckout =
-        (taxSettings?.enableTax !== false)
-          ? packageItems
-              .filter((p) => p.packageId)
-              .reduce((sum, p) => {
-                const baseAmount = p.price * p.quantity
-                const packageTaxRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, packageTaxRate > 0)
+                const { taxAmount } = computeLineTotalAndTax(
+                  baseAmount,
+                  m.discount ?? 0,
+                  membershipTaxRate,
+                  membershipTaxRate > 0
+                )
                 return sum + taxAmount
               }, 0)
           : 0
@@ -4332,12 +4845,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 const baseAmount = p.price * p.quantity
                 const prepaidTaxRate =
                   taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-                const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, prepaidTaxRate, prepaidTaxRate > 0)
+                const { taxAmount } = computeLineTotalAndTax(
+                  baseAmount,
+                  p.discount ?? 0,
+                  prepaidTaxRate,
+                  prepaidTaxRate > 0
+                )
                 return sum + taxAmount
               }, 0)
           : 0
 
-      calculatedTax = serviceTax + productTax + membershipTaxCheckout + packageTaxCheckout + prepaidTaxCheckout
+      calculatedTax = serviceTax + productTax + membershipTaxCheckout + prepaidTaxCheckout
         taxBreakdown = {
           cgst: calculatedTax / 2,
           sgst: calculatedTax / 2,
@@ -4345,7 +4863,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           serviceTax: serviceTax,
           membershipTax: membershipTaxCheckout,
           membershipRate: taxSettings?.membershipTaxRate ?? taxSettings?.serviceTaxRate ?? 5,
-          packageTax: packageTaxCheckout,
+          packageTax: 0,
           packageRate: taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5,
           prepaidWalletTax: prepaidTaxCheckout,
           prepaidWalletTaxRate:
@@ -4401,17 +4919,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           item.totalWithTax = item.total
           item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
           item.taxRate = applyTax ? membershipTaxRate : 0
-        } else if (item.type === 'package') {
-          const packageTaxRate = taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5
-          const applyTax = (taxSettings?.enableTax !== false) && packageTaxRate > 0
-          const baseAmount = item.price * item.quantity
-          const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, applyTax)
-          item.taxAmount = taxAmount
-          item.cgst = taxAmount / 2
-          item.sgst = taxAmount / 2
-          item.totalWithTax = item.total
-          item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
-          item.taxRate = applyTax ? packageTaxRate : 0
         } else if (item.type === 'prepaid_wallet') {
           const prepaidTaxRate =
             taxSettings?.prepaidWalletTaxRate ?? taxSettings?.serviceTaxRate ?? 5
@@ -4429,7 +4936,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
       let loyaltyDiscountAmountSave = 0
       let loyaltyPointsRedeemedSave = 0
-      if (rewardPointsSettings?.enabled && loyaltyPointsInput > 0 && showRewardInput) {
+      if (rewardPointsSettings?.enabled && loyaltyPointsInput > 0) {
         const cid = getCustomerId(customer)
         if (cid && isLikelyMongoObjectId(cid)) {
           const rewardCapForSave = allowBillingRedemption ? eligibleRewardSubtotalRounded : roundedBaseTotalForSale
@@ -4439,7 +4946,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             loyaltyPointsInput,
             loyaltyBalance
           )
-          if (prev.ok) {
+          if (prev.ok && prev.pointsToRedeem > 0) {
             loyaltyPointsRedeemedSave = prev.pointsToRedeem
             loyaltyDiscountAmountSave = prev.discountRupees
           }
@@ -4449,6 +4956,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       
       // Handle different modes: create, edit, exchange
       try {
+        let raiseSaleLinkageVoided = false
         let receiptNumber
         let saleId: string | undefined
 
@@ -4488,6 +4996,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         const tipStaff = tipStaffId
           ? staff.find((s) => (s._id || s.id) === tipStaffId)
           : null
+        const tipLinesForApi =
+          tip > 0.005
+            ? tipLines
+                .filter(
+                  (l) =>
+                    Math.max(0, Number(l.amount) || 0) > 0.005 && String(l.staffId || "").trim(),
+                )
+                .map((l) => {
+                  const st = staff.find((s) => String(s._id || s.id) === String(l.staffId))
+                  return {
+                    staffId: String(l.staffId).trim(),
+                    staffName: st?.name || "",
+                    amount: Math.max(0, Number(l.amount) || 0),
+                  }
+                })
+            : []
         const saleDueTotal = calculatedTotal + tip
         const { payments, changeToCredit, recordedPaidTotal } = buildRecordedPaymentsForCheckout({
           cashAmount,
@@ -4510,6 +5034,35 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           })
           return
         }
+
+        const linkageBaseline = raiseSaleLinkageBaselineRef.current
+        let appointmentLinkageIntact = true
+        if (mode === "create" && linkedAppointmentId && linkageBaseline !== null) {
+          const membershipLineCountCheckout = membershipItems.filter((m) => m.planId).length
+          const checkoutSnap = raiseSaleLinkageSnapshotFromCheckoutState({
+            clientId: String(getCustomerId(customer) || "").trim(),
+            dateYYYYMMDD: calendarYmdLocal(selectedDate),
+            remarksNormalized: String(remarks || "").trim(),
+            serviceLines: validServiceItems.map((item) => ({
+              serviceId: String(item.serviceId || ""),
+              staffId: String(item.staffId || ""),
+              quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+            })),
+            extraProducts: validProductItems.length,
+            extraMemberships: membershipLineCountCheckout,
+            extraPackages: 0,
+            extraPrepaid: validPrepaidPlanItems.length,
+          })
+          appointmentLinkageIntact = areRaiseSaleLinkageSnapshotsEqual(linkageBaseline, checkoutSnap)
+          raiseSaleLinkageVoided = !appointmentLinkageIntact
+        }
+        const effectiveAppointmentId =
+          mode === "create"
+            ? appointmentLinkageIntact
+              ? linkedAppointmentId || undefined
+              : undefined
+            : linkedAppointmentId || undefined
+
         const saleData = {
           billNo: receiptNumber,
           customerId: getCustomerId(customer),
@@ -4586,27 +5139,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   taxRate: (receiptItem as any)?.taxRate ?? 0,
                 }
               }),
-            ...validPackageItems.map((p) => {
-              const receiptItem = receiptItems.find((r) => r.id === p.id)
-              const itemTax = receiptItem?.taxAmount ?? 0
-              const staffMember = staff.find((s) => s._id === p.staffId || s.id === p.staffId)
-              return {
-                serviceId: null,
-                productId: null,
-                name: `${p.packageName} (${p.totalSittings} sittings)`,
-                type: "package" as const,
-                quantity: p.quantity,
-                price: p.price,
-                priceExcludingGST: (p.total - itemTax) / (p.quantity || 1),
-                total: p.total,
-                discount: 0,
-                staffId: p.staffId || "",
-                staffName: staffMember?.name || staff[0]?.name || "",
-                staffContributions: [],
-                hsnSacCode: "",
-                taxRate: (receiptItem as any)?.taxRate ?? 0,
-              }
-            }),
             ...validPrepaidPlanItems.map((p) => {
               const receiptItem = receiptItems.find((r) => r.id === p.id)
               const itemTax = receiptItem?.taxAmount ?? 0
@@ -4638,6 +5170,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           tip: tip,
           tipStaffId: tipStaffId || undefined,
           tipStaffName: tipStaff?.name || undefined,
+          ...(tipLinesForApi.length > 0 ? { tipLines: tipLinesForApi } : {}),
           discount: isValueDiscountActive ? discountValue : (isGlobalDiscountActive ? discountPercentage : 0),
           discountType: isValueDiscountActive ? 'fixed' : 'percentage',
           // Payment status tracking
@@ -4656,10 +5189,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 : recordedPaidTotal < calculatedTotal + tip
                   ? 'partial'
                   : 'completed',
-          paymentMode: payments.map(p => {
-            const capitalized = p.type.charAt(0).toUpperCase() + p.type.slice(1);
-            return capitalized;
-          }).join(', '),
+          paymentMode: buildSalePaymentModeFromCheckout({
+            payments,
+            loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
+            loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+          }),
           payments: payments.map(p => ({
             mode: p.type.charAt(0).toUpperCase() + p.type.slice(1), // Capitalize first letter: "Cash", "Card", "Online"
             amount: p.amount
@@ -4667,7 +5201,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
           staffName: primaryStaff?.staffName || staff[0]?.name || "Unassigned Staff",
           notes: remarks || '',
-          appointmentId: linkedAppointmentId || undefined,
+          appointmentId: effectiveAppointmentId,
           date: selectedDate.toISOString(),
           time: format(new Date(), "HH:mm"),
           ...(membershipItems.filter((m) => m.planId).length > 0 && {
@@ -4685,6 +5219,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           changeToCredit > 0.005 && {
             billChangeCreditedToWallet: changeToCredit,
           }),
+          ...(mode === "create"
+            ? {
+                // Quick Sale bills are walk-ins only: never create synthetic walk-in calendar rows
+                // (multi-staff standalone sale). Real bookings still complete via appointmentId above.
+                suppressStandaloneWalkInCalendarCards: true,
+                ...(raiseSaleLinkageVoided
+                  ? {
+                      voidBookingAppointmentIds: resolveAppointmentIdsToComplete(
+                        linkedAppointmentIds,
+                        linkedAppointmentId
+                      ),
+                    }
+                  : {}),
+              }
+            : {}),
         }
 
         console.log('💾 Creating sale in backend:', saleData)
@@ -4808,15 +5357,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     })
                     if (cr.success) {
                       toast({
-                        title: "Prepaid wallet opened",
-                        description: `₹${changeToCredit.toFixed(2)} credited — new wallet linked to bill ${receiptNumber}.`,
+                        title: "Change credited to wallet",
+                        description: `₹${changeToCredit.toFixed(2)} added to the client's wallet (bill ${receiptNumber}).`,
                       })
                     } else {
                       toast({
                         title: "Could not create wallet credit",
                         description:
                           cr.message ||
-                          "Ensure an active prepaid plan exists under Wallet settings. Adjust balance manually if needed.",
+                          "Bill was saved — add the change manually from the client wallet if needed.",
                         variant: "destructive",
                       })
                     }
@@ -4877,8 +5426,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               console.warn('⚠️ No WhatsApp status in response')
             }
             
-            // Mark all linked appointments as completed if fully paid
-            if (linkedAppointmentId && (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')) {
+            // Mark linked appointments completed only when the bill still matches Raise Sale confirmation
+            if (
+              appointmentLinkageIntact &&
+              linkedAppointmentId &&
+              (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')
+            ) {
               try {
                 const idsToComplete = resolveAppointmentIdsToComplete(linkedAppointmentIds, linkedAppointmentId)
                 await Promise.all(idsToComplete.map(id => AppointmentsAPI.update(id, { status: "completed" })))
@@ -4892,6 +5445,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               } catch (error) {
                 console.error("Failed to update appointment status:", error)
               }
+            }
+            if (raiseSaleLinkageVoided) {
+              toast({
+                title: "Bill saved without appointment link",
+                description:
+                  "This sale no longer matched the confirmed booking snapshot, so it was billed as a direct sale. The original booking rows were cleared from the calendar (no duplicate walk-in cards added).",
+              })
             }
             // Refresh calendar so new walk-in cards (multi-staff services) appear - for both linked and standalone sales
             if (typeof window !== "undefined" && (recordedPaidTotal >= calculatedTotal + tip || result.data?.status === 'completed')) {
@@ -4987,15 +5547,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     })
                     if (cr.success) {
                       toast({
-                        title: "Prepaid wallet opened",
-                        description: `₹${changeToCredit.toFixed(2)} credited — wallet created using your salon prepaid plan.`,
+                        title: "Change credited to wallet",
+                        description: `₹${changeToCredit.toFixed(2)} added to the client's wallet.`,
                       })
                     } else {
                       toast({
                         title: "Could not create wallet credit",
                         description:
                           cr.message ||
-                          "Create at least one active prepaid plan under Wallet settings, then add credit manually.",
+                          "Bill was saved — add the change manually from the client wallet if needed.",
                         variant: "destructive",
                       })
                     }
@@ -5059,81 +5619,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               }
             }
 
-            // Activate client packages (separate from Sale.items — backend package sell API)
-            if (mode === "create" && validPackageItems.length > 0) {
-              const clientOid = getCustomerId(selectedCustomer)
-              if (isLikelyMongoObjectId(clientOid || undefined)) {
-                const paidForBill = Math.min(recordedPaidTotal, calculatedTotal)
-                try {
-                  for (const row of validPackageItems) {
-                    const qty = Math.max(1, Math.floor(row.quantity || 1))
-                    const unitTotal = qty > 0 ? row.total / qty : row.total
-                    for (let q = 0; q < qty; q++) {
-                      const ap =
-                        calculatedTotal > 0 ? (unitTotal / calculatedTotal) * paidForBill : 0
-                      const res = await PackagesAPI.sell(row.packageId, {
-                        client_id: clientOid!,
-                        amount_paid: Math.round(ap * 100) / 100,
-                        ...(row.staffId ? { sold_by_staff_id: String(row.staffId) } : {}),
-                      })
-                      if (!res.success) {
-                        toast({
-                          title: "Package not activated",
-                          description: res.message || "Check Packages or the client profile to complete the sale.",
-                          variant: "destructive",
-                        })
-                      }
-                    }
-                  }
-                } catch (pkgErr) {
-                  console.error("[QuickSale] Package sell after bill:", pkgErr)
-                  toast({
-                    title: "Package activation error",
-                    description: "The bill was saved. You can sell the package from the client’s Packages tab if needed.",
-                    variant: "destructive",
-                  })
-                }
-              }
-            }
-
-            // Redeem package sitting (opened from client panel → Quick Sale with ₹0 package lines)
-            if (mode === "create" && pendingPackageRedemption) {
-              const pr = pendingPackageRedemption
-              const idSet = new Set(validServiceItems.map((i) => String(i.serviceId)))
-              const allPresent = pr.serviceIds.every((sid) => idSet.has(String(sid)))
-              if (!allPresent) {
-                toast({
-                  title: "Package not redeemed",
-                  description:
-                    "Bill was saved. Keep all package services on the bill, or redeem from the client profile.",
-                  variant: "destructive",
-                })
-              } else {
-                try {
-                  const r = await PackagesAPI.redeem(pr.clientPackageId, {
-                    services: pr.serviceIds.map((service_id) => ({ service_id })),
-                  })
-                  if (r.success) {
-                    toast({ title: "Package sitting redeemed" })
-                  } else {
-                    toast({
-                      title: "Bill saved — redemption failed",
-                      description: r.message || "Complete redemption from the client’s Packages tab.",
-                      variant: "destructive",
-                    })
-                  }
-                } catch (redeemErr) {
-                  console.error("[QuickSale] Package redeem after bill:", redeemErr)
-                  toast({
-                    title: "Bill saved — redemption failed",
-                    description: "Complete redemption from the client’s Packages tab.",
-                    variant: "destructive",
-                  })
-                }
-              }
-              setPendingPackageRedemption(null)
-            }
-            
             // Now that backend sale is successful, create and store the receipt locally
       const tipStaff = tipStaffId
         ? staff.find((s) => (s._id || s.id) === tipStaffId)
@@ -5158,11 +5643,19 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         // Receipt total = bill amount (calculatedTotal) + tip (what customer pays)
         total: calculatedTotal + tip,
         taxBreakdown: taxBreakdown,
-        payments: payments,
+        payments: buildReceiptPaymentsFromSale({
+          date: selectedDate.toISOString(),
+          payments: payments.map((p) => ({ mode: p.type, amount: p.amount })),
+          loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
+          loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+        }),
         staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
         staffName: primaryStaff?.staffName || staff[0]?.name || "Unassigned Staff",
         tipStaffId: tipStaffId || undefined,
         tipStaffName: tipStaff?.name || undefined,
+        ...(tipLinesForApi.length > 0
+          ? { tipLines: tipLinesForApi.map((l) => ({ staffName: l.staffName, amount: l.amount })) }
+          : {}),
         notes: remarks,
         shareToken: result.data?.shareToken,
         ...(creditChangeEffective &&
@@ -5298,7 +5791,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setDiscountValue(0)
     setDiscountPercentage(0)
     setGiftVoucher("")
-    setTip(0)
+    setTipLines([])
     setIsGlobalDiscountActive(false)
     setIsValueDiscountActive(false)
     setCashAmount(0)
@@ -5310,45 +5803,74 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setPrepaidPlanItems([])
     setAddItemSection(null)
     setRemarks("")
-    setTipStaffId(null)
     setConfirmUnpaid(false)
     setShowTipModal(false)
-    setTempTipAmount(0)
+    setTipDraftLines([])
     setEditReason("")
     setShowEditReasonModal(false)
     setTempEditReason("")
     setMembershipItems([])
-    setPackageItems([])
-    setPendingPackageRedemption(null)
+    setAppointmentPricingFinalized(false)
   }
+
+  const defaultStaffForQuickSaleTip = useCallback((): string => {
+    const pick = (items: { staffId?: string }[]) => {
+      const sid = items.find((it) => String(it.staffId || "").trim())?.staffId
+      return String(sid || "").trim()
+    }
+    return (
+      pick(serviceItems) ||
+      pick(productItems) ||
+      pick(membershipItems) ||
+      pick(prepaidPlanItems) ||
+      String(staff[0]?._id || staff[0]?.id || "").trim()
+    )
+  }, [serviceItems, productItems, membershipItems, prepaidPlanItems, staff])
+
+  const quickSaleStaffOptions = useMemo(
+    () =>
+      staff
+        .map((s) => ({
+          id: String(s._id || s.id || ""),
+          name: String(s.name || "Unnamed Staff"),
+        }))
+        .filter((o) => o.id),
+    [staff]
+  )
 
   // Tip modal handlers
   const handleTipClick = () => {
-    setTempTipAmount(tip)
+    const def = defaultStaffForQuickSaleTip()
+    if (tipLines.length > 0) {
+      setTipDraftLines(cloneCheckoutTipLines(tipLines))
+    } else {
+      setTipDraftLines([
+        {
+          id: `tip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          staffId: def,
+          amount: 0,
+        },
+      ])
+    }
     setShowTipModal(true)
   }
 
   const handleTipCancel = () => {
     setShowTipModal(false)
-    setTempTipAmount(0)
+    setTipDraftLines([])
   }
 
-  const handleTipOk = () => {
-    if (tempTipAmount > 0 && !tipStaffId) {
-      toast({
-        title: "Select Staff",
-        description: "Please select the staff member receiving the tip.",
-        variant: "destructive",
-      })
-      return
-    }
-    if (tempTipAmount > 0) {
-      setTip(tempTipAmount)
-    } else {
-      setTip(0)
-      setTipStaffId(null)
-    }
+  const commitQuickSaleTipDialog = () => {
+    const next = tipDraftLines
+      .map((l) => ({
+        id: l.id,
+        staffId: String(l.staffId || "").trim(),
+        amount: Math.max(0, Number(l.amount) || 0),
+      }))
+      .filter((l) => l.staffId && l.amount > 0)
+    setTipLines(next)
     setShowTipModal(false)
+    setTipDraftLines([])
   }
 
   // Quick cash amounts
@@ -5413,7 +5935,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     className="pl-10"
                   />
 
-                  {showCustomerDropdown && customerSearch && (
+                  {showCustomerDropdown && (customerSearch.trim().length > 0 || findWalkInClient(clients)) && (
                     <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-auto">
                       {filteredCustomers.length > 0 ? (
                         filteredCustomers.map((customer, index) => (
@@ -5426,7 +5948,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               <User className="h-4 w-4 text-muted-foreground" />
                               <div>
                                 <div className="font-medium">{customer.name}</div>
-                                <div className="text-sm text-muted-foreground">📞 {customer.phone}</div>
+                                <div className="text-sm text-muted-foreground">📞 {formatClientPhoneForDisplay(customer)}</div>
                               </div>
                             </div>
                           </div>
@@ -5503,7 +6025,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   <div className="flex items-center gap-4 text-sm text-muted-foreground">
                     <div className="flex items-center gap-1">
                       <Phone className="h-3 w-3" />
-                      {selectedCustomer.phone}
+                      {formatClientPhoneForDisplay(selectedCustomer)}
                     </div>
                     {selectedCustomer.email && (
                       <div className="flex items-center gap-1">
@@ -6010,7 +6532,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               </div>
 
               {/* Customer Dropdown */}
-              {showCustomerDropdown && customerSearch && (
+              {showCustomerDropdown && (customerSearch.trim().length > 0 || findWalkInClient(clients)) && (
                 <div className="absolute top-full left-0 right-0 z-50 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl max-h-60 overflow-auto backdrop-blur-sm">
                   {filteredCustomers.length > 0 ? (
                     filteredCustomers.map((customer, index) => (
@@ -6028,7 +6550,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             <div className="text-sm text-muted-foreground flex items-center gap-4 mt-1">
                               <span className="flex items-center gap-1">
                                 <Phone className="h-3 w-3" />
-                                {customer.phone}
+                                {formatClientPhoneForDisplay(customer)}
                               </span>
                               {customer.email && (
                                 <span className="flex items-center gap-1">
@@ -6130,7 +6652,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     <h4 className="truncate text-base font-semibold tracking-tight text-slate-900">
                       {selectedCustomer.name}
                     </h4>
-                    <p className="mt-0.5 text-sm text-slate-500 tabular-nums">{selectedCustomer.phone}</p>
+                    <p className="mt-0.5 text-sm text-slate-500 tabular-nums">{formatClientPhoneForDisplay(selectedCustomer)}</p>
                     {selectedCustomer.email && (
                       <p className="mt-0.5 truncate text-sm text-slate-500">{selectedCustomer.email}</p>
                     )}
@@ -6197,30 +6719,33 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       </span>
                     )}
                   </div>
-                  {membershipData?.subscription?.expiryDate && (
+                  {membershipData?.subscription?.status === "ACTIVE" && !membershipData?.subscription?.expiryDate ? (
+                    <p className="text-xs text-slate-500">No end date</p>
+                  ) : null}
+                  {membershipData?.subscription?.expiryDate ? (
                     <p className="text-xs text-slate-500">
                       Valid through{" "}
                       {format(new Date(membershipData.subscription.expiryDate), "dd MMM yyyy")}
                     </p>
-                  )}
+                  ) : null}
                 </div>
               </div>
 
               <div className="min-w-0 px-4 py-3 sm:px-5 sm:py-3.5">
-                <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-2.5">
-                  <div className="min-w-0 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
+                <div className="flex w-full min-w-0 flex-nowrap gap-2 sm:gap-2.5">
+                  <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
                     <p className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-500">Visits</p>
                     <p className="mt-1 min-w-0 break-all text-xs font-semibold tabular-nums leading-tight text-slate-900 sm:text-sm">
                       {selectedCustomer.totalVisits || 0}
                     </p>
                   </div>
-                  <div className="min-w-0 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
+                  <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
                     <p className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-500">Revenue</p>
                     <p className="mt-1 min-w-0 break-all text-xs font-semibold tabular-nums leading-tight text-slate-900 sm:text-sm">
                       ₹{Number(selectedCustomer.totalSpent || 0).toFixed(2)}
                     </p>
                   </div>
-                  <div className="min-w-0 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
+                  <div className="min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-100/90 bg-slate-50/50 px-2 py-2 shadow-sm ring-1 ring-slate-900/[0.03] sm:px-2.5 sm:py-2.5">
                     <p className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-500">Last visit</p>
                     <p className="mt-1 min-w-0 break-words text-xs font-semibold leading-tight text-slate-900 sm:text-sm">
                       {selectedCustomer.lastVisit ? format(new Date(selectedCustomer.lastVisit), "dd MMM") : "Never"}
@@ -6229,7 +6754,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   {(selectedCustomer.totalDues || 0) > 0 && (
                     <button
                       type="button"
-                      className="min-w-0 overflow-hidden rounded-lg border border-red-100/90 bg-red-50/50 px-2 py-2 text-left shadow-sm ring-1 ring-red-900/[0.04] transition-colors hover:bg-red-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/30 sm:px-2.5 sm:py-2.5"
+                      className="min-w-0 flex-1 overflow-hidden rounded-lg border border-red-100/90 bg-red-50/50 px-2 py-2 text-left shadow-sm ring-1 ring-red-900/[0.04] transition-colors hover:bg-red-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/30 sm:px-2.5 sm:py-2.5"
                       onClick={async () => {
                         if (selectedCustomer) {
                           await fetchUnpaidBills(selectedCustomer.phone || "")
@@ -6387,7 +6912,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                     ) : null}
                                   </div>
                                   <p className="text-xs leading-relaxed text-slate-900 whitespace-pre-wrap break-words sm:text-sm">
-                                    {String(bill.notes || "").trim()}
+                                    {billNotesForCustomerDisplay(bill.notes)}
                                   </p>
                                 </>
                               )
@@ -6507,12 +7032,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <h3 className="text-xl font-semibold text-gray-800">Services</h3>
-                <p className="text-sm text-muted-foreground">Add services to the sale</p>
+                <p className="text-sm text-muted-foreground">
+                  {appointmentPricingFinalized
+                    ? "From appointment checkout (read-only)"
+                    : "Add services to the sale"}
+                </p>
               </div>
-              <Button onClick={addServiceItem} className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Service
-              </Button>
+              {!appointmentPricingFinalized ? (
+                <Button onClick={addServiceItem} className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Service
+                </Button>
+              ) : null}
             </div>
 
             {serviceItems.length > 0 && (
@@ -6531,7 +7062,17 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   {serviceItems.map((item, serviceIndex) => (
                   <div
                     key={item.id}
-                    className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200"
+                    title={
+                      item.appointmentLineLocked
+                        ? appointmentPricingFinalized
+                          ? "From appointment — pricing is final"
+                          : "From appointment — only quantity, price, and line discount can be changed"
+                        : undefined
+                    }
+                    className={cn(
+                      "grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-gray-50/50 transition-all duration-200",
+                      item.appointmentLineLocked && "bg-slate-50/80 ring-1 ring-inset ring-amber-200/70"
+                    )}
                   >
                     <div className="relative" data-quicksale-dropdown>
                       {item.serviceId ? (
@@ -6541,8 +7082,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               {services.find(s => (s._id || s.id) === item.serviceId)?.name || 'Unknown Service'}
                             </span>
                             <button
+                              type="button"
                               onClick={() => updateServiceItem(item.id, "serviceId", "")}
-                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground"
+                              disabled={item.appointmentLineLocked}
+                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
                             >
                               ×
                             </button>
@@ -6576,6 +7119,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             onChange={(e) => setServiceDropdownSearch(e.target.value)}
                             className="h-8 pl-7 pr-8 text-sm"
                             onFocus={(e) => {
+                              if (item.appointmentLineLocked) {
+                                e.target.blur()
+                                return
+                              }
                               e.target.select()
                               setActiveServiceDropdown(item.id)
                             }}
@@ -6593,7 +7140,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           )}
                         </div>
                       )}
-                      {activeServiceDropdown === item.id && (
+                      {activeServiceDropdown === item.id && !item.appointmentLineLocked && (
                         <div className="absolute top-full left-0 right-0 z-[9999] mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
                           {loadingServices ? (
                             <div className="p-2 text-center text-sm text-muted-foreground">Loading services...</div>
@@ -6664,7 +7211,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         }
                       }}
                       initialContributions={item.staffContributions || []}
-                      disabled={loadingStaff}
+                      disabled={loadingStaff || !!item.appointmentLineLocked}
                     />
 
                     <div className="flex items-center gap-1">
@@ -6672,6 +7219,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         variant="outline"
                         size="icon"
                         className="h-8 w-8 p-0 bg-transparent"
+                        disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
                         onClick={() => updateServiceItem(item.id, "quantity", Math.max(1, item.quantity - 1))}
                       >
                         <Minus className="h-3 w-3" />
@@ -6681,6 +7229,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         variant="outline"
                         size="icon"
                         className="h-8 w-8 p-0 bg-transparent"
+                        disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
                         onClick={() => updateServiceItem(item.id, "quantity", item.quantity + 1)}
                       >
                         <Plus className="h-3 w-3" />
@@ -6694,6 +7243,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       onFocus={() => setFocusedZeroInputKey(`service-price-${item.id}`)}
                       onBlur={() => setFocusedZeroInputKey(null)}
                       className="h-8"
+                      disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
                     />
 
                     <Input
@@ -6707,7 +7257,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       onFocus={() => setFocusedZeroInputKey(`service-discount-${item.id}`)}
                       onBlur={() => setFocusedZeroInputKey(null)}
                       className={`h-8 ${(isGlobalDiscountActive || isValueDiscountActive) ? 'bg-amber-50 border-amber-200' : ''}`}
-                      disabled={isGlobalDiscountActive || isValueDiscountActive}
+                      disabled={
+                        isGlobalDiscountActive ||
+                        isValueDiscountActive ||
+                        (!!item.appointmentLineLocked && appointmentPricingFinalized)
+                      }
                       placeholder={(isGlobalDiscountActive || isValueDiscountActive) ? "Global discount" : "0"}
                     />
 
@@ -6719,6 +7273,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                      disabled={!!item.appointmentLineLocked}
+                      title={item.appointmentLineLocked ? "Cannot remove appointment line" : undefined}
                       onClick={() => removeServiceItem(item.id)}
                     >
                       <X className="h-3 w-3" />
@@ -6735,12 +7291,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             <div className="flex items-center justify-between">
               <div className="space-y-1">
                 <h3 className="text-xl font-semibold text-gray-800">Products</h3>
-                <p className="text-sm text-muted-foreground">Add products to the sale</p>
+                <p className="text-sm text-muted-foreground">
+                  {appointmentPricingFinalized
+                    ? "From appointment checkout (read-only)"
+                    : "Add products to the sale"}
+                </p>
               </div>
-              <Button onClick={addProductItem} className="bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Product
-              </Button>
+              {!appointmentPricingFinalized ? (
+                <Button onClick={addProductItem} className="bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Product
+                </Button>
+              ) : null}
             </div>
 
             {productItems.length > 0 && (
@@ -6757,8 +7319,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
                 <div style={{ overflow: 'visible' }}>
                   {productItems.map((item) => (
-                  <div key={item.id} className="space-y-2">
-                    <div className="grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-emerald-50/30 transition-all duration-200">
+                    <div key={item.id} className="space-y-2">
+                    <div
+                      title={
+                        item.appointmentLineLocked
+                          ? appointmentPricingFinalized
+                            ? "From appointment — pricing is final"
+                            : "From appointment — only quantity, price, and line discount can be changed"
+                          : undefined
+                      }
+                      className={cn(
+                        "grid grid-cols-[2fr_2fr_120px_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-emerald-50/30 transition-all duration-200",
+                        item.appointmentLineLocked && "bg-slate-50/80 ring-1 ring-inset ring-amber-200/70"
+                      )}
+                    >
                       <div className="relative" data-quicksale-dropdown>
                         {item.productId ? (
                           <div className="flex items-center justify-between h-8 px-3 py-1 bg-muted rounded-md text-sm">
@@ -6766,8 +7340,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               {products.find(p => (p._id || p.id) === item.productId)?.name || 'Unknown Product'}
                             </span>
                             <button
+                              type="button"
                               onClick={() => updateProductItem(item.id, "productId", "")}
-                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground"
+                              disabled={item.appointmentLineLocked}
+                              className="ml-2 h-4 w-4 text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
                             >
                               ×
                             </button>
@@ -6776,11 +7352,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           <div className="relative">
                             <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                             <Input
-                              placeholder="Search products..."
+                              placeholder="Search products (name, category, barcode)..."
                               value={productDropdownSearch}
                               onChange={(e) => setProductDropdownSearch(e.target.value)}
                               className="h-8 pl-7 pr-8 text-sm"
                               onFocus={(e) => {
+                                if (item.appointmentLineLocked) {
+                                  e.target.blur()
+                                  return
+                                }
                                 e.target.select()
                                 setActiveProductDropdown(item.id)
                               }}
@@ -6798,7 +7378,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             )}
                           </div>
                         )}
-                        {activeProductDropdown === item.id && (
+                        {activeProductDropdown === item.id && !item.appointmentLineLocked && (
                           <div className="absolute top-full left-0 right-0 z-[9999] mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
                             {loadingProducts ? (
                               <div className="p-2 text-center text-sm text-muted-foreground">Loading products...</div>
@@ -6825,7 +7405,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                               setActiveProductDropdown(null)
                                             }}
                                           >
-                                            <PackageIcon className="h-4 w-4 text-slate-400 shrink-0" />
+                                            <ShoppingBag className="h-4 w-4 text-slate-400 shrink-0" />
                                             <span className="flex-1 min-w-0">
                                               <span className="font-medium text-slate-800 truncate block">{product.name}</span>
                                               <span className="text-xs text-slate-500">Stock: {product.stock ?? 0}</span>
@@ -6847,6 +7427,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         key={`product-${item.id}-staff`}
                         value={item.staffId}
                         onValueChange={(value) => updateProductItem(item.id, "staffId", value)}
+                        disabled={item.appointmentLineLocked}
                       >
                         <SelectTrigger className="h-8">
                           <SelectValue placeholder="Select staff" />
@@ -6895,6 +7476,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           variant="outline"
                           size="icon"
                           className="h-8 w-8 p-0 bg-transparent"
+                          disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
                           onClick={() => updateProductItem(item.id, "quantity", Math.max(1, item.quantity - 1))}
                         >
                           <Minus className="h-3 w-3" />
@@ -6904,6 +7486,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           variant="outline"
                           size="icon"
                           className="h-8 w-8 p-0 bg-transparent"
+                          disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
                           onClick={() => updateProductItem(item.id, "quantity", item.quantity + 1)}
                         >
                           <Plus className="h-3 w-3" />
@@ -6917,6 +7500,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         onFocus={() => setFocusedZeroInputKey(`product-price-${item.id}`)}
                         onBlur={() => setFocusedZeroInputKey(null)}
                         className="h-8"
+                        disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
                       />
 
                       <Input
@@ -6930,7 +7514,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         onFocus={() => setFocusedZeroInputKey(`product-discount-${item.id}`)}
                         onBlur={() => setFocusedZeroInputKey(null)}
                         className={`h-8 ${(isGlobalDiscountActive || isValueDiscountActive) ? 'bg-amber-50 border-amber-200' : ''}`}
-                        disabled={isGlobalDiscountActive || isValueDiscountActive}
+                        disabled={
+                          isGlobalDiscountActive ||
+                          isValueDiscountActive ||
+                          (!!item.appointmentLineLocked && appointmentPricingFinalized)
+                        }
                         placeholder={(isGlobalDiscountActive || isValueDiscountActive) ? "Global discount" : "0"}
                       />
 
@@ -6942,6 +7530,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                        disabled={!!item.appointmentLineLocked}
+                        title={item.appointmentLineLocked ? "Cannot remove appointment line" : undefined}
                         onClick={() => removeProductItem(item.id)}
                       >
                         <X className="h-3 w-3" />
@@ -6967,14 +7557,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             )}
           </div>
 
-          {/* Add Items Section */}
+          {/* Add Items Section — extra cart lines blocked after appointment "Continue to payment" */}
           <div className="space-y-4">
+            {!appointmentPricingFinalized ? (
             <div className="flex gap-2 flex-wrap">
               <Button type="button" variant="outline" size="sm" onClick={() => addMembershipItem()}>
                 Add Membership
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => addPackageItem()}>
-                Add Package
               </Button>
               <Button
                 type="button"
@@ -6993,6 +7581,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 Add Prepaid Plans
               </Button>
             </div>
+            ) : null}
             <div className="mt-4 space-y-6">
               {membershipItems.length > 0 && (
                 <div className="space-y-4">
@@ -7015,11 +7604,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     {membershipItems.map((item) => (
                       <div
                         key={item.id}
-                        className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-indigo-50/30 transition-all duration-200"
+                        title={
+                          item.appointmentLineLocked
+                            ? appointmentPricingFinalized
+                              ? "From appointment — pricing is final"
+                              : "From appointment — only quantity and price can be changed"
+                            : undefined
+                        }
+                        className={cn(
+                          "grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-indigo-50/30 transition-all duration-200",
+                          item.appointmentLineLocked && "bg-slate-50/80 ring-1 ring-inset ring-amber-200/70"
+                        )}
                       >
                         <Select
                           value={item.planId || "__none__"}
                           onValueChange={(v) => updateMembershipItem(item.id, "planId", v === "__none__" ? "" : v)}
+                          disabled={item.appointmentLineLocked}
                         >
                           <SelectTrigger className="h-8">
                             <SelectValue placeholder="Select plan" />
@@ -7036,6 +7636,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         <Select
                           value={item.staffId || "__none__"}
                           onValueChange={(v) => updateMembershipItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                          disabled={item.appointmentLineLocked}
                         >
                           <SelectTrigger className="h-8">
                             <SelectValue placeholder="Select staff" />
@@ -7057,6 +7658,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             variant="outline"
                             size="icon"
                             className="h-8 w-8 p-0"
+                            disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
                             onClick={() => updateMembershipItem(item.id, "quantity", Math.max(1, item.quantity - 1))}
                           >
                             <Minus className="h-3 w-3" />
@@ -7066,6 +7668,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             variant="outline"
                             size="icon"
                             className="h-8 w-8 p-0"
+                            disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
                             onClick={() => updateMembershipItem(item.id, "quantity", item.quantity + 1)}
                           >
                             <Plus className="h-3 w-3" />
@@ -7074,14 +7677,26 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         <Input
                           type="number"
                           value={item.price}
-                          readOnly
-                          className="h-8 bg-muted"
+                          readOnly={!item.appointmentLineLocked || appointmentPricingFinalized}
+                          onChange={
+                            item.appointmentLineLocked && !appointmentPricingFinalized
+                              ? (e) =>
+                                  updateMembershipItem(
+                                    item.id,
+                                    "price",
+                                    Number(e.target.value)
+                                  )
+                              : undefined
+                          }
+                          className={cn("h-8", !item.appointmentLineLocked && "bg-muted")}
                         />
                         <div className="text-sm font-medium">₹{getDisplayTotal(item).toFixed(2)}</div>
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          disabled={!!item.appointmentLineLocked}
+                          title={item.appointmentLineLocked ? "Cannot remove appointment line" : undefined}
                           onClick={() => removeMembershipItem(item.id)}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -7089,104 +7704,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       </div>
                     ))}
                   </div>
-                  {plans.length > 0 && (
+                  {plans.length > 0 && !appointmentPricingFinalized && (
                     <Button type="button" variant="outline" size="sm" onClick={addMembershipItem}>
                       Add another membership
-                    </Button>
-                  )}
-                </div>
-              )}
-              {packageItems.length > 0 && (
-                <div className="space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    {selectedCustomer && isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined)
-                      ? "Package price is added to this bill; the client’s package is activated when checkout completes."
-                      : "Select an existing customer from search to sell packages on this bill."}
-                  </p>
-                  <div className="border border-gray-200 rounded-xl shadow-sm bg-white">
-                    <div className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 bg-gradient-to-r from-cyan-50 to-sky-50 font-semibold text-sm text-gray-700 border-b">
-                      <div>Package *</div>
-                      <div>Staff *</div>
-                      <div>Qty</div>
-                      <div>Price (₹)</div>
-                      <div>Package total (₹)</div>
-                      <div></div>
-                    </div>
-                    {packageItems.map((item) => (
-                      <div
-                        key={item.id}
-                        className="grid grid-cols-[2fr_1.5fr_100px_100px_100px_40px] gap-4 p-4 border-b last:border-b-0 items-center hover:bg-cyan-50/30 transition-all duration-200"
-                      >
-                        <Select
-                          value={item.packageId || "__none__"}
-                          onValueChange={(v) => updatePackageItem(item.id, "packageId", v === "__none__" ? "" : v)}
-                        >
-                          <SelectTrigger className="h-8">
-                            <SelectValue placeholder="Select package" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__none__">Select package</SelectItem>
-                            {packagesCatalog.map((p) => (
-                              <SelectItem key={p._id} value={p._id}>
-                                {p.name} — ₹{Number(p.total_price || 0).toFixed(2)} ({p.total_sittings} sittings)
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Select
-                          value={item.staffId || "__none__"}
-                          onValueChange={(v) => updatePackageItem(item.id, "staffId", v === "__none__" ? "" : v)}
-                        >
-                          <SelectTrigger className="h-8">
-                            <SelectValue placeholder="Select staff" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__none__">Select staff</SelectItem>
-                            {getAvailableStaffList(15, item.staffId ? [item.staffId] : undefined).map((member) => {
-                              const staffId = member._id || member.id
-                              return (
-                                <SelectItem key={staffId} value={staffId}>
-                                  {member.name}
-                                </SelectItem>
-                              )
-                            })}
-                          </SelectContent>
-                        </Select>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8 p-0"
-                            onClick={() => updatePackageItem(item.id, "quantity", Math.max(1, item.quantity - 1))}
-                          >
-                            <Minus className="h-3 w-3" />
-                          </Button>
-                          <div className="w-8 text-center text-sm font-medium">{item.quantity}</div>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8 p-0"
-                            onClick={() => updatePackageItem(item.id, "quantity", item.quantity + 1)}
-                          >
-                            <Plus className="h-3 w-3" />
-                          </Button>
-                        </div>
-                        <Input type="number" value={item.price} readOnly className="h-8 bg-muted" />
-                        <div className="text-sm font-medium">₹{getDisplayTotal(item).toFixed(2)}</div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                          onClick={() => removePackageItem(item.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                  {packagesCatalog.length > 0 && (
-                    <Button type="button" variant="outline" size="sm" onClick={addPackageItem}>
-                      Add another package
                     </Button>
                   )}
                 </div>
@@ -7217,11 +7737,23 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         {prepaidPlanItems.map((item) => (
                           <div
                             key={item.id}
-                            className="grid grid-cols-[2fr_1.5fr_80px_100px_100px_40px] gap-2 p-3 border-b border-amber-50/80 last:border-0 items-center text-sm"
+                            title={
+                              item.appointmentLineLocked
+                                ? appointmentPricingFinalized
+                                  ? "From appointment — pricing is final"
+                                  : "From appointment — only quantity and pay amount can be changed"
+                                : undefined
+                            }
+                            className={cn(
+                              "grid grid-cols-[2fr_1.5fr_80px_100px_100px_40px] gap-2 p-3 border-b border-amber-50/80 last:border-0 items-center text-sm",
+                              item.appointmentLineLocked &&
+                                "bg-amber-50/40 ring-1 ring-inset ring-amber-200/60"
+                            )}
                           >
                             <Select
                               value={item.planId || "__none__"}
                               onValueChange={(v) => updatePrepaidPlanItem(item.id, "planId", v === "__none__" ? "" : v)}
+                              disabled={item.appointmentLineLocked}
                             >
                               <SelectTrigger className="h-8 bg-white">
                                 <SelectValue placeholder="Select plan" />
@@ -7238,6 +7770,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             <Select
                               value={item.staffId || "__none__"}
                               onValueChange={(v) => updatePrepaidPlanItem(item.id, "staffId", v === "__none__" ? "" : v)}
+                              disabled={item.appointmentLineLocked}
                             >
                               <SelectTrigger className="h-8 bg-white">
                                 <SelectValue placeholder="Staff" />
@@ -7254,8 +7787,63 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                 })}
                               </SelectContent>
                             </Select>
-                            <div className="text-center text-muted-foreground tabular-nums">1</div>
-                            <div className="text-sm tabular-nums">{item.planId ? item.price.toFixed(0) : "—"}</div>
+                            {item.appointmentLineLocked ? (
+                              <div className="flex items-center gap-0.5 justify-center">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  className="h-7 w-7 p-0"
+                                  disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
+                                  onClick={() =>
+                                    updatePrepaidPlanItem(
+                                      item.id,
+                                      "quantity",
+                                      Math.max(1, item.quantity - 1)
+                                    )
+                                  }
+                                >
+                                  <Minus className="h-3 w-3" />
+                                </Button>
+                                <div className="w-7 text-center text-xs font-medium tabular-nums">
+                                  {item.quantity}
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="icon"
+                                  className="h-7 w-7 p-0"
+                                  disabled={!!item.appointmentLineLocked && appointmentPricingFinalized}
+                                  onClick={() =>
+                                    updatePrepaidPlanItem(item.id, "quantity", item.quantity + 1)
+                                  }
+                                >
+                                  <Plus className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="text-center text-muted-foreground tabular-nums">1</div>
+                            )}
+                            {item.appointmentLineLocked ? (
+                              <Input
+                                type="number"
+                                className="h-8 bg-white"
+                                value={item.planId ? item.price : ""}
+                                readOnly={appointmentPricingFinalized}
+                                onChange={(e) => {
+                                  if (appointmentPricingFinalized) return
+                                  updatePrepaidPlanItem(
+                                    item.id,
+                                    "price",
+                                    Number(e.target.value)
+                                  )
+                                }}
+                              />
+                            ) : (
+                              <div className="text-sm tabular-nums">
+                                {item.planId ? item.price.toFixed(0) : "—"}
+                              </div>
+                            )}
                             <div className="text-sm font-medium tabular-nums">
                               {item.planId ? `₹${item.total.toFixed(2)}` : "—"}
                             </div>
@@ -7264,6 +7852,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                               variant="ghost"
                               size="icon"
                               className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              disabled={!!item.appointmentLineLocked}
+                              title={
+                                item.appointmentLineLocked
+                                  ? "Cannot remove appointment line"
+                                  : undefined
+                              }
                               onClick={() => removePrepaidPlanItem(item.id)}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -7271,9 +7865,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           </div>
                         ))}
                       </div>
+                      {!appointmentPricingFinalized ? (
                       <Button type="button" variant="outline" size="sm" onClick={addPrepaidPlanItem}>
                         Add prepaid plan line
                       </Button>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -7281,7 +7877,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             </div>
           </div>
 
-          {/* Discounts & Offers */}
+          {/* Discounts & Offers — hidden when sale is sealed from appointment checkout */}
+          {!appointmentPricingFinalized && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
             <h3 className="text-xl font-semibold">Discounts & Offers</h3>
@@ -7336,6 +7933,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               </div>
             </div>
           </div>
+          )}
           </>
           )}
         </div>
@@ -7346,7 +7944,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         {/* Header */}
         <div className="px-6 py-5 border-b border-gray-50 bg-white flex-shrink-0">
           <h3 className="text-xl font-semibold text-gray-900">Billing Summary</h3>
-          <p className="text-sm text-gray-500 mt-1">Review and complete the sale</p>
+          <p className="text-sm text-gray-500 mt-1">
+            {appointmentPricingFinalized
+              ? "Pricing is set from checkout — choose how the client pays below."
+              : "Review and complete the sale"}
+          </p>
         </div>
 
         {/* Content - Scrollable */}
@@ -7375,13 +7977,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
               )}
 
-              {packageItems.some((p) => p.packageId) && (
-                <div className="flex justify-between items-center py-1">
-                  <span className="text-sm text-gray-600">Package Total</span>
-                  <span className="text-sm font-medium text-gray-900">{formatCurrency(billingPackageTotal)}</span>
-                </div>
-              )}
-
               {prepaidPlanItems.some((p) => p.planId) && (
                 <div className="flex justify-between items-center py-1">
                   <span className="text-sm text-gray-600">Prepaid plans</span>
@@ -7389,15 +7984,28 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
               )}
 
-              {/* 2. Discounts (Manual + Global) */}
+              {membershipServiceDiscountPreTax > 0.01 && (
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-sm text-gray-600">Membership Discount</span>
+                  <span className="text-sm font-medium text-red-500">
+                    −{formatCurrency(membershipServiceDiscountPreTax)}
+                  </span>
+                </div>
+              )}
+
+              {/* 2. Other discounts (manual line + cart / global) — membership shown above when applicable */}
               <div className="flex justify-between items-center py-1">
                 <span className="text-sm text-gray-600">Discounts</span>
-                <span className={`text-sm font-medium ${discounts > 0 ? "text-red-500" : "text-gray-500"}`}>
-                  {discounts > 0 ? `-${formatCurrency(discounts)}` : formatCurrency(0)}
+                <span
+                  className={`text-sm font-medium ${billingDiscountsExclMembershipPreTax > 0 ? "text-red-500" : "text-gray-500"}`}
+                >
+                  {billingDiscountsExclMembershipPreTax > 0
+                    ? `-${formatCurrency(billingDiscountsExclMembershipPreTax)}`
+                    : formatCurrency(0)}
                 </span>
               </div>
 
-              {/* 3. Sub Total (pre-tax: services + products + membership + package bases, minus discounts) */}
+              {/* 3. Sub Total (pre-tax: services + products + membership + prepaid bases, minus discounts) */}
               <div className="flex justify-between items-center py-1">
                 <span className="text-sm text-gray-600">Sub total (pre-tax)</span>
                 <span className="text-sm font-medium text-gray-900">{formatCurrency(subTotal)}</span>
@@ -7462,22 +8070,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         </div>
                       </>
                     )}
-                    {packageTax > 0 && (
-                      <>
-                        <div className="flex justify-between items-center py-0.5">
-                          <span className="text-sm text-gray-500">
-                            CGST @ {((taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5) / 2).toFixed(1)}% (Package)
-                          </span>
-                          <span className="text-sm font-medium text-gray-900">{formatCurrency(packageTax / 2)}</span>
-                        </div>
-                        <div className="flex justify-between items-center py-0.5">
-                          <span className="text-sm text-gray-500">
-                            SGST @ {((taxSettings?.packageTaxRate ?? taxSettings?.serviceTaxRate ?? 5) / 2).toFixed(1)}% (Package)
-                          </span>
-                          <span className="text-sm font-medium text-gray-900">{formatCurrency(packageTax / 2)}</span>
-                        </div>
-                      </>
-                    )}
                     {prepaidWalletTax > 0 && (
                       <>
                         <div className="flex justify-between items-center py-0.5">
@@ -7536,10 +8128,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
               )}
 
-              {/* 6. Tip (Optional) */}
+              {/* 6. Tip (Optional) — sealed when arriving from appointment checkout */}
               <div className="flex justify-between items-center py-1">
                 <span className="text-sm text-gray-600">Tip (Optional)</span>
-                {tip > 0 ? (
+                {appointmentPricingFinalized ? (
+                  <span className="text-sm font-medium text-gray-900">
+                    {tip > 0 ? formatCurrency(tip) : "—"}
+                  </span>
+                ) : tip > 0 ? (
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm font-medium text-gray-900">{formatCurrency(tip)}</span>
                     <button
@@ -7550,7 +8146,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       <Pencil className="h-3 w-3 text-gray-500 hover:text-gray-700" />
                     </button>
                     <button
-                      onClick={() => { setTip(0); setTipStaffId(null) }}
+                      onClick={() => setTipLines([])}
                       className="p-1 hover:bg-red-50 rounded-md transition-colors"
                       title="Remove tip"
                     >
@@ -7616,8 +8212,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               <Textarea
                 value={remarks}
                 onChange={(e) => setRemarks(e.target.value)}
+                readOnly={appointmentPricingFinalized}
                 placeholder="Add remarks..."
-                className="h-12 text-sm resize-none rounded-lg border-gray-200 focus:border-indigo-300 focus:ring-indigo-200"
+                className="h-12 text-sm resize-none rounded-lg border-gray-200 focus:border-indigo-300 focus:ring-indigo-200 read-only:bg-muted/60 read-only:cursor-default"
               />
             </div>
 
@@ -7961,76 +8558,118 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         </div>
       </div>
       
-      {/* Tip Modal */}
-      <Dialog open={showTipModal} onOpenChange={setShowTipModal}>
-        <DialogContent className="max-w-md">
+      <Dialog
+        open={showTipModal}
+        onOpenChange={(open) => {
+          setShowTipModal(open)
+          if (!open) setTipDraftLines([])
+        }}
+      >
+        <DialogContent
+          className="z-[200] gap-4 w-[calc(100vw-2rem)] sm:max-w-[36rem]"
+          overlayClassName="z-[190]"
+          aria-describedby={undefined}
+        >
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Pencil className="h-5 w-5 text-indigo-600" />
-              Add Tip
-            </DialogTitle>
+            <DialogTitle className="text-base font-semibold tracking-tight">Add tip</DialogTitle>
             <DialogDescription>
-              Enter the tip amount for this transaction
+              Choose staff and enter tip amounts. Totals carry through to payment.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="tip-amount" className="text-sm font-medium">
-                Tip Amount
-              </Label>
-              <Input
-                id="tip-amount"
-                type="number"
-                value={tempTipAmount}
-                onChange={(e) => setTempTipAmount(Number(e.target.value))}
-                placeholder="0"
-                className="text-lg"
-                autoFocus
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="tip-staff" className="text-sm font-medium">
-                Staff for Tip
-              </Label>
-              <Select
-                value={tipStaffId || ""}
-                onValueChange={(value) => setTipStaffId(value || null)}
-              >
-                <SelectTrigger id="tip-staff" className="h-9">
-                  <SelectValue placeholder="Select staff" />
-                </SelectTrigger>
-                <SelectContent>
-                  {staff.length === 0 ? (
-                    <SelectItem value="__no_staff" disabled>
-                      No staff available
-                    </SelectItem>
-                  ) : (
-                    staff.map((s) => {
-                      const id = s._id || s.id
-                      return (
-                        <SelectItem key={id} value={id}>
-                          {s.name || "Unnamed Staff"}
-                        </SelectItem>
+          <div className="max-h-[min(60vh,360px)] space-y-3 overflow-y-auto pr-1">
+            {quickSaleStaffOptions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No staff available for tipping.</p>
+            ) : null}
+            {tipDraftLines.map((row) => (
+              <div key={row.id} className="flex flex-wrap items-end gap-2">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Staff</Label>
+                  <Select
+                    value={row.staffId || undefined}
+                    onValueChange={(v) =>
+                      setTipDraftLines((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, staffId: v } : r))
                       )
-                    })
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
+                    }
+                    disabled={quickSaleStaffOptions.length === 0}
+                  >
+                    <SelectTrigger className="h-9 rounded-lg">
+                      <SelectValue placeholder="Select staff" />
+                    </SelectTrigger>
+                    <SelectContent
+                      position="popper"
+                      className={cn(quickSaleTipModalSelectContentClass, "max-h-[min(24rem,70vh)]")}
+                      style={{ zIndex: 9999 }}
+                    >
+                      {quickSaleStaffOptions.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[7.5rem] space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Amount (₹)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    className="h-9 rounded-lg"
+                    value={row.amount > 0 ? row.amount : ""}
+                    placeholder="0"
+                    onChange={(e) => {
+                      const n = Math.max(0, parseFloat(e.target.value) || 0)
+                      setTipDraftLines((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, amount: n } : r))
+                      )
+                    }}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 text-destructive hover:text-destructive"
+                  aria-label="Remove tip row"
+                  disabled={tipDraftLines.length <= 1}
+                  onClick={() =>
+                    setTipDraftLines((prev) =>
+                      prev.length <= 1 ? prev : prev.filter((r) => r.id !== row.id)
+                    )
+                  }
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
           </div>
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={handleTipCancel}
-              className="flex-1"
-            >
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full rounded-lg"
+            disabled={quickSaleStaffOptions.length === 0}
+            onClick={() =>
+              setTipDraftLines((prev) => [
+                ...prev,
+                {
+                  id: `tip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                  staffId: defaultStaffForQuickSaleTip(),
+                  amount: 0,
+                },
+              ])
+            }
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            Add staff
+          </Button>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={handleTipCancel}>
               Cancel
             </Button>
-            <Button
-              onClick={handleTipOk}
-              className="flex-1 bg-indigo-600 hover:bg-indigo-700"
-            >
-              OK
+            <Button type="button" onClick={commitQuickSaleTipDialog}>
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -8715,10 +9354,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       {/* Payment Collection Modal for Dues */}
       <PaymentCollectionModal
         isOpen={showDuesPaymentModal}
+        presentation={paymentCollectionPresentation}
         onClose={() => {
           setShowDuesPaymentModal(false)
           setSelectedBillForPayment(null)
-          setShowDuesDialog(true) // Reopen dues dialog when payment modal is closed
+          setPaymentCollectionPresentation("dialog")
+          if (skipReopenDuesAfterPaymentModalRef.current) {
+            skipReopenDuesAfterPaymentModalRef.current = false
+          } else {
+            setShowDuesDialog(true)
+          }
         }}
         sale={selectedBillForPayment}
         onPaymentCollected={handlePaymentCollected}

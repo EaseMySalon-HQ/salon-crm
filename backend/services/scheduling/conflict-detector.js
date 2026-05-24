@@ -2,9 +2,10 @@ const mongoose = require('mongoose');
 const { getAppointmentWindow, intervalsOverlap, ACTIVE_APPOINTMENT_STATUSES } = require('./scheduling-utils');
 
 /**
- * Build Mongo query for appointments with UTC bounds overlapping [start, end).
+ * @param {string[]} excludeAppointmentIds — objectIds as strings (deduped). Rows in this set
+ *   are omitted from overlap results (used when the same finalize batch removes or moves them).
  */
-function overlapQueryForStaff(branchId, staffId, start, end, excludeAppointmentId) {
+function overlapQueryForStaff(branchId, staffId, start, end, excludeAppointmentIds = []) {
   const sid = new mongoose.Types.ObjectId(staffId.toString());
   const q = {
     branchId,
@@ -16,22 +17,40 @@ function overlapQueryForStaff(branchId, staffId, start, end, excludeAppointmentI
     startAt: { $exists: true, $ne: null, $lt: end },
     endAt: { $exists: true, $ne: null, $gt: start }
   };
-  if (excludeAppointmentId) {
-    q._id = { $ne: new mongoose.Types.ObjectId(excludeAppointmentId.toString()) };
+  const seen = new Set();
+  const oids = [];
+  for (const id of excludeAppointmentIds || []) {
+    const s = id != null ? String(id).trim() : '';
+    if (!s || !mongoose.Types.ObjectId.isValid(s) || seen.has(s)) continue;
+    seen.add(s);
+    oids.push(new mongoose.Types.ObjectId(s));
+  }
+  if (oids.length === 1) {
+    q._id = { $ne: oids[0] };
+  } else if (oids.length > 1) {
+    q._id = { $nin: oids };
   }
   return q;
 }
 
 /**
  * @param {object} models — { Appointment, BookingHold }
- * @param {object} ctx — { branchId, staffId, start: Date, end: Date, excludeAppointmentId?, skipHoldCheck?: boolean }
+ * @param {object} ctx — {
+ *   branchId, staffId, start: Date, end: Date,
+ *   excludeAppointmentId?, excludeAppointmentIds?: string[],
+ *   skipHoldCheck?: boolean
+ * }
  * @returns {Promise<{ conflict: boolean, reason?: string, details?: object }>}
  */
 async function detectStaffConflict(models, ctx) {
   const { Appointment, BookingHold } = models;
-  const { branchId, staffId, start, end, excludeAppointmentId } = ctx;
+  const { branchId, staffId, start, end, excludeAppointmentId, excludeAppointmentIds } = ctx;
 
-  const q = overlapQueryForStaff(branchId, staffId, start, end, excludeAppointmentId);
+  const excludedIdSet = new Set(
+    ([]).concat(excludeAppointmentId ? [String(excludeAppointmentId)] : [], Array.isArray(excludeAppointmentIds) ? excludeAppointmentIds.map(String) : [])
+  );
+
+  const q = overlapQueryForStaff(branchId, staffId, start, end, [...excludedIdSet]);
   const hit = await Appointment.findOne(q).lean();
   if (hit) {
     return { conflict: true, reason: 'appointment_overlap', details: { appointmentId: hit._id } };
@@ -59,7 +78,7 @@ async function detectStaffConflict(models, ctx) {
   }).lean();
 
   const legacyFiltered = legacyList.filter((apt) => {
-    if (excludeAppointmentId && apt._id.toString() === excludeAppointmentId.toString()) return false;
+    if (excludedIdSet.has(apt._id.toString())) return false;
     return !apt.startAt || !apt.endAt;
   });
 
