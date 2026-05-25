@@ -143,12 +143,16 @@ function NotificationAlertMenuRow({
   )
 }
 
+function normalizePathname(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
 export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const { user, logout, hasPermission } = useAuth()
   const router = useRouter()
-  const pathname = usePathname()
+  const pathname = normalizePathname(usePathname())
   const canAccessWhatsAppInbox = hasPermission("campaigns", "view")
-  const isInboxActive = Boolean(pathname?.startsWith("/whatsapp/inbox"))
+  const isInboxActive = pathname.startsWith("/whatsapp/inbox")
   const [showExpenseDialog, setShowExpenseDialog] = useState(false)
   const [showCashRegistryModal, setShowCashRegistryModal] = useState(false)
   const { amount: todayOnlineSales } = useTodayOnlineSales(showCashRegistryModal)
