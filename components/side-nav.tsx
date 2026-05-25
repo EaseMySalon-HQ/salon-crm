@@ -18,7 +18,6 @@ import {
   ChevronRight,
   Phone,
   MessageCircle,
-  Inbox,
   FileText,
   Megaphone,
   ChevronDown,
@@ -86,7 +85,6 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
       items: [
         { title: "WA Templates", href: "/whatsapp/templates", icon: FileText },
         { title: "WA Campaigns", href: "/whatsapp/campaigns", icon: MessageCircle },
-        { title: "WA Inbox", href: "/whatsapp/inbox", icon: Inbox },
       ],
     },
     { kind: "link", title: "Cash Register", href: "/cash-registry", icon: Banknote, permissionModule: "cash_registry" },

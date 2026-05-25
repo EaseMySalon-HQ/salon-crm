@@ -216,6 +216,10 @@ export function WhatsAppInboxPage() {
   const [consentReason, setConsentReason] = useState("")
   const [consentSaving, setConsentSaving] = useState(false)
 
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const activeThreadIdRef = useRef<string | null>(null)
+  const lastMessageIdRef = useRef<string | null>(null)
+
   /* Live CSW countdown ticker (recomputes every 30s) */
   const [tick, setTick] = useState(0)
   useEffect(() => {
@@ -370,6 +374,31 @@ export function WhatsAppInboxPage() {
     return () => clearInterval(id)
   }, [active?._id, loadThread, addonDisabled])
 
+  /** Scroll to newest message when opening a thread or when a new message arrives. */
+  useEffect(() => {
+    if (threadLoading || messages.length === 0 || !active?._id) return
+
+    const latestId =
+      [...messages].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      ).at(-1)?._id ?? null
+
+    const threadChanged = activeThreadIdRef.current !== active._id
+    const newMessage = latestId !== lastMessageIdRef.current
+
+    if (!threadChanged && !newMessage) return
+
+    activeThreadIdRef.current = active._id
+    lastMessageIdRef.current = latestId
+
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({
+        behavior: threadChanged ? "auto" : "smooth",
+        block: "end",
+      })
+    })
+  }, [messages, threadLoading, active?._id])
+
   /* ------------------------ Mutations ------------------------ */
 
   async function openThread(conv: Conversation) {
@@ -377,6 +406,7 @@ export function WhatsAppInboxPage() {
     setMessages([])
     setReply("")
     setComposerMode(conv.cswOpen ? "text" : "template")
+    lastMessageIdRef.current = null
     await loadThread(conv._id)
   }
 
@@ -522,20 +552,40 @@ export function WhatsAppInboxPage() {
 
   const canSendFreeForm = active?.cswOpen && cswCountdown > 0
 
+  const sendDisabled =
+    sending ||
+    (composerMode === "text" && (!reply.trim() || !canSendFreeForm)) ||
+    (composerMode === "template" && !templateName)
+
+  const sendReplyButton = (
+    <Button
+      onClick={handleSend}
+      disabled={sendDisabled}
+      className="shrink-0 bg-emerald-600 hover:bg-emerald-700"
+    >
+      {sending ? (
+        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+      ) : (
+        <Send className="h-4 w-4 mr-2" />
+      )}
+      Send {composerMode === "template" ? "template" : "reply"}
+    </Button>
+  )
+
   /* ============================== Render ============================== */
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-[calc(100vh-7.25rem)] min-h-0 flex-col gap-4">
       {/* Header */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100">
-        <div className="bg-gradient-to-r from-emerald-50 via-cyan-50 to-blue-50 px-8 py-6 flex items-center justify-between gap-4">
+      <div className="shrink-0 bg-white rounded-2xl shadow-sm border border-slate-100">
+        <div className="bg-gradient-to-r from-emerald-50 via-cyan-50 to-blue-50 px-6 py-4 lg:px-8 lg:py-5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="p-3 bg-white rounded-xl shadow-sm">
               <Inbox className="h-7 w-7 text-emerald-600" />
             </div>
             <div>
-              <h1 className="text-3xl font-bold text-slate-800 mb-1">WhatsApp Inbox</h1>
-              <p className="text-slate-600 text-base">
+              <h1 className="text-2xl lg:text-3xl font-bold text-slate-800 mb-1">WhatsApp Inbox</h1>
+              <p className="text-slate-600 text-sm lg:text-base">
                 Conversations with customers. Reply free-form within the 24h Customer Service Window or send an approved template anytime.
               </p>
             </div>
@@ -564,10 +614,10 @@ export function WhatsAppInboxPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12 lg:overflow-hidden">
           {/* ============================== List pane ============================== */}
-          <Card className="lg:col-span-4 border-slate-200/90 shadow-sm overflow-hidden">
-            <div className="border-b border-slate-100 p-4 space-y-3 bg-white">
+          <Card className="flex min-h-0 flex-col overflow-hidden border-slate-200/90 shadow-sm lg:col-span-4 lg:h-full">
+            <div className="shrink-0 border-b border-slate-100 p-4 space-y-3 bg-white">
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <Input
@@ -597,7 +647,7 @@ export function WhatsAppInboxPage() {
               </div>
             </div>
 
-            <div className="max-h-[68vh] overflow-y-auto bg-slate-50/30">
+            <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/30">
               {listLoading && conversations.length === 0 ? (
                 <div className="flex items-center gap-2 text-slate-500 p-6">
                   <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -681,9 +731,9 @@ export function WhatsAppInboxPage() {
           </Card>
 
           {/* ============================== Thread pane ============================== */}
-          <Card className="lg:col-span-8 border-slate-200/90 shadow-sm flex flex-col min-h-[68vh]">
+          <Card className="flex min-h-0 flex-col overflow-hidden border-slate-200/90 shadow-sm lg:col-span-8 lg:h-full">
             {!active ? (
-              <CardContent className="py-20 text-center text-slate-500 m-auto">
+              <CardContent className="m-auto py-20 text-center text-slate-500">
                 <MessageSquareReply className="h-14 w-14 text-slate-300 mx-auto mb-3" />
                 <p className="text-sm font-medium text-slate-700">Pick a conversation</p>
                 <p className="text-xs text-slate-500 mt-1">
@@ -693,7 +743,7 @@ export function WhatsAppInboxPage() {
             ) : (
               <>
                 {/* Thread header */}
-                <div className="border-b border-slate-100 p-4 bg-white">
+                <div className="shrink-0 border-b border-slate-100 p-4 bg-white">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
                       <div className="shrink-0 w-11 h-11 rounded-full bg-emerald-600 text-white font-semibold text-base flex items-center justify-center">
@@ -785,7 +835,7 @@ export function WhatsAppInboxPage() {
 
                 {/* Messages */}
                 <div
-                  className="flex-1 overflow-y-auto p-4 space-y-2"
+                  className="min-h-0 flex-1 overflow-y-auto p-4 space-y-2"
                   style={{
                     background:
                       "repeating-linear-gradient(45deg, #f8fafc, #f8fafc 12px, #f1f5f9 12px, #f1f5f9 13px)",
@@ -842,10 +892,11 @@ export function WhatsAppInboxPage() {
                         )
                       })
                   )}
+                  <div ref={messagesEndRef} aria-hidden="true" className="h-px shrink-0" />
                 </div>
 
                 {/* Composer */}
-                <div className="border-t border-slate-100 p-4 bg-white">
+                <div className="shrink-0 max-h-[38vh] overflow-y-auto border-t border-slate-100 p-4 bg-white">
                   <Tabs
                     value={composerMode}
                     onValueChange={(v) => setComposerMode(v as "text" | "template")}
@@ -864,18 +915,27 @@ export function WhatsAppInboxPage() {
                       )}
                     </div>
 
-                    <TabsContent value="text" className="m-0 space-y-2">
-                      <Textarea
-                        rows={3}
-                        value={reply}
-                        onChange={(e) => setReply(e.target.value)}
-                        placeholder={
-                          canSendFreeForm
-                            ? "Type a quick reply…"
-                            : "Customer hasn't replied recently — switch to a template to message anyway."
-                        }
-                        disabled={!canSendFreeForm}
-                      />
+                    <TabsContent value="text" className="m-0">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          className="h-10 flex-1"
+                          value={reply}
+                          onChange={(e) => setReply(e.target.value)}
+                          placeholder={
+                            canSendFreeForm
+                              ? "Type a quick reply…"
+                              : "Customer hasn't replied recently — switch to a template to message anyway."
+                          }
+                          disabled={!canSendFreeForm}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && canSendFreeForm && reply.trim()) {
+                              e.preventDefault()
+                              void handleSend()
+                            }
+                          }}
+                        />
+                        {sendReplyButton}
+                      </div>
                     </TabsContent>
 
                     <TabsContent value="template" className="m-0 space-y-3">
@@ -982,27 +1042,9 @@ export function WhatsAppInboxPage() {
                           )}
                         </div>
                       )}
+                      <div className="flex justify-end pt-1">{sendReplyButton}</div>
                     </TabsContent>
                   </Tabs>
-
-                  <div className="flex justify-end mt-3">
-                    <Button
-                      onClick={handleSend}
-                      disabled={
-                        sending ||
-                        (composerMode === "text" && (!reply.trim() || !canSendFreeForm)) ||
-                        (composerMode === "template" && !templateName)
-                      }
-                      className="bg-emerald-600 hover:bg-emerald-700"
-                    >
-                      {sending ? (
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4 mr-2" />
-                      )}
-                      Send {composerMode === "template" ? "template" : "reply"}
-                    </Button>
-                  </div>
                 </div>
               </>
             )}
