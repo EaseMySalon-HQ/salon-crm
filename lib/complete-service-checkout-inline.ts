@@ -9,6 +9,7 @@ import {
   ClientWalletAPI,
   ClientsAPI,
   MembershipAPI,
+  PackagesAPI,
   ProductsAPI,
   RewardPointsAPI,
   SalesAPI,
@@ -17,10 +18,15 @@ import {
 import type { Client } from "@/lib/client-store"
 import { addReceipt } from "@/lib/data"
 import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
-import { mergePaymentConfiguration, eligibleRedemptionSubtotal } from "@/lib/payment-redemption-eligibility"
+import {
+  mergePaymentConfiguration,
+  eligibleRedemptionSubtotal,
+  type PaymentRedemptionLine,
+} from "@/lib/payment-redemption-eligibility"
 import { previewRedemptionLive } from "@/lib/reward-points-preview"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { buildRecordedPaymentsForCheckout } from "@/lib/quick-sale-recorded-payments"
+import { buildSalePaymentModeFromCheckout, buildReceiptPaymentsFromSale } from "@/lib/sale-payment-lines"
 import {
   extractAppointmentIdsFromPayload,
   resolveAppointmentIdsToComplete,
@@ -342,11 +348,13 @@ async function buildSaleLinesFromAppointmentPayload(
   staff: any[],
   membershipPlans: any[],
   prepaidPlans: any[],
+  catalogPackages: any[],
   ts: ServiceCheckoutTaxSettings
 ): Promise<{
   serviceItems: any[]
   productItems: any[]
   membershipItems: any[]
+  packageItems: any[]
   prepaidPlanItems: any[]
   tip: number
   tipStaffId: string | null
@@ -522,6 +530,37 @@ async function buildSaleLinesFromAppointmentPayload(
     }
   }
 
+  const packageItemsToAdd: any[] = []
+  if (Array.isArray(appointmentData.packages) && appointmentData.packages.length > 0) {
+    for (const pkData of appointmentData.packages as any[]) {
+      const pkg = catalogPackages.find((p) => String(p._id || p.id) === String(pkData.packageId))
+      if (!pkg) continue
+      const unitPrice = Number(pkData.price) || Number(pkg.total_price) || 0
+      const qty = Math.max(1, Math.floor(Number(pkData.quantity) || 1))
+      const discPct = Math.min(100, Math.max(0, Number(pkData.discount) || 0))
+      const base = addonLineTaxableBase(unitPrice, qty, discPct)
+      const pkgRate = ts.packageTaxRate ?? ts.serviceTaxRate ?? 5
+      const { total } = computeMembershipPlanLineTotal(base, {
+        membershipTaxRate: pkgRate,
+        enableTax: taxOn,
+        priceInclusiveOfTax: priceInclusive,
+      })
+      packageItemsToAdd.push({
+        id: `${Date.now()}-${Math.random()}`,
+        packageId: String(pkg._id || pkg.id),
+        packageName: pkData.packageName || pkg.name || "Package",
+        price: unitPrice,
+        totalSittings: Number(pkg.total_sittings) || Number(pkData.totalSittings) || 0,
+        validityDays: Number(pkg.validity_days) || Number(pkData.validityDays) || 0,
+        quantity: qty,
+        total,
+        staffId: pkData.staffId || "",
+        discount: discPct,
+        appointmentLineLocked: true,
+      })
+    }
+  }
+
   const prepaidPlanItemsToAdd: any[] = []
   if (Array.isArray(appointmentData.prepaidPlans) && appointmentData.prepaidPlans.length > 0) {
     for (const prData of appointmentData.prepaidPlans as any[]) {
@@ -594,6 +633,7 @@ async function buildSaleLinesFromAppointmentPayload(
     serviceItems: s,
     productItems: p,
     membershipItems: membershipItemsToAdd,
+    packageItems: packageItemsToAdd,
     prepaidPlanItems: prepaidPlanItemsToAdd,
     tip,
     tipStaffId,
@@ -627,6 +667,7 @@ export async function completeServiceCheckoutInline(opts: {
   catalogProducts: any[]
   catalogMembershipPlans: any[]
   catalogPrepaidPlans: any[]
+  catalogPackages: any[]
   checkoutTaxSettings: ServiceCheckoutTaxSettings
   checkoutPaymentConfiguration: unknown
   /** After staff confirms in UI: credit cash overpayment to prepaid (cash-only tenders; server enforces). */
@@ -642,6 +683,7 @@ export async function completeServiceCheckoutInline(opts: {
     catalogProducts: products,
     catalogMembershipPlans,
     catalogPrepaidPlans,
+    catalogPackages: catalogPackagesInput,
     checkoutTaxSettings: ts,
     checkoutPaymentConfiguration: payRaw,
     creditBillChangeToWallet: creditBillChangeOpt,
@@ -664,6 +706,13 @@ export async function completeServiceCheckoutInline(opts: {
         prepaidPlans = pwRes.data.plans
       }
     }
+    let catalogPackages = catalogPackagesInput
+    if (Array.isArray(appointmentData.packages) && appointmentData.packages.length > 0 && catalogPackages.length === 0) {
+      const pkgRes = await PackagesAPI.list({ status: "ACTIVE", limit: 500 })
+      if (pkgRes.success && pkgRes.data?.packages) {
+        catalogPackages = pkgRes.data.packages
+      }
+    }
 
     const built = await buildSaleLinesFromAppointmentPayload(
       appointmentData,
@@ -672,12 +721,14 @@ export async function completeServiceCheckoutInline(opts: {
       staff,
       membershipPlans,
       prepaidPlans,
+      catalogPackages,
       ts
     )
 
     const serviceItems = built.serviceItems
     const productItems = built.productItems
     const membershipItems = built.membershipItems
+    const packageItems = built.packageItems
     const prepaidPlanItems = built.prepaidPlanItems
     const tip = built.tip
     const tipStaffId = built.tipStaffId
@@ -688,11 +739,13 @@ export async function completeServiceCheckoutInline(opts: {
     const validServiceItems = serviceItems.filter((item) => item.serviceId)
     const validProductItems = productItems.filter((item) => item.productId)
     const validPrepaidPlanItems = prepaidPlanItems.filter((p) => p.planId)
+    const validPackageItems = packageItems.filter((p) => p.packageId)
 
     if (
       validServiceItems.length === 0 &&
       validProductItems.length === 0 &&
       membershipItems.filter((m) => m.planId).length === 0 &&
+      validPackageItems.length === 0 &&
       validPrepaidPlanItems.length === 0
     ) {
       return { ok: false, error: "No billable lines" }
@@ -712,26 +765,62 @@ export async function completeServiceCheckoutInline(opts: {
     const productTotal = productItems.reduce((sum, item) => sum + item.total, 0)
     const subtotal = serviceTotal + productTotal
     const membershipTotal = membershipItems.reduce((sum, item) => sum + item.total, 0)
+    const packageTotal = packageItems.reduce((sum, item) => sum + item.total, 0)
     const prepaidPlanTotal = prepaidPlanItems.reduce((sum, item) => sum + item.total, 0)
-    const baseTotalForSale = subtotal + membershipTotal + prepaidPlanTotal
+    const baseTotalForSale = subtotal + membershipTotal + packageTotal + prepaidPlanTotal
     const roundedBaseTotalForSale = Math.round(baseTotalForSale)
     const roundOff = roundedBaseTotalForSale - baseTotalForSale
 
     const payCfgMerged = mergePaymentConfiguration(payRaw as any)
     const allowBillingRedemption = payCfgMerged.billingRedemption.allowRedemptionInBilling !== false
 
-    const redemptionLineItems: { type: string; total: number }[] = []
+    const globalCartDiscountActive = built.discountValue > 0 || built.discountPercentage > 0
+    const lineDiscounted = (item: {
+      discount?: number
+      isMembershipFree?: boolean
+      membershipDiscountPercent?: number
+    }) =>
+      globalCartDiscountActive ||
+      (item.discount ?? 0) > 0 ||
+      !!item.isMembershipFree ||
+      (item.membershipDiscountPercent ?? 0) > 0
+
+    const redemptionLineItems: PaymentRedemptionLine[] = []
     for (const it of serviceItems) {
       if (!it.serviceId) continue
-      redemptionLineItems.push({ type: "service", total: Number(it.total) || 0 })
+      redemptionLineItems.push({
+        type: "service",
+        total: Number(it.total) || 0,
+        discount: it.discount ?? 0,
+        isMembershipFree: it.isMembershipFree,
+        membershipDiscountPercent: it.membershipDiscountPercent,
+        isDiscounted: lineDiscounted(it),
+      })
     }
     for (const it of productItems) {
       if (!it.productId) continue
-      redemptionLineItems.push({ type: "product", total: Number(it.total) || 0 })
+      redemptionLineItems.push({
+        type: "product",
+        total: Number(it.total) || 0,
+        discount: it.discount ?? 0,
+        isDiscounted: lineDiscounted(it),
+      })
     }
     for (const it of membershipItems) {
       if (!it.planId) continue
-      redemptionLineItems.push({ type: "membership", total: Number(it.total) || 0 })
+      redemptionLineItems.push({
+        type: "membership",
+        total: Number(it.total) || 0,
+        isDiscounted: globalCartDiscountActive,
+      })
+    }
+    for (const it of packageItems) {
+      if (!it.packageId) continue
+      redemptionLineItems.push({
+        type: "package",
+        total: Number(it.total) || 0,
+        isDiscounted: globalCartDiscountActive,
+      })
     }
     for (const it of prepaidPlanItems) {
       if (!it.planId) continue
@@ -854,6 +943,18 @@ export async function completeServiceCheckoutInline(opts: {
         if (prev.ok && prev.pointsToRedeem > 0) {
           loyaltyPointsRedeemedSave = prev.pointsToRedeem
           loyaltyDiscountAmountSave = prev.discountRupees
+        } else {
+          return {
+            ok: false,
+            error: prev.error || "Could not apply reward points to this bill.",
+          }
+        }
+      } else {
+        return {
+          ok: false,
+          error: rewardRedemptionBlockedByItems
+            ? "Reward points cannot be applied to these bill items."
+            : "Reward points are not available for this checkout.",
         }
       }
     }
@@ -915,15 +1016,10 @@ export async function completeServiceCheckoutInline(opts: {
       }
     } else if (paymentMethod === "reward") {
       walletPayAmount = 0
-      if (
-        !rewardPointsSettings?.enabled ||
-        loyaltyBalance <= 0 ||
-        rewardRedemptionBlockedByItems ||
-        payCfgMerged.rewardPointRedemption.enabled === false
-      ) {
-        applyCash(roundedTotal)
+      if (loyaltyPointsRedeemedSave > 0) {
+        applyCash(Math.max(0, saleDueTotal))
       } else {
-        applyCash(Math.max(0, roundedBaseTotalForSale - loyaltyDiscountAmountSave + tip))
+        applyCash(roundedTotal)
       }
     }
 
@@ -936,7 +1032,7 @@ export async function completeServiceCheckoutInline(opts: {
       Math.abs(walletPayAmount) < PAY_EPS
 
     /** Allow partial billing: any positive tender up to the bill total is accepted (overpay handled below). */
-    if (roundedTotal > 0.01 && totalPaid < 0.005) {
+    if (saleDueTotal > 0.01 && totalPaid < 0.005) {
       return {
         ok: false,
         error: "Enter at least one payment amount, or use Quick Sale to save an unpaid bill.",
@@ -964,6 +1060,7 @@ export async function completeServiceCheckoutInline(opts: {
       const hasBillDiscount = isValueDiscountActive || isGlobalDiscountActive
       const combinedSources = (wSel as { _combinedSources?: any[] })._combinedSources
       const stackingOk =
+        payCfgMerged.walletRedemption.allowOnDiscountedItems !== false ||
         walletSettings?.allowCouponStacking ||
         (Array.isArray(combinedSources) && combinedSources.length > 0
           ? combinedSources.every((sw) => sw.planSnapshot?.allowCouponStacking)
@@ -971,7 +1068,8 @@ export async function completeServiceCheckoutInline(opts: {
       if (hasBillDiscount && !stackingOk) {
         return {
           ok: false,
-          error: "Discount stacking is not allowed for this prepaid wallet. Use Quick Sale to adjust.",
+          error:
+            "Wallet cannot be used with bill discounts unless redemption on discounted items is enabled (Prepaid wallet settings).",
         }
       }
     }
@@ -1057,7 +1155,7 @@ export async function completeServiceCheckoutInline(opts: {
         })),
         extraProducts: validProductItems.length,
         extraMemberships: membershipItems.filter((m) => m.planId).length,
-        extraPackages: 0,
+        extraPackages: validPackageItems.length,
         extraPrepaid: validPrepaidPlanItems.length,
       })
     }
@@ -1066,6 +1164,7 @@ export async function completeServiceCheckoutInline(opts: {
     const linkedAppointmentIds = linkedIds
 
     const membershipLineCountCheckout = membershipItems.filter((m) => m.planId).length
+    const packageLineCountCheckout = validPackageItems.length
     const checkoutSnap = raiseSaleLinkageSnapshotFromCheckoutState({
       clientId: String(getCustomerId(customer) || "").trim(),
       dateYYYYMMDD: calendarYmdLocal(
@@ -1079,7 +1178,7 @@ export async function completeServiceCheckoutInline(opts: {
       })),
       extraProducts: validProductItems.length,
       extraMemberships: membershipLineCountCheckout,
-      extraPackages: 0,
+      extraPackages: packageLineCountCheckout,
       extraPrepaid: validPrepaidPlanItems.length,
     })
 
@@ -1174,7 +1273,22 @@ export async function completeServiceCheckoutInline(opts: {
           }, 0)
       : 0
 
-    const packageTaxCheckout = 0
+    const packageTaxCheckout = taxOn
+      ? packageItems
+          .filter((p) => p.packageId)
+          .reduce((sum, p) => {
+            const baseAmount = p.price * p.quantity
+            const packageTaxRate = ts.packageTaxRate ?? ts.serviceTaxRate ?? 5
+            const { taxAmount } = computeLineTotalAndTax(
+              baseAmount,
+              p.discount ?? 0,
+              packageTaxRate,
+              packageTaxRate > 0,
+              priceInclusive
+            )
+            return sum + taxAmount
+          }, 0)
+      : 0
 
     const prepaidTaxCheckout = taxOn
       ? prepaidPlanItems
@@ -1333,6 +1447,25 @@ export async function completeServiceCheckoutInline(opts: {
           sgst: 0,
           totalWithTax: m.total,
         })),
+      ...packageItems
+        .filter((p) => p.packageId)
+        .map((p) => ({
+          id: p.id,
+          name: `${p.packageName}${p.totalSittings ? ` (${p.totalSittings} sittings)` : ""}`,
+          type: "package" as const,
+          quantity: p.quantity,
+          price: p.price,
+          discount: 0,
+          discountType: "percentage" as const,
+          hsnSacCode: "",
+          staffId: p.staffId || staff[0]?._id || staff[0]?.id || "",
+          staffName: (p.staffId ? staff.find((s) => (s._id || s.id) === p.staffId)?.name : null) || staff[0]?.name || "Unassigned Staff",
+          total: p.total,
+          taxAmount: 0,
+          cgst: 0,
+          sgst: 0,
+          totalWithTax: p.total,
+        })),
       ...prepaidPlanItems
         .filter((p) => p.planId)
         .map((p) => ({
@@ -1366,6 +1499,17 @@ export async function completeServiceCheckoutInline(opts: {
         item.totalWithTax = item.total
         item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
         ;(item as any).taxRate = applyTax ? membershipTaxRate : 0
+      } else if (item.type === "package") {
+        const packageTaxRate = ts.packageTaxRate ?? ts.serviceTaxRate ?? 5
+        const applyTax = taxOn && packageTaxRate > 0
+        const baseAmount = item.price * item.quantity
+        const { taxAmount } = computeLineTotalAndTax(baseAmount, 0, packageTaxRate, applyTax, priceInclusive)
+        item.taxAmount = taxAmount
+        item.cgst = taxAmount / 2
+        item.sgst = taxAmount / 2
+        item.totalWithTax = item.total
+        item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
+        ;(item as any).taxRate = applyTax ? packageTaxRate : 0
       } else if (item.type === "prepaid_wallet") {
         const prepaidTaxRate = ts.prepaidWalletTaxRate ?? ts.serviceTaxRate ?? 5
         const applyTax = taxOn && prepaidTaxRate > 0
@@ -1464,6 +1608,28 @@ export async function completeServiceCheckoutInline(opts: {
               taxRate: (receiptItem as any)?.taxRate ?? 0,
             }
           }),
+        ...validPackageItems.map((p) => {
+          const receiptItem = receiptItems.find((r) => r.id === p.id)
+          const itemTax = receiptItem?.taxAmount ?? 0
+          const staffMember = staff.find((s) => s._id === p.staffId || s.id === p.staffId)
+          return {
+            serviceId: null,
+            productId: null,
+            packageId: p.packageId,
+            name: `${p.packageName}${p.totalSittings ? ` (${p.totalSittings} sittings)` : ""}`,
+            type: "package" as const,
+            quantity: p.quantity,
+            price: p.price,
+            priceExcludingGST: (p.total - itemTax) / (p.quantity || 1),
+            total: p.total,
+            discount: p.discount ?? 0,
+            staffId: p.staffId || "",
+            staffName: staffMember?.name || staff[0]?.name || "",
+            staffContributions: [],
+            hsnSacCode: "",
+            taxRate: (receiptItem as any)?.taxRate ?? 0,
+          }
+        }),
         ...validPrepaidPlanItems.map((p) => {
           const receiptItem = receiptItems.find((r) => r.id === p.id)
           const itemTax = receiptItem?.taxAmount ?? 0
@@ -1509,7 +1675,11 @@ export async function completeServiceCheckoutInline(opts: {
             : recordedPaidTotal < calculatedTotal + tip
               ? "partial"
               : "completed",
-      paymentMode: payments.map((p) => p.type.charAt(0).toUpperCase() + p.type.slice(1)).join(", "),
+      paymentMode: buildSalePaymentModeFromCheckout({
+        payments,
+        loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
+        loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+      }),
       payments: payments.map((p) => ({
         mode: p.type.charAt(0).toUpperCase() + p.type.slice(1),
         amount: p.amount,
@@ -1629,6 +1799,27 @@ export async function completeServiceCheckoutInline(opts: {
       }
     }
 
+    if (validPackageItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
+      try {
+        const paymentTowardGoods = Math.min(recordedPaidTotal, calculatedTotal)
+        const paymentRatio =
+          calculatedTotal > 0 ? Math.min(1, Math.max(0, paymentTowardGoods / calculatedTotal)) : 1
+        for (const row of validPackageItems) {
+          const qty = Math.max(1, Math.floor(row.quantity || 1))
+          const perUnitPaid = Math.round(((Number(row.price) || 0) * paymentRatio) * 100) / 100
+          for (let q = 0; q < qty; q++) {
+            await PackagesAPI.sell(row.packageId, {
+              client_id: cid!,
+              amount_paid: perUnitPaid,
+              sold_by_staff_id: row.staffId || undefined,
+            })
+          }
+        }
+      } catch (e) {
+        console.warn("[inline-checkout] package sell", e)
+      }
+    }
+
     const subtotalExcludingTax = receiptItems.reduce(
       (sum, item) => sum + (item.total - ((item as any).taxAmount || 0)),
       0
@@ -1650,7 +1841,12 @@ export async function completeServiceCheckoutInline(opts: {
       roundOff,
       total: calculatedTotal + tip,
       taxBreakdown,
-      payments,
+      payments: buildReceiptPaymentsFromSale({
+        date: (appointmentData.date ? new Date(String(appointmentData.date)) : new Date()).toISOString(),
+        payments: payments.map((p) => ({ mode: p.type, amount: p.amount })),
+        loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
+        loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+      }),
       staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
       staffName: primaryStaff?.staffName || staff[0]?.name || "Unassigned Staff",
       tipStaffId: tipStaffId || undefined,

@@ -1,6 +1,19 @@
 /** Mirrors backend/lib/payment-redemption-eligibility.js for POS UI. */
 
-export type PaymentRedemptionLine = { type?: string; total?: number }
+export type PaymentRedemptionLine = {
+  type?: string
+  total?: number
+  discount?: number
+  isMembershipFree?: boolean
+  membershipDiscountPercent?: number
+  /** When set by POS, overrides inferred discount detection. */
+  isDiscounted?: boolean
+}
+
+export type EligibleRedemptionOptions = {
+  /** Sale-level discount on the bill (fixed ₹ or % value stored on sale.discount). */
+  cartDiscountAmount?: number
+}
 
 export type WalletRedemptionFlags = {
   enabled?: boolean
@@ -8,6 +21,8 @@ export type WalletRedemptionFlags = {
   products?: boolean
   packages?: boolean
   memberships?: boolean
+  /** When false, discounted lines are excluded from the redemption base. Default true. */
+  allowOnDiscountedItems?: boolean
 }
 
 export type BillingRedemptionSettings = {
@@ -32,6 +47,7 @@ export const DEFAULT_PAYMENT_CONFIGURATION: PaymentConfiguration = {
     products: true,
     packages: true,
     memberships: true,
+    allowOnDiscountedItems: true,
   },
   rewardPointRedemption: {
     enabled: true,
@@ -39,6 +55,7 @@ export const DEFAULT_PAYMENT_CONFIGURATION: PaymentConfiguration = {
     products: true,
     packages: true,
     memberships: true,
+    allowOnDiscountedItems: true,
   },
   billingRedemption: {
     allowRedemptionInBilling: true,
@@ -75,10 +92,28 @@ export function mergePaymentConfiguration(raw: Partial<PaymentConfiguration> | n
   }
 }
 
+export function isDiscountedRedemptionLine(
+  item: PaymentRedemptionLine | null | undefined,
+  options?: EligibleRedemptionOptions
+): boolean {
+  if (!item) return false
+  if (item.isDiscounted === true) return true
+  if (Number(item.discount) > 0) return true
+  if (item.isMembershipFree === true) return true
+  if (Number(item.membershipDiscountPercent) > 0) return true
+  const cartAmt = Number(options?.cartDiscountAmount) || 0
+  if (cartAmt > 0) {
+    const t = String(item.type || "").toLowerCase()
+    if (t !== "prepaid_wallet") return true
+  }
+  return false
+}
+
 export function eligibleRedemptionSubtotal(
   items: PaymentRedemptionLine[] | null | undefined,
   config: PaymentConfiguration | Partial<PaymentConfiguration> | null | undefined,
-  kind: "wallet" | "reward"
+  kind: "wallet" | "reward",
+  options?: EligibleRedemptionOptions
 ): number {
   const c = mergePaymentConfiguration(config as PaymentConfiguration)
   if (!c.billingRedemption || c.billingRedemption.allowRedemptionInBilling === false) {
@@ -88,10 +123,12 @@ export function eligibleRedemptionSubtotal(
   if (group.enabled === false) {
     return 0
   }
+  const allowDiscounted = group.allowOnDiscountedItems !== false
   let sum = 0
   for (const item of items || []) {
     const t = String(item.type || "").toLowerCase()
     if (t === "prepaid_wallet") continue
+    if (!allowDiscounted && isDiscountedRedemptionLine(item, options)) continue
     let ok = false
     if (t === "service") ok = !!group.services
     else if (t === "product") ok = !!group.products

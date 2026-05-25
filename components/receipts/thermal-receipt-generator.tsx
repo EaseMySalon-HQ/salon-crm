@@ -4,7 +4,7 @@ import { Receipt } from "@/lib/data"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
-import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
+import { formatPaymentRecordedDateLabelFromIso, receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 
@@ -313,16 +313,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             <div style="font-weight: bold; margin-bottom: 4px;">Payment Method(s):</div>
             ${receipt.payments
               .map((payment) => {
-                const displayName =
-                  payment.type === "cash"
-                    ? "Cash"
-                    : payment.type === "card"
-                      ? "Card"
-                      : payment.type === "online"
-                        ? "Online"
-                        : payment.type === "wallet"
-                          ? "Wallet"
-                          : "Unknown"
+                const displayName = receiptPaymentTypeDisplayName(payment.type)
                 const d = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
                 const label = d ? `${displayName} (${d})` : displayName
                 return `
@@ -604,16 +595,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           <div style="font-weight: bold; margin-bottom: 4px;">Payment Method(s):</div>
           ${receipt.payments
             .map((payment) => {
-              const displayName =
-                payment.type === "cash"
-                  ? "Cash"
-                  : payment.type === "card"
-                    ? "Card"
-                    : payment.type === "online"
-                      ? "Online"
-                      : payment.type === "wallet"
-                        ? "Wallet"
-                        : "Unknown"
+              const displayName = receiptPaymentTypeDisplayName(payment.type)
               const d = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
               const label = d ? `${displayName} (${d})` : displayName
               return `

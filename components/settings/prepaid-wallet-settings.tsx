@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Loader2, Wallet } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -27,6 +28,11 @@ import { cn } from "@/lib/utils"
 import { ClientWalletAPI, type ClientWalletSettings } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { WalletLiabilityReport } from "@/components/reports/wallet-liability-report"
+import {
+  mergePaymentConfiguration,
+  type PaymentConfiguration,
+} from "@/lib/payment-redemption-eligibility"
+import { useInvalidatePaymentSettings } from "@/lib/queries/payment-settings"
 
 const defaultSettings: ClientWalletSettings = {
   allowCouponStacking: false,
@@ -44,10 +50,53 @@ function statusBadgeClass(status: string) {
   return "bg-slate-500/90 text-white border-0"
 }
 
+type WalletRedemptionFlags = PaymentConfiguration["walletRedemption"]
+
+function RedemptionToggleRow({
+  label,
+  checked,
+  onCheckedChange,
+  disabled,
+}: {
+  label: string
+  checked: boolean
+  onCheckedChange: (v: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm">
+      <Label className="text-sm font-normal text-slate-700 cursor-pointer">{label}</Label>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} />
+    </div>
+  )
+}
+
+const PREPAID_WALLET_TABS = ["plans", "rules", "liability"] as const
+type PrepaidWalletTab = (typeof PREPAID_WALLET_TABS)[number]
+
+function isPrepaidWalletTab(value: string | null): value is PrepaidWalletTab {
+  return value != null && (PREPAID_WALLET_TABS as readonly string[]).includes(value)
+}
+
 export function PrepaidWalletSettings() {
   const { toast } = useToast()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const tabParam = searchParams.get("prepaidWalletTab")
+  const activeTab: PrepaidWalletTab = isPrepaidWalletTab(tabParam) ? tabParam : "plans"
+
+  const setActiveTab = (tab: string) => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("section", "prepaid-wallet")
+    params.set("prepaidWalletTab", tab)
+    router.replace(`/settings?${params.toString()}`)
+  }
+  const invalidatePaymentSettings = useInvalidatePaymentSettings()
   const [plans, setPlans] = useState<any[]>([])
   const [settings, setSettings] = useState<ClientWalletSettings>(defaultSettings)
+  const [walletRedemption, setWalletRedemption] = useState<WalletRedemptionFlags>(
+    mergePaymentConfiguration(null).walletRedemption
+  )
   const [loading, setLoading] = useState(true)
   const [savingRules, setSavingRules] = useState(false)
 
@@ -65,7 +114,18 @@ export function PrepaidWalletSettings() {
     try {
       const [p, s] = await Promise.all([ClientWalletAPI.listPlans(), ClientWalletAPI.getSettings()])
       if (p.success && p.data?.plans) setPlans(p.data.plans)
-      if (s.success && s.data) setSettings({ ...defaultSettings, ...s.data })
+      if (s.success && s.data) {
+        const { walletRedemption: wr, ...rest } = s.data
+        setSettings({ ...defaultSettings, ...rest })
+        if (wr) {
+          setWalletRedemption(mergePaymentConfiguration({ walletRedemption: wr }).walletRedemption)
+        } else {
+          setWalletRedemption((prev) => ({
+            ...prev,
+            allowOnDiscountedItems: rest.allowCouponStacking !== false,
+          }))
+        }
+      }
     } finally {
       setLoading(false)
     }
@@ -78,16 +138,31 @@ export function PrepaidWalletSettings() {
   const saveRules = async () => {
     setSavingRules(true)
     try {
-      const res = await ClientWalletAPI.updateSettings(settings)
+      const res = await ClientWalletAPI.updateSettings({
+        ...settings,
+        allowCouponStacking: walletRedemption.allowOnDiscountedItems !== false,
+        walletRedemption,
+      })
       if (res.success) {
-        toast({ title: "Business rules saved" })
-        if (res.data) setSettings({ ...defaultSettings, ...res.data })
+        toast({ title: "Redemption rules saved" })
+        if (res.data) {
+          const { walletRedemption: wr, ...rest } = res.data
+          setSettings({ ...defaultSettings, ...rest })
+          if (wr) {
+            setWalletRedemption(mergePaymentConfiguration({ walletRedemption: wr }).walletRedemption)
+          }
+        }
+        invalidatePaymentSettings()
       } else {
         toast({ title: res.message || "Failed", variant: "destructive" })
       }
     } finally {
       setSavingRules(false)
     }
+  }
+
+  const patchWalletRedemption = (patch: Partial<WalletRedemptionFlags>) => {
+    setWalletRedemption((prev) => ({ ...prev, ...patch }))
   }
 
   const createPlan = async () => {
@@ -165,13 +240,13 @@ export function PrepaidWalletSettings() {
         </div>
       </div>
 
-      <Tabs defaultValue="plans" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid h-auto w-full max-w-none grid-cols-3 gap-1 rounded-xl border border-slate-200/80 bg-slate-100/70 p-1.5 shadow-inner">
           <TabsTrigger value="plans" className={tabTriggerClass}>
             Plans
           </TabsTrigger>
           <TabsTrigger value="rules" className={tabTriggerClass}>
-            Business rules
+            Redemption rules
           </TabsTrigger>
           <TabsTrigger value="liability" className={tabTriggerClass}>
             Liability
@@ -386,22 +461,73 @@ export function PrepaidWalletSettings() {
         <TabsContent value="rules" className="mt-8 w-full max-w-none space-y-4 focus-visible:outline-none">
           <Card className="border-slate-200/90 shadow-sm">
             <CardHeader className="border-b border-slate-100 bg-slate-50/40 pb-4">
-              <CardTitle className="text-lg text-slate-900">Business rules</CardTitle>
-              <CardDescription>These apply to all prepaid wallets at this branch. Save when you are done.</CardDescription>
+              <CardTitle className="text-lg text-slate-900">Redemption rules</CardTitle>
+              <CardDescription>
+                Control where prepaid wallet balance can reduce the bill and branch-wide wallet policies.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3 pt-6">
+            <CardContent className="space-y-6 pt-6">
+              <div className="space-y-3">
+                <div>
+                  <Label className="text-base font-medium">Eligible line types</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Control which bill categories prepaid wallet balance can reduce at checkout.
+                  </p>
+                </div>
+                <RedemptionToggleRow
+                  label="Allow wallet redemption (master)"
+                  checked={walletRedemption.enabled !== false}
+                  onCheckedChange={(v) => patchWalletRedemption({ enabled: v })}
+                />
+                <div
+                  className={
+                    walletRedemption.enabled === false ? "opacity-50 pointer-events-none space-y-3" : "space-y-3"
+                  }
+                >
+                  <RedemptionToggleRow
+                    label="Allow wallet redemption for Services"
+                    checked={walletRedemption.services !== false}
+                    onCheckedChange={(v) => patchWalletRedemption({ services: v })}
+                  />
+                  <RedemptionToggleRow
+                    label="Allow wallet redemption for Products"
+                    checked={walletRedemption.products !== false}
+                    onCheckedChange={(v) => patchWalletRedemption({ products: v })}
+                  />
+                  <RedemptionToggleRow
+                    label="Allow wallet redemption for Packages"
+                    checked={walletRedemption.packages !== false}
+                    onCheckedChange={(v) => patchWalletRedemption({ packages: v })}
+                  />
+                  <RedemptionToggleRow
+                    label="Allow wallet redemption for Memberships"
+                    checked={walletRedemption.memberships !== false}
+                    onCheckedChange={(v) => patchWalletRedemption({ memberships: v })}
+                  />
+                  <RedemptionToggleRow
+                    label="Allow redemption on discounted items"
+                    checked={walletRedemption.allowOnDiscountedItems !== false}
+                    onCheckedChange={(v) => patchWalletRedemption({ allowOnDiscountedItems: v })}
+                  />
+                  <p className="text-xs text-muted-foreground -mt-1">
+                    When off, wallet cannot be applied to discounted lines or bills with cart-level discounts.
+                  </p>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-6 space-y-3">
+                <div>
+                  <Label className="text-base font-medium">Wallet policies</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Branch-wide rules for prepaid credit usage, expiry, and refunds.
+                  </p>
+                </div>
               {[
                 {
                   title: "Multi-branch redemption",
                   desc: "Allow using balance at any branch",
                   checked: settings.allowMultiBranch,
                   onChange: (v: boolean) => setSettings((s) => ({ ...s, allowMultiBranch: v })),
-                },
-                {
-                  title: "Coupon / discount stacking",
-                  desc: "Allow wallet + bill discounts together",
-                  checked: settings.allowCouponStacking,
-                  onChange: (v: boolean) => setSettings((s) => ({ ...s, allowCouponStacking: v })),
                 },
                 {
                   title: "Expiry SMS / WhatsApp alerts",
@@ -481,6 +607,7 @@ export function PrepaidWalletSettings() {
                   <option value="no_refunds">No refunds</option>
                 </select>
               </div>
+              </div>
 
               <div className="pt-2">
                 <Button
@@ -489,7 +616,7 @@ export function PrepaidWalletSettings() {
                   disabled={savingRules}
                   className="h-10 min-w-[160px] bg-gradient-to-r from-indigo-600 to-violet-600 font-medium shadow-md shadow-indigo-500/20 hover:from-indigo-700 hover:to-violet-700"
                 >
-                  {savingRules ? "Saving…" : "Save business rules"}
+                  {savingRules ? "Saving…" : "Save redemption rules"}
                 </Button>
               </div>
             </CardContent>

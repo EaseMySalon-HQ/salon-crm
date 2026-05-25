@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail, ReceiptText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { format } from "date-fns"
-import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
+import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates, normalizePaymentModeLabel } from "@/lib/sale-payment-lines"
 import { getSaleAdjustmentSummary } from "@/lib/sale-adjustments"
 import { getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST, formatDateIST } from "@/lib/date-utils"
 import { Calendar } from "@/components/ui/calendar"
@@ -27,6 +27,7 @@ import {
   type CashMovementReportHandle,
 } from "@/components/reports/cash-movement-report"
 import { GstReport, type GstReportHandle } from "@/components/reports/gst-report"
+import { AnalyticsDonutChart, type AnalyticsDonutSlice } from "@/components/analytics/analytics-donut-chart"
 import { CASH_MOVEMENT_TYPE_OPTIONS } from "@/lib/cash-movements"
 import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
 import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
@@ -175,6 +176,10 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
     editedAt: sale.editedAt as Date | string | undefined,
     billChangeCreditedToWallet:
       sale.billChangeCreditedToWallet != null ? Number(sale.billChangeCreditedToWallet) : undefined,
+    loyaltyPointsRedeemed:
+      sale.loyaltyPointsRedeemed != null ? Number(sale.loyaltyPointsRedeemed) : undefined,
+    loyaltyDiscountAmount:
+      sale.loyaltyDiscountAmount != null ? Number(sale.loyaltyDiscountAmount) : undefined,
   }
 }
 
@@ -256,9 +261,9 @@ export function SalesReport() {
   const [selectedSale, setSelectedSale] = useState<SalesRecord | null>(null)
   const [salesPageIndex, setSalesPageIndex] = useState(0)
   const [salesPageSize, setSalesPageSize] = useState(10)
-  /** Sales stat card: combined count by default; click for partial vs unpaid breakdown */
-  const [showPartialUnpaidBreakdown, setShowPartialUnpaidBreakdown] = useState(false)
-
+  /** Sales stat card: click Cash Collected for service vs wallet breakdown */
+  const [showCashCollectedBreakdown, setShowCashCollectedBreakdown] = useState(false)
+  const [showOnlineCashCollectedBreakdown, setShowOnlineCashCollectedBreakdown] = useState(false)
   // Service List filters (when report type is service-list; shown in same bar)
   const [serviceListDatePeriod, setServiceListDatePeriod] = useState<ServiceListDatePeriod>("today")
   const [serviceListDateRange, setServiceListDateRange] = useState<{ from?: Date; to?: Date }>({})
@@ -332,11 +337,14 @@ export function SalesReport() {
     totalSalesCash: number
     totalSalesOnline: number
     totalSalesCard: number
+    totalSalesWallet?: number
+    totalSalesRewardPoint?: number
     duesCollected: number
     cashDuesCollected?: number
     cashExpense: number
     pettyCashExpense?: number
     tipCollected: number
+    cashAddedToWallet?: number
     cashBalance: number
     openingBalance?: number
     closingBalance?: number
@@ -344,6 +352,24 @@ export function SalesReport() {
     customersWithDue?: number
   } | null>(null)
   const [summaryReportLoading, setSummaryReportLoading] = useState(false)
+
+  const paymentModeBreakdown = useMemo(() => {
+    if (!summaryData) {
+      return { modes: [] as { label: string; value: number; fill: string }[], chartSlices: [] as AnalyticsDonutSlice[], total: 0 }
+    }
+    const modes = [
+      { label: "Cash", value: summaryData.totalSalesCash, fill: "#10b981" },
+      { label: "Online", value: summaryData.totalSalesOnline, fill: "#3b82f6" },
+      { label: "Card", value: summaryData.totalSalesCard, fill: "#8b5cf6" },
+      { label: "Wallet", value: summaryData.totalSalesWallet ?? 0, fill: "#f59e0b" },
+      { label: "Reward Point", value: summaryData.totalSalesRewardPoint ?? 0, fill: "#f43f5e" },
+    ]
+    const chartSlices: AnalyticsDonutSlice[] = modes
+      .filter((m) => m.value > 0.005)
+      .map((m) => ({ name: m.label, value: Math.round(m.value * 100) / 100, fill: m.fill }))
+    const total = modes.reduce((sum, m) => sum + m.value, 0)
+    return { modes, chartSlices, total }
+  }, [summaryData])
 
   /** Ref for sales list: reset page when filter key changes (avoids stale page + fetch race). */
   const prevSalesFilterKeyRef = useRef<string | null>(null)
@@ -1048,9 +1074,11 @@ export function SalesReport() {
     }
   }
 
-  // Reset partial/unpaid card when filters change
+
+  // Reset stat card breakdowns when filters change
   useEffect(() => {
-    setShowPartialUnpaidBreakdown(false)
+    setShowCashCollectedBreakdown(false)
+    setShowOnlineCashCollectedBreakdown(false)
   }, [debouncedSearchTerm, paymentFilter, statusFilter, staffTipFilter, datePeriod, dateRange])
 
   // Pagination for the sales table (server-side; order matches API — newest saved bill first)
@@ -1068,26 +1096,11 @@ export function SalesReport() {
   const unpaidValue = summaryStats?.unpaidValue ?? 0
   const tipsCollected = summaryStats?.tips ?? 0
   const cashCollected = summaryStats?.cashCollected ?? 0
+  const serviceCashCollected = summaryStats?.serviceCashCollected ?? cashCollected
+  const walletCashCollected = summaryStats?.walletCashCollected ?? 0
   const onlineCashCollected = summaryStats?.onlineCash ?? 0
-
-  const cashCollectedTooltip =
-    paymentFilter === "all"
-      ? "Cash payments only"
-      : paymentFilter === "Cash"
-        ? "Filtered: Cash only"
-        : paymentFilter === "Wallet"
-          ? "Filtered: bills with prepaid wallet payment"
-        : "All cash payments"
-  const onlineCashCollectedTooltip =
-    paymentFilter === "all"
-      ? "Card + Online/Paytm"
-      : paymentFilter === "Card"
-        ? "Filtered: Card only"
-        : paymentFilter === "Online"
-          ? "Filtered: Online only"
-        : paymentFilter === "Wallet"
-          ? "Filtered: bills with prepaid wallet payment"
-        : "All online payments"
+  const cardCollected = summaryStats?.cardCollected ?? onlineCashCollected
+  const onlinePayCollected = summaryStats?.onlinePayCollected ?? 0
 
   const salesStatSkeleton = <div className="h-8 w-24 max-w-full bg-slate-200 rounded animate-pulse" aria-hidden />
 
@@ -1617,11 +1630,21 @@ export function SalesReport() {
   const getTotalPaid = (sale: SalesRecord, forceFull = false) => {
     const fullPaid = sale.paymentStatus?.paidAmount ?? sale.payments?.reduce((s, p) => s + (p.amount || 0), 0) ?? 0
     if (forceFull || paymentFilter === "all") return fullPaid
+    const filterLabel = normalizePaymentModeLabel(paymentFilter)
     if (sale.payments && sale.payments.length > 0) {
-      const filteredPayment = sale.payments.find(payment => payment.mode === paymentFilter)
-      return filteredPayment ? filteredPayment.amount : 0
+      const filteredTotal = sale.payments
+        .filter((payment) => normalizePaymentModeLabel(payment.mode) === filterLabel)
+        .reduce((s, p) => s + (p.amount || 0), 0)
+      if (filteredTotal > 0) return filteredTotal
     }
-    return sale.paymentMode === paymentFilter ? fullPaid : 0
+    if (filterLabel === "Reward Point") {
+      const pts = Math.floor(Number(sale.loyaltyPointsRedeemed) || 0)
+      const disc = Math.max(0, Number(sale.loyaltyDiscountAmount) || 0)
+      if (pts > 0 && disc > 0.005) return disc
+    }
+    const legacyModes = sale.paymentMode.split(",").map((m) => normalizePaymentModeLabel(m.trim()))
+    if (legacyModes.includes(filterLabel)) return fullPaid
+    return 0
   }
 
   return (
@@ -1786,6 +1809,7 @@ export function SalesReport() {
                       <SelectItem value="Card">Card</SelectItem>
                       <SelectItem value="Online">Online</SelectItem>
                       <SelectItem value="Wallet">Wallet</SelectItem>
+                      <SelectItem value="Reward Point">Reward Point</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -3040,6 +3064,25 @@ export function SalesReport() {
                       <span className="text-slate-600">Tip Collected</span>
                       <span className="font-semibold text-emerald-600">₹{summaryData.tipCollected.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
                     </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 flex items-center gap-1.5">
+                        Cash Added to wallet
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs p-3">
+                            <p className="text-sm">
+                              Cash received at checkout but credited to the client&apos;s prepaid wallet (e.g. bill change
+                              added to wallet balance).
+                            </p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                      <span className="font-semibold text-indigo-600">
+                        ₹{(summaryData.cashAddedToWallet ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -3093,142 +3136,175 @@ export function SalesReport() {
                     <CreditCard className="h-4 w-4 text-indigo-500" />
                     Payment Mode Breakdown
                   </h3>
-                  {summaryData.totalSales > 0 ? (
+                  {paymentModeBreakdown.total > 0 ? (
                     <div className="space-y-4">
-                      {[
-                        { label: "Cash", value: summaryData.totalSalesCash, color: "bg-emerald-500" },
-                        { label: "Online", value: summaryData.totalSalesOnline, color: "bg-blue-500" },
-                        { label: "Card", value: summaryData.totalSalesCard, color: "bg-violet-500" },
-                      ].map(({ label, value, color }) => (
-                        <div key={label}>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="text-slate-600">{label}</span>
-                            <span className="font-medium text-slate-900">₹{value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                          </div>
-                          <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${color} transition-all duration-500`}
-                              style={{ width: `${Math.min(100, (value / summaryData.totalSales) * 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      ))}
+                      <AnalyticsDonutChart
+                        data={paymentModeBreakdown.chartSlices}
+                        emptyMessage="No payment data for this period."
+                        formatTooltip={(value) =>
+                          `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
+                        }
+                        innerRadius={0}
+                        outerRadius={88}
+                      />
+                      <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                        {paymentModeBreakdown.modes.map(({ label, value, fill }) => (
+                          <li key={label} className="flex items-center justify-between gap-2 min-w-0">
+                            <span className="flex items-center gap-2 text-slate-600 min-w-0">
+                              <span
+                                className="h-2.5 w-2.5 rounded-full shrink-0"
+                                style={{ backgroundColor: fill }}
+                                aria-hidden
+                              />
+                              <span className="truncate">{label}</span>
+                            </span>
+                            <span className="font-medium text-slate-900 tabular-nums shrink-0">
+                              ₹{value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   ) : (
                     <p className="text-slate-400 text-sm">No payment data for this period.</p>
                   )}
                 </div>
 
-                {/* Section C: Expenses */}
-                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                    <Wallet className="h-4 w-4 text-indigo-500" />
-                    Expenses
-                  </h3>
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600 flex items-center gap-1.5">
-                        Cash Expense
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs p-3">
-                            <p className="text-sm">Cash paid out for expenses during this period (e.g. supplies, misc).</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </span>
-                      <span className={`font-semibold ${summaryData.cashExpense > 0 ? "text-red-600" : "text-slate-900"}`}>
-                        ₹{summaryData.cashExpense.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600 flex items-center gap-1.5">
-                        Petty Cash Expense
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs p-3">
-                            <p className="text-sm">Expenses paid from the petty cash wallet during this period.</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </span>
-                      <span className={`font-semibold ${(summaryData.pettyCashExpense ?? 0) > 0 ? "text-red-600" : "text-slate-900"}`}>
-                        ₹{(summaryData.pettyCashExpense ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Section D: Final Settlement (single day) / Total Cash Balance (date range) */}
+                {/* Section C + D: Expenses & Final Settlement (stacked) */}
                 {(() => {
-                  const isSummarySingleDay = datePeriod === "today" || datePeriod === "yesterday" ||
-                    (datePeriod === "custom" && dateRange.from && dateRange.to && toDateStringIST(dateRange.from) === toDateStringIST(dateRange.to))
-                  const expectedCashInDrawer = (summaryData.openingBalance ?? 0) + summaryData.totalSalesCash + (summaryData.cashDuesCollected ?? 0) - summaryData.cashExpense
+                  const isSummarySingleDay =
+                    datePeriod === "today" ||
+                    datePeriod === "yesterday" ||
+                    (datePeriod === "custom" &&
+                      dateRange.from &&
+                      dateRange.to &&
+                      toDateStringIST(dateRange.from) === toDateStringIST(dateRange.to))
+                  const expectedCashInDrawer =
+                    (summaryData.openingBalance ?? 0) +
+                    summaryData.totalSalesCash +
+                    (summaryData.cashDuesCollected ?? 0) -
+                    summaryData.cashExpense
                   const cashBalance = summaryData.closingBalance ?? summaryData.cashBalance ?? 0
                   const diff = Math.abs(cashBalance - expectedCashInDrawer)
-                  const cashBalanceColor = diff < 0.01 ? "text-emerald-600" : cashBalance < expectedCashInDrawer ? "text-red-600" : "text-orange-600"
+                  const cashBalanceColor =
+                    diff < 0.01
+                      ? "text-emerald-600"
+                      : cashBalance < expectedCashInDrawer
+                        ? "text-red-600"
+                        : "text-orange-600"
                   return (
-                <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
-                  <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                    <Banknote className="h-4 w-4 text-indigo-500" />
-                    {isSummarySingleDay ? "Final Settlement" : "Total Cash Balance"}
-                  </h3>
-                  <div className="space-y-4">
-                    {isSummarySingleDay ? (
-                          <>
-                            <div className="flex justify-between items-center">
-                              <span className="text-slate-600 flex items-center gap-1.5">
-                                Expected Cash in Drawer
+                    <div className="flex flex-col gap-4">
+                      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+                        <h3 className="text-sm font-semibold text-slate-800 mb-2.5 flex items-center gap-2">
+                          <Wallet className="h-4 w-4 text-indigo-500" />
+                          Expenses
+                        </h3>
+                        <div className="space-y-2.5 text-sm">
+                          <div className="flex justify-between items-center gap-3">
+                            <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                              Cash Expense
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs p-3">
+                                  <p className="text-sm">Cash paid out for expenses during this period (e.g. supplies, misc).</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </span>
+                            <span
+                              className={`font-semibold tabular-nums shrink-0 ${summaryData.cashExpense > 0 ? "text-red-600" : "text-slate-900"}`}
+                            >
+                              ₹{summaryData.cashExpense.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center gap-3">
+                            <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                              Petty Cash Expense
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs p-3">
+                                  <p className="text-sm">Expenses paid from the petty cash wallet during this period.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </span>
+                            <span
+                              className={`font-semibold tabular-nums shrink-0 ${(summaryData.pettyCashExpense ?? 0) > 0 ? "text-red-600" : "text-slate-900"}`}
+                            >
+                              ₹{(summaryData.pettyCashExpense ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+                        <h3 className="text-sm font-semibold text-slate-800 mb-2.5 flex items-center gap-2">
+                          <Banknote className="h-4 w-4 text-indigo-500" />
+                          {isSummarySingleDay ? "Final Settlement" : "Total Cash Balance"}
+                        </h3>
+                        <div className="space-y-2.5 text-sm">
+                          {isSummarySingleDay ? (
+                            <>
+                              <div className="flex justify-between items-center gap-3">
+                                <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                                  Expected Cash in Drawer
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-xs p-3">
+                                      <p className="text-sm">
+                                        Opening Balance + Cash Sales + Cash Dues Collected − Cash Expenses
+                                      </p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </span>
+                                <span className="font-semibold text-slate-900 tabular-nums shrink-0">
+                                  ₹{expectedCashInDrawer.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center gap-3 pt-2.5 border-t border-slate-100">
+                                <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                                  Cash Balance
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-xs p-3">
+                                      <p className="text-sm">
+                                        Closing balance recorded in the cash registry when the shift was closed.
+                                      </p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </span>
+                                <span className={`font-bold text-base tabular-nums shrink-0 ${cashBalanceColor}`}>
+                                  ₹{cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex justify-between items-center gap-3">
+                              <span className="text-slate-600 flex items-center gap-1.5 min-w-0">
+                                Total Cash Balance
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
+                                    <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help shrink-0" />
                                   </TooltipTrigger>
                                   <TooltipContent side="top" className="max-w-xs p-3">
-                                    <p className="text-sm">Opening Balance + Cash Sales + Cash Dues Collected − Cash Expenses</p>
+                                    <p className="text-sm">Total cash balance across the selected date range.</p>
                                   </TooltipContent>
                                 </Tooltip>
                               </span>
-                              <span className="font-semibold text-slate-900">₹{expectedCashInDrawer.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
-                            </div>
-                            <div className="flex justify-between items-center pt-3 border-t border-slate-100">
-                              <span className="text-slate-600 flex items-center gap-1.5">
-                                Cash Balance
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top" className="max-w-xs p-3">
-                                    <p className="text-sm">Closing balance recorded in the cash registry when the shift was closed.</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </span>
-                              <span className={`font-bold text-lg ${cashBalanceColor}`}>
+                              <span className={`font-bold text-base tabular-nums shrink-0 ${cashBalanceColor}`}>
                                 ₹{cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                               </span>
                             </div>
-                          </>
-                    ) : (
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-600 flex items-center gap-1.5">
-                          Total Cash Balance
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <HelpCircle className="h-3.5 w-3.5 text-slate-400 hover:text-slate-600 cursor-help" />
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs p-3">
-                              <p className="text-sm">Total cash balance across the selected date range.</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </span>
-                        <span className={`font-bold text-lg ${cashBalanceColor}`}>
-                          ₹{cashBalance.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-                        </span>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                </div>
+                    </div>
                   )
                 })()}
               </div>
@@ -3324,32 +3400,10 @@ export function SalesReport() {
 
         <CursorTooltip
           wrapperClassName="h-full min-h-0"
-          wrapperTabIndex={-1}
           className="text-center"
-          content={
-            showPartialUnpaidBreakdown
-              ? "Click the card to show combined partial + unpaid count."
-              : "Partial + unpaid bill count for current filters. Click the card to see partial vs unpaid."
-          }
+          content="Bills with partial payment vs fully unpaid for current filters."
         >
-          <Card
-            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
-            role="button"
-            tabIndex={0}
-            aria-expanded={showPartialUnpaidBreakdown}
-            aria-label={
-              showPartialUnpaidBreakdown
-                ? "Partial and unpaid breakdown. Activate to show combined count."
-                : "Partial and unpaid combined count. Activate to show breakdown."
-            }
-            onClick={() => setShowPartialUnpaidBreakdown((v) => !v)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault()
-                setShowPartialUnpaidBreakdown((v) => !v)
-              }
-            }}
-          >
+          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
               <CardTitle className="text-sm font-medium text-gray-900">Partial/Unpaid Payments</CardTitle>
               <div className="p-2 bg-gray-100 rounded-lg">
@@ -3359,21 +3413,21 @@ export function SalesReport() {
             <CardContent>
               {salesStatsLoading ? (
                 salesStatSkeleton
-              ) : !showPartialUnpaidBreakdown ? (
-                <div className="space-y-1">
-                  <div className="text-2xl font-bold text-gray-900">{partialSales + unpaidSales}</div>
-                  <p className="text-xs font-medium text-gray-500">Partial + Unpaid</p>
-                  <p className="text-xs text-gray-400">Click for breakdown</p>
-                </div>
               ) : (
-                <div className="flex flex-wrap gap-6">
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Partial</p>
-                    <p className="text-2xl font-bold text-gray-900">{partialSales}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Unpaid</p>
-                    <p className="text-2xl font-bold text-gray-900">{unpaidSales}</p>
+                <div className="space-y-2">
+                  <div className="text-2xl font-bold text-gray-900">{partialSales + unpaidSales}</div>
+                  <div className="flex flex-nowrap items-center justify-between gap-2 text-xs text-gray-600">
+                    <span className="truncate">
+                      Partial{" "}
+                      <span className="font-semibold text-gray-900">{partialSales}</span>
+                    </span>
+                    <span className="shrink-0 text-gray-300" aria-hidden>
+                      ·
+                    </span>
+                    <span className="truncate text-right">
+                      Unpaid{" "}
+                      <span className="font-semibold text-gray-900">{unpaidSales}</span>
+                    </span>
                   </div>
                 </div>
               )}
@@ -3425,8 +3479,29 @@ export function SalesReport() {
           </Card>
         </CursorTooltip>
 
-        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content={cashCollectedTooltip}>
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          wrapperTabIndex={-1}
+          className="text-center"
+          content={
+            showCashCollectedBreakdown
+              ? "Click to show combined cash total."
+              : "Service cash from bills; wallet cash is change credited to prepaid wallet. Click for breakdown."
+          }
+        >
+          <Card
+            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+            role="button"
+            tabIndex={0}
+            aria-expanded={showCashCollectedBreakdown}
+            onClick={() => setShowCashCollectedBreakdown((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                setShowCashCollectedBreakdown((v) => !v)
+              }
+            }}
+          >
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
               <CardTitle className="text-sm font-medium text-gray-900">Cash Collected</CardTitle>
               <div className="p-2 bg-gray-100 rounded-lg">
@@ -3434,15 +3509,52 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">
-                {salesStatsLoading ? salesStatSkeleton : `₹${cashCollected.toFixed(2)}`}
-              </div>
+              {salesStatsLoading ? (
+                salesStatSkeleton
+              ) : !showCashCollectedBreakdown ? (
+                <div className="space-y-1">
+                  <div className="text-2xl font-bold text-gray-900">₹{cashCollected.toFixed(2)}</div>
+                  <p className="text-xs text-gray-400">Click for breakdown</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Service Cash</p>
+                    <p className="text-xl font-bold text-gray-900">₹{serviceCashCollected.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Wallet Cash</p>
+                    <p className="text-xl font-bold text-gray-900">₹{walletCashCollected.toFixed(2)}</p>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </CursorTooltip>
 
-        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content={onlineCashCollectedTooltip}>
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          wrapperTabIndex={-1}
+          className="text-center"
+          content={
+            showOnlineCashCollectedBreakdown
+              ? "Click to show combined online total."
+              : "Card and online/UPI payments for current filters. Click for breakdown."
+          }
+        >
+          <Card
+            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+            role="button"
+            tabIndex={0}
+            aria-expanded={showOnlineCashCollectedBreakdown}
+            onClick={() => setShowOnlineCashCollectedBreakdown((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                setShowOnlineCashCollectedBreakdown((v) => !v)
+              }
+            }}
+          >
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
               <CardTitle className="text-sm font-medium text-gray-900">Online Cash Collected</CardTitle>
               <div className="p-2 bg-gray-100 rounded-lg">
@@ -3450,9 +3562,25 @@ export function SalesReport() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">
-                {salesStatsLoading ? salesStatSkeleton : `₹${onlineCashCollected.toFixed(2)}`}
-              </div>
+              {salesStatsLoading ? (
+                salesStatSkeleton
+              ) : !showOnlineCashCollectedBreakdown ? (
+                <div className="space-y-1">
+                  <div className="text-2xl font-bold text-gray-900">₹{onlineCashCollected.toFixed(2)}</div>
+                  <p className="text-xs text-gray-400">Click for breakdown</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Card</p>
+                    <p className="text-xl font-bold text-gray-900">₹{cardCollected.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Online</p>
+                    <p className="text-xl font-bold text-gray-900">₹{onlinePayCollected.toFixed(2)}</p>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </CursorTooltip>

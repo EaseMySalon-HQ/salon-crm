@@ -8,7 +8,7 @@ import { AppointmentForm } from "@/components/appointments/appointment-form"
 import { ClientDetailPanel } from "@/components/appointments/client-detail-panel"
 import { getAppointmentStatusSheetHeaderClass } from "@/lib/appointment-calendar-helpers"
 import { useToast } from "@/hooks/use-toast"
-import { useState, useCallback, useEffect, useRef, type ReactNode } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react"
 import type { Client } from "@/lib/client-store"
 
 export interface AppointmentFormDrawerProps {
@@ -24,6 +24,8 @@ export interface AppointmentFormDrawerProps {
   resumeServiceCheckoutDraft?: boolean
   /** Token from calendar pill (`draftRef`) paired with resume flag. */
   resumeSavedDraftToken?: string
+  /** Open Add to Cart immediately (Quick Sale) — skip appointment service selection. */
+  openCheckoutDirectly?: boolean
   onSuccess?: () => void
 }
 
@@ -37,6 +39,7 @@ export function AppointmentFormDrawer({
   initialClientId,
   resumeServiceCheckoutDraft = false,
   resumeSavedDraftToken,
+  openCheckoutDirectly = false,
   onSuccess,
 }: AppointmentFormDrawerProps) {
   const { toast } = useToast()
@@ -53,6 +56,23 @@ export function AppointmentFormDrawer({
 
   const showClientDetailPanel = !!(selectedClient && !serviceCheckoutOpen)
   const drawerMultiServices = drawerSelectedServiceCount > 1
+
+  const sheetMaxWidth = useMemo(() => {
+    if (serviceCheckoutOpen) {
+      return drawerMultiServices ? "72rem" : "64rem"
+    }
+    if (showClientDetailPanel) {
+      return drawerMultiServices ? "72rem" : "64rem"
+    }
+    if (drawerMultiServices) return "48rem"
+    return "36rem"
+  }, [serviceCheckoutOpen, showClientDetailPanel, drawerMultiServices])
+
+  const formContentMaxWidth = useMemo(() => {
+    if (serviceCheckoutOpen) return undefined
+    if (drawerMultiServices) return "48rem"
+    return "36rem"
+  }, [serviceCheckoutOpen, drawerMultiServices])
 
   useEffect(() => {
     if (!open) {
@@ -81,13 +101,20 @@ export function AppointmentFormDrawer({
   // Reset form and client panel when opening for new appointment (no appointmentId),
   // unless we're resuming a saved checkout draft from the calendar chip.
   useEffect(() => {
-    if (open && !appointmentId && !resumeServiceCheckoutDraft) {
+    if (open && !appointmentId && !resumeServiceCheckoutDraft && !openCheckoutDirectly) {
       setFormOpenKey((k) => k + 1)
       setSelectedClient(null)
       setPanelVisible(false)
       setServiceCheckoutOpen(false)
     }
-  }, [open, appointmentId, resumeServiceCheckoutDraft])
+  }, [open, appointmentId, resumeServiceCheckoutDraft, openCheckoutDirectly])
+
+  useEffect(() => {
+    if (open && openCheckoutDirectly && !appointmentId) {
+      setFormOpenKey((k) => k + 1)
+      setServiceCheckoutOpen(true)
+    }
+  }, [open, openCheckoutDirectly, appointmentId])
 
   useEffect(() => {
     if (open && resumeServiceCheckoutDraft) {
@@ -115,6 +142,16 @@ export function AppointmentFormDrawer({
     onOpenChange(false)
   }, [onOpenChange])
 
+  const handleServiceCheckoutOpenChange = useCallback(
+    (next: boolean) => {
+      setServiceCheckoutOpen(next)
+      if (openCheckoutDirectly && !next) {
+        onOpenChange(false)
+      }
+    },
+    [openCheckoutDirectly, onOpenChange]
+  )
+
   const handleSheetOpenChange = useCallback(
     (next: boolean) => {
       if (!next && appointmentId && editAppointmentDirty) {
@@ -133,20 +170,9 @@ export function AppointmentFormDrawer({
     <Sheet open={open} onOpenChange={handleSheetOpenChange}>
       <SheetContent
         side="right"
+        style={{ maxWidth: sheetMaxWidth }}
         className={cn(
-          // Smooth width when client panel / checkout / multi-service changes max-w-* (see ui/sheet base).
-          "w-full overflow-hidden p-0 flex flex-col motion-reduce:transition-none sm:transition-[max-width] sm:duration-500 sm:ease-[cubic-bezier(0.32,0.72,0,1)]",
-          serviceCheckoutOpen
-            ? drawerMultiServices
-              ? "sm:max-w-6xl"
-              : "sm:max-w-5xl"
-            : showClientDetailPanel
-              ? drawerMultiServices
-                ? "sm:max-w-6xl"
-                : "sm:max-w-5xl"
-              : drawerMultiServices
-                ? "sm:max-w-3xl"
-                : "sm:max-w-xl"
+          "w-full overflow-hidden p-0 flex flex-col motion-reduce:transition-none transition-[max-width] duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]",
         )}
       >
         <div className="flex h-full overflow-hidden">
@@ -173,9 +199,19 @@ export function AppointmentFormDrawer({
                         serviceCheckoutPaymentBackRef.current()
                         return
                       }
+                      if (openCheckoutDirectly) {
+                        onOpenChange(false)
+                        return
+                      }
                       setServiceCheckoutOpen(false)
                     }}
-                    aria-label={checkoutPaymentStep ? "Back to cart items" : "Back to appointment"}
+                    aria-label={
+                      checkoutPaymentStep
+                        ? "Back to cart items"
+                        : openCheckoutDirectly
+                          ? "Close checkout"
+                          : "Back to appointment"
+                    }
                   >
                     <ArrowLeft className="h-4 w-4" />
                   </Button>
@@ -193,10 +229,9 @@ export function AppointmentFormDrawer({
               )}
             </SheetHeader>
             <div
+              style={formContentMaxWidth ? { maxWidth: formContentMaxWidth } : undefined}
               className={cn(
-                "flex-1 min-h-0 p-4 sm:p-5 flex flex-col w-full",
-                !serviceCheckoutOpen &&
-                  (drawerMultiServices ? "max-w-3xl mx-auto" : "max-w-xl mx-auto")
+                "flex-1 min-h-0 p-4 sm:p-5 flex flex-col w-full mx-auto motion-reduce:transition-none transition-[max-width] duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]",
               )}
             >
               <AppointmentForm
@@ -214,12 +249,13 @@ export function AppointmentFormDrawer({
                 onSuccess={handleSuccess}
                 onCancel={handleCancel}
                 serviceCheckoutOpen={serviceCheckoutOpen}
-                onServiceCheckoutOpenChange={setServiceCheckoutOpen}
+                onServiceCheckoutOpenChange={handleServiceCheckoutOpenChange}
                 onServiceCheckoutPaymentStepChange={setCheckoutPaymentStep}
                 serviceCheckoutPaymentBackRef={serviceCheckoutPaymentBackRef}
                 initialClientIdForPrefill={initialClientId}
                 resumeServiceCheckoutDraft={resumeServiceCheckoutDraft}
                 resumeSavedDraftToken={resumeSavedDraftToken}
+                openCheckoutDirectly={openCheckoutDirectly}
                 onDrawerHeaderEndChange={setDrawerHeaderEnd}
                 onDrawerHeaderStatusToneChange={setDrawerHeaderStatusTone}
                 onDrawerSelectedServiceCountChange={setDrawerSelectedServiceCount}

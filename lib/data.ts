@@ -135,7 +135,7 @@ export interface ReceiptItem {
 }
 
 export interface PaymentMethod {
-  type: "cash" | "card" | "online" | "wallet" | "unknown"
+  type: "cash" | "card" | "online" | "wallet" | "reward" | "unknown"
   amount: number
   /** ISO timestamp when this split was recorded (checkout or due collection). */
   recordedAt?: string

@@ -25,10 +25,19 @@ type Props = {
   /** Shown when `data` is empty */
   emptyMessage: string
   formatTooltip: (value: number) => string
+  /** Default 52 (donut). Set to 0 for a full pie chart. */
+  innerRadius?: number
+  outerRadius?: number
 }
 
 /** Shared donut used across Analytics tabs (revenue breakdown, top services, etc.) */
-export function AnalyticsDonutChart({ data, emptyMessage, formatTooltip }: Props) {
+export function AnalyticsDonutChart({
+  data,
+  emptyMessage,
+  formatTooltip,
+  innerRadius = 52,
+  outerRadius = 100,
+}: Props) {
   const empty = data.length === 0
 
   return (
@@ -44,8 +53,8 @@ export function AnalyticsDonutChart({ data, emptyMessage, formatTooltip }: Props
               data={data}
               cx="50%"
               cy="50%"
-              innerRadius={52}
-              outerRadius={100}
+              innerRadius={innerRadius}
+              outerRadius={outerRadius}
               paddingAngle={2}
               dataKey="value"
               nameKey="name"

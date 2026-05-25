@@ -205,6 +205,7 @@ async function schedulePackageSession(models, businessDoc, payload, opts = {}) {
     throw err;
   }
 
+  const packageFullyPaid = cp.payment_status === 'PAID';
   return createBooking(
     models,
     businessDoc,
@@ -212,8 +213,9 @@ async function schedulePackageSession(models, businessDoc, payload, opts = {}) {
       branchId: cp.branchId,
       clientId: cp.client_id,
       type: 'package',
-      paymentMode: 'per_appointment',
-      paymentState: cp.payment_status === 'PAID' ? 'paid' : 'pending',
+      paymentMode: packageFullyPaid ? 'full_upfront' : 'per_appointment',
+      paymentState: packageFullyPaid ? 'paid' : 'pending',
+      packagePaymentCollected: packageFullyPaid,
       packagePurchaseId: cp._id,
       units: [{ ...unit, packageSessionId: session._id }],
       metadata: { packageBooking: true }

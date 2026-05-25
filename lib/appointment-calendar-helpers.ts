@@ -191,11 +191,29 @@ export function canChangeAppointmentStatusViaContextMenu(apt: { status?: string 
 /**
  * Appointment IDs to update when setting status from a booking card context menu.
  * - `service_started` → only the card that was acted on.
- * - `scheduled`, `confirmed`, `arrived` → all loaded rows sharing `bookingGroupId` (or the anchor alone if no group / no siblings in memory).
+ * - `scheduled`, `confirmed`, `arrived`, `missed` → same-day siblings sharing `bookingGroupId` only.
  */
+export function normalizeAppointmentDateStr(date: unknown): string {
+  if (date == null) return ""
+  const s = String(date).trim()
+  if (!s) return ""
+  return s.slice(0, 10)
+}
+
+/** Same calendar day for status/linking — multi-date bookings are independent per day. */
+export function appointmentsOnSameVisitDate(
+  a: { date?: unknown },
+  b: { date?: unknown },
+): boolean {
+  const da = normalizeAppointmentDateStr(a.date)
+  const db = normalizeAppointmentDateStr(b.date)
+  if (!da || !db) return true
+  return da === db
+}
+
 export function getAppointmentIdsForCardStatusUpdate(
-  anchor: { _id: string; bookingGroupId?: string | null | undefined },
-  loadedAppointments: Array<{ _id: string; bookingGroupId?: string | null | undefined }>,
+  anchor: { _id: string; bookingGroupId?: string | null | undefined; date?: unknown },
+  loadedAppointments: Array<{ _id: string; bookingGroupId?: string | null | undefined; date?: unknown }>,
   newStatus: AppointmentCardContextStatus,
 ): string[] {
   const anchorId = toMongoIdString(anchor._id) || String(anchor._id)
@@ -212,7 +230,9 @@ export function getAppointmentIdsForCardStatusUpdate(
     const aid = toMongoIdString(a._id) || String(a._id)
     if (!aid) continue
     const ag = a.bookingGroupId
-    if (ag != null && String(ag).trim() === bg) out.add(aid)
+    if (ag != null && String(ag).trim() === bg && appointmentsOnSameVisitDate(a, anchor)) {
+      out.add(aid)
+    }
   }
   if (out.size === 0 && anchorId) out.add(anchorId)
   return [...out]
@@ -377,13 +397,15 @@ export function getAppointmentGridWindowMinutes(apt: {
   return { startM, endM }
 }
 
-export function getBookingGroupSiblings<T extends { bookingGroupId?: string | null }>(
+export function getBookingGroupSiblings<T extends { bookingGroupId?: string | null; date?: unknown }>(
   appointments: T[],
   anchor: T
 ): T[] {
   const bg = anchor.bookingGroupId
   if (!bg) return [anchor]
-  return appointments.filter((apt) => apt.bookingGroupId === bg)
+  return appointments.filter(
+    (apt) => apt.bookingGroupId === bg && appointmentsOnSameVisitDate(apt, anchor)
+  )
 }
 
 /** Lines for Quick Sale prefill — one card may expand to primary + additional services. */

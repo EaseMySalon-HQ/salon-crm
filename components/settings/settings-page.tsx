@@ -29,6 +29,7 @@ import {
   Gift,
   MessageSquare,
   Bell,
+  Boxes,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -55,6 +56,7 @@ import { ProductStatsCards } from "@/components/dashboard/stats-cards"
 import { CategoryManagement } from "@/components/categories/category-management"
 import { SuppliersAndOrdersTab } from "@/components/suppliers/suppliers-and-orders-tab"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { PackagesSettingsPanel } from "@/components/packages/packages-settings-panel"
 
 import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
 import type { LucideIcon } from "lucide-react"
@@ -77,6 +79,7 @@ const SETTINGS_SECTION_IDS = [
   "recharge",
   "prepaid-wallet",
   "reward-points",
+  "packages",
 ] as const
 
 function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
@@ -162,6 +165,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "Membership tiers, benefits, and customer subscriptions.",
         icon: IdCard,
         searchTerms: ["subscription", "tiers", "loyalty"],
+      },
+      {
+        id: "packages",
+        title: "Packages",
+        description: "Multi-session packages, pricing, and sellable bundles.",
+        icon: Boxes,
+        searchTerms: ["bundle", "sittings", "sessions", "prepaid"],
       },
       {
         id: "prepaid-wallet",
@@ -364,6 +374,8 @@ export function SettingsPage() {
             <MembershipPlansTable />
           </div>
         )
+      case "packages":
+        return <PackagesSettingsPanel />
       case "services":
         return (
           <Tabs defaultValue="services" className="w-full">

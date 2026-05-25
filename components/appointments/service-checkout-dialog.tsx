@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, type ComponentType } from "react"
+import { useCallback, useEffect, useImperativeHandle, useMemo, useReducer, useRef, useState, forwardRef, type ComponentType } from "react"
 import { useRouter } from "next/navigation"
 import {
   Search,
@@ -9,6 +9,7 @@ import {
   Gift,
   ShoppingBag,
   Wallet,
+  Boxes,
   Plus,
   Minus,
   Trash2,
@@ -66,20 +67,31 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { useToast } from "@/hooks/use-toast"
+import { useCurrency } from "@/hooks/use-currency"
 import { effectiveMembershipPlanDiscountPercent } from "@/lib/membership-plan-discount"
 import { cn } from "@/lib/utils"
 import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import { clientStore, type Client } from "@/lib/client-store"
+import {
+  customerDropdownList,
+  findWalkInClient,
+  formatClientPhoneForDisplay,
+  prependWalkInIfMissing,
+} from "@/lib/walk-in-client"
 import { ClientDetailsDrawer } from "@/components/clients/client-details-drawer"
 import {
   ClientWalletAPI,
   ClientsAPI,
+  AnalyticsAPI,
   MembershipAPI,
+  PackagesAPI,
   ProductsAPI,
   RewardPointsAPI,
+  SalesAPI,
   SettingsAPI,
   StaffDirectoryAPI,
 } from "@/lib/api"
+import type { AnalyticsTopService } from "@/lib/types/analytics"
 import {
   clearServiceCheckoutDraftByRef,
   dispatchServiceCheckoutDraftChanged,
@@ -194,6 +206,19 @@ export type ServiceCheckoutPrepaidLine = {
   discountIsPercent?: boolean
 }
 
+export type ServiceCheckoutPackageLine = {
+  id: string
+  packageId: string
+  staffId: string
+  packageName: string
+  price: number
+  totalSittings: number
+  validityDays: number
+  quantity: number
+  discountValue?: number
+  discountIsPercent?: boolean
+}
+
 function formatDurationShort(minutes: number): string {
   const m = Math.max(0, Math.round(minutes || 0))
   if (m < 60) return `${m} min`
@@ -274,7 +299,31 @@ function cloneCheckoutTipLines(lines: CheckoutTipLine[]): CheckoutTipLine[] {
   return lines.map((l) => ({ ...l }))
 }
 
-type ServiceCheckoutMembershipSnapshot = { plan?: any; usageSummary?: any[] } | null
+type ServiceCheckoutMembershipSnapshot = {
+  subscription?: any
+  plan?: any
+  usageSummary?: any[]
+  freeServicesRemaining?: number
+  totalSavedViaMembership?: number
+} | null
+
+function getActiveMembershipPlanName(data: ServiceCheckoutMembershipSnapshot): string {
+  if (!data?.subscription) return "NA"
+  const sub = data.subscription
+  const plan = data.plan ?? sub.planId
+  const isActive = sub.status === "ACTIVE"
+  const isExpired =
+    sub.status === "EXPIRED" ||
+    (sub.expiryDate != null &&
+      String(sub.expiryDate) !== "" &&
+      new Date(sub.expiryDate) < new Date())
+  if (!isActive || isExpired) return "NA"
+  if (plan && typeof plan === "object") {
+    const name = (plan.planName || plan.name || "").trim()
+    if (name) return name
+  }
+  return "NA"
+}
 
 /** Align with Quick Sale membership pricing: included-service balances + plan % off remaining. */
 function applyMembershipToCheckoutServiceLines(
@@ -542,11 +591,68 @@ function clonePrepaidLines(lines: ServiceCheckoutPrepaidLine[]): ServiceCheckout
   return lines.map((l) => ({ ...l }))
 }
 
+function clonePackageLines(lines: ServiceCheckoutPackageLine[]): ServiceCheckoutPackageLine[] {
+  return lines.map((l) => ({ ...l }))
+}
+
+/** Pick catalog services ordered by bill frequency (units sold), then fill from catalog. */
+function resolveFrequentCatalogServices(
+  catalog: any[],
+  ranked: AnalyticsTopService[],
+  limit = 10
+): any[] {
+  if (!catalog.length) return []
+  const catalogById = new Map<string, any>()
+  const catalogByName = new Map<string, any>()
+  for (const svc of catalog) {
+    const id = String(svc._id || svc.id || "")
+    if (id) catalogById.set(id, svc)
+    const nameKey = String(svc.name || "")
+      .trim()
+      .toLowerCase()
+    if (nameKey && !catalogByName.has(nameKey)) catalogByName.set(nameKey, svc)
+  }
+
+  const picked: any[] = []
+  const seen = new Set<string>()
+
+  const tryAdd = (svc: any | undefined) => {
+    if (!svc || picked.length >= limit) return
+    const sid = String(svc._id || svc.id || "")
+    if (!sid || seen.has(sid)) return
+    seen.add(sid)
+    picked.push(svc)
+  }
+
+  for (const row of ranked) {
+    if (picked.length >= limit) break
+    const key = String(row.id || "")
+    if (key && !key.startsWith("__name__")) {
+      tryAdd(catalogById.get(key))
+      continue
+    }
+    const fromKey =
+      key.startsWith("__name__") ? key.slice("__name__".length).trim().toLowerCase() : ""
+    const fromRowName = String(row.name || "")
+      .trim()
+      .toLowerCase()
+    tryAdd(catalogByName.get(fromKey) ?? catalogByName.get(fromRowName))
+  }
+
+  for (const svc of catalog) {
+    if (picked.length >= limit) break
+    tryAdd(svc)
+  }
+
+  return picked
+}
+
 type ServiceCheckoutCategory =
   | "services"
   | "products"
   | "memberships"
   | "prepaidPlans"
+  | "packages"
   | "giftVoucher"
 
 const CATEGORY_TILES: Array<{
@@ -559,6 +665,7 @@ const CATEGORY_TILES: Array<{
   { id: "products", label: "Products", Icon: ShoppingBag },
   { id: "memberships", label: "Memberships", Icon: CreditCard },
   { id: "prepaidPlans", label: "Prepaid Plans", Icon: Wallet },
+  { id: "packages", label: "Packages", Icon: Boxes },
   { id: "giftVoucher", label: "Gift Voucher", Icon: Gift, comingSoon: true },
 ]
 
@@ -667,11 +774,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 ) {
   const router = useRouter()
   const { toast } = useToast()
+  const { formatAmount } = useCurrency()
   const [lines, setLines] = useState<ServiceCheckoutLine[]>([])
   const [search, setSearch] = useState("")
   const [category, setCategory] = useState<ServiceCheckoutCategory>("services")
-  /** Quick-access "favorite" services the user has pinned beside the default Top 10. */
+  /** Quick-access "favorite" services pinned beside the default frequent sellers. */
   const [pinnedServiceIds, setPinnedServiceIds] = useState<string[]>([])
+  const [frequentServicesRanked, setFrequentServicesRanked] = useState<AnalyticsTopService[] | null>(
+    null
+  )
   const [pinPickerOpen, setPinPickerOpen] = useState(false)
   const [pinPickerSearch, setPinPickerSearch] = useState("")
   const [navigating, setNavigating] = useState(false)
@@ -679,6 +790,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const productSnapshotRef = useRef<ServiceCheckoutProductLine[]>([])
   const membershipSnapshotRef = useRef<ServiceCheckoutMembershipLine[]>([])
   const prepaidSnapshotRef = useRef<ServiceCheckoutPrepaidLine[]>([])
+  const packageSnapshotRef = useRef<ServiceCheckoutPackageLine[]>([])
   const wasOpenRef = useRef(false)
   /** Latest save / resume token for this checkout session (clear on continue or cancel draft). */
   const persistedDraftRef = useRef<string | null>(null)
@@ -696,6 +808,11 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const [prepaidSearch, setPrepaidSearch] = useState("")
   const [catalogPrepaidPlans, setCatalogPrepaidPlans] = useState<any[]>([])
   const [loadingPrepaidCatalog, setLoadingPrepaidCatalog] = useState(false)
+
+  const [packageLines, setPackageLines] = useState<ServiceCheckoutPackageLine[]>([])
+  const [packageSearch, setPackageSearch] = useState("")
+  const [catalogPackages, setCatalogPackages] = useState<any[]>([])
+  const [loadingPackages, setLoadingPackages] = useState(false)
   /** Loaded for checkout; options always filtered with isStaffEligibleForAppointmentScheduling. */
   const [saleStaffCatalog, setSaleStaffCatalog] = useState<any[]>([])
 
@@ -709,16 +826,36 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const [cancelDraftDialogOpen, setCancelDraftDialogOpen] = useState(false)
   const [hasPersistedDraft, setHasPersistedDraft] = useState(false)
 
-  const changeClientSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [changeClientOpen, setChangeClientOpen] = useState(false)
   const [changeClientQuery, setChangeClientQuery] = useState("")
   const [changeClientResults, setChangeClientResults] = useState<Client[]>([])
   const [changeClientSearching, setChangeClientSearching] = useState(false)
   const [changingClient, setChangingClient] = useState(false)
+  const [isChangingClientProfile, setIsChangingClientProfile] = useState(false)
+  const [inlineClientPickerOpen, setInlineClientPickerOpen] = useState(false)
+  const [showNewClientDialog, setShowNewClientDialog] = useState(false)
+  const [creatingClient, setCreatingClient] = useState(false)
+  const [newClient, setNewClient] = useState({
+    firstName: "",
+    lastName: "",
+    phone: "",
+    email: "",
+  })
+  const clientSearchInputRef = useRef<HTMLInputElement>(null)
+  const changeClientSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [clientDirEpoch, bumpClientDir] = useReducer((n: number) => n + 1, 0)
+  const clientProfileId = customer?._id || customer?.id
+  const showInlineClientSearch = !clientProfileId && Boolean(onCustomerChange)
+  const showClientSearchBox = showInlineClientSearch || isChangingClientProfile
   const [clientDetailsDrawerOpen, setClientDetailsDrawerOpen] = useState(false)
   const [checkoutTaxSettings, setCheckoutTaxSettings] = useState<CheckoutPaymentTaxSettings | null>(null)
   const [checkoutMembershipData, setCheckoutMembershipData] =
     useState<ServiceCheckoutMembershipSnapshot>(null)
+  const [checkoutClientStats, setCheckoutClientStats] = useState<{
+    loading: boolean
+    totalVisits: number
+    totalRevenue: number
+    duesAmount: number
+  } | null>(null)
   /** Payment breakdown (Subtotal / Tax / Total); To pay stays visible when collapsed. */
   const [cartBreakdownOpen, setCartBreakdownOpen] = useState(false)
   const [checkoutTipLines, setCheckoutTipLines] = useState<CheckoutTipLine[]>([])
@@ -821,6 +958,72 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     }
   }, [open, customer, appointmentDate])
 
+  useEffect(() => {
+    if (!open || !clientProfileId) {
+      setCheckoutClientStats(null)
+      return
+    }
+    const fallbackVisits = customer?.totalVisits ?? 0
+    const fallbackRevenue = customer?.totalSpent ?? 0
+    const fallbackDues = customer?.totalDues ?? 0
+    const phone = String(customer?.phone || "").trim()
+
+    if (!phone) {
+      setCheckoutClientStats({
+        loading: false,
+        totalVisits: fallbackVisits,
+        totalRevenue: fallbackRevenue,
+        duesAmount: fallbackDues,
+      })
+      return
+    }
+
+    let cancelled = false
+    setCheckoutClientStats({
+      loading: true,
+      totalVisits: fallbackVisits,
+      totalRevenue: fallbackRevenue,
+      duesAmount: fallbackDues,
+    })
+
+    void SalesAPI.getByClient(phone)
+      .then((res) => {
+        if (cancelled) return
+        const salesList = Array.isArray(res?.data) ? res.data : []
+        const totalVisits = salesList.length
+        const totalRevenue = salesList.reduce(
+          (acc: number, s: any) => acc + (Number(s?.grossTotal) || Number(s?.netTotal) || 0),
+          0
+        )
+        const duesAmount = salesList.reduce((acc: number, s: any) => {
+          const remaining = Number(s?.paymentStatus?.remainingAmount) ?? 0
+          return remaining > 0 ? acc + remaining : acc
+        }, 0)
+        setCheckoutClientStats({ loading: false, totalVisits, totalRevenue, duesAmount })
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCheckoutClientStats({
+            loading: false,
+            totalVisits: fallbackVisits,
+            totalRevenue: fallbackRevenue,
+            duesAmount: fallbackDues,
+          })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    open,
+    clientProfileId,
+    customer?.phone,
+    customer?.totalVisits,
+    customer?.totalSpent,
+    customer?.totalDues,
+  ])
+
   const serviceLinesMembershipSignature = useMemo(
     () =>
       lines
@@ -844,11 +1047,36 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       setCartBreakdownOpen(false)
       setPaymentMethodDialogOpen(false)
       setShowCreditChangeConfirm(false)
+      setInlineClientPickerOpen(false)
+      setIsChangingClientProfile(false)
     }
   }, [open])
 
   useEffect(() => {
-    if (!changeClientOpen) return
+    if (!open || !showClientSearchBox) return
+    void clientStore.loadClients().finally(() => bumpClientDir())
+    return clientStore.subscribe(bumpClientDir)
+  }, [open, showClientSearchBox])
+
+  useEffect(() => {
+    if (!showClientSearchBox) return
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Element
+      if (!target.closest(".checkout-client-search-container")) {
+        setInlineClientPickerOpen(false)
+        if (isChangingClientProfile) {
+          setIsChangingClientProfile(false)
+          setChangeClientQuery("")
+          setChangeClientResults([])
+        }
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [showClientSearchBox, isChangingClientProfile])
+
+  useEffect(() => {
+    if (!showClientSearchBox) return
     const trimmed = changeClientQuery.trim()
     if (trimmed.length < 2) {
       setChangeClientResults([])
@@ -872,7 +1100,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     return () => {
       if (changeClientSearchTimerRef.current) clearTimeout(changeClientSearchTimerRef.current)
     }
-  }, [changeClientQuery, changeClientOpen])
+  }, [changeClientQuery, showClientSearchBox])
 
   useEffect(() => {
     if (!open) setClientDetailsDrawerOpen(false)
@@ -890,10 +1118,12 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           productSnapshotRef.current = []
           membershipSnapshotRef.current = []
           prepaidSnapshotRef.current = []
+          packageSnapshotRef.current = []
           setLines(cloneLines(draft.lines))
           setProductLines(cloneProductLines(draft.productLines))
           setMembershipLines(cloneMembershipLines(draft.membershipLines))
           setPrepaidLines(clonePrepaidLines(draft.prepaidLines))
+          setPackageLines(clonePackageLines(draft.packageLines || []))
           if (Array.isArray(draft.checkoutTipLines) && draft.checkoutTipLines.length > 0) {
             setCheckoutTipLines(cloneCheckoutTipLines(draft.checkoutTipLines as CheckoutTipLine[]))
           } else {
@@ -922,6 +1152,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           setProductSearch("")
           setMembershipSearch("")
           setPrepaidSearch("")
+          setPackageSearch("")
           setHasPersistedDraft(true)
           wasOpenRef.current = open
           return
@@ -947,6 +1178,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       prepaidSnapshotRef.current = []
       setPrepaidLines([])
       setPrepaidSearch("")
+      packageSnapshotRef.current = []
+      setPackageLines([])
+      setPackageSearch("")
       clearCheckoutExtras()
       setHasPersistedDraft(false)
     }
@@ -1037,6 +1271,29 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   useEffect(() => {
     if (!open) return
     let cancelled = false
+    setLoadingPackages(true)
+    PackagesAPI.list({ status: "ACTIVE", limit: 500 })
+      .then((res) => {
+        if (cancelled || !res?.success) {
+          if (!cancelled) setCatalogPackages([])
+          return
+        }
+        if (!cancelled) setCatalogPackages(res.data?.packages || [])
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogPackages([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPackages(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
     StaffDirectoryAPI.getAll()
       .then((res) => {
         if (cancelled || !res?.success) {
@@ -1087,18 +1344,50 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     }
   }, [])
 
-  /** Default quick-access set when no search query: first 10 catalog services. */
-  const topTenServices = useMemo(
-    () => (catalogServices || []).slice(0, 10),
-    [catalogServices]
-  )
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setFrequentServicesRanked(null)
+    void AnalyticsAPI.getServicesTab()
+      .then((res) => {
+        if (cancelled) return
+        if (!res.success || !res.data?.services) {
+          setFrequentServicesRanked([])
+          return
+        }
+        const breakdown =
+          res.data.services.allServicesBreakdown ?? res.data.services.topServices ?? []
+        const ranked = [...breakdown].sort(
+          (a, b) =>
+            (b.units || 0) - (a.units || 0) ||
+            (b.bookings || 0) - (a.bookings || 0) ||
+            (b.revenue || 0) - (a.revenue || 0)
+        )
+        setFrequentServicesRanked(ranked)
+      })
+      .catch(() => {
+        if (!cancelled) setFrequentServicesRanked([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  /** Default quick-access set when no search query: most frequently sold services (last ~12 months). */
+  const topTenServices = useMemo(() => {
+    const catalog = catalogServices || []
+    if (!catalog.length) return []
+    if (frequentServicesRanked === null) return catalog.slice(0, 10)
+    if (frequentServicesRanked.length === 0) return catalog.slice(0, 10)
+    return resolveFrequentCatalogServices(catalog, frequentServicesRanked, 10)
+  }, [catalogServices, frequentServicesRanked])
 
   const topTenServiceIdSet = useMemo(
     () => new Set(topTenServices.map((s: any) => String(s._id || s.id))),
     [topTenServices]
   )
 
-  /** Resolve pinned IDs against the live catalog (skip removed/disabled), excluding ones already in the Top 10. */
+  /** Resolve pinned IDs against the live catalog (skip removed/disabled), excluding frequent defaults. */
   const pinnedServices = useMemo(() => {
     const out: any[] = []
     for (const id of pinnedServiceIds) {
@@ -1177,6 +1466,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     })
   }, [catalogPrepaidPlans, prepaidSearch])
 
+  const filteredPackages = useMemo(() => {
+    const q = packageSearch.trim().toLowerCase()
+    return (catalogPackages || []).filter((pkg: any) => {
+      if (!q) return true
+      const name = (pkg.name || "").toLowerCase()
+      return name.includes(q)
+    })
+  }, [catalogPackages, packageSearch])
+
   const cartPricing = useMemo(() => {
     const ts = checkoutTaxSettings
     const enableTax = ts?.enableTax !== false
@@ -1184,6 +1482,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     const sRate = ts?.serviceTaxRate ?? 5
     const mRate = ts?.membershipTaxRate ?? sRate
     const prRate = ts?.prepaidWalletTaxRate ?? sRate
+    const pkRate = ts?.packageTaxRate ?? sRate
 
     let lineNetSum = 0
     let taxSum = 0
@@ -1299,6 +1598,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       addLine(net, net, prRate, true)
     })
 
+    packageLines.forEach((l) => {
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const price = Number(l.price) || 0
+      const grossLine = price * q
+      const net = lineNetAfterLineDiscount(price, q, l.discountValue, l.discountIsPercent)
+      subtotalPreTaxGrossBeforeLineDiscounts += netToPreTaxLine(grossLine, pkRate, true)
+      addLine(net, net, pkRate, true)
+    })
+
     return {
       lineNetSum,
       taxSum,
@@ -1314,6 +1622,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     productLines,
     membershipLines,
     prepaidLines,
+    packageLines,
     checkoutTaxSettings,
     catalogServices,
     catalogProducts,
@@ -1381,13 +1690,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           : Math.min(Math.max(0, checkoutCartDiscountValue), toPay)
     const afterPay = Math.max(0, toPay - disc)
     const factor = toPay > 1e-9 ? afterPay / toPay : 0
+    const cartDiscounted = factor < 1 - 1e-9
     const sRate = ts.serviceTaxRate ?? 5
     const mRate = ts.membershipTaxRate ?? sRate
     const prRate = ts.prepaidWalletTaxRate ?? sRate
+    const pkRate = ts.packageTaxRate ?? sRate
 
     for (const l of lines) {
       if (!l.serviceId) continue
       const qty = serviceLineQuantity(l)
+      const undiscountedNet = (Number(l.price) || 0) * qty
       const net = lineNetAfterLineDiscount(
         Number(l.price) || 0,
         qty,
@@ -1397,11 +1709,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       const svc = catalogServices.find((s: any) => String(s._id || s.id) === String(l.serviceId))
       const taxable = !!(svc?.taxApplicable === true)
       const gross = lineGrossPayableForCheckout(net, sRate, taxable, ts)
-      out.push({ type: "service", total: gross * factor })
+      out.push({
+        type: "service",
+        total: gross * factor,
+        isDiscounted: cartDiscounted || net < undiscountedNet - 0.01,
+      })
     }
     for (const l of productLines) {
       if (!l.productId) continue
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const undiscountedNet = (Number(l.price) || 0) * q
       const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
       const p = catalogProducts.find((x: any) => String(x._id || x.id) === String(l.productId))
       let rate = ts.standardProductRate ?? 18
@@ -1427,14 +1744,23 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         }
       }
       const gross = lineGrossPayableForCheckout(net, rate, true, ts)
-      out.push({ type: "product", total: gross * factor })
+      out.push({
+        type: "product",
+        total: gross * factor,
+        isDiscounted: cartDiscounted || net < undiscountedNet - 0.01,
+      })
     }
     for (const l of membershipLines) {
       if (!l.planId) continue
       const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const undiscountedNet = (Number(l.price) || 0) * q
       const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
       const gross = lineGrossPayableForCheckout(net, mRate, true, ts)
-      out.push({ type: "membership", total: gross * factor })
+      out.push({
+        type: "membership",
+        total: gross * factor,
+        isDiscounted: cartDiscounted || net < undiscountedNet - 0.01,
+      })
     }
     for (const l of prepaidLines) {
       if (!l.planId) continue
@@ -1442,6 +1768,18 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
       const gross = lineGrossPayableForCheckout(net, prRate, true, ts)
       out.push({ type: "prepaid_wallet", total: gross * factor })
+    }
+    for (const l of packageLines) {
+      if (!l.packageId) continue
+      const q = Math.max(1, Math.floor(Number(l.quantity) || 1))
+      const undiscountedNet = (Number(l.price) || 0) * q
+      const net = lineNetAfterLineDiscount(Number(l.price) || 0, q, l.discountValue, l.discountIsPercent)
+      const gross = lineGrossPayableForCheckout(net, pkRate, true, ts)
+      out.push({
+        type: "package",
+        total: gross * factor,
+        isDiscounted: cartDiscounted || net < undiscountedNet - 0.01,
+      })
     }
     return out
   }, [
@@ -1453,6 +1791,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     productLines,
     membershipLines,
     prepaidLines,
+    packageLines,
     catalogServices,
     catalogProducts,
   ])
@@ -1567,7 +1906,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     lines.length > 0 ||
     productLines.length > 0 ||
     membershipLines.length > 0 ||
-    prepaidLines.length > 0
+    prepaidLines.length > 0 ||
+    packageLines.length > 0
 
   const clientInitial =
     customer?.name?.trim()?.charAt(0)?.toUpperCase() ||
@@ -1579,6 +1919,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
+    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     toast({
       title: "Cart restored",
       description: "Booking snapshot restored for services, products, and add-ons.",
@@ -1591,6 +1932,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       productLines.find((l) => l.staffId)?.staffId ||
       membershipLines.find((l) => l.staffId)?.staffId ||
       prepaidLines.find((l) => l.staffId)?.staffId ||
+      packageLines.find((l) => l.staffId)?.staffId ||
       staffOptions[0]?.id ||
       ""
     )
@@ -1800,6 +2142,10 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     setPrepaidLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
   }
 
+  function patchPackageLine(lineId: string, patch: Partial<ServiceCheckoutPackageLine>) {
+    setPackageLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
+  }
+
   function addCatalogMembershipPlan(plan: any) {
     const planId = String(plan._id || plan.id || "")
     if (!planId) return
@@ -1876,6 +2222,44 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     )
   }
 
+  function addCatalogPackage(pkg: any) {
+    const packageId = String(pkg._id || pkg.id || "")
+    if (!packageId) return
+    const defaultStaffId = defaultStaffAcrossCart()
+    setPackageLines((prev) => [
+      ...prev,
+      {
+        id: `pkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        packageId,
+        staffId: defaultStaffId,
+        packageName: pkg.name || "Package",
+        price: Number(pkg.total_price) || 0,
+        totalSittings: Number(pkg.total_sittings) || 0,
+        validityDays: Number(pkg.validity_days) || 0,
+        quantity: 1,
+        discountValue: 0,
+        discountIsPercent: true,
+      },
+    ])
+  }
+
+  function removePackageLine(id: string) {
+    setPackageLines((prev) => prev.filter((l) => l.id !== id))
+  }
+
+  function setPackageQuantity(lineId: string, quantity: number) {
+    const q = Math.max(1, Math.floor(quantity) || 1)
+    setPackageLines((prev) =>
+      prev.map((l) => (l.id === lineId ? { ...l, quantity: q } : l))
+    )
+  }
+
+  function setPackageLineStaff(lineId: string, staffId: string) {
+    setPackageLines((prev) =>
+      prev.map((l) => (l.id === lineId ? { ...l, staffId } : l))
+    )
+  }
+
   function validateCheckoutBeforePayment(): boolean {
     if (!customer) {
       toast({ title: "Select a client", description: "Choose a client before checkout.", variant: "destructive" })
@@ -1884,7 +2268,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     const hasExtras =
       productLines.length > 0 ||
       membershipLines.length > 0 ||
-      prepaidLines.length > 0
+      prepaidLines.length > 0 ||
+      packageLines.length > 0
     if (lines.length === 0 && !hasExtras) {
       toast({
         title: "Cart is empty",
@@ -1917,6 +2302,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       toast({
         title: "Assign staff",
         description: "Every prepaid plan line needs a staff member.",
+        variant: "destructive",
+      })
+      return false
+    }
+    if (packageLines.length > 0 && packageLines.some((l) => l.packageId && !l.staffId)) {
+      toast({
+        title: "Assign staff",
+        description: "Every package line needs a staff member.",
         variant: "destructive",
       })
       return false
@@ -2330,6 +2723,23 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               }),
             }
           : {}),
+        ...(packageLines.length > 0
+          ? {
+              packages: packageLines.map((pk) => {
+                const q = Math.max(1, Math.floor(Number(pk.quantity) || 1))
+                return {
+                  packageId: pk.packageId,
+                  staffId: pk.staffId || "",
+                  packageName: pk.packageName,
+                  totalSittings: pk.totalSittings,
+                  validityDays: pk.validityDays,
+                  price: pk.price,
+                  quantity: q,
+                  discount: lineDiscountAsPayloadPercent(pk.price, q, pk.discountValue, pk.discountIsPercent),
+                }
+              }),
+            }
+          : {}),
         ...(checkoutTipLines.filter((t) => t.staffId && t.amount > 0).length > 0
           ? {
               checkoutTips: checkoutTipLines
@@ -2395,6 +2805,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         catalogProducts,
         catalogMembershipPlans,
         catalogPrepaidPlans,
+        catalogPackages,
         checkoutTaxSettings,
         checkoutPaymentConfiguration,
         creditBillChangeToWallet: opts?.creditBillChangeToWallet === true,
@@ -2454,6 +2865,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         productLines: cloneProductLines(productLines),
         membershipLines: cloneMembershipLines(membershipLines),
         prepaidLines: clonePrepaidLines(prepaidLines),
+        packageLines: clonePackageLines(packageLines),
         checkoutTipLines: cloneCheckoutTipLines(checkoutTipLines),
         checkoutCartDiscountType,
         checkoutCartDiscountValue,
@@ -2487,6 +2899,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
+    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     clearCheckoutExtras()
     setCancelDraftDialogOpen(false)
     toast({
@@ -2506,6 +2919,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     setProductLines(cloneProductLines(productSnapshotRef.current))
     setMembershipLines(cloneMembershipLines(membershipSnapshotRef.current))
     setPrepaidLines(clonePrepaidLines(prepaidSnapshotRef.current))
+    setPackageLines(clonePackageLines(packageSnapshotRef.current))
     clearCheckoutExtras()
     setCancelSaleDialogOpen(false)
     onOpenChange(false)
@@ -2528,8 +2942,60 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     return tags
   }, [customer?.totalSpent, customer?.totalVisits])
 
-  const clientProfileId = customer?._id || customer?.id
   const showClientActionsMenu = Boolean(clientProfileId) || Boolean(onCustomerChange)
+
+  const activeMembershipPlanName = useMemo(
+    () => getActiveMembershipPlanName(checkoutMembershipData),
+    [checkoutMembershipData]
+  )
+
+  const inlineClientPickerOptions = useMemo(() => {
+    const catalog = clientStore.getClients()
+    const q = changeClientQuery.trim()
+    if (q.length < 2) {
+      return customerDropdownList(catalog, q)
+    }
+    const walkIn = findWalkInClient(catalog)
+    const base = prependWalkInIfMissing(walkIn, changeClientResults)
+    return customerDropdownList(base, q)
+  }, [changeClientQuery, changeClientResults, clientDirEpoch])
+
+  const openInlineClientPicker = useCallback(() => {
+    setInlineClientPickerOpen(true)
+    void clientStore.loadClients().finally(() => bumpClientDir())
+    if (!changeClientQuery.trim()) {
+      void clientStore.preloadRecent().finally(() => bumpClientDir())
+    }
+  }, [changeClientQuery])
+
+  const beginChangeClientProfile = useCallback(() => {
+    setChangeClientQuery("")
+    setChangeClientResults([])
+    setIsChangingClientProfile(true)
+    setInlineClientPickerOpen(true)
+    void clientStore.loadClients().finally(() => bumpClientDir())
+    requestAnimationFrame(() => clientSearchInputRef.current?.focus())
+  }, [])
+
+  const cancelChangeClientProfile = useCallback(() => {
+    setIsChangingClientProfile(false)
+    setInlineClientPickerOpen(false)
+    setChangeClientQuery("")
+    setChangeClientResults([])
+  }, [])
+
+  const handleCreateNewClient = useCallback(() => {
+    const q = changeClientQuery.trim()
+    const isPhone = /^\d+$/.test(q)
+    setNewClient({
+      firstName: isPhone ? "" : q,
+      lastName: "",
+      phone: isPhone ? q.slice(0, 10) : "",
+      email: "",
+    })
+    setShowNewClientDialog(true)
+    setInlineClientPickerOpen(false)
+  }, [changeClientQuery])
 
   const pickCheckoutClient = useCallback(
     async (c: Client) => {
@@ -2537,13 +3003,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       const nextId = String(c._id || c.id || "")
       const curId = String(customer?._id || customer?.id || "")
       if (nextId && curId && nextId === curId) {
-        setChangeClientOpen(false)
+        setIsChangingClientProfile(false)
+        setInlineClientPickerOpen(false)
         return
       }
       setChangingClient(true)
       try {
         await onCustomerChange(c)
-        setChangeClientOpen(false)
+        setIsChangingClientProfile(false)
+        setInlineClientPickerOpen(false)
         setChangeClientQuery("")
         setChangeClientResults([])
       } finally {
@@ -2552,6 +3020,77 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     },
     [onCustomerChange, customer]
   )
+
+  const handleSaveNewClient = useCallback(async () => {
+    if (!newClient.firstName.trim()) {
+      toast({
+        title: "Missing information",
+        description: "Please provide a first name.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const phoneNumber = (newClient.phone || changeClientQuery.trim()).replace(/\D/g, "").slice(0, 10)
+    if (!/^\d{10}$/.test(phoneNumber)) {
+      toast({
+        title: "Invalid phone number",
+        description: "Phone number must be exactly 10 digits.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setCreatingClient(true)
+    try {
+      const name = newClient.lastName.trim()
+        ? `${newClient.firstName.trim()} ${newClient.lastName.trim()}`
+        : newClient.firstName.trim()
+      const success = await clientStore.addClient({
+        id: `new-${Date.now()}`,
+        name,
+        phone: phoneNumber,
+        email: newClient.email.trim() || undefined,
+        status: "active",
+      })
+
+      if (!success) {
+        toast({
+          title: "Error",
+          description: "Failed to create client. Please try again.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      bumpClientDir()
+      const createdClient = clientStore
+        .getClients()
+        .find(
+          (c) =>
+            c.phone === phoneNumber && c._id && !String(c._id).startsWith("new-")
+        )
+
+      if (createdClient) {
+        await pickCheckoutClient(createdClient)
+      }
+
+      setNewClient({ firstName: "", lastName: "", phone: "", email: "" })
+      setShowNewClientDialog(false)
+      toast({
+        title: "Client created",
+        description: "New client has been added and selected for checkout.",
+      })
+    } catch {
+      toast({
+        title: "Error",
+        description: "Failed to create client. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setCreatingClient(false)
+    }
+  }, [newClient, changeClientQuery, toast, pickCheckoutClient])
 
   const editingServiceLine = editingServiceLineId
     ? lines.find((l) => l.id === editingServiceLineId)
@@ -3062,6 +3601,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                     className="pl-9 rounded-lg bg-background"
                   />
                 </div>
+              ) : category === "packages" ? (
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search packages"
+                    value={packageSearch}
+                    onChange={(e) => setPackageSearch(e.target.value)}
+                    className="pl-9 rounded-lg bg-background"
+                  />
+                </div>
               ) : null}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {CATEGORY_TILES.map(({ id, label, Icon, comingSoon }) => (
@@ -3458,6 +4007,70 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   </>
                 )}
 
+                {category === "packages" && (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-foreground">Packages</h3>
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-violet-600 hover:text-violet-700 underline-offset-2 hover:underline"
+                        onClick={() =>
+                          setPackageLines(clonePackageLines(packageSnapshotRef.current))
+                        }
+                      >
+                        Clear packages
+                      </button>
+                    </div>
+                    {loadingPackages ? (
+                      <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading packages…
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {filteredPackages.length === 0 ? (
+                          <p className="text-sm text-muted-foreground col-span-full py-6 text-center">
+                            No packages match your search.
+                          </p>
+                        ) : (
+                          filteredPackages.map((pkg: any) => {
+                            const id = String(pkg._id || pkg.id)
+                            const price = Number(pkg.total_price) || 0
+                            const sittings = Number(pkg.total_sittings) || 0
+                            const days = Number(pkg.validity_days) || 0
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                onClick={() => addCatalogPackage(pkg)}
+                                className={cn(
+                                  "flex gap-3 rounded-xl border border-border/80 bg-background p-3 text-left",
+                                  "hover:border-amber-400/90 hover:bg-amber-50/40 transition-colors"
+                                )}
+                              >
+                                <span
+                                  className="w-1 self-stretch rounded-full bg-amber-500 shrink-0"
+                                  aria-hidden
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-medium text-foreground truncate">
+                                    {pkg.name || "Package"}
+                                  </div>
+                                  <div className="text-sm text-muted-foreground">
+                                    ₹{price}
+                                    {sittings ? ` · ${sittings} sittings` : ""}
+                                    {days ? ` · ${days} days` : ""}
+                                  </div>
+                                </div>
+                              </button>
+                            )
+                          })
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
                 {category === "giftVoucher" && (
                   <div className="space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
@@ -3519,68 +4132,248 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
             )}
           >
             <div className="p-4 border-b border-border/60 space-y-3 shrink-0">
-              <div className="flex gap-3">
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <p className="font-semibold text-foreground truncate">{customer?.name || "No client"}</p>
-                  <p className="text-xs text-muted-foreground truncate">{customer?.email || customer?.phone || "—"}</p>
+              {showClientSearchBox ? (
+                <div className="relative checkout-client-search-container">
+                  <div
+                    className="relative flex w-full items-center gap-2 rounded-full border border-violet-200/70 bg-gradient-to-r from-violet-50/80 to-slate-50/60 px-3 py-2 shadow-sm transition-colors focus-within:border-violet-300/80 focus-within:ring-2 focus-within:ring-violet-400/40"
+                    onClick={openInlineClientPicker}
+                  >
+                    <Search className="h-4 w-4 shrink-0 text-muted-foreground pointer-events-none" aria-hidden />
+                    <Input
+                      ref={clientSearchInputRef}
+                      className="h-7 flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0 focus-visible:ring-offset-0"
+                      placeholder={
+                        isChangingClientProfile
+                          ? "Search to change client…"
+                          : "Search client by name, phone, or email…"
+                      }
+                      value={changeClientQuery}
+                      onChange={(e) => {
+                        setChangeClientQuery(e.target.value)
+                        setInlineClientPickerOpen(true)
+                      }}
+                      onFocus={openInlineClientPicker}
+                      disabled={changingClient}
+                      autoFocus={!isChangingClientProfile}
+                    />
+                    {isChangingClientProfile ? (
+                      <button
+                        type="button"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-violet-100/80 hover:text-foreground"
+                        aria-label="Cancel change client"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          cancelChangeClientProfile()
+                        }}
+                      >
+                        <X className="h-4 w-4" aria-hidden />
+                      </button>
+                    ) : (
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 shrink-0 text-muted-foreground opacity-70 transition-transform",
+                          inlineClientPickerOpen && "rotate-180"
+                        )}
+                        aria-hidden
+                      />
+                    )}
+                  </div>
+                  {inlineClientPickerOpen ? (
+                    <div className="absolute top-full left-0 right-0 z-20 mt-1.5 max-h-[220px] overflow-y-auto rounded-2xl border border-violet-200/60 bg-background shadow-lg">
+                      {changeClientSearching && changeClientQuery.trim().length >= 2 ? (
+                        <div className="flex items-center justify-center gap-2 px-3 py-4 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden />
+                          Searching…
+                        </div>
+                      ) : inlineClientPickerOptions.length === 0 ? (
+                        changeClientQuery.trim().length >= 2 ? (
+                          <button
+                            type="button"
+                            disabled={changingClient || creatingClient}
+                            className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors rounded-2xl hover:bg-violet-50/80 disabled:pointer-events-none disabled:opacity-50"
+                            onClick={handleCreateNewClient}
+                          >
+                            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+                              <Plus className="h-4 w-4 text-emerald-700" aria-hidden />
+                            </span>
+                            <span className="min-w-0 font-medium text-foreground">
+                              Add client: &quot;{changeClientQuery.trim()}&quot;
+                            </span>
+                          </button>
+                        ) : (
+                          <p className="px-3 py-4 text-center text-sm text-muted-foreground">No clients found.</p>
+                        )
+                      ) : (
+                        inlineClientPickerOptions.map((c) => {
+                          const id = String(c._id || c.id || "")
+                          return (
+                            <button
+                              key={id || c.name}
+                              type="button"
+                              disabled={changingClient}
+                              className="w-full px-3 py-2.5 text-left text-sm transition-colors first:rounded-t-2xl last:rounded-b-2xl hover:bg-violet-50/80 disabled:pointer-events-none disabled:opacity-50"
+                              onClick={() => void pickCheckoutClient(c)}
+                            >
+                              <span className="block truncate font-medium text-foreground">{c.name || "Client"}</span>
+                              <span className="block truncate text-xs text-muted-foreground">
+                                {formatClientPhoneForDisplay(c)}
+                              </span>
+                            </button>
+                          )
+                        })
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-                <Avatar className="h-11 w-11 border border-violet-200/80 shrink-0">
-                  <AvatarFallback className="bg-violet-100 text-violet-800 text-sm font-semibold">
-                    {clientInitial}
-                  </AvatarFallback>
-                </Avatar>
-              </div>
-              {visitBadges.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {visitBadges.map((t) => (
+              ) : (
+                <>
+                  {showClientActionsMenu ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2.5 rounded-full border border-violet-200/70 bg-gradient-to-r from-violet-50/80 to-slate-50/60 px-3 py-2 shadow-sm text-left transition-colors hover:border-violet-300/80 hover:from-violet-50 hover:to-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40"
+                          aria-label="Client actions"
+                        >
+                          <Avatar className="h-9 w-9 border border-violet-200/80 shrink-0">
+                            <AvatarFallback className="bg-violet-100 text-violet-800 text-sm font-semibold">
+                              {clientInitial}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-semibold text-foreground truncate text-sm leading-tight">
+                              {customer?.name || "Walk-in"}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground truncate leading-tight">
+                              {customer?.email || customer?.phone || "—"}
+                            </p>
+                          </div>
+                          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground opacity-70" aria-hidden />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-52">
+                        {clientProfileId ? (
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              setClientDetailsDrawerOpen(true)
+                            }}
+                          >
+                            View client profile
+                          </DropdownMenuItem>
+                        ) : null}
+                        {clientProfileId && onCustomerChange ? <DropdownMenuSeparator /> : null}
+                        {onCustomerChange ? (
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              beginChangeClientProfile()
+                            }}
+                          >
+                            Change client profile
+                          </DropdownMenuItem>
+                        ) : null}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : (
+                    <div className="flex items-center gap-2.5 rounded-full border border-violet-200/70 bg-gradient-to-r from-violet-50/80 to-slate-50/60 px-3 py-2 shadow-sm">
+                      <Avatar className="h-9 w-9 border border-violet-200/80 shrink-0">
+                        <AvatarFallback className="bg-violet-100 text-violet-800 text-sm font-semibold">
+                          {clientInitial}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-foreground truncate text-sm leading-tight">
+                          {customer?.name || "Walk-in"}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground truncate leading-tight">
+                          {customer?.email || customer?.phone || "—"}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    {visitBadges.map((t) => (
+                      <span
+                        key={t.label}
+                        className={cn(
+                          "inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-medium",
+                          t.className
+                        )}
+                      >
+                        {t.label}
+                      </span>
+                    ))}
+                    <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50/80 px-2.5 py-1 text-[11px]">
+                      <span className="shrink-0 text-muted-foreground">Visits</span>
+                      <span className="font-semibold tabular-nums text-foreground">
+                        {checkoutClientStats?.loading ? (
+                          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" aria-hidden />
+                        ) : (
+                          checkoutClientStats?.totalVisits ?? customer?.totalVisits ?? 0
+                        )}
+                      </span>
+                    </span>
+                    <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50/80 px-2.5 py-1 text-[11px]">
+                      <span className="shrink-0 text-muted-foreground">Revenue</span>
+                      <span className="min-w-0 truncate font-semibold tabular-nums text-foreground">
+                        {checkoutClientStats?.loading ? (
+                          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" aria-hidden />
+                        ) : (
+                          formatAmount(checkoutClientStats?.totalRevenue ?? customer?.totalSpent ?? 0)
+                        )}
+                      </span>
+                    </span>
                     <span
-                      key={t.label}
                       className={cn(
-                        "text-[10px] font-medium px-2 py-0.5 rounded-full border",
-                        t.className
+                        "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]",
+                        (checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0) > 0
+                          ? "border-red-200/80 bg-red-50/80"
+                          : "border-slate-200/80 bg-slate-50/80"
                       )}
                     >
-                      {t.label}
+                      <span
+                        className={cn(
+                          "shrink-0",
+                          (checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0) > 0
+                            ? "text-red-700/90"
+                            : "text-muted-foreground"
+                        )}
+                      >
+                        Dues
+                      </span>
+                      <span
+                        className={cn(
+                          "min-w-0 truncate font-semibold tabular-nums",
+                          (checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0) > 0
+                            ? "text-red-900"
+                            : "text-foreground"
+                        )}
+                      >
+                        {checkoutClientStats?.loading ? (
+                          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" aria-hidden />
+                        ) : (
+                          formatAmount(checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0)
+                        )}
+                      </span>
                     </span>
-                  ))}
-                </div>
-              ) : null}
-              {showClientActionsMenu ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className="h-7 rounded-full px-3 text-[11px] font-medium gap-1 w-fit shrink-0 border-border/70 shadow-none hover:bg-muted/60"
-                    >
-                      Actions
-                      <ChevronDown className="h-3 w-3 opacity-60 shrink-0" aria-hidden />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-52">
-                    {clientProfileId ? (
-                      <DropdownMenuItem
-                        onSelect={() => {
-                          setClientDetailsDrawerOpen(true)
-                        }}
-                      >
-                        View client profile
-                      </DropdownMenuItem>
-                    ) : null}
-                    {clientProfileId && onCustomerChange ? <DropdownMenuSeparator /> : null}
-                    {onCustomerChange ? (
-                      <DropdownMenuItem
-                        onSelect={() => {
-                          setChangeClientQuery("")
-                          setChangeClientResults([])
-                          setChangeClientOpen(true)
-                        }}
-                      >
-                        Change client profile
-                      </DropdownMenuItem>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : null}
+                    <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50/80 px-2.5 py-1 text-[11px]">
+                      <span className="shrink-0 text-muted-foreground">Membership</span>
+                      <span className="min-w-0 truncate font-semibold text-foreground">
+                        {activeMembershipPlanName === "NA" ? "None" : activeMembershipPlanName}
+                      </span>
+                      {activeMembershipPlanName !== "NA" ? (
+                        <span className="min-w-0 truncate text-[10px] text-muted-foreground">
+                          {checkoutMembershipData?.subscription?.status === "ACTIVE" &&
+                          !checkoutMembershipData?.subscription?.expiryDate
+                            ? "· No end date"
+                            : checkoutMembershipData?.subscription?.expiryDate
+                              ? `· till ${format(new Date(checkoutMembershipData.subscription.expiryDate), "dd MMM yyyy")}`
+                              : null}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
 
             <ScrollArea className="flex-1 min-h-0">
@@ -4224,6 +5017,162 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                     </div>
                   )
                 })}
+                {packageLines.map((line) => {
+                  const staffName =
+                    staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
+                  const qty = Math.max(1, Math.floor(Number(line.quantity) || 1))
+                  const unit = Number(line.price) || 0
+                  const discVal = Number(line.discountValue) || 0
+                  const discIsPct = line.discountIsPercent !== false
+                  const lineTotal = lineNetAfterLineDiscount(unit, qty, discVal, discIsPct)
+                  const sittings = Number(line.totalSittings) || 0
+                  const staffTriggerId = `cart-package-staff-${line.id}`
+                  return (
+                    <div
+                      key={line.id}
+                      className={cn(
+                        "group flex gap-2.5 rounded-xl border border-border/70 bg-muted/15 p-3 shadow-sm",
+                        "transition-shadow hover:border-border hover:shadow-md"
+                      )}
+                    >
+                      <span className="w-1 self-stretch shrink-0 rounded-full bg-amber-500" aria-hidden />
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="flex min-w-0 items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium leading-snug text-foreground">
+                              {line.packageName}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Package · ₹
+                              {unit.toLocaleString("en-IN", { maximumFractionDigits: 2 })} each
+                              {sittings ? ` · ${sittings} sittings` : ""} · {staffName}
+                              {qty > 1 ? ` · ×${qty}` : ""}
+                            </p>
+                          </div>
+                          <div className="relative flex min-h-8 min-w-[4.5rem] shrink-0 items-center justify-end gap-0.5">
+                            <p
+                              className={cn(
+                                "text-sm font-semibold tabular-nums text-foreground transition-opacity duration-150",
+                                "max-md:opacity-100",
+                                "md:opacity-100 md:group-hover:opacity-0 md:group-hover:invisible",
+                                "md:group-focus-within:opacity-0 md:group-focus-within:invisible"
+                              )}
+                            >
+                              ₹{lineTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </p>
+                            <div
+                              className={cn(
+                                "flex shrink-0 items-center gap-0.5 transition-opacity duration-150",
+                                "max-md:opacity-100",
+                                "md:pointer-events-none md:absolute md:right-0 md:top-1/2 md:-translate-y-1/2",
+                                "md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100",
+                                "md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
+                              )}
+                            >
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  document.getElementById(staffTriggerId)?.focus()
+                                }}
+                                aria-label="Focus staff for this line"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:text-destructive"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  removePackageLine(line.id)
+                                }}
+                                aria-label="Remove package"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                          <div className="flex items-center gap-2">
+                            <div className="flex h-8 items-center gap-0.5 rounded-lg border border-border/80 bg-background">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 shrink-0 rounded-md p-0"
+                                onClick={() => setPackageQuantity(line.id, qty - 1)}
+                                disabled={qty <= 1}
+                                aria-label="Decrease quantity"
+                              >
+                                <Minus className="h-3.5 w-3.5" />
+                              </Button>
+                              <span className="w-8 text-center text-sm font-semibold tabular-nums">{qty}</span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 shrink-0 rounded-md p-0"
+                                onClick={() => setPackageQuantity(line.id, qty + 1)}
+                                aria-label="Increase quantity"
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                            <CheckoutLineDiscountRow
+                              discountValue={discVal}
+                              discountIsPercent={discIsPct}
+                              onDiscountValueChange={(v) =>
+                                patchPackageLine(line.id, { discountValue: v })
+                              }
+                              onSetPercentMode={() =>
+                                patchPackageLine(line.id, {
+                                  discountIsPercent: true,
+                                  discountValue: 0,
+                                })
+                              }
+                              onSetFixedMode={() =>
+                                patchPackageLine(line.id, {
+                                  discountIsPercent: false,
+                                  discountValue: 0,
+                                })
+                              }
+                            />
+                            {staffOptions.length > 0 ? (
+                              <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
+                                <Select
+                                  value={line.staffId || undefined}
+                                  onValueChange={(v) => setPackageLineStaff(line.id, v)}
+                                >
+                                  <SelectTrigger
+                                    id={staffTriggerId}
+                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
+                                  >
+                                    <SelectValue placeholder="Staff" />
+                                  </SelectTrigger>
+                                  <SelectContent position="popper" className={cartSelectContentClass}>
+                                    {staffOptions.map((s) => (
+                                      <SelectItem key={s.id} value={s.id}>
+                                        {s.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </ScrollArea>
 
@@ -4560,6 +5509,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                       (lines.some((l) => l.serviceId && !l.staffId) || lines.some((l) => !l.serviceId))) ||
                     (membershipLines.length > 0 && membershipLines.some((l) => !l.staffId)) ||
                     (prepaidLines.length > 0 && prepaidLines.some((l) => !l.staffId)) ||
+                    (packageLines.length > 0 && packageLines.some((l) => !l.staffId)) ||
                     (productLines.length > 0 && productLines.some((l) => !l.staffId))
                   }
                   onClick={() => void continueToPayment()}
@@ -4579,6 +5529,84 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
             </div>
           </div>
         </div>
+  )
+
+  const newClientDialog = (
+    <Dialog open={showNewClientDialog} onOpenChange={setShowNewClientDialog}>
+      <DialogContent className="z-[200] gap-4 sm:max-w-md" overlayClassName="z-[190]" aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle className="text-base font-semibold tracking-tight">Create new client</DialogTitle>
+          <DialogDescription>Add a new client to use for this checkout.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-1">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="checkout-new-client-first">First name *</Label>
+              <Input
+                id="checkout-new-client-first"
+                value={newClient.firstName}
+                onChange={(e) => setNewClient({ ...newClient, firstName: e.target.value })}
+                disabled={creatingClient}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="checkout-new-client-last">Last name</Label>
+              <Input
+                id="checkout-new-client-last"
+                value={newClient.lastName}
+                onChange={(e) => setNewClient({ ...newClient, lastName: e.target.value })}
+                disabled={creatingClient}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="checkout-new-client-phone">Phone *</Label>
+            <Input
+              id="checkout-new-client-phone"
+              type="tel"
+              placeholder="10-digit phone number"
+              maxLength={10}
+              value={newClient.phone}
+              onChange={(e) => {
+                const value = e.target.value.replace(/\D/g, "").slice(0, 10)
+                setNewClient({ ...newClient, phone: value })
+              }}
+              disabled={creatingClient}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="checkout-new-client-email">Email</Label>
+            <Input
+              id="checkout-new-client-email"
+              type="email"
+              value={newClient.email}
+              onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
+              disabled={creatingClient}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setShowNewClientDialog(false)}
+            disabled={creatingClient}
+          >
+            Cancel
+          </Button>
+          <Button type="button" onClick={() => void handleSaveNewClient()} disabled={creatingClient}>
+            {creatingClient ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                Creating…
+              </>
+            ) : (
+              "Create client"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 
   const cancelDraftConfirmDialog = (
@@ -4605,88 +5633,6 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     </AlertDialog>
   )
 
-  const changeClientDialog = (
-    <Dialog
-      open={changeClientOpen}
-      onOpenChange={(next) => {
-        setChangeClientOpen(next)
-        if (!next) {
-          setChangeClientQuery("")
-          setChangeClientResults([])
-        }
-      }}
-    >
-      <DialogContent
-        className="z-[200] gap-4 sm:max-w-md max-h-[min(90vh,520px)] flex flex-col"
-        overlayClassName="z-[190]"
-        aria-describedby={undefined}
-      >
-        <DialogHeader>
-          <DialogTitle className="text-base font-semibold tracking-tight">Change client profile</DialogTitle>
-          <DialogDescription>
-            Search by name, phone, or email, then select the client this checkout should use.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex min-h-0 flex-1 flex-col space-y-3">
-          <div className="relative shrink-0">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-            <Input
-              className="rounded-lg pl-9"
-              placeholder="Search clients…"
-              value={changeClientQuery}
-              onChange={(e) => setChangeClientQuery(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <ScrollArea className="max-h-[280px] min-h-0 rounded-lg border border-border/70">
-            <div className="p-1">
-              {changeClientSearching ? (
-                <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden />
-                  Searching…
-                </div>
-              ) : changeClientQuery.trim().length < 2 ? (
-                <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  Type at least 2 characters to search.
-                </p>
-              ) : changeClientResults.length === 0 ? (
-                <p className="px-3 py-6 text-center text-sm text-muted-foreground">No clients found.</p>
-              ) : (
-                changeClientResults.map((c) => {
-                  const id = String(c._id || c.id || "")
-                  return (
-                    <button
-                      key={id || c.name}
-                      type="button"
-                      disabled={changingClient}
-                      className="w-full rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/80 disabled:pointer-events-none disabled:opacity-50"
-                      onClick={() => void pickCheckoutClient(c)}
-                    >
-                      <span className="block truncate font-medium text-foreground">{c.name || "Client"}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {c.phone || c.email || "—"}
-                      </span>
-                    </button>
-                  )
-                })
-              )}
-            </div>
-          </ScrollArea>
-        </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setChangeClientOpen(false)}
-            disabled={changingClient}
-          >
-            Cancel
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-
   const pinServicePickerDialog = (
     <Dialog
       open={pinPickerOpen}
@@ -4703,7 +5649,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         <DialogHeader>
           <DialogTitle className="text-base font-semibold tracking-tight">Add a quick-access service</DialogTitle>
           <DialogDescription>
-            Pin frequently-sold services so they appear beside the Top 10 next time.
+            Pin frequently-sold services so they appear beside your usual quick picks next time.
           </DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-1 flex-col space-y-3">
@@ -5205,7 +6151,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">{mainColumns}</div>
         </div>
         {serviceLineEditDialog}
-        {changeClientDialog}
+        {newClientDialog}
         {pinServicePickerDialog}
         {cancelDraftConfirmDialog}
         {checkoutPartialPaymentConfirmDialog}
@@ -5240,7 +6186,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         </DialogContent>
       </Dialog>
       {serviceLineEditDialog}
-      {changeClientDialog}
+      {newClientDialog}
       {pinServicePickerDialog}
       {cancelDraftConfirmDialog}
       {checkoutPartialPaymentConfirmDialog}

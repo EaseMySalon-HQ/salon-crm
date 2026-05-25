@@ -157,9 +157,10 @@ export function BlockTimeModal({
         onOpenChange(false)
         onSuccess?.()
       } else {
+        const failed = res as { error?: string; errorDetail?: string }
         toast({
           title: "Cannot Block Time",
-          description: res?.error || res?.errorDetail || "Failed to block time. Please try again.",
+          description: failed?.error || failed?.errorDetail || "Failed to block time. Please try again.",
           variant: "destructive",
         })
       }

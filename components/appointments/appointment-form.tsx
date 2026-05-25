@@ -47,9 +47,9 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import {
   Dialog,
@@ -244,8 +244,6 @@ interface SelectedService {
   staffLocked?: boolean
   /** Per-service start time in 24h "HH:mm". Only used in custom scheduling mode. */
   startTime?: string
-  /** Row was expanded from a catalog bundle — checkout skips membership auto-discount on these lines. */
-  fromBundle?: boolean
 }
 
 /** Stable snapshot for detecting unsaved appointment edits (drawer + page). */
@@ -455,6 +453,8 @@ export interface AppointmentFormProps {
   resumeServiceCheckoutDraft?: boolean
   /** Storage token from chip; required to load the correct draft when several exist. */
   resumeSavedDraftToken?: string
+  /** Open checkout overlay immediately — hide appointment service picker (Quick Sale from calendar). */
+  openCheckoutDirectly?: boolean
   /** "drawer" = compact layout for right-side drawer; "page" = full card layout for standalone page */
   variant?: "page" | "drawer"
   /** Drawer only: render a status control in the sheet header (right side). */
@@ -484,6 +484,7 @@ export function AppointmentForm({
   initialClientIdForPrefill,
   resumeServiceCheckoutDraft = false,
   resumeSavedDraftToken,
+  openCheckoutDirectly = false,
   variant = "page",
   onDrawerHeaderEndChange,
   onDrawerHeaderStatusToneChange,
@@ -1312,6 +1313,7 @@ export function AppointmentForm({
         price: number
         staffLocked: boolean
         startTime?: string
+        date?: string
       }
 
       const servicesPayload: ServiceRow[] = []
@@ -2800,12 +2802,10 @@ export function AppointmentForm({
             {/* Services Section */}
             <div id="appointment-services-section" className={cn("space-y-4", isDrawer ? "mt-6" : "mt-12")}>
               <div className="space-y-1">
-                <div>
-                  <h3 className={cn("font-semibold text-slate-800 flex items-center gap-2", isDrawer ? "text-base" : "text-lg")}>
-                    <FileText className={cn("text-slate-600", isDrawer ? "h-4 w-4" : "h-5 w-5")} />
-                    Services *
-                  </h3>
-                </div>
+                <h3 className={cn("font-semibold text-slate-800 flex items-center gap-2", isDrawer ? "text-base" : "text-lg")}>
+                  <FileText className={cn("text-slate-600", isDrawer ? "h-4 w-4" : "h-5 w-5")} />
+                  Services *
+                </h3>
                 {!isDrawer && <p className="text-sm text-slate-500">Add services and assign staff members for this appointment</p>}
               </div>
 
@@ -3098,7 +3098,7 @@ export function AppointmentForm({
                                 ) : null}
                               </div>
                             </div>
-                            <div className="text-slate-700 tabular-nums shrink-0">
+                            <div className="text-slate-700 tabular-nums shrink-0 text-right">
                               {fmt(startM)} <span className="text-slate-400">–</span> {fmt(endM)}
                             </div>
                           </div>
@@ -3381,18 +3381,28 @@ export function AppointmentForm({
     <>
       {isDrawer ? (
         <div className="relative flex flex-col min-h-0 flex-1">
-          <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
-            {formContent}
-          </div>
-          <div className="shrink-0">
-            {selectedServices.length > 0 && (
-              <div className="flex items-center justify-between gap-4 py-3 text-sm border-b border-border/60">
-                <span className="text-slate-600">Total Duration: <span className="font-medium text-slate-800">{calculateTotalDuration()} min</span></span>
-                <span className="text-slate-600">Total Amount: <span className="font-semibold text-slate-800">₹{calculateTotalAmount()}</span></span>
+          {!(openCheckoutDirectly && serviceCheckoutOpen) ? (
+            <>
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-6">{formContent}</div>
+              <div className="shrink-0">
+                {selectedServices.length > 0 && (
+                  <div className="flex items-center justify-between gap-4 py-3 text-sm border-b border-border/60">
+                    <span className="text-slate-600">
+                      Total Duration:{" "}
+                      <span className="font-medium text-slate-800">{calculateTotalDuration()} min</span>
+                    </span>
+                    <span className="text-slate-600">
+                      Total Amount:{" "}
+                      <span className="font-semibold text-slate-800">₹{calculateTotalAmount()}</span>
+                    </span>
+                  </div>
+                )}
+                {footerButtons}
               </div>
-            )}
-            {footerButtons}
-          </div>
+            </>
+          ) : (
+            <div className="flex-1 min-h-0" aria-hidden />
+          )}
           <ServiceCheckoutDialog
             ref={serviceCheckoutRef}
             variant="drawer"
@@ -3413,7 +3423,7 @@ export function AppointmentForm({
             resumeSavedDraftToken={resumeSavedDraftToken ?? null}
             onCustomerChange={handleCheckoutCustomerChange}
             ensureAppointmentBookingBeforeCheckout={
-              isEditMode ? undefined : ensureAppointmentBookingBeforeCheckout
+              isEditMode || openCheckoutDirectly ? undefined : ensureAppointmentBookingBeforeCheckout
             }
             onSuccessfulCheckout={onSuccess}
             onPaymentStepChange={onServiceCheckoutPaymentStepChange}
