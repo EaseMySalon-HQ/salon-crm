@@ -78,7 +78,8 @@ export function buildSalePaymentModeFromCheckout(opts: {
     modes.push("Reward Point")
   }
   if (modes.length === 0) {
-    return pts > 0 && disc > 0.005 ? "Reward Point" : "Cash"
+    if (pts > 0 && disc > 0.005) return "Reward Point"
+    return ""
   }
   return modes.join(", ")
 }

@@ -219,6 +219,26 @@ export type ServiceCheckoutPackageLine = {
   discountIsPercent?: boolean
 }
 
+type CatalogCartLineKind = "membership" | "prepaid" | "package"
+
+type CartLineEditDraft = {
+  price: number
+  quantity: number
+  staffId: string
+}
+
+function cartLineEditDraftFrom(line: {
+  price: number
+  quantity: number
+  staffId: string
+}): CartLineEditDraft {
+  return {
+    price: Math.max(0, Number(line.price) || 0),
+    quantity: Math.max(1, Math.floor(Number(line.quantity) || 1)),
+    staffId: line.staffId || "",
+  }
+}
+
 function formatDurationShort(minutes: number): string {
   const m = Math.max(0, Math.round(minutes || 0))
   if (m < 60) return `${m} min`
@@ -822,6 +842,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     quantity: number
     staffId: string
   } | null>(null)
+
+  const [editingProductLineId, setEditingProductLineId] = useState<string | null>(null)
+  const [productEditDraft, setProductEditDraft] = useState<CartLineEditDraft | null>(null)
+
+  const [editingCatalogLineKind, setEditingCatalogLineKind] =
+    useState<CatalogCartLineKind | null>(null)
+  const [editingCatalogLineId, setEditingCatalogLineId] = useState<string | null>(null)
+  const [catalogLineEditDraft, setCatalogLineEditDraft] = useState<CartLineEditDraft | null>(null)
 
   const [cancelDraftDialogOpen, setCancelDraftDialogOpen] = useState(false)
   const [hasPersistedDraft, setHasPersistedDraft] = useState(false)
@@ -2046,6 +2074,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   function openServiceEdit(lineId: string) {
     const line = lines.find((l) => l.id === lineId)
     if (!line) return
+    closeProductEdit()
+    closeCatalogLineEdit()
     setEditingServiceLineId(lineId)
     setServiceEditDraft({
       price: Math.max(0, Number(line.price) || 0),
@@ -2132,6 +2162,101 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
   function patchProductLine(lineId: string, patch: Partial<ServiceCheckoutProductLine>) {
     setProductLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
+  }
+
+  function openProductEdit(lineId: string) {
+    const line = productLines.find((l) => l.id === lineId)
+    if (!line) return
+    closeServiceEdit()
+    closeCatalogLineEdit()
+    setEditingProductLineId(lineId)
+    setProductEditDraft(cartLineEditDraftFrom(line))
+  }
+
+  function closeProductEdit() {
+    setEditingProductLineId(null)
+    setProductEditDraft(null)
+  }
+
+  function applyProductEdit() {
+    if (!editingProductLineId || !productEditDraft) return
+    setProductLines((prev) =>
+      prev.map((l) => {
+        if (l.id !== editingProductLineId) return l
+        const cap = maxProductLineQtyFromStock(l, prev, catalogProducts)
+        const q = Math.min(
+          Math.max(1, Math.floor(productEditDraft.quantity) || 1),
+          Math.max(1, cap)
+        )
+        return {
+          ...l,
+          price: Math.max(0, Number(productEditDraft.price) || 0),
+          quantity: q,
+          staffId: productEditDraft.staffId,
+        }
+      })
+    )
+    closeProductEdit()
+  }
+
+  function removeProductFromEditDialog() {
+    if (!editingProductLineId) return
+    removeProductLine(editingProductLineId)
+    closeProductEdit()
+  }
+
+  function closeCatalogLineEdit() {
+    setEditingCatalogLineKind(null)
+    setEditingCatalogLineId(null)
+    setCatalogLineEditDraft(null)
+  }
+
+  function openCatalogLineEdit(kind: CatalogCartLineKind, lineId: string) {
+    closeServiceEdit()
+    closeProductEdit()
+    let line:
+      | ServiceCheckoutMembershipLine
+      | ServiceCheckoutPrepaidLine
+      | ServiceCheckoutPackageLine
+      | undefined
+    if (kind === "membership") line = membershipLines.find((l) => l.id === lineId)
+    else if (kind === "prepaid") line = prepaidLines.find((l) => l.id === lineId)
+    else line = packageLines.find((l) => l.id === lineId)
+    if (!line) return
+    setEditingCatalogLineKind(kind)
+    setEditingCatalogLineId(lineId)
+    setCatalogLineEditDraft(cartLineEditDraftFrom(line))
+  }
+
+  function applyCatalogLineEdit() {
+    if (!editingCatalogLineKind || !editingCatalogLineId || !catalogLineEditDraft) return
+    const patch = {
+      price: Math.max(0, Number(catalogLineEditDraft.price) || 0),
+      quantity: Math.max(1, Math.floor(catalogLineEditDraft.quantity) || 1),
+      staffId: catalogLineEditDraft.staffId,
+    }
+    if (editingCatalogLineKind === "membership") {
+      setMembershipLines((prev) =>
+        prev.map((l) => (l.id === editingCatalogLineId ? { ...l, ...patch } : l))
+      )
+    } else if (editingCatalogLineKind === "prepaid") {
+      setPrepaidLines((prev) =>
+        prev.map((l) => (l.id === editingCatalogLineId ? { ...l, ...patch } : l))
+      )
+    } else {
+      setPackageLines((prev) =>
+        prev.map((l) => (l.id === editingCatalogLineId ? { ...l, ...patch } : l))
+      )
+    }
+    closeCatalogLineEdit()
+  }
+
+  function removeCatalogLineFromEditDialog() {
+    if (!editingCatalogLineKind || !editingCatalogLineId) return
+    if (editingCatalogLineKind === "membership") removeMembershipLine(editingCatalogLineId)
+    else if (editingCatalogLineKind === "prepaid") removePrepaidLine(editingCatalogLineId)
+    else removePackageLine(editingCatalogLineId)
+    closeCatalogLineEdit()
   }
 
   function patchMembershipLine(lineId: string, patch: Partial<ServiceCheckoutMembershipLine>) {
@@ -2535,19 +2660,11 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         })
         return
       }
-    } else {
-      if (totalPaid < 0.005) {
-        toast({
-          title: "No payment entered",
-          description: "Enter at least one tender amount for this bill, or reduce reward points if the client pays nothing now.",
-          variant: "destructive",
-        })
-        return
-      }
     }
 
-    const isPartialPayment = due > 0.01 && totalPaid + 0.02 < due
-    if (isPartialPayment && opts?.skipPartialConfirm !== true) {
+    const isUnpaidBill = due > 0.01 && totalPaid < 0.005
+    const isPartialPayment = due > 0.01 && totalPaid >= 0.005 && totalPaid + 0.02 < due
+    if ((isUnpaidBill || isPartialPayment) && opts?.skipPartialConfirm !== true) {
       setCheckoutPartialPaymentConfirmAck(false)
       setCheckoutPartialPaymentConfirmOpen(true)
       return
@@ -2814,15 +2931,20 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       if (inlineResult.ok) {
         const remaining = Math.max(0, due - totalPaid)
         toast(
-          isPartialPayment
+          isUnpaidBill
             ? {
-                title: "Partial payment recorded",
-                description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} balance remains on this bill.`,
+                title: "Unpaid bill saved",
+                description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} is due on this bill.`,
               }
-            : {
-                title: "Bill created",
-                description: `${inlineResult.billNo} was saved successfully.`,
-              }
+            : isPartialPayment
+              ? {
+                  title: "Partial payment recorded",
+                  description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} balance remains on this bill.`,
+                }
+              : {
+                  title: "Bill created",
+                  description: `${inlineResult.billNo} was saved successfully.`,
+                }
         )
         onOpenChange(false)
         onSuccessfulCheckout?.()
@@ -3096,6 +3218,46 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     ? lines.find((l) => l.id === editingServiceLineId)
     : undefined
 
+  const editingProductLine = editingProductLineId
+    ? productLines.find((l) => l.id === editingProductLineId)
+    : undefined
+
+  const productEditMaxQty =
+    editingProductLine && productEditDraft
+      ? maxProductLineQtyFromStock(editingProductLine, productLines, catalogProducts)
+      : Number.MAX_SAFE_INTEGER
+
+  const productEditAtStockCap =
+    productEditMaxQty < Number.MAX_SAFE_INTEGER &&
+    Math.max(1, Math.floor(productEditDraft?.quantity || 1)) >= Math.max(1, productEditMaxQty)
+
+  const editingCatalogMembershipLine =
+    editingCatalogLineKind === "membership" && editingCatalogLineId
+      ? membershipLines.find((l) => l.id === editingCatalogLineId)
+      : undefined
+  const editingCatalogPrepaidLine =
+    editingCatalogLineKind === "prepaid" && editingCatalogLineId
+      ? prepaidLines.find((l) => l.id === editingCatalogLineId)
+      : undefined
+  const editingCatalogPackageLine =
+    editingCatalogLineKind === "package" && editingCatalogLineId
+      ? packageLines.find((l) => l.id === editingCatalogLineId)
+      : undefined
+
+  const catalogLineEditTitle =
+    editingCatalogMembershipLine?.planName ||
+    editingCatalogPrepaidLine?.planName ||
+    editingCatalogPackageLine?.packageName
+
+  const catalogLineEditKindLabel =
+    editingCatalogLineKind === "membership"
+      ? "membership"
+      : editingCatalogLineKind === "prepaid"
+        ? "prepaid plan"
+        : editingCatalogLineKind === "package"
+          ? "package"
+          : "item"
+
   const serviceLineEditDialog = (
     <Dialog
       open={!!editingServiceLineId}
@@ -3243,6 +3405,342 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   type="button"
                   className="h-10 rounded-full bg-violet-600 px-6 font-semibold text-white hover:bg-violet-700"
                   onClick={applyServiceEdit}
+                >
+                  Apply
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+
+  const productLineEditDialog = (
+    <Dialog
+      open={!!editingProductLineId}
+      onOpenChange={(next) => {
+        if (!next) closeProductEdit()
+      }}
+    >
+      <DialogContent
+        className="z-[200] gap-4 sm:max-w-md"
+        overlayClassName="z-[190]"
+        aria-describedby={undefined}
+      >
+        <DialogHeader>
+          <DialogTitle className="text-base font-semibold tracking-tight">
+            {editingProductLine ? `Edit ${editingProductLine.name}` : "Edit product"}
+          </DialogTitle>
+        </DialogHeader>
+        {productEditDraft && editingProductLine ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="prod-checkout-price">Price (₹)</Label>
+                <Input
+                  id="prod-checkout-price"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={productEditDraft.price}
+                  onChange={(e) =>
+                    setProductEditDraft((d) =>
+                      d ? { ...d, price: Math.max(0, parseFloat(e.target.value) || 0) } : d
+                    )
+                  }
+                  className="rounded-lg"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Quantity</Label>
+                <div className="flex h-10 items-center gap-0 rounded-lg border border-border/80 bg-background">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-10 shrink-0 rounded-none rounded-l-lg px-3 hover:bg-muted/80"
+                    onClick={() =>
+                      setProductEditDraft((d) =>
+                        d
+                          ? {
+                              ...d,
+                              quantity: Math.max(1, (Math.floor(d.quantity) || 1) - 1),
+                            }
+                          : d
+                      )
+                    }
+                    disabled={Math.max(1, Math.floor(productEditDraft.quantity) || 1) <= 1}
+                    aria-label="Decrease quantity"
+                  >
+                    <Minus className="h-4 w-4" />
+                  </Button>
+                  <span className="min-w-0 flex-1 text-center text-sm font-semibold tabular-nums">
+                    {Math.max(1, Math.floor(productEditDraft.quantity) || 1)}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-10 shrink-0 rounded-none rounded-r-lg px-3 hover:bg-muted/80"
+                    onClick={() =>
+                      setProductEditDraft((d) =>
+                        d
+                          ? {
+                              ...d,
+                              quantity: Math.min(
+                                Math.max(1, Math.floor(d.quantity) || 1) + 1,
+                                Math.max(1, productEditMaxQty)
+                              ),
+                            }
+                          : d
+                      )
+                    }
+                    disabled={productEditAtStockCap}
+                    aria-label={
+                      productEditAtStockCap
+                        ? "Maximum stock reached for this product"
+                        : "Increase quantity"
+                    }
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+                {productEditMaxQty < Number.MAX_SAFE_INTEGER ? (
+                  <p className="text-xs text-muted-foreground">
+                    Max {Math.max(0, productEditMaxQty)} in stock for this cart.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Staff</Label>
+              {staffOptions.length > 0 ? (
+                <Select
+                  value={productEditDraft.staffId || undefined}
+                  onValueChange={(v) =>
+                    setProductEditDraft((d) => (d ? { ...d, staffId: v } : d))
+                  }
+                >
+                  <SelectTrigger className="h-10 rounded-lg text-sm">
+                    <SelectValue placeholder="Select staff" />
+                  </SelectTrigger>
+                  <SelectContent
+                    position="popper"
+                    className="z-[260] max-h-[min(24rem,70vh)]"
+                  >
+                    {staffOptions.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  No staff loaded — refresh the page or add staff in settings.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-row flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Item total
+                </p>
+                <p className="text-lg font-semibold tabular-nums text-foreground">
+                  ₹
+                  {(
+                    productEditDraft.price *
+                    Math.max(1, Math.floor(productEditDraft.quantity) || 1)
+                  ).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 shrink-0 rounded-full border-destructive/40 text-destructive hover:bg-destructive/10"
+                  onClick={removeProductFromEditDialog}
+                  aria-label="Remove from cart"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  className="h-10 rounded-full bg-violet-600 px-6 font-semibold text-white hover:bg-violet-700"
+                  onClick={applyProductEdit}
+                >
+                  Apply
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+
+  const catalogLineEditDialog = (
+    <Dialog
+      open={!!editingCatalogLineKind && !!editingCatalogLineId}
+      onOpenChange={(next) => {
+        if (!next) closeCatalogLineEdit()
+      }}
+    >
+      <DialogContent
+        className="z-[200] gap-4 sm:max-w-md"
+        overlayClassName="z-[190]"
+        aria-describedby={undefined}
+      >
+        <DialogHeader>
+          <DialogTitle className="text-base font-semibold tracking-tight">
+            {catalogLineEditTitle
+              ? `Edit ${catalogLineEditTitle}`
+              : `Edit ${catalogLineEditKindLabel}`}
+          </DialogTitle>
+        </DialogHeader>
+        {catalogLineEditDraft && editingCatalogLineKind ? (
+          <div className="space-y-4">
+            {editingCatalogLineKind === "prepaid" && editingCatalogPrepaidLine ? (
+              <p className="rounded-lg border border-cyan-200/80 bg-cyan-50/60 px-3 py-2 text-xs text-cyan-950">
+                Wallet credit ₹
+                {Number(editingCatalogPrepaidLine.creditAmount || 0).toLocaleString("en-IN", {
+                  maximumFractionDigits: 2,
+                })}{" "}
+                per unit (from plan).
+              </p>
+            ) : null}
+            {editingCatalogLineKind === "package" && editingCatalogPackageLine ? (
+              <p className="rounded-lg border border-amber-200/80 bg-amber-50/60 px-3 py-2 text-xs text-amber-950">
+                {Number(editingCatalogPackageLine.totalSittings) || 0} sittings
+                {editingCatalogPackageLine.validityDays
+                  ? ` · ${editingCatalogPackageLine.validityDays} day validity`
+                  : ""}
+              </p>
+            ) : null}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="catalog-checkout-price">Price (₹)</Label>
+                <Input
+                  id="catalog-checkout-price"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={catalogLineEditDraft.price}
+                  onChange={(e) =>
+                    setCatalogLineEditDraft((d) =>
+                      d ? { ...d, price: Math.max(0, parseFloat(e.target.value) || 0) } : d
+                    )
+                  }
+                  className="rounded-lg"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Quantity</Label>
+                <div className="flex h-10 items-center gap-0 rounded-lg border border-border/80 bg-background">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-10 shrink-0 rounded-none rounded-l-lg px-3 hover:bg-muted/80"
+                    onClick={() =>
+                      setCatalogLineEditDraft((d) =>
+                        d
+                          ? {
+                              ...d,
+                              quantity: Math.max(1, (Math.floor(d.quantity) || 1) - 1),
+                            }
+                          : d
+                      )
+                    }
+                    disabled={Math.max(1, Math.floor(catalogLineEditDraft.quantity) || 1) <= 1}
+                    aria-label="Decrease quantity"
+                  >
+                    <Minus className="h-4 w-4" />
+                  </Button>
+                  <span className="min-w-0 flex-1 text-center text-sm font-semibold tabular-nums">
+                    {Math.max(1, Math.floor(catalogLineEditDraft.quantity) || 1)}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-10 shrink-0 rounded-none rounded-r-lg px-3 hover:bg-muted/80"
+                    onClick={() =>
+                      setCatalogLineEditDraft((d) =>
+                        d
+                          ? {
+                              ...d,
+                              quantity: Math.max(1, Math.floor(d.quantity) || 1) + 1,
+                            }
+                          : d
+                      )
+                    }
+                    aria-label="Increase quantity"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Staff</Label>
+              {staffOptions.length > 0 ? (
+                <Select
+                  value={catalogLineEditDraft.staffId || undefined}
+                  onValueChange={(v) =>
+                    setCatalogLineEditDraft((d) => (d ? { ...d, staffId: v } : d))
+                  }
+                >
+                  <SelectTrigger className="h-10 rounded-lg text-sm">
+                    <SelectValue placeholder="Select staff" />
+                  </SelectTrigger>
+                  <SelectContent
+                    position="popper"
+                    className="z-[260] max-h-[min(24rem,70vh)]"
+                  >
+                    {staffOptions.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  No staff loaded — refresh the page or add staff in settings.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-row flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Item total
+                </p>
+                <p className="text-lg font-semibold tabular-nums text-foreground">
+                  ₹
+                  {(
+                    catalogLineEditDraft.price *
+                    Math.max(1, Math.floor(catalogLineEditDraft.quantity) || 1)
+                  ).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 shrink-0 rounded-full border-destructive/40 text-destructive hover:bg-destructive/10"
+                  onClick={removeCatalogLineFromEditDialog}
+                  aria-label="Remove from cart"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  className="h-10 rounded-full bg-violet-600 px-6 font-semibold text-white hover:bg-violet-700"
+                  onClick={applyCatalogLineEdit}
                 >
                   Apply
                 </Button>
@@ -4607,11 +5105,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  document.getElementById(staffTriggerId)?.focus()
-                                }}
-                                aria-label="Focus staff for this line"
+                                onClick={() => openProductEdit(line.id)}
+                                aria-label="Edit product line"
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
@@ -4764,9 +5259,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                                 className="h-8 w-8 text-muted-foreground hover:text-foreground"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  document.getElementById(staffTriggerId)?.focus()
+                                  openCatalogLineEdit("membership", line.id)
                                 }}
-                                aria-label="Focus staff for this line"
+                                aria-label="Edit membership line"
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
@@ -4920,9 +5415,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                                 className="h-8 w-8 text-muted-foreground hover:text-foreground"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  document.getElementById(staffTriggerId)?.focus()
+                                  openCatalogLineEdit("prepaid", line.id)
                                 }}
-                                aria-label="Focus staff for this line"
+                                aria-label="Edit prepaid plan line"
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
@@ -5076,9 +5571,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                                 className="h-8 w-8 text-muted-foreground hover:text-foreground"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  document.getElementById(staffTriggerId)?.focus()
+                                  openCatalogLineEdit("package", line.id)
                                 }}
-                                aria-label="Focus staff for this line"
+                                aria-label="Edit package line"
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
@@ -5418,8 +5913,10 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                           <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" aria-hidden />
                           Saving…
                         </>
+                      ) : paymentRemainingDue > 0.01 ? (
+                        "Save Part-Paid"
                       ) : (
-                        paymentRemainingDue <= 0.01 ? "Complete billing" : "Save Part-Paid"
+                        "Complete billing"
                       )}
                     </Button>
                   </>
@@ -5768,8 +6265,11 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               <span className="font-medium text-orange-800">Important notice</span>
             </div>
             <p className="text-sm text-orange-700">
-              This will create a partially paid bill. Customer owes ₹
-              {formatCheckoutInr(Math.max(0, paymentDueAfterLoyalty - paymentTotalTenderEntered))} more.
+              {paymentTotalTenderEntered < 0.005
+                ? `This will create an unpaid bill. Customer owes ₹${formatCheckoutInr(paymentDueAfterLoyalty)}.`
+                : `This will create a partially paid bill. Customer owes ₹${formatCheckoutInr(
+                    Math.max(0, paymentDueAfterLoyalty - paymentTotalTenderEntered)
+                  )} more.`}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -5783,7 +6283,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               htmlFor="svc-checkout-partial-confirm"
               className="cursor-pointer text-sm font-normal text-orange-700 leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
             >
-              I confirm this partially paid bill
+              I confirm this{" "}
+              {paymentTotalTenderEntered < 0.005 ? "unpaid" : "partially paid"} bill
             </Label>
           </div>
         </div>
@@ -6151,6 +6652,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">{mainColumns}</div>
         </div>
         {serviceLineEditDialog}
+        {productLineEditDialog}
+        {catalogLineEditDialog}
         {newClientDialog}
         {pinServicePickerDialog}
         {cancelDraftConfirmDialog}
@@ -6186,6 +6689,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         </DialogContent>
       </Dialog>
       {serviceLineEditDialog}
+      {productLineEditDialog}
+      {catalogLineEditDialog}
       {newClientDialog}
       {pinServicePickerDialog}
       {cancelDraftConfirmDialog}
