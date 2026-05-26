@@ -1596,30 +1596,35 @@ export function SalesReport() {
   }
 
   const getPaymentModeDisplay = (sale: SalesRecord) => {
+    const paidAmount =
+      sale.paymentStatus?.paidAmount ??
+      sale.payments?.reduce((s, p) => s + (p.amount || 0), 0) ??
+      0
+
     // First priority: Check if there are payments (new split payment structure)
     if (sale.payments && sale.payments.length > 0) {
       const paymentModes = sale.payments.map(payment => payment.mode)
       const uniqueModes = [...new Set(paymentModes)]
       return uniqueModes.join(", ")
     }
-    
-    // Second priority: Check legacy paymentMode field
-    if (sale.paymentMode) {
+
+    // Unpaid bills with nothing collected yet
+    if (paidAmount < 0.005 && String(sale.status || "").toLowerCase() === "unpaid") {
+      return ""
+    }
+
+    // Second priority: Check legacy paymentMode field (only when something was paid)
+    if (sale.paymentMode && paidAmount >= 0.005) {
       return sale.paymentMode
     }
-    
-    // For unpaid bills with no payments, return empty
-    if (sale.status === 'unpaid' && (!sale.payments || sale.payments.length === 0)) {
-      return ''
-    }
-    
+
     // For partial bills, show what's been paid
     if (sale.status === 'partial' && sale.payments && sale.payments.length > 0) {
       const paymentModes = sale.payments.map(payment => payment.mode)
       const uniqueModes = [...new Set(paymentModes)]
       return uniqueModes.join(", ")
     }
-    
+
     // Default: no payment recorded
     return ''
   }
@@ -3727,9 +3732,17 @@ export function SalesReport() {
                     </TableCell>
                     <TableCell>{getStatusBadge(sale.status)}</TableCell>
                     <TableCell>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                        {getPaymentModeDisplay(sale)}
-                      </span>
+                      {(() => {
+                        const modeLabel = getPaymentModeDisplay(sale)
+                        if (!modeLabel) {
+                          return <span className="text-slate-400">—</span>
+                        }
+                        return (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                            {modeLabel}
+                          </span>
+                        )
+                      })()}
                     </TableCell>
                     <TableCell className="text-slate-600">₹{getTaxableAmount(sale).toFixed(2)}</TableCell>
                     <TableCell className="text-slate-600">₹{getGST(sale).toFixed(2)}</TableCell>

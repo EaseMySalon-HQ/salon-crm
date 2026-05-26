@@ -1031,13 +1031,7 @@ export async function completeServiceCheckoutInline(opts: {
       Math.abs(onlineAmount) < PAY_EPS &&
       Math.abs(walletPayAmount) < PAY_EPS
 
-    /** Allow partial billing: any positive tender up to the bill total is accepted (overpay handled below). */
-    if (saleDueTotal > 0.01 && totalPaid < 0.005) {
-      return {
-        ok: false,
-        error: "Enter at least one payment amount, or use Quick Sale to save an unpaid bill.",
-      }
-    }
+    /** Unpaid and partial billing are allowed; checkout UI confirms before saving with zero tender. */
 
     if (walletPayAmount > 0) {
       if (!allowBillingRedemption) {

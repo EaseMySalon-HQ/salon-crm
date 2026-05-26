@@ -196,6 +196,10 @@ router.post('/', auth, async (req, res) => {
       salesToday.forEach((sale) => {
         let cashAmt = 0;
         let isAllCash = false;
+        const paidAmount =
+          typeof sale.paymentStatus?.paidAmount === 'number'
+            ? Math.max(0, sale.paymentStatus.paidAmount)
+            : (sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
         if (sale.payments && sale.payments.length > 0) {
           sale.payments.forEach((p) => {
             const m = (p.mode || p.type || '').toLowerCase();
@@ -206,10 +210,10 @@ router.post('/', auth, async (req, res) => {
             return m.includes('card') || m.includes('online') || m.includes('upi');
           });
           isAllCash = cashAmt > 0 && !hasNonCash;
-        } else {
+        } else if (paidAmount > 0.005) {
           const pm = (sale.paymentMode || '').toLowerCase();
           if (pm.includes('cash') && !pm.includes('card') && !pm.includes('online')) {
-            cashAmt = sale.netTotal || sale.grossTotal || 0;
+            cashAmt = paidAmount;
             isAllCash = true;
           }
         }

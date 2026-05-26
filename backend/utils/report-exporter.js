@@ -1251,6 +1251,10 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
           salesToday.forEach(s => {
             let cashAmt = 0;
             let isAllCash = false;
+            const paidAmount =
+              typeof s.paymentStatus?.paidAmount === 'number'
+                ? Math.max(0, s.paymentStatus.paidAmount)
+                : (s.payments || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
             if (s.payments && s.payments.length > 0) {
               cashAmt = s.payments.filter(p => (p.mode || '').toLowerCase() === 'cash')
                 .reduce((pSum, p) => pSum + (p.amount || 0), 0);
@@ -1259,8 +1263,8 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
                 return m === 'card' || m === 'online';
               });
               isAllCash = cashAmt > 0 && !hasNonCash;
-            } else {
-              cashAmt = (s.netTotal || 0);
+            } else if (paidAmount > 0.005) {
+              cashAmt = paidAmount;
               isAllCash = (s.paymentMode || '').toLowerCase().includes('cash') &&
                 !(s.paymentMode || '').toLowerCase().includes('card') &&
                 !(s.paymentMode || '').toLowerCase().includes('online');
@@ -1284,6 +1288,10 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
           // Total Online Sales = Card/Online at checkout (invoice date = dateKey) + dues via paymentHistory (Card/Online)
           let onlineFromCheckout = 0;
           salesToday.forEach((s) => {
+            const paidAmount =
+              typeof s.paymentStatus?.paidAmount === 'number'
+                ? Math.max(0, s.paymentStatus.paidAmount)
+                : (s.payments || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
             if (s.payments && s.payments.length > 0) {
               onlineFromCheckout += s.payments
                 .filter((p) => {
@@ -1291,10 +1299,10 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
                   return mode === 'card' || mode === 'online';
                 })
                 .reduce((pSum, p) => pSum + (p.amount || 0), 0);
-            } else {
+            } else if (paidAmount > 0.005) {
               const pm = (s.paymentMode || '').toLowerCase();
               if (pm.includes('card') || pm.includes('online')) {
-                onlineFromCheckout += s.netTotal || 0;
+                onlineFromCheckout += paidAmount;
               }
             }
           });
