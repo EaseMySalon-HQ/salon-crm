@@ -399,6 +399,15 @@ function getOutstandingBalance(sale) {
   return Math.max(0, total - paid);
 }
 
+function getSalePaidAmount(sale) {
+  const paid = sale.paymentStatus?.paidAmount;
+  if (typeof paid === 'number' && !Number.isNaN(paid)) return Math.max(0, paid);
+  if (sale.payments && sale.payments.length > 0) {
+    return sale.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  }
+  return 0;
+}
+
 /**
  * Aggregate totals from lean sale docs (same rules as sales-report frontend).
  * @param {object} sale
@@ -418,6 +427,7 @@ function accumulateSaleSummary(sale, acc) {
 
   let cashAmt = 0;
   let isAllCash = false;
+  const paidAmount = getSalePaidAmount(sale);
   if (sale.payments && sale.payments.length > 0) {
     const cashPayments = sale.payments.filter((p) =>
       String(p.mode || p.type || '')
@@ -430,11 +440,11 @@ function accumulateSaleSummary(sale, acc) {
     });
     cashAmt = cashPayments.reduce((s, p) => s + (p.amount || 0), 0);
     isAllCash = cashAmt > 0 && !hasNonCash;
-  } else {
+  } else if (paidAmount > 0.005) {
     const pm = String(sale.paymentMode || '').toLowerCase();
     cashAmt =
       pm.includes('cash') && !pm.includes('card') && !pm.includes('online')
-        ? sale.netTotal || 0
+        ? paidAmount
         : 0;
     isAllCash = cashAmt > 0;
   }
@@ -457,14 +467,12 @@ function accumulateSaleSummary(sale, acc) {
         acc.onlineCash += amt;
       }
     });
-  } else if (sale.paymentMode === 'Card') {
-    const amt = sale.netTotal || 0;
-    acc.cardCollected += amt;
-    acc.onlineCash += amt;
-  } else if (sale.paymentMode === 'Online') {
-    const amt = sale.netTotal || 0;
-    acc.onlinePayCollected += amt;
-    acc.onlineCash += amt;
+  } else if (paidAmount > 0.005 && sale.paymentMode === 'Card') {
+    acc.cardCollected += paidAmount;
+    acc.onlineCash += paidAmount;
+  } else if (paidAmount > 0.005 && sale.paymentMode === 'Online') {
+    acc.onlinePayCollected += paidAmount;
+    acc.onlineCash += paidAmount;
   }
 }
 
