@@ -12,12 +12,59 @@ function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function buildLegacyPaymentModeMatch(mode) {
+  const safe = escapeRegex(mode);
+  return {
+    $or: [
+      { paymentMode: mode },
+      { paymentMode: { $regex: `^${safe}(,|\\s|$)`, $options: 'i' } },
+      { paymentMode: { $regex: `,\\s*${safe}(,|\\s|$)`, $options: 'i' } },
+    ],
+  };
+}
+
 /**
- * @param {string} mode - Cash | Card | Online
+ * @param {string} mode - Cash | Card | Online | Wallet | Reward Point
  */
 function buildPaymentModeCondition(mode) {
   if (!mode || mode === 'all') return null;
-  const safe = escapeRegex(mode);
+
+  if (mode === 'Reward Point') {
+    return {
+      $or: [
+        { payments: { $elemMatch: { mode: { $in: ['Reward Point', 'Reward', 'reward'] } } } },
+        {
+          $and: [
+            { loyaltyPointsRedeemed: { $gt: 0 } },
+            { loyaltyDiscountAmount: { $gt: 0.005 } },
+          ],
+        },
+        {
+          $and: [
+            {
+              $or: [
+                { payments: { $exists: false } },
+                { payments: { $size: 0 } },
+              ],
+            },
+            buildLegacyPaymentModeMatch('Reward Point'),
+          ],
+        },
+        {
+          $and: [
+            {
+              $or: [
+                { payments: { $exists: false } },
+                { payments: { $size: 0 } },
+              ],
+            },
+            buildLegacyPaymentModeMatch('Reward'),
+          ],
+        },
+      ],
+    };
+  }
+
   return {
     $or: [
       { payments: { $elemMatch: { mode } } },
@@ -29,13 +76,7 @@ function buildPaymentModeCondition(mode) {
               { payments: { $size: 0 } },
             ],
           },
-          {
-            $or: [
-              { paymentMode: mode },
-              { paymentMode: { $regex: `^${safe}(,|\\s|$)`, $options: 'i' } },
-              { paymentMode: { $regex: `,\\s*${safe}(,|\\s|$)`, $options: 'i' } },
-            ],
-          },
+          buildLegacyPaymentModeMatch(mode),
         ],
       },
     ],
@@ -397,16 +438,33 @@ function accumulateSaleSummary(sale, acc) {
         : 0;
     isAllCash = cashAmt > 0;
   }
-  cashAmt += billChangeCreditedToWalletCashAddition(sale);
+  const walletCashAdd = billChangeCreditedToWalletCashAddition(sale);
+  cashAmt += walletCashAdd;
   const tip = sale.tip || 0;
-  acc.cashCollected += cashAmt - (isAllCash ? tip : 0);
+  const tipDeduction = isAllCash ? tip : 0;
+  acc.cashCollected += cashAmt - tipDeduction;
+  acc.walletCashCollected += walletCashAdd;
+  acc.serviceCashCollected += cashAmt - walletCashAdd - tipDeduction;
 
   if (sale.payments && sale.payments.length > 0) {
-    acc.onlineCash += sale.payments
-      .filter((p) => p.mode === 'Card' || p.mode === 'Online')
-      .reduce((s, p) => s + (p.amount || 0), 0);
-  } else if (sale.paymentMode === 'Card' || sale.paymentMode === 'Online') {
-    acc.onlineCash += sale.netTotal || 0;
+    sale.payments.forEach((p) => {
+      const amt = p.amount || 0;
+      if (p.mode === 'Card') {
+        acc.cardCollected += amt;
+        acc.onlineCash += amt;
+      } else if (p.mode === 'Online') {
+        acc.onlinePayCollected += amt;
+        acc.onlineCash += amt;
+      }
+    });
+  } else if (sale.paymentMode === 'Card') {
+    const amt = sale.netTotal || 0;
+    acc.cardCollected += amt;
+    acc.onlineCash += amt;
+  } else if (sale.paymentMode === 'Online') {
+    const amt = sale.netTotal || 0;
+    acc.onlinePayCollected += amt;
+    acc.onlineCash += amt;
   }
 }
 
@@ -430,7 +488,11 @@ async function computeSalesSummaryTotals(Sale, match) {
   const acc = {
     totalRevenue: 0,
     cashCollected: 0,
+    serviceCashCollected: 0,
+    walletCashCollected: 0,
     onlineCash: 0,
+    cardCollected: 0,
+    onlinePayCollected: 0,
     unpaidValue: 0,
     tips: 0,
     completedSales: 0,
@@ -461,7 +523,11 @@ async function computeSalesSummaryTotalsSplit(Sale, matchInvoice, matchPaymentOn
   const acc = {
     totalRevenue: 0,
     cashCollected: 0,
+    serviceCashCollected: 0,
+    walletCashCollected: 0,
     onlineCash: 0,
+    cardCollected: 0,
+    onlinePayCollected: 0,
     unpaidValue: 0,
     tips: 0,
     completedSales: 0,

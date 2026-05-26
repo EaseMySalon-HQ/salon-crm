@@ -157,6 +157,8 @@ export default function ReceiptPage() {
                     })
                   ),
                   paymentHistory: frontendData.paymentHistory || [],
+                  loyaltyPointsRedeemed: frontendData.loyaltyPointsRedeemed,
+                  loyaltyDiscountAmount: frontendData.loyaltyDiscountAmount,
                 }),
               staffName: frontendData.staffName,
               status:
@@ -198,6 +200,14 @@ export default function ReceiptPage() {
             console.log('🔍 Sale payments array:', saleData.payments)
             console.log('🔍 Sale payment mode:', saleData.paymentMode)
             
+            const receiptPaymentsFromSale = buildReceiptPaymentsFromSale({
+              date: saleData.date,
+              payments: saleData.payments,
+              paymentHistory: saleData.paymentHistory || [],
+              loyaltyPointsRedeemed: saleData.loyaltyPointsRedeemed,
+              loyaltyDiscountAmount: saleData.loyaltyDiscountAmount,
+            })
+
             const receiptData: ReceiptData = {
               id: saleData._id || saleData.id,
               billNo: saleData.billNo,
@@ -240,12 +250,8 @@ export default function ReceiptPage() {
                 : undefined,
               paymentMode: saleData.paymentMode,
               payments:
-                saleData.payments?.length > 0
-                  ? buildReceiptPaymentsFromSale({
-                      date: saleData.date,
-                      payments: saleData.payments,
-                      paymentHistory: saleData.paymentHistory || [],
-                    })
+                receiptPaymentsFromSale.length > 0
+                  ? receiptPaymentsFromSale
                   : [
                       {
                         type: (saleData.paymentMode?.split?.(",")?.[0]?.toLowerCase() || "cash") as

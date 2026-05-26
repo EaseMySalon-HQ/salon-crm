@@ -97,6 +97,7 @@ import { previewRedemptionLive } from "@/lib/reward-points-preview"
 import {
   mergePaymentConfiguration,
   eligibleRedemptionSubtotal,
+  type PaymentRedemptionLine,
 } from "@/lib/payment-redemption-eligibility"
 import type { RewardPointsSettings } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
@@ -107,7 +108,12 @@ import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } f
 import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
 import { effectiveMembershipPlanDiscountPercent } from "@/lib/membership-plan-discount"
 import { useRouter } from "next/navigation"
-import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates } from "@/lib/sale-payment-lines"
+import {
+  buildReceiptPaymentsFromSale,
+  buildSalePaymentModeFromCheckout,
+  formatPaymentRecordedDateLabel,
+  getSalePaymentLinesWithDates,
+} from "@/lib/sale-payment-lines"
 import type { RaiseSaleLinkageSnapshot } from "@/lib/quick-sale-helpers"
 import type { CheckoutTipLine } from "@/components/appointments/service-checkout-dialog"
 import {
@@ -3894,25 +3900,52 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const stackWalletAndReward = payCfgMerged.billingRedemption.allowWalletAndPointsTogether !== false
 
   const redemptionLineItems = useMemo(() => {
-    const lines: { type: string; total: number }[] = []
+    const globalCartDiscountActive = discountValue > 0 || discountPercentage > 0
+    const lineDiscounted = (item: {
+      discount?: number
+      isMembershipFree?: boolean
+      membershipDiscountPercent?: number
+    }) =>
+      globalCartDiscountActive ||
+      (item.discount ?? 0) > 0 ||
+      !!item.isMembershipFree ||
+      (item.membershipDiscountPercent ?? 0) > 0
+
+    const lines: PaymentRedemptionLine[] = []
     for (const it of serviceItems) {
       if (!it.serviceId) continue
-      lines.push({ type: "service", total: Number(it.total) || 0 })
+      lines.push({
+        type: "service",
+        total: Number(it.total) || 0,
+        discount: it.discount ?? 0,
+        isMembershipFree: it.isMembershipFree,
+        membershipDiscountPercent: it.membershipDiscountPercent,
+        isDiscounted: lineDiscounted(it),
+      })
     }
     for (const it of productItems) {
       if (!it.productId) continue
-      lines.push({ type: "product", total: Number(it.total) || 0 })
+      lines.push({
+        type: "product",
+        total: Number(it.total) || 0,
+        discount: it.discount ?? 0,
+        isDiscounted: lineDiscounted(it),
+      })
     }
     for (const it of membershipItems) {
       if (!it.planId) continue
-      lines.push({ type: "membership", total: Number(it.total) || 0 })
+      lines.push({
+        type: "membership",
+        total: Number(it.total) || 0,
+        isDiscounted: globalCartDiscountActive,
+      })
     }
     for (const it of prepaidPlanItems) {
       if (!it.planId) continue
       lines.push({ type: "prepaid_wallet", total: Number(it.total) || 0 })
     }
     return lines
-  }, [serviceItems, productItems, membershipItems, prepaidPlanItems])
+  }, [serviceItems, productItems, membershipItems, prepaidPlanItems, discountValue, discountPercentage])
 
   const eligibleWalletSubtotal = useMemo(() => {
     if (!allowBillingRedemption) return 0
@@ -4110,10 +4143,22 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       (item) => item.isMembershipFree === true && Math.abs(item.total) < 0.005
     )
 
+  const hasAnyCheckoutLine =
+    validServiceForCheckout.length > 0 ||
+    validProductForCheckout.length > 0 ||
+    validMembershipSaleLines.length > 0 ||
+    validPrepaidPlanForCheckout.length > 0
+
+  const rewardPointsFullyCoverCheckout =
+    loyaltyPointsInput > 0 &&
+    loyaltyPreview.ok &&
+    (loyaltyPreview.pointsToRedeem ?? 0) > 0 &&
+    roundedTotal <= 0.005
+
   const allowZeroTotalCheckout =
     roundedTotal <= 0 &&
-    validServiceForCheckout.length > 0 &&
-    membershipFreeServicesOnly
+    hasAnyCheckoutLine &&
+    (membershipFreeServicesOnly || rewardPointsFullyCoverCheckout)
 
   useEffect(() => {
     const method = appointmentCheckoutPaymentMethodRef.current
@@ -4447,15 +4492,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       }
       const combinedSources = (wSel as { _combinedSources?: any[] })._combinedSources
       const stackingOk =
+        payCfgMerged.walletRedemption.allowOnDiscountedItems !== false ||
         clientWalletSettings?.allowCouponStacking ||
         (Array.isArray(combinedSources) && combinedSources.length > 0
           ? combinedSources.every((sw) => sw.planSnapshot?.allowCouponStacking)
           : wSel.planSnapshot?.allowCouponStacking)
       if (hasBillDiscount && !stackingOk) {
         toast({
-          title: "Discount stacking not allowed",
+          title: "Wallet not allowed with discounts",
           description:
-            "Turn off bill discounts or enable stacking in Prepaid wallet settings / plan to use a wallet with discounts.",
+            "Enable “Allow redemption on discounted items” in Prepaid wallet → Redemption rules, or use a plan that allows discount stacking.",
           variant: "destructive",
         })
         return
@@ -4890,7 +4936,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
       let loyaltyDiscountAmountSave = 0
       let loyaltyPointsRedeemedSave = 0
-      if (rewardPointsSettings?.enabled && loyaltyPointsInput > 0 && showRewardInput) {
+      if (rewardPointsSettings?.enabled && loyaltyPointsInput > 0) {
         const cid = getCustomerId(customer)
         if (cid && isLikelyMongoObjectId(cid)) {
           const rewardCapForSave = allowBillingRedemption ? eligibleRewardSubtotalRounded : roundedBaseTotalForSale
@@ -4900,7 +4946,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             loyaltyPointsInput,
             loyaltyBalance
           )
-          if (prev.ok) {
+          if (prev.ok && prev.pointsToRedeem > 0) {
             loyaltyPointsRedeemedSave = prev.pointsToRedeem
             loyaltyDiscountAmountSave = prev.discountRupees
           }
@@ -5143,10 +5189,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 : recordedPaidTotal < calculatedTotal + tip
                   ? 'partial'
                   : 'completed',
-          paymentMode: payments.map(p => {
-            const capitalized = p.type.charAt(0).toUpperCase() + p.type.slice(1);
-            return capitalized;
-          }).join(', '),
+          paymentMode: buildSalePaymentModeFromCheckout({
+            payments,
+            loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
+            loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+          }),
           payments: payments.map(p => ({
             mode: p.type.charAt(0).toUpperCase() + p.type.slice(1), // Capitalize first letter: "Cash", "Card", "Online"
             amount: p.amount
@@ -5596,7 +5643,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         // Receipt total = bill amount (calculatedTotal) + tip (what customer pays)
         total: calculatedTotal + tip,
         taxBreakdown: taxBreakdown,
-        payments: payments,
+        payments: buildReceiptPaymentsFromSale({
+          date: selectedDate.toISOString(),
+          payments: payments.map((p) => ({ mode: p.type, amount: p.amount })),
+          loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
+          loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+        }),
         staffId: primaryStaff?.staffId || staff[0]?._id || staff[0]?.id || "",
         staffName: primaryStaff?.staffName || staff[0]?.name || "Unassigned Staff",
         tipStaffId: tipStaffId || undefined,

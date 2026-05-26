@@ -7,7 +7,7 @@ import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
-import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
+import { formatPaymentRecordedDateLabelFromIso, receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 
 interface ReceiptGeneratorProps {
@@ -381,13 +381,7 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
           `
                 }
                 
-                // Map payment types to display names
-                let displayName = 'Unknown'
-                if (payment.type === 'cash') displayName = 'Cash'
-                if (payment.type === 'card') displayName = 'Card'
-                if (payment.type === 'online') displayName = 'Online'
-                if (payment.type === 'wallet') displayName = 'Wallet'
-                if (payment.type === 'unknown') displayName = 'Unknown'
+                const displayName = receiptPaymentTypeDisplayName(payment.type)
                 const dateSuffix = formatPaymentRecordedDateLabelFromIso(payment.recordedAt)
                 const labelWithDate = dateSuffix ? `${displayName} (${dateSuffix})` : displayName
                 

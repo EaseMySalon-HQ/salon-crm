@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import Link from "next/link"
-import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard, Wallet, Gift, X } from "lucide-react"
+import { User, Phone, TrendingUp, Receipt, FileText, AlertCircle, Loader2, ChevronDown, ChevronUp, Scissors, Package, MessageSquare, CreditCard, Wallet, Gift, X, Boxes } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -25,6 +25,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -32,7 +42,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { SalesAPI, MembershipAPI, AppointmentsAPI, ClientWalletAPI, RewardPointsAPI } from "@/lib/api"
+import { Checkbox } from "@/components/ui/checkbox"
+import { SalesAPI, MembershipAPI, AppointmentsAPI, ClientWalletAPI, RewardPointsAPI, PackagesAPI } from "@/lib/api"
 import type { Client } from "@/lib/client-store"
 import { useCurrency } from "@/hooks/use-currency"
 import { format } from "date-fns"
@@ -101,6 +112,36 @@ function getPrepaidWalletPurchaseDate(wallet: any): Date | null {
   return Number.isNaN(t.getTime()) ? null : t
 }
 
+function isClientPackageActive(cp: any): boolean {
+  if (String(cp?.status || "").toUpperCase() !== "ACTIVE") return false
+  if ((Number(cp?.remaining_sittings) || 0) <= 0) return false
+  const expRaw = cp?.expiry_date
+  if (expRaw) {
+    const exp = new Date(expRaw)
+    if (!Number.isNaN(exp.getTime()) && exp < new Date()) return false
+  }
+  return true
+}
+
+function clientPackageDisplayName(cp: any): string {
+  const pkg = cp?.package_id
+  if (pkg && typeof pkg === "object") {
+    const n = String(pkg.name || "").trim()
+    if (n) return n
+  }
+  return "Package"
+}
+
+function clientPackageSoldByName(cp: any): string | null {
+  const sold = cp?.sold_by_staff_id
+  if (sold == null) return null
+  if (typeof sold === "object") {
+    const name = String(sold.name || "").trim()
+    return name || null
+  }
+  return null
+}
+
 /** One Past note per booking: multi-staff / multi-service rows share bookingGroupId. */
 function appointmentNotesDedupeKey(apt: any): string {
   const bg = apt?.bookingGroupId
@@ -160,6 +201,30 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   const [membershipCardOpen, setMembershipCardOpen] = useState(false)
   const [prepaidWalletOpen, setPrepaidWalletOpen] = useState(false)
   const [prepaidWallets, setPrepaidWallets] = useState<any[]>([])
+  const [packagesOpen, setPackagesOpen] = useState(false)
+  const [clientPackages, setClientPackages] = useState<any[]>([])
+  const [expandedClientPackageId, setExpandedClientPackageId] = useState<string | null>(null)
+  const [packageServicesCache, setPackageServicesCache] = useState<
+    Record<
+      string,
+      {
+        loading: boolean
+        availableServices: Array<{ id: string; name: string; isOptional?: boolean }>
+        redeemedServices: Array<{ id: string; name: string; redeemedAt: string | null }>
+        minServiceCount: number
+      }
+    >
+  >({})
+  const [selectedRedeemServices, setSelectedRedeemServices] = useState<Record<string, string[]>>({})
+  const [redeemConfirmOpen, setRedeemConfirmOpen] = useState(false)
+  const [redeemTarget, setRedeemTarget] = useState<{
+    clientPackageId: string
+    packageName: string
+    serviceIds: string[]
+    serviceNames: string[]
+    minServiceCount: number
+  } | null>(null)
+  const [redeemingPackage, setRedeemingPackage] = useState(false)
   const [walletLedgerOpen, setWalletLedgerOpen] = useState(false)
   const [walletLedgerLoading, setWalletLedgerLoading] = useState(false)
   const [walletLedgerRows, setWalletLedgerRows] = useState<ClientWalletLedgerRow[]>([])
@@ -177,6 +242,11 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     }, 0)
   }, [prepaidWallets])
 
+  const activeClientPackages = useMemo(
+    () => clientPackages.filter(isClientPackageActive),
+    [clientPackages]
+  )
+
   const BILLS_VISIBLE_DEFAULT = 5
   const visibleBills = showAllBills ? bills : bills.slice(0, BILLS_VISIBLE_DEFAULT)
   const hasMoreBills = bills.length > BILLS_VISIBLE_DEFAULT
@@ -187,6 +257,13 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   useEffect(() => {
     setMembershipCardOpen(false)
     setPrepaidWalletOpen(false)
+    setPackagesOpen(false)
+    setExpandedClientPackageId(null)
+    setPackageServicesCache({})
+    setSelectedRedeemServices({})
+    setRedeemConfirmOpen(false)
+    setRedeemTarget(null)
+    setClientPackages([])
     setWalletLedgerOpen(false)
     setWalletLedgerRows([])
     setPrepaidWallets([])
@@ -218,11 +295,12 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     async function fetchStats() {
       setLoading(true)
       try {
-        const [salesRes, membershipRes, walletRes, rewardSumRes] = await Promise.all([
+        const [salesRes, membershipRes, walletRes, rewardSumRes, packagesRes] = await Promise.all([
           client.phone ? SalesAPI.getByClient(client.phone) : Promise.resolve({ success: false, data: [] as any[] }),
           MembershipAPI.getByCustomer(clientId).catch(() => ({ success: false, data: null })),
           ClientWalletAPI.getClientWallets(String(clientId)).catch(() => ({ success: false, data: null })),
           RewardPointsAPI.getSummary(String(clientId)).catch(() => ({ success: false, data: null })),
+          PackagesAPI.getClientPackages(String(clientId)).catch(() => ({ success: false, data: [] as any[] })),
         ])
 
         if (cancelled) return
@@ -236,6 +314,9 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         const walletPayload = walletRes?.success && walletRes.data ? (walletRes.data as { wallets?: any[] }) : null
         const wList = Array.isArray(walletPayload?.wallets) ? walletPayload.wallets : []
         setPrepaidWallets(wList)
+
+        const pkgList = packagesRes?.success && Array.isArray(packagesRes.data) ? packagesRes.data : []
+        setClientPackages(pkgList)
 
         if (rewardSumRes?.success && rewardSumRes.data) {
           setRewardSummary(rewardSumRes.data as any)
@@ -478,6 +559,240 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
       setWalletLedgerLoading(false)
     }
   }, [clientId, toast])
+
+  const refreshClientPackages = useCallback(async () => {
+    const cid = clientId ? String(clientId) : ""
+    if (!cid) return
+    try {
+      const res = await PackagesAPI.getClientPackages(cid)
+      if (res.success && Array.isArray(res.data)) {
+        setClientPackages(res.data)
+      }
+    } catch {
+      /* best-effort */
+    }
+  }, [clientId])
+
+  const loadPackageServices = useCallback(async (cp: any) => {
+    const cpId = String(cp._id || cp.id || "")
+    const pkgRef = cp?.package_id
+    const catalogId =
+      typeof pkgRef === "object" ? String(pkgRef._id || pkgRef.id || "") : String(pkgRef || "")
+    if (!cpId || !catalogId) return
+
+    let shouldLoad = true
+    setPackageServicesCache((prev) => {
+      if (prev[cpId]?.loading) {
+        shouldLoad = false
+        return prev
+      }
+      return {
+        ...prev,
+        [cpId]: {
+          loading: true,
+          availableServices: [],
+          redeemedServices: [],
+          minServiceCount: 1,
+        },
+      }
+    })
+    if (!shouldLoad) return
+
+    try {
+      const [pkgRes, historyRes] = await Promise.all([
+        PackagesAPI.getById(catalogId),
+        PackagesAPI.getRedemptionHistory(cpId).catch(() => ({ success: false, data: null })),
+      ])
+
+      const redeemedIds = new Set<string>()
+      const redeemedAtByServiceId = new Map<string, string>()
+      if (historyRes?.success && historyRes.data?.history) {
+        for (const row of historyRes.data.history) {
+          if (row.is_reversed) continue
+          const redeemedAt = row.redeemed_at ? String(row.redeemed_at) : null
+          for (const svc of row.services_redeemed || []) {
+            const sid = svc?.service_id
+            if (!sid) continue
+            const id = String(sid)
+            redeemedIds.add(id)
+            if (redeemedAt && !redeemedAtByServiceId.has(id)) {
+              redeemedAtByServiceId.set(id, redeemedAt)
+            }
+          }
+        }
+      }
+
+      if (!pkgRes.success || !pkgRes.data) {
+        setPackageServicesCache((prev) => ({
+          ...prev,
+          [cpId]: {
+            loading: false,
+            availableServices: [],
+            redeemedServices: [],
+            minServiceCount: 1,
+          },
+        }))
+        return
+      }
+
+      const allServices = (pkgRes.data.services || [])
+        .map((row: any) => {
+          const svc = row?.service_id
+          const id =
+            typeof svc === "object" ? String(svc._id || svc.id || "") : String(svc || "")
+          const name =
+            typeof svc === "object"
+              ? String(svc.name || "Service").trim() || "Service"
+              : "Service"
+          if (!id) return null
+          return {
+            id,
+            name,
+            isOptional: row?.is_optional === true,
+          }
+        })
+        .filter(Boolean) as Array<{ id: string; name: string; isOptional?: boolean }>
+
+      const availableServices = allServices.filter((s) => !redeemedIds.has(s.id))
+      const redeemedServices = allServices
+        .filter((s) => redeemedIds.has(s.id))
+        .map((s) => ({
+          id: s.id,
+          name: s.name,
+          redeemedAt: redeemedAtByServiceId.get(s.id) ?? null,
+        }))
+
+      const minServiceCount = Math.max(1, Number(pkgRes.data.min_service_count) || 1)
+      setPackageServicesCache((prev) => ({
+        ...prev,
+        [cpId]: {
+          loading: false,
+          availableServices,
+          redeemedServices,
+          minServiceCount,
+        },
+      }))
+    } catch {
+      setPackageServicesCache((prev) => ({
+        ...prev,
+        [cpId]: {
+          loading: false,
+          availableServices: [],
+          redeemedServices: [],
+          minServiceCount: 1,
+        },
+      }))
+    }
+  }, [])
+
+  const toggleClientPackageExpanded = useCallback(
+    (cp: any) => {
+      const cpId = String(cp._id || cp.id || "")
+      if (!cpId) return
+      setExpandedClientPackageId((prev) => {
+        const next = prev === cpId ? null : cpId
+        if (next) void loadPackageServices(cp)
+        return next
+      })
+    },
+    [loadPackageServices]
+  )
+
+  const toggleRedeemServiceSelection = useCallback((clientPackageId: string, serviceId: string, checked: boolean) => {
+    setSelectedRedeemServices((prev) => {
+      const current = prev[clientPackageId] || []
+      const next = checked
+        ? current.includes(serviceId)
+          ? current
+          : [...current, serviceId]
+        : current.filter((id) => id !== serviceId)
+      return { ...prev, [clientPackageId]: next }
+    })
+  }, [])
+
+  const openRedeemConfirm = useCallback(
+    (cp: any) => {
+      const cpId = String(cp._id || cp.id || "")
+      const cache = packageServicesCache[cpId]
+      const selected = (selectedRedeemServices[cpId] || []).filter((id) =>
+        (cache?.availableServices || []).some((s) => s.id === id)
+      )
+      const availableCount = cache?.availableServices?.length ?? 0
+      const min = Math.min(cache?.minServiceCount ?? 1, Math.max(1, availableCount))
+      if (availableCount === 0) {
+        toast({
+          title: "Nothing to redeem",
+          description: "All package services have already been redeemed.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (selected.length < min) {
+        toast({
+          title: "Select services",
+          description: `Choose at least ${min} service${min === 1 ? "" : "s"} to redeem this sitting.`,
+          variant: "destructive",
+        })
+        return
+      }
+      const nameById = new Map((cache?.availableServices || []).map((s) => [s.id, s.name]))
+      setRedeemTarget({
+        clientPackageId: cpId,
+        packageName: clientPackageDisplayName(cp),
+        serviceIds: selected,
+        serviceNames: selected.map((id) => nameById.get(id) || "Service"),
+        minServiceCount: min,
+      })
+      setRedeemConfirmOpen(true)
+    },
+    [packageServicesCache, selectedRedeemServices, toast]
+  )
+
+  const confirmPackageRedeem = useCallback(async () => {
+    if (!redeemTarget) return
+    setRedeemingPackage(true)
+    try {
+      const res = await PackagesAPI.redeem(redeemTarget.clientPackageId, {
+        services: redeemTarget.serviceIds.map((service_id) => ({ service_id })),
+      })
+      if (!res.success) {
+        toast({
+          title: "Redemption failed",
+          description: res.message || "Could not redeem package sitting.",
+          variant: "destructive",
+        })
+        setPackageServicesCache((prev) => {
+          const next = { ...prev }
+          delete next[redeemTarget.clientPackageId]
+          return next
+        })
+        setSelectedRedeemServices((prev) => ({ ...prev, [redeemTarget.clientPackageId]: [] }))
+        const cpRow = clientPackages.find(
+          (row) => String(row._id || row.id) === redeemTarget.clientPackageId
+        )
+        if (cpRow) void loadPackageServices(cpRow)
+        return
+      }
+      toast({
+        title: "Package redeemed",
+        description: `${redeemTarget.serviceNames.join(", ")} — sitting recorded.`,
+      })
+      setRedeemConfirmOpen(false)
+      setRedeemTarget(null)
+      setSelectedRedeemServices((prev) => ({ ...prev, [redeemTarget.clientPackageId]: [] }))
+      setPackageServicesCache((prev) => {
+        const next = { ...prev }
+        delete next[redeemTarget.clientPackageId]
+        return next
+      })
+      setExpandedClientPackageId(null)
+      await refreshClientPackages()
+    } catch {
+      toast({ title: "Redemption failed", description: "Something went wrong.", variant: "destructive" })
+    } finally {
+      setRedeemingPackage(false)
+    }
+  }, [redeemTarget, refreshClientPackages, toast, clientPackages, loadPackageServices])
 
   const freeServicesRemainingDisplay = (() => {
     const d = membershipData as {
@@ -909,7 +1224,204 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
           </CollapsibleContent>
         </Collapsible>
 
+        <Separator className="shrink-0" />
 
+        <Collapsible
+          open={packagesOpen}
+          onOpenChange={setPackagesOpen}
+          className="flex flex-col min-h-0 shrink-0"
+        >
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="w-full text-left text-xs sm:text-sm font-semibold text-slate-600 mb-2 sm:mb-3 flex items-center justify-between gap-1.5 shrink-0 hover:bg-slate-50 rounded-lg px-1 py-0.5 -mx-1 transition-colors"
+            >
+              <span className="flex items-center gap-1.5 min-w-0">
+                <Boxes className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0 text-amber-600" />
+                Packages
+                <span className="font-normal text-slate-500">({activeClientPackages.length})</span>
+              </span>
+              <ChevronDown
+                className={`h-4 w-4 text-slate-500 transition-transform shrink-0 ${packagesOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col min-h-0 data-[state=closed]:hidden">
+            {activeClientPackages.length === 0 ? (
+              <p className="text-xs sm:text-sm text-slate-500 mb-1">No active packages</p>
+            ) : (
+              <ul className="space-y-2 mb-1">
+                {activeClientPackages.map((cp) => {
+                  const cpId = String(cp._id || cp.id)
+                  const isExpanded = expandedClientPackageId === cpId
+                  const cache = packageServicesCache[cpId]
+                  const selected = selectedRedeemServices[cpId] || []
+                  const availableServices = cache?.availableServices ?? []
+                  const redeemedServices = cache?.redeemedServices ?? []
+                  const minCount = Math.min(
+                    cache?.minServiceCount ?? 1,
+                    Math.max(1, availableServices.length)
+                  )
+                  const remaining = Number(cp.remaining_sittings) || 0
+                  const total = Number(cp.total_sittings) || remaining
+                  const purchaseDate = cp.purchase_date ? new Date(cp.purchase_date) : null
+                  const expiryDate = cp.expiry_date ? new Date(cp.expiry_date) : null
+                  const soldByName = clientPackageSoldByName(cp)
+                  const canRedeem =
+                    availableServices.length > 0 && selected.length >= minCount && !cache?.loading
+
+                  return (
+                    <li
+                      key={cpId}
+                      className="rounded-lg border border-slate-200/80 bg-slate-50/60 overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleClientPackageExpanded(cp)}
+                        className="w-full text-left px-2.5 py-2 sm:px-3 sm:py-2.5 flex items-start justify-between gap-2 hover:bg-slate-100/80 transition-colors"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs sm:text-sm font-medium text-slate-900 truncate">
+                            {clientPackageDisplayName(cp)}
+                          </p>
+                          <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5">
+                            {remaining} of {total} sitting{total === 1 ? "" : "s"} left
+                            {purchaseDate && !Number.isNaN(purchaseDate.getTime())
+                              ? ` · Purchased ${format(purchaseDate, "dd MMM yyyy")}`
+                              : ""}
+                            {soldByName ? ` · Sold by ${soldByName}` : ""}
+                            {expiryDate && !Number.isNaN(expiryDate.getTime())
+                              ? ` · Expires ${format(expiryDate, "dd MMM yyyy")}`
+                              : ""}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] sm:text-xs border-emerald-300 bg-emerald-50/80 text-emerald-700"
+                          >
+                            Active
+                          </Badge>
+                          <ChevronDown
+                            className={cn(
+                              "h-4 w-4 text-slate-500 transition-transform",
+                              isExpanded && "rotate-180"
+                            )}
+                          />
+                        </div>
+                      </button>
+
+                      {isExpanded ? (
+                        <div className="border-t border-slate-200/80 bg-white/70 px-2.5 py-2.5 sm:px-3 sm:py-3 space-y-2.5">
+                          <p className="text-[10px] sm:text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                            Redeem services
+                          </p>
+                          {cache?.loading ? (
+                            <div className="flex items-center gap-2 text-xs text-slate-500 py-2">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                              Loading services…
+                            </div>
+                          ) : availableServices.length === 0 && redeemedServices.length === 0 ? (
+                            <p className="text-xs text-slate-500">No services configured for this package.</p>
+                          ) : (
+                            <>
+                              {availableServices.length > 0 ? (
+                                <>
+                                  <p className="text-[10px] sm:text-xs text-slate-500">
+                                    Select at least {minCount} service{minCount === 1 ? "" : "s"} for this sitting.
+                                  </p>
+                                  <ul className="space-y-1.5 max-h-40 overflow-y-auto pr-0.5">
+                                    {availableServices.map((svc) => {
+                                      const checked = selected.includes(svc.id)
+                                      return (
+                                        <li key={svc.id}>
+                                          <label className="flex items-center gap-2 rounded-md border border-slate-200/70 bg-white px-2 py-1.5 cursor-pointer hover:bg-slate-50/80">
+                                            <Checkbox
+                                              checked={checked}
+                                              onCheckedChange={(v) =>
+                                                toggleRedeemServiceSelection(cpId, svc.id, v === true)
+                                              }
+                                            />
+                                            <Scissors className="h-3 w-3 text-indigo-500 shrink-0" />
+                                            <span className="text-xs sm:text-sm text-slate-800 truncate flex-1">
+                                              {svc.name}
+                                            </span>
+                                            {svc.isOptional ? (
+                                              <span className="text-[10px] text-slate-400 shrink-0">Optional</span>
+                                            ) : null}
+                                          </label>
+                                        </li>
+                                      )
+                                    })}
+                                  </ul>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    className="w-full h-8 text-xs sm:text-sm bg-amber-600 hover:bg-amber-700 text-white"
+                                    disabled={!canRedeem}
+                                    onClick={() => openRedeemConfirm(cp)}
+                                  >
+                                    Redeem sitting ({selected.length}/{minCount}+ selected)
+                                  </Button>
+                                </>
+                              ) : (
+                                <p className="text-xs text-slate-500">
+                                  All package services have been redeemed.
+                                  {remaining > 0
+                                    ? ` ${remaining} sitting${remaining === 1 ? "" : "s"} remain unused on this package.`
+                                    : ""}
+                                </p>
+                              )}
+                              {redeemedServices.length > 0 ? (
+                                <div className="space-y-1.5 pt-1 border-t border-slate-200/70">
+                                  <p className="text-[10px] sm:text-xs font-medium text-slate-500 uppercase tracking-wide">
+                                    Already redeemed
+                                  </p>
+                                  <ul className="space-y-1">
+                                    {redeemedServices.map((svc) => {
+                                      const redeemedDate =
+                                        svc.redeemedAt && !Number.isNaN(new Date(svc.redeemedAt).getTime())
+                                          ? format(new Date(svc.redeemedAt), "dd MMM yyyy")
+                                          : null
+                                      return (
+                                      <li
+                                        key={svc.id}
+                                        className="flex items-center gap-2 rounded-md border border-slate-100 bg-slate-50/80 px-2 py-1.5 opacity-75"
+                                      >
+                                        <Scissors className="h-3 w-3 text-slate-400 shrink-0" />
+                                        <div className="min-w-0 flex-1">
+                                          <span className="text-xs sm:text-sm text-slate-600 truncate block">
+                                            {svc.name}
+                                          </span>
+                                          {redeemedDate ? (
+                                            <span className="text-[10px] text-slate-400 block mt-0.5">
+                                              Redeemed {redeemedDate}
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                        <Badge
+                                          variant="outline"
+                                          className="text-[10px] shrink-0 border-slate-200 text-slate-500"
+                                        >
+                                          Redeemed
+                                        </Badge>
+                                      </li>
+                                      )
+                                    })}
+                                  </ul>
+                                </div>
+                              ) : null}
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
 
         <Separator className="shrink-0" />
 
@@ -1247,6 +1759,50 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         exitAfterPaymentSuccess={false}
         nestedChromeZClassName="z-[135]"
       />
+
+      <AlertDialog open={redeemConfirmOpen} onOpenChange={setRedeemConfirmOpen}>
+        <AlertDialogContent className="z-[140]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm package redemption</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  Redeem one sitting from <span className="font-medium text-foreground">{redeemTarget?.packageName}</span> for{" "}
+                  <span className="font-medium text-foreground">{displayName}</span>?
+                </p>
+                {redeemTarget?.serviceNames?.length ? (
+                  <ul className="list-disc pl-5 space-y-0.5">
+                    {redeemTarget.serviceNames.map((name) => (
+                      <li key={name}>{name}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                <p className="text-xs">This will use 1 sitting from the package balance.</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={redeemingPackage}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-amber-600 hover:bg-amber-700"
+              disabled={redeemingPackage}
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmPackageRedeem()
+              }}
+            >
+              {redeemingPackage ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Redeeming…
+                </>
+              ) : (
+                "Confirm redemption"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

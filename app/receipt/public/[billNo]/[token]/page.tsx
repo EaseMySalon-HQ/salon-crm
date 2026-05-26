@@ -55,6 +55,14 @@ interface ReceiptData {
 }
 
 function mapSaleToReceiptData(saleData: any): ReceiptData {
+  const receiptPayments = buildReceiptPaymentsFromSale({
+    date: saleData.date,
+    payments: saleData.payments,
+    paymentHistory: saleData.paymentHistory || [],
+    loyaltyPointsRedeemed: saleData.loyaltyPointsRedeemed,
+    loyaltyDiscountAmount: saleData.loyaltyDiscountAmount,
+  })
+
   return {
     id: saleData._id || saleData.id,
     billNo: saleData.billNo,
@@ -91,16 +99,12 @@ function mapSaleToReceiptData(saleData: any): ReceiptData {
       }, 0) || (saleData.grossTotal - saleData.taxAmount),
     paymentMode: saleData.paymentMode,
     payments:
-      saleData.payments?.length > 0
-        ? buildReceiptPaymentsFromSale({
-            date: saleData.date,
-            payments: saleData.payments,
-            paymentHistory: saleData.paymentHistory || [],
-          })
+      receiptPayments.length > 0
+        ? receiptPayments
         : [
             {
               type: (String(saleData.paymentMode || "cash").split(",")[0]?.trim().toLowerCase() ||
-                "unknown") as "cash" | "card" | "online" | "wallet" | "unknown",
+                "unknown") as "cash" | "card" | "online" | "wallet" | "reward" | "unknown",
               amount: saleData.grossTotal,
               recordedAt: new Date(saleData.date).toISOString(),
             },

@@ -124,6 +124,7 @@ const createStaffBodySchema = z
           .strict()
       )
       .optional(),
+    avatar: z.string().max(7_000_000).optional(),
   })
   .strict();
 
@@ -145,6 +146,7 @@ const staffUpdateBodySchema = z
     workSchedule: z.array(z.unknown()).optional(),
     permissions: z.array(z.unknown()).optional(),
     permissionsTemplate: z.string().nullable().optional(),
+    avatar: z.string().max(7_000_000).optional(),
   })
   .passthrough();
 

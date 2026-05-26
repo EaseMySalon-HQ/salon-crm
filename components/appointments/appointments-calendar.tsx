@@ -4,9 +4,10 @@ import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHand
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
-import { Pencil, Eye, ChevronDown, Square, List, Calendar, Heart } from "lucide-react"
+import { Pencil, Eye, Heart, PlusCircle, Receipt } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { AppointmentsViewSettingsPopover } from "@/components/appointments/appointments-view-settings-popover"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   ContextMenu,
@@ -45,6 +46,7 @@ import {
   APPOINTMENT_CARD_CONTEXT_STATUS_OPTIONS,
   canChangeAppointmentStatusViaContextMenu,
   getAppointmentIdsForCardStatusUpdate,
+  appointmentsOnSameVisitDate,
   type AppointmentCardContextStatus,
 } from "@/lib/appointment-calendar-helpers"
 import {
@@ -156,7 +158,13 @@ interface StaffMember {
 interface AppointmentsCalendarProps {
   onShowCancelled?: () => void
   initialAppointmentId?: string
-  onOpenAppointmentForm?: (params?: { date?: string; time?: string; staffId?: string; appointmentId?: string }) => void
+  onOpenAppointmentForm?: (params?: {
+    date?: string
+    time?: string
+    staffId?: string
+    appointmentId?: string
+    openCheckoutDirectly?: boolean
+  }) => void
   view?: "list" | "calendar"
   onSwitchView?: (v: "list" | "calendar") => void
 }
@@ -165,14 +173,15 @@ export const AppointmentsCalendar = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarProps
 >(({ onShowCancelled, initialAppointmentId, onOpenAppointmentForm, view = "list", onSwitchView }, ref) => {
-  const { user } = useAuth()
+  const { user, hasPermission } = useAuth()
+  const canCreateAppointment = hasPermission("appointments", "create")
+  const canQuickSale = hasPermission("sales", "create")
   const router = useRouter()
   const { toast } = useToast()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [staffList, setStaffList] = useState<StaffMember[]>([])
   const [staffFilter, setStaffFilter] = useState<string | null>(null)
-  const [showColorLegend, setShowColorLegend] = useState(false)
   const [loading, setLoading] = useState(true)
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null)
   const [showDetails, setShowDetails] = useState(false)
@@ -759,7 +768,7 @@ export const AppointmentsCalendar = forwardRef<
         const syncGroup = newStatus === 'arrived' || newStatus === 'missed'
         const list = appointments.map((a: any) => {
           if (a._id === selectedAppointment._id) return { ...a, status: newStatus }
-          if (syncGroup && bgId && a.bookingGroupId === bgId) {
+          if (syncGroup && bgId && a.bookingGroupId === bgId && appointmentsOnSameVisitDate(a, selectedAppointment)) {
             return { ...a, status: newStatus }
           }
           return a
@@ -892,7 +901,7 @@ export const AppointmentsCalendar = forwardRef<
 
   return (
     <div className="space-y-8">
-      {/* Filter bar - same as Calendar View (Staff, Date, Day chips, Color Code) - no Compact/Comfortable or Show Walk-in */}
+      {/* Filter bar - staff, date, day chips; view options in settings */}
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-3">
           <Select
@@ -951,100 +960,38 @@ export const AppointmentsCalendar = forwardRef<
           </div>
         </div>
         <div className="flex-1" />
-        {/* List/Calendar toggle - just before Color Code */}
-        {onSwitchView && (
-          <div className="flex gap-1 rounded-xl overflow-hidden border border-slate-200 bg-white/80 p-0.5">
-            <button
-              type="button"
-              onClick={() => onSwitchView("list")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
-                view === "list"
-                  ? "bg-violet-600 text-white shadow-sm"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              <List className="h-3.5 w-3.5 shrink-0" />
-              List
-            </button>
-            <button
-              type="button"
-              onClick={() => onSwitchView("calendar")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
-                view === "calendar"
-                  ? "bg-violet-600 text-white shadow-sm"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              <Calendar className="h-3.5 w-3.5 shrink-0" />
-              Calendar
-            </button>
-          </div>
-        )}
-        {/* Color Code - right side */}
-        <div className="relative">
+        {canCreateAppointment && onOpenAppointmentForm ? (
           <Button
-            variant="outline"
-            size="sm"
-            className="rounded-xl border-slate-200 gap-1.5"
-            onClick={() => setShowColorLegend((v) => !v)}
+            type="button"
+            onClick={() => onOpenAppointmentForm()}
+            className="h-9 shrink-0 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 font-semibold shadow-md shadow-violet-500/20 transition-all hover:shadow-lg"
           >
-            <Square className="h-3.5 w-3.5 rounded bg-red-500" />
-            Color Code
-            <ChevronDown className="h-4 w-4" />
+            <PlusCircle className="mr-2 h-4 w-4" />
+            New Appointment
           </Button>
-          {showColorLegend && (
-            <>
-              <div
-                className="fixed inset-0 z-[100]"
-                aria-hidden
-                onClick={() => setShowColorLegend(false)}
-              />
-              <div className="absolute right-0 top-full mt-1 z-[101] rounded-xl border border-slate-200 bg-white p-3 shadow-lg min-w-[220px] max-w-[min(calc(100vw-2rem),280px)]">
-                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-                  Status
-                </div>
-                <div className="space-y-1.5 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-slate-500" />
-                    Scheduled
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-cyan-500" />
-                    Confirmed
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-blue-500" />
-                    Arrived
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-amber-500" />
-                    Partial payment
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-indigo-500" />
-                    Service started
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-emerald-500" />
-                    Completed
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-rose-600" />
-                    No show
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-red-500" />
-                    Cancelled
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 shrink-0 rounded bg-slate-600" />
-                    Blocked time
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        ) : null}
+        {canQuickSale && onOpenAppointmentForm ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() =>
+              onOpenAppointmentForm({
+                date: selectedDate,
+                openCheckoutDirectly: true,
+              })
+            }
+            className="h-9 shrink-0 rounded-xl border-slate-200 bg-white/80 px-4 font-semibold text-slate-800 hover:bg-slate-50"
+          >
+            <Receipt className="mr-2 h-4 w-4 text-violet-600" />
+            Quick Sale
+          </Button>
+        ) : null}
+        <AppointmentsViewSettingsPopover
+          view={view}
+          onSwitchView={onSwitchView}
+          title="List settings"
+          description="View and display options"
+        />
       </div>
 
       {/* Appointments for selected date — columns by status */}

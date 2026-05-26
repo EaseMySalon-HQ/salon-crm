@@ -5,7 +5,17 @@ export type RewardPointsSettingsLike = {
   redeemPointsStep?: number
   redeemRupeeStep?: number
   minRedeemPoints?: number
+  minBillAmountForRedemption?: number
   maxRedeemPercentOfBill?: number
+}
+
+function billMeetsMinAmountForRedemption(
+  settings: RewardPointsSettingsLike,
+  subtotalBeforeLoyalty: number
+) {
+  const minBill = Math.max(0, Number(settings.minBillAmountForRedemption) || 0)
+  if (minBill <= 0) return true
+  return (Number(subtotalBeforeLoyalty) || 0) >= minBill
 }
 
 function maxRedeemPointsForBill(
@@ -13,6 +23,9 @@ function maxRedeemPointsForBill(
   subtotalBeforeLoyalty: number,
   currentBalance: number
 ) {
+  if (!billMeetsMinAmountForRedemption(settings, subtotalBeforeLoyalty)) {
+    return 0
+  }
   const pct = Math.min(100, Math.max(0, Number(settings.maxRedeemPercentOfBill) || 0))
   const maxDiscount = (Number(subtotalBeforeLoyalty) || 0) * (pct / 100)
   const step = Number(settings.redeemPointsStep) || 1
@@ -37,6 +50,15 @@ export function previewRedemptionLive(
 ): { ok: boolean; error?: string; pointsToRedeem: number; discountRupees: number } {
   const minR = Number(settings.minRedeemPoints) || 0
   let pts = Math.floor(Number(pointsRequested) || 0)
+  const minBill = Math.max(0, Number(settings.minBillAmountForRedemption) || 0)
+  if (pts > 0 && minBill > 0 && !billMeetsMinAmountForRedemption(settings, billSubtotalBeforeLoyalty)) {
+    return {
+      ok: false,
+      error: `Reward points can only be redeemed on bills above ₹${minBill}`,
+      pointsToRedeem: 0,
+      discountRupees: 0,
+    }
+  }
   if (pts > 0 && pts < minR) {
     return { ok: false, error: `Minimum redemption is ${minR} points`, pointsToRedeem: 0, discountRupees: 0 }
   }

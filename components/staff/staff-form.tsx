@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Save } from "lucide-react"
+import { Camera, Save, Upload, X } from "lucide-react"
 import { useRouter } from "next/navigation"
 
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,8 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { ProfilePhotoCropDialog } from "@/components/ui/profile-photo-crop-dialog"
 import { useToast } from "@/hooks/use-toast"
 import { StaffAPI, CommissionProfileAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
@@ -112,6 +114,74 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
   const [loadingProfiles, setLoadingProfiles] = useState(true)
   const [commissionDropdownOpen, setCommissionDropdownOpen] = useState(false)
   const [workScheduleOpen, setWorkScheduleOpen] = useState(false)
+  const [profilePhoto, setProfilePhoto] = useState<string | null>(staff?.avatar || null)
+  const [photoChanged, setPhotoChanged] = useState(false)
+  const [cropDialogOpen, setCropDialogOpen] = useState(false)
+  const [cropSourceImage, setCropSourceImage] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setProfilePhoto(staff?.avatar || null)
+    setPhotoChanged(false)
+  }, [staff?._id, staff?.avatar])
+
+  const staffInitials = (name?: string) =>
+    (name || "?")
+      .split(/\s+/)
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2)
+
+  const handlePhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Invalid file type",
+        description: "Please select a PNG, JPG, or WebP image.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        title: "File too large",
+        description: "Please select an image smaller than 5MB.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const dataUrl = (e.target?.result as string) || null
+      if (!dataUrl) return
+      setCropSourceImage(dataUrl)
+      setCropDialogOpen(true)
+    }
+    reader.readAsDataURL(file)
+    if (fileInputRef.current) fileInputRef.current.value = ""
+  }
+
+  const handleCropComplete = (croppedDataUrl: string) => {
+    setProfilePhoto(croppedDataUrl)
+    setPhotoChanged(true)
+    setCropSourceImage(null)
+  }
+
+  const handleCropDialogOpenChange = (open: boolean) => {
+    setCropDialogOpen(open)
+    if (!open) setCropSourceImage(null)
+  }
+
+  const handleRemovePhoto = () => {
+    setProfilePhoto(null)
+    setPhotoChanged(true)
+    if (fileInputRef.current) fileInputRef.current.value = ""
+  }
 
   const form = useForm<z.infer<typeof staffSchema>>({
     resolver: zodResolver(staffSchema),
@@ -187,6 +257,12 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
           : undefined,
       }
 
+      if (photoChanged) {
+        staffData.avatar = profilePhoto || ""
+      } else if (profilePhoto) {
+        staffData.avatar = profilePhoto
+      }
+
       console.log("Submitting staff data:", staffData)
       
       let response
@@ -227,8 +303,71 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
   }
 
   return (
-    <Form {...form}>
+    <>
+      <ProfilePhotoCropDialog
+        open={cropDialogOpen}
+        imageSrc={cropSourceImage}
+        onOpenChange={handleCropDialogOpenChange}
+        onCropComplete={handleCropComplete}
+      />
+      <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 sm:p-5">
+          <p className="text-sm font-medium text-slate-900 mb-3">Profile photo</p>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="relative shrink-0">
+              <Avatar className="h-20 w-20 border-2 border-white shadow-sm">
+                <AvatarImage
+                  src={profilePhoto || undefined}
+                  alt={form.watch("name") || "Staff"}
+                />
+                <AvatarFallback className="bg-violet-100 text-violet-700 text-lg font-semibold">
+                  {staffInitials(form.watch("name"))}
+                </AvatarFallback>
+              </Avatar>
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                className="absolute -bottom-1 -right-1 h-8 w-8 rounded-full bg-white shadow-md"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Camera className="h-4 w-4" />
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/jpg,image/webp"
+                onChange={handlePhotoUpload}
+                className="hidden"
+              />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                Upload a photo for this staff member. Shown on the appointments calendar and staff directory.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload className="h-4 w-4 mr-2" />
+                  {profilePhoto ? "Change photo" : "Upload photo"}
+                </Button>
+                {profilePhoto ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={handleRemovePhoto}>
+                    <X className="h-4 w-4 mr-2" />
+                    Remove
+                  </Button>
+                ) : null}
+              </div>
+              <p className="text-xs text-muted-foreground">PNG, JPG, or WebP · Max 5MB</p>
+            </div>
+          </div>
+        </div>
+
         <div className="grid gap-6 md:grid-cols-2">
           <FormField
             control={form.control}
@@ -658,5 +797,6 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
         </div>
       </form>
     </Form>
+    </>
   )
 }

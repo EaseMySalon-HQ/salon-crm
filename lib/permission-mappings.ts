@@ -75,6 +75,7 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   notifications: "notification_settings",
   "plan-billing": "plan_billing",
   membership: "membership",
+  packages: "sales",
   "prepaid-wallet": "payment_settings",
   services: "services",
   products: "products",

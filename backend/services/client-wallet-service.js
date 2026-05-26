@@ -1265,6 +1265,78 @@ async function getLiabilitySummary(branchId, businessModels) {
   };
 }
 
+async function listClientLiability(branchId, businessModels, opts = {}) {
+  const { ClientWallet } = businessModels;
+  const branchOid = new mongoose.Types.ObjectId(String(branchId));
+  const page = Math.max(1, Number(opts.page) || 1);
+  const limit = Math.min(Math.max(1, Number(opts.limit) || 25), 100);
+  const skip = (page - 1) * limit;
+  const search = String(opts.search || '').trim();
+
+  const baseMatch = {
+    branchId: branchOid,
+    status: 'active',
+    remainingBalance: { $gt: 0 },
+  };
+
+  const pipeline = [
+    { $match: baseMatch },
+    {
+      $group: {
+        _id: '$clientId',
+        totalOutstanding: { $sum: '$remainingBalance' },
+        walletCount: { $sum: 1 },
+        soonestExpiry: { $min: '$effectiveExpiryDate' },
+      },
+    },
+    {
+      $lookup: {
+        from: 'clients',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'client',
+      },
+    },
+    { $addFields: { client: { $arrayElemAt: ['$client', 0] } } },
+  ];
+
+  if (search) {
+    pipeline.push({
+      $match: {
+        $or: [
+          { 'client.name': { $regex: search, $options: 'i' } },
+          { 'client.phone': { $regex: search, $options: 'i' } },
+          { 'client.email': { $regex: search, $options: 'i' } },
+        ],
+      },
+    });
+  }
+
+  pipeline.push({ $sort: { totalOutstanding: -1, 'client.name': 1 } });
+
+  const [countRows, pageRows] = await Promise.all([
+    ClientWallet.aggregate([...pipeline, { $count: 'total' }]),
+    ClientWallet.aggregate([...pipeline, { $skip: skip }, { $limit: limit }]),
+  ]);
+
+  const total = countRows[0]?.total || 0;
+  return {
+    rows: pageRows.map((row) => ({
+      clientId: String(row._id),
+      name: row.client?.name || '',
+      phone: row.client?.phone || '',
+      email: row.client?.email || '',
+      totalOutstanding: Number(row.totalOutstanding) || 0,
+      walletCount: Number(row.walletCount) || 0,
+      soonestExpiry: row.soonestExpiry || null,
+    })),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit) || 1,
+  };
+}
+
 module.exports = {
   getMainBusiness,
   mergeClientWalletSettings,
@@ -1279,5 +1351,6 @@ module.exports = {
   openBalanceWalletForClient,
   reverseWalletRedemptionsForDeletedSale,
   getLiabilitySummary,
+  listClientLiability,
   DEFAULT_SETTINGS,
 };

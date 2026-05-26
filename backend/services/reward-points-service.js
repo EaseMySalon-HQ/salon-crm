@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
   redeemPointsStep: 100,
   redeemRupeeStep: 10,
   minRedeemPoints: 100,
+  minBillAmountForRedemption: 0,
   maxRedeemPercentOfBill: 20,
   earnOnWalletPurchaseLines: false,
   /** Eligible spend for earning: include service line totals (default on for new merges). */
@@ -66,7 +67,16 @@ function rupeeDiscountFromPoints(settings, points) {
   return Math.floor(points / step) * rupee;
 }
 
+function billMeetsMinAmountForRedemption(settings, subtotalBeforeLoyalty) {
+  const minBill = Math.max(0, Number(settings.minBillAmountForRedemption) || 0);
+  if (minBill <= 0) return true;
+  return (Number(subtotalBeforeLoyalty) || 0) >= minBill;
+}
+
 function maxRedeemPointsForBill(settings, subtotalBeforeLoyalty, currentBalance) {
+  if (!billMeetsMinAmountForRedemption(settings, subtotalBeforeLoyalty)) {
+    return 0;
+  }
   const pct = Math.min(100, Math.max(0, Number(settings.maxRedeemPercentOfBill) || 0));
   const maxDiscount = (Number(subtotalBeforeLoyalty) || 0) * (pct / 100);
   const step = Number(settings.redeemPointsStep) || 1;
@@ -82,6 +92,15 @@ function maxRedeemPointsForBill(settings, subtotalBeforeLoyalty, currentBalance)
 function previewRedemption(settings, billSubtotalBeforeLoyalty, pointsRequested, currentBalance) {
   const minR = Number(settings.minRedeemPoints) || 0;
   let pts = Math.floor(Number(pointsRequested) || 0);
+  const minBill = Math.max(0, Number(settings.minBillAmountForRedemption) || 0);
+  if (pts > 0 && minBill > 0 && !billMeetsMinAmountForRedemption(settings, billSubtotalBeforeLoyalty)) {
+    return {
+      ok: false,
+      error: `Reward points can only be redeemed on bills above ₹${minBill}`,
+      pointsToRedeem: 0,
+      discountRupees: 0,
+    };
+  }
   if (pts > 0 && pts < minR) {
     return { ok: false, error: `Minimum redemption is ${minR} points`, pointsToRedeem: 0, discountRupees: 0 };
   }
@@ -166,12 +185,18 @@ function validateSaleLoyaltyBeforeSave(saleBody, settings, eligibleSubtotalBefor
     err.status = 400;
     throw err;
   }
+  const minBill = Math.max(0, Number(settings.minBillAmountForRedemption) || 0);
   const gross = Number(saleBody.grossTotal) || 0;
   const subtotalBefore = gross + disc;
   const capBase =
     eligibleSubtotalBeforeLoyalty != null && Number.isFinite(Number(eligibleSubtotalBeforeLoyalty))
       ? Math.max(0, Number(eligibleSubtotalBeforeLoyalty))
       : subtotalBefore;
+  if (redeemed > 0 && minBill > 0 && capBase < minBill) {
+    const err = new Error(`Reward points can only be redeemed on bills above ₹${minBill}`);
+    err.status = 400;
+    throw err;
+  }
   const expectedDisc = rupeeDiscountFromPoints(settings, redeemed);
   if (Math.abs(expectedDisc - disc) > 0.05) {
     const err = new Error('Loyalty discount does not match points redeemed');
@@ -227,7 +252,9 @@ async function processSaleCompletionLoyalty({ savedSale, branchId, businessModel
       const bs = await BusinessSettings.findOne().select('paymentConfiguration').lean();
       const { mergePaymentConfiguration, eligibleRedemptionSubtotal } = require('../lib/payment-redemption-eligibility');
       const pc = mergePaymentConfiguration(bs?.paymentConfiguration);
-      eligibleRewardSub = eligibleRedemptionSubtotal(savedSale.items || [], pc, 'reward');
+      eligibleRewardSub = eligibleRedemptionSubtotal(savedSale.items || [], pc, 'reward', {
+        cartDiscountAmount: Number(savedSale.discount) || 0,
+      });
     }
   } catch (cfgErr) {
     logger.warn('[reward-points] payment configuration load failed', cfgErr?.message || cfgErr);
@@ -523,6 +550,53 @@ async function getClientSummary(branchId, businessModels, clientId) {
   };
 }
 
+async function listClientBalances(businessModels, branchId, opts = {}) {
+  const { Client } = businessModels;
+  const branchOid = new mongoose.Types.ObjectId(String(branchId));
+  const page = Math.max(1, Number(opts.page) || 1);
+  const limit = Math.min(Math.max(1, Number(opts.limit) || 25), 100);
+  const skip = (page - 1) * limit;
+  const search = String(opts.search || '').trim();
+  const includeZero = opts.includeZero === true;
+
+  const query = { branchId: branchOid };
+  if (!includeZero) {
+    query.rewardPointsBalance = { $gt: 0 };
+  }
+  if (search) {
+    query.$or = [
+      { name: { $regex: search, $options: 'i' } },
+      { phone: { $regex: search, $options: 'i' } },
+      { email: { $regex: search, $options: 'i' } },
+    ];
+  }
+
+  const [rows, total] = await Promise.all([
+    Client.find(query)
+      .select('name phone email rewardPointsBalance updatedAt')
+      .sort({ rewardPointsBalance: -1, name: 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Client.countDocuments(query),
+  ]);
+
+  return {
+    rows: rows.map((c) => ({
+      id: String(c._id),
+      name: c.name || '',
+      phone: c.phone || '',
+      email: c.email || '',
+      rewardPointsBalance: Number(c.rewardPointsBalance) || 0,
+      updatedAt: c.updatedAt || null,
+    })),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit) || 1,
+  };
+}
+
 module.exports = {
   DEFAULT_SETTINGS,
   mergeRewardPointsSettings,
@@ -535,6 +609,7 @@ module.exports = {
   reverseSaleLoyalty,
   grantManualBonus,
   getClientSummary,
+  listClientBalances,
   rupeeDiscountFromPoints,
   maxRedeemPointsForBill,
 };

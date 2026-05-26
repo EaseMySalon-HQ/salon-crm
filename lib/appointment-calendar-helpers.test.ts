@@ -11,6 +11,7 @@ import {
   getAppointmentStatusSheetHeaderClass,
   saleRecordIsPartialPayment,
   getAppointmentEditAppearanceStatus,
+  getAppointmentIdsForCardStatusUpdate,
 } from "./appointment-calendar-helpers"
 
 describe("saleRecordIsPartialPayment", () => {
@@ -143,16 +144,37 @@ describe("getAppointmentGridWindowMinutes", () => {
 })
 
 describe("getBookingGroupSiblings", () => {
-  const a = { _id: "a", bookingGroupId: "g1" as string | null }
-  const b = { _id: "b", bookingGroupId: "g1" as string | null }
-  const c = { _id: "c", bookingGroupId: null as string | null }
+  const a = { _id: "a", bookingGroupId: "g1" as string | null, date: "2026-05-22" }
+  const b = { _id: "b", bookingGroupId: "g1" as string | null, date: "2026-05-22" }
+  const c = { _id: "c", bookingGroupId: null as string | null, date: "2026-05-22" }
+  const d = { _id: "d", bookingGroupId: "g1" as string | null, date: "2026-05-23" }
 
   it("returns only anchor when no bookingGroupId", () => {
     expect(getBookingGroupSiblings([a, b, c], c)).toEqual([c])
   })
 
-  it("returns all members of the same group", () => {
-    expect(getBookingGroupSiblings([a, b, c], a)).toEqual([a, b])
+  it("returns same-day members of the group", () => {
+    expect(getBookingGroupSiblings([a, b, d], a)).toEqual([a, b])
+  })
+
+  it("excludes siblings on a different calendar date", () => {
+    expect(getBookingGroupSiblings([a, b, d], d)).toEqual([d])
+  })
+})
+
+describe("getAppointmentIdsForCardStatusUpdate", () => {
+  const loaded = [
+    { _id: "a1", bookingGroupId: "g1", date: "2026-05-22" },
+    { _id: "a2", bookingGroupId: "g1", date: "2026-05-22" },
+    { _id: "a3", bookingGroupId: "g1", date: "2026-05-23" },
+  ]
+
+  it("syncs arrived only to same-day group siblings", () => {
+    expect(getAppointmentIdsForCardStatusUpdate(loaded[0], loaded, "arrived")).toEqual(["a1", "a2"])
+  })
+
+  it("service_started updates only the acted-on card", () => {
+    expect(getAppointmentIdsForCardStatusUpdate(loaded[0], loaded, "service_started")).toEqual(["a1"])
   })
 })
 

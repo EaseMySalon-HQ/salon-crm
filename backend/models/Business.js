@@ -270,6 +270,8 @@ const businessSchema = new mongoose.Schema({
     redeemPointsStep: { type: Number, default: 100, min: 1 },
     redeemRupeeStep: { type: Number, default: 10, min: 0 },
     minRedeemPoints: { type: Number, default: 100, min: 0 },
+    /** Minimum eligible bill subtotal (₹) before reward points may be redeemed; 0 = no minimum. */
+    minBillAmountForRedemption: { type: Number, default: 0, min: 0 },
     maxRedeemPercentOfBill: { type: Number, default: 20, min: 0, max: 100 },
     /** Exclude prepaid_wallet lines from eligible spend for earning (synced with earnPointsOnPrepaidPlan) */
     earnOnWalletPurchaseLines: { type: Boolean, default: false },
