@@ -1,15 +1,25 @@
-/** Sale.time is typically "HH:mm" (24h). Returns "hh:mm AM/PM" with zero-padded hour. */
-export function formatBillTimeStringTo12h(time24: string | undefined | null): string | null {
-  if (time24 == null || !String(time24).trim()) return null
-  const m = String(time24).trim().match(/^(\d{1,2}):(\d{2})/)
+/** Sale.time is typically "HH:mm" (24h). Also accepts "h:mm AM/PM". Returns "hh:mm AM/PM". */
+export function formatBillTimeStringTo12h(timeRaw: string | undefined | null): string | null {
+  if (timeRaw == null || !String(timeRaw).trim()) return null
+  const trimmed = String(timeRaw).trim()
+
+  const twelveHourMatch = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\b/i)
+  if (twelveHourMatch) {
+    const min = twelveHourMatch[2].padStart(2, "0")
+    const ap = twelveHourMatch[3].toUpperCase()
+    let h12 = parseInt(twelveHourMatch[1], 10) % 12
+    if (h12 === 0) h12 = 12
+    return `${String(h12).padStart(2, "0")}:${min} ${ap}`
+  }
+
+  const m = trimmed.match(/^(\d{1,2}):(\d{2})/)
   if (!m) return null
   const h = parseInt(m[1], 10)
   const min = m[2].padStart(2, "0")
   const ampm = h >= 12 ? "PM" : "AM"
   let h12 = h % 12
   if (h12 === 0) h12 = 12
-  const hh = String(h12).padStart(2, "0")
-  return `${hh}:${min} ${ampm}`
+  return `${String(h12).padStart(2, "0")}:${min} ${ampm}`
 }
 
 /** Time from full ISO datetime, displayed in IST as "hh:mm AM/PM". */
