@@ -12,7 +12,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { format } from "date-fns"
 import { formatPaymentRecordedDateLabel, getSalePaymentLinesWithDates, normalizePaymentModeLabel } from "@/lib/sale-payment-lines"
 import { getSaleAdjustmentSummary } from "@/lib/sale-adjustments"
-import { getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST, formatDateIST } from "@/lib/date-utils"
+import { formatDateIST, getTodayIST, getStartOfDayIST, getEndOfDayIST, toDateStringIST } from "@/lib/date-utils"
+import { formatBillTimeStringTo12h, formatInstantToTime12hIST } from "@/lib/sale-datetime-format"
 import { Calendar } from "@/components/ui/calendar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -35,38 +36,6 @@ import { useToast } from "@/hooks/use-toast"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
-
-/** Sale.time is typically "HH:mm" (24h). Returns "hh:mm AM/PM" with zero-padded hour. */
-function formatBillTimeStringTo12h(time24: string | undefined | null): string | null {
-  if (time24 == null || !String(time24).trim()) return null
-  const m = String(time24).trim().match(/^(\d{1,2}):(\d{2})/)
-  if (!m) return null
-  let h = parseInt(m[1], 10)
-  const min = m[2].padStart(2, "0")
-  const ampm = h >= 12 ? "PM" : "AM"
-  let h12 = h % 12
-  if (h12 === 0) h12 = 12
-  const hh = String(h12).padStart(2, "0")
-  return `${hh}:${min} ${ampm}`
-}
-
-/** Time from full ISO datetime, displayed in IST as "hh:mm AM/PM". */
-function formatInstantToTime12hIST(isoDate: Date): string {
-  const s = new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  }).format(isoDate)
-  const match = s.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i)
-  if (!match) return s
-  let h = parseInt(match[1], 10)
-  const min = match[2].padStart(2, "0")
-  const ap = match[3].toUpperCase()
-  let h12 = h % 12
-  if (h12 === 0) h12 = 12
-  return `${String(h12).padStart(2, "0")}:${min} ${ap}`
-}
 
 function formatSalesRecordDateTimeParts(sale: { date: string; time?: string }): { dateLine: string; timeLine: string } | null {
   const d = new Date(sale.date)

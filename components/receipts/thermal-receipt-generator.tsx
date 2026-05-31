@@ -1,12 +1,19 @@
 "use client"
 
 import { Receipt } from "@/lib/data"
+import { formatReceiptDiscountPercent } from "@/lib/receipt-discount-format"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatPaymentRecordedDateLabelFromIso, receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
+import {
+  buildReceiptTaxDetailHtml,
+  renderReceiptTotalsHtml,
+} from "@/lib/receipt-totals-breakdown"
+
+const thermalFormat = (amount: number) => `₹${amount.toFixed(2)}`
 
 /** Thermal HTML rows for split tips (one line per staff). */
 function thermalTipRowsHtml(receipt: Receipt): string {
@@ -229,7 +236,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
                   <td>${(item as any).hsnSacCode || "-"}</td>
                   <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
                   <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
-                  <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
+                  <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? formatReceiptDiscountPercent(item.discount) : "₹" + item.discount.toFixed(2)) : "-"}</td>
                   <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
                   <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
                 </tr>
@@ -238,74 +245,10 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           </div>
 
           <div class="totals">
-            <div class="total-line">
-              <span>Subtotal (Excl. Tax):</span>
-              <span>₹${((receipt as any).subtotalExcludingTax ?? receipt.subtotal).toFixed(2)}</span>
-            </div>
-            ${receipt.discount > 0 ? `
-              <div class="total-line">
-                <span>Discount:</span>
-                <span>-₹${receipt.discount.toFixed(2)}</span>
-              </div>
-            ` : ''}
-            ${receipt.tax > 0 ? `
-              <div class="total-line">
-                <span>Tax (GST):</span>
-                <span>₹${receipt.tax.toFixed(2)}</span>
-              </div>
-              ${(() => {
-                // Calculate service and product tax separately
-                const serviceTax = receipt.items
-                  .filter(item => item.type === 'service')
-                  .reduce((sum, item) => {
-                    const itemTax = (item.price * item.quantity) * 0.05 // 5% service tax
-                    return sum + itemTax
-                  }, 0)
-                
-                const productTax = receipt.items
-                  .filter(item => item.type === 'product')
-                  .reduce((sum, item) => {
-                    const itemTax = (item.price * item.quantity) * 0.18 // 18% product tax (assuming standard)
-                    return sum + itemTax
-                  }, 0)
-
-                let breakdown = ''
-
-                if (serviceTax > 0) {
-                  breakdown += `
-                    <div class="tax-breakdown">
-                      <div class="total-line">Service Tax (5%): ₹${serviceTax.toFixed(2)}</div>
-                      <div class="total-line">CGST (2.5%): ₹${(serviceTax / 2).toFixed(2)}</div>
-                      <div class="total-line">SGST (2.5%): ₹${(serviceTax / 2).toFixed(2)}</div>
-                    </div>
-                  `
-                }
-
-                if (productTax > 0) {
-                  breakdown += `
-                    <div class="tax-breakdown">
-                      <div class="total-line">Product Tax (18%): ₹${productTax.toFixed(2)}</div>
-                      <div class="total-line">CGST (9%): ₹${(productTax / 2).toFixed(2)}</div>
-                      <div class="total-line">SGST (9%): ₹${(productTax / 2).toFixed(2)}</div>
-                    </div>
-                  `
-                }
-
-                return breakdown || `
-                  <div class="tax-breakdown">
-                    <div class="total-line">CGST (2.5%): ₹${(receipt.tax / 2).toFixed(2)}</div>
-                    <div class="total-line">SGST (2.5%): ₹${(receipt.tax / 2).toFixed(2)}</div>
-                  </div>
-                `
-              })()}
-            ` : ''}
-            ${thermalTipRowsHtml(receipt)}
-            ${receipt.roundOff && Math.abs(receipt.roundOff) > 0.01 ? `
-              <div class="total-line round-off">
-                <span>Round Off:</span>
-                <span>₹${receipt.roundOff.toFixed(2)}</span>
-              </div>
-            ` : ''}
+            ${renderReceiptTotalsHtml(receipt, thermalFormat, {
+              taxDetailHtml: buildReceiptTaxDetailHtml(receipt, thermalFormat),
+              skipGrandTotal: true,
+            })}
             ${buildThermalSettlementTotals(receipt)}
           </div>
 
@@ -511,7 +454,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
                 <td>${(item as any).hsnSacCode || "-"}</td>
                 <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
                 <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
-                <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : "₹" + item.discount.toFixed(2)) : "-"}</td>
+                <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? formatReceiptDiscountPercent(item.discount) : "₹" + item.discount.toFixed(2)) : "-"}</td>
                 <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
                 <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
               </tr>

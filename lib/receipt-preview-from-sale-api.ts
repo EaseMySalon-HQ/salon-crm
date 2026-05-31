@@ -1,5 +1,6 @@
 import type { Receipt } from "@/lib/data"
-import { buildReceiptPaymentsFromSale } from "@/lib/sale-payment-lines"
+import { buildReceiptPaymentsWithLegacyFallback } from "@/lib/sale-payment-lines"
+import { formatSaleTimeForDisplay } from "@/lib/sale-datetime-format"
 
 function mapSaleTipLinesForReceipt(raw: unknown): Array<{ staffName: string; amount: number }> | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined
@@ -21,28 +22,19 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
   const billNo = String(saleData.billNo || "")
   const items = saleData.items || []
 
-  const payments = buildReceiptPaymentsFromSale({
+  const paymentsFinal = buildReceiptPaymentsWithLegacyFallback({
     date: saleData.date,
     payments: saleData.payments,
     paymentHistory: saleData.paymentHistory || [],
     loyaltyPointsRedeemed: saleData.loyaltyPointsRedeemed,
     loyaltyDiscountAmount: saleData.loyaltyDiscountAmount,
+    status: saleData.status,
+    invoiceDeleted: saleData.invoiceDeleted,
+    paymentStatus: saleData.paymentStatus,
+    grossTotal: saleData.grossTotal,
+    paymentMode: saleData.paymentMode,
+    tip: saleData.tip,
   })
-
-  const paymentsFinal =
-    payments.length > 0
-      ? payments
-      : [
-          {
-            type: (saleData.paymentMode?.split?.(",")?.[0]?.toLowerCase() || "cash") as
-              | "cash"
-              | "card"
-              | "online"
-              | "unknown",
-            amount: saleData.grossTotal,
-            recordedAt: new Date(saleData.date).toISOString(),
-          },
-        ]
 
   const subtotalExcludingTax =
     items.reduce((sum: number, item: any) => {
@@ -52,6 +44,19 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
           : (item.total || 0) - (item.taxAmount || 0)
       return sum + base
     }, 0) || (saleData.grossTotal - saleData.taxAmount)
+
+  const discountType =
+    String(saleData.discountType || "percentage").toLowerCase() === "fixed"
+      ? "fixed"
+      : "percentage"
+  const cartDiscount = Math.max(0, Number(saleData.discount) || 0)
+  const loyaltyDiscountAmount = Math.max(0, Number(saleData.loyaltyDiscountAmount) || 0)
+  const grossTotal = Number(saleData.grossTotal) || 0
+  const tipAmount = Number(saleData.tip) || 0
+  const roundOff =
+    saleData.receiptTotalsBreakdown?.roundOff != null
+      ? Number(saleData.receiptTotalsBreakdown.roundOff)
+      : 0
 
   const taxBreakdown = saleData.taxBreakdown
     ? {
@@ -68,7 +73,7 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
     clientName: saleData.customerName,
     clientPhone: saleData.customerPhone || "N/A",
     date: saleData.date,
-    time: new Date(saleData.date).toLocaleTimeString(),
+    time: formatSaleTimeForDisplay({ date: saleData.date, time: saleData.time }),
     items:
       items.map((item: any) => ({
         id: item.name,
@@ -87,15 +92,21 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
         priceExcludingGST: item.priceExcludingGST,
         taxRate: item.taxRate,
         lineSource: item.lineSource,
+        isMembershipFree: item.isMembershipFree,
+        membershipDiscountPercent: item.membershipDiscountPercent,
       })) || [],
     subtotal: saleData.netTotal,
     subtotalExcludingTax,
-    tip: saleData.tip || 0,
+    tip: tipAmount,
     tipStaffName: saleData.tipStaffName,
     tipLines: mapSaleTipLinesForReceipt(saleData.tipLines),
-    discount: 0,
+    discount: cartDiscount,
+    discountType,
     tax: saleData.taxAmount,
-    total: saleData.grossTotal + (saleData.tip || 0),
+    roundOff,
+    total: grossTotal + tipAmount,
+    totalsBreakdown: saleData.receiptTotalsBreakdown ?? undefined,
+    loyaltyDiscountAmount,
     payments: paymentsFinal,
     staffId: id,
     staffName: saleData.staffName,
@@ -114,4 +125,69 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
         ? Number(saleData.billChangeCreditedToWallet)
         : undefined,
   } as Receipt
+}
+
+/** Maps bill receipt page / thermal payload to ReceiptPreview shape. */
+export function receiptPreviewFromBillPageData(data: {
+  id: string
+  billNo: string
+  customerName: string
+  customerPhone: string
+  date: string
+  time: string
+  items: any[]
+  netTotal: number
+  taxAmount: number
+  grossTotal: number
+  subtotalExcludingTax?: number
+  tip?: number
+  tipStaffName?: string
+  tipLines?: Array<{ staffName?: string; amount: number }>
+  discount?: number
+  discountType?: string
+  loyaltyDiscountAmount?: number
+  receiptTotalsBreakdown?: Receipt["totalsBreakdown"]
+  payments?: any[]
+  paymentHistory?: any[]
+  loyaltyPointsRedeemed?: number
+  status?: string
+  invoiceDeleted?: boolean
+  paymentStatus?: any
+  paymentMode?: string
+  staffName?: string
+  taxBreakdown?: Receipt["taxBreakdown"]
+  shareToken?: string
+  billChangeCreditedToWallet?: number
+}): Receipt {
+  return receiptPreviewReceiptFromSaleApi({
+    _id: data.id,
+    id: data.id,
+    billNo: data.billNo,
+    customerName: data.customerName,
+    customerPhone: data.customerPhone,
+    date: data.date,
+    time: data.time,
+    items: data.items,
+    netTotal: data.netTotal,
+    taxAmount: data.taxAmount,
+    grossTotal: data.grossTotal,
+    tip: data.tip,
+    tipStaffName: data.tipStaffName,
+    tipLines: data.tipLines,
+    discount: data.discount,
+    discountType: data.discountType,
+    loyaltyDiscountAmount: data.loyaltyDiscountAmount,
+    receiptTotalsBreakdown: data.receiptTotalsBreakdown,
+    payments: data.payments,
+    paymentHistory: data.paymentHistory,
+    loyaltyPointsRedeemed: data.loyaltyPointsRedeemed,
+    status: data.status,
+    invoiceDeleted: data.invoiceDeleted,
+    paymentStatus: data.paymentStatus,
+    paymentMode: data.paymentMode,
+    staffName: data.staffName,
+    taxBreakdown: data.taxBreakdown,
+    shareToken: data.shareToken,
+    billChangeCreditedToWallet: data.billChangeCreditedToWallet,
+  })
 }

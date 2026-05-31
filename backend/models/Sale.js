@@ -145,6 +145,8 @@ const saleSchema = new mongoose.Schema({
   loyaltyReversedAt: { type: Date, default: null },
   /** When customer paid cash above bill due and excess was credited to prepaid wallet (POS). Amount in ₹. */
   billChangeCreditedToWallet: { type: Number, default: undefined, min: 0 },
+  /** Checkout totals bifurcation for receipt display (discounts, subtotals). */
+  receiptTotalsBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
 }, {
   timestamps: true
 });

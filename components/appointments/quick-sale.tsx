@@ -77,6 +77,7 @@ import {
 } from "@/lib/data"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
+import { buildReceiptTotalsBreakdown } from "@/lib/receipt-totals-breakdown"
 import {
   ServicesAPI,
   ProductsAPI,
@@ -536,7 +537,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [productItems, setProductItems] = useState<ProductItem[]>([])
   const [discountValue, setDiscountValue] = useState(0)
   const [discountPercentage, setDiscountPercentage] = useState(0)
-  const [giftVoucher, setGiftVoucher] = useState("")
   const [tipLines, setTipLines] = useState<CheckoutTipLine[]>([])
   const tip = useMemo(
     () => tipLines.reduce((a, l) => a + Math.max(0, Number(l.amount) || 0), 0),
@@ -648,8 +648,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // Plans for membership section (fetched when customer selected)
   const [plans, setPlans] = useState<Array<{ _id: string; id?: string; planName: string; price: number; durationInDays: number }>>([])
 
-  // Add Items section: gift-voucher | prepaid (none selected by default)
-  const [addItemSection, setAddItemSection] = useState<'gift-voucher' | 'prepaid' | null>(null)
+  // Add Items section: prepaid (none selected by default)
+  const [addItemSection, setAddItemSection] = useState<"prepaid" | null>(null)
 
   // Membership items (rows added from Membership section)
   const [membershipItems, setMembershipItems] = useState<MembershipItem[]>([])
@@ -5063,6 +5063,35 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               : undefined
             : linkedAppointmentId || undefined
 
+        const subtotalExcludingTaxForReceipt = receiptItems.reduce(
+          (sum, item) => sum + (item.total - ((item as any).taxAmount || 0)),
+          0
+        )
+        let cartDiscountInclTax = 0
+        let cartDiscountLabel = "Cart Discount"
+        if (isValueDiscountActive && discountValue > 0) {
+          cartDiscountInclTax = discountValue
+        } else if (isGlobalDiscountActive && discountPercentage > 0) {
+          cartDiscountInclTax =
+            (baseTotalForSale * discountPercentage) / (100 - discountPercentage)
+          cartDiscountLabel = `Cart Discount (${discountPercentage}%)`
+        }
+        const totalsBreakdown = buildReceiptTotalsBreakdown({
+          items: receiptItems,
+          tax: calculatedTax,
+          totalInclTaxBeforeLoyalty: calculatedTotal + loyaltyDiscountAmountSave,
+          roundOff,
+          loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+          tip,
+          cartDiscountAmount: cartDiscountInclTax,
+          cartDiscountLabel,
+          membershipDiscountAmount: membershipServiceDiscountPreTax,
+          lineDiscountAmount: globalCartDiscountActiveQuick
+            ? undefined
+            : lineLevelDiscountNonMembership,
+          subtotalPreTax: subtotalExcludingTaxForReceipt,
+        })
+
         const saleData = {
           billNo: receiptNumber,
           customerId: getCustomerId(customer),
@@ -5213,6 +5242,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             serviceRate: taxBreakdown.serviceRate,
             productTaxByRate: taxBreakdown.productTaxByRate,
           },
+          receiptTotalsBreakdown: totalsBreakdown,
           loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
           loyaltyDiscountAmount: loyaltyDiscountAmountSave,
           ...(creditChangeEffective &&
@@ -5624,7 +5654,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         ? staff.find((s) => (s._id || s.id) === tipStaffId)
         : null
 
-      const subtotalExcludingTax = receiptItems.reduce((sum, item) => sum + (item.total - ((item as any).taxAmount || 0)), 0)
+      const subtotalExcludingTax = subtotalExcludingTaxForReceipt
       const receipt: any = {
         id: Date.now().toString(),
         receiptNumber: receiptNumber,
@@ -5637,9 +5667,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         subtotal: subtotal,
         subtotalExcludingTax,
         tip: tip,
-        discount: totalDiscount,
+        discount: isValueDiscountActive ? discountValue : isGlobalDiscountActive ? discountPercentage : 0,
+        discountType: isValueDiscountActive ? "fixed" : "percentage",
         tax: calculatedTax,
         roundOff: roundOff,
+        totalsBreakdown,
+        loyaltyDiscountAmount: loyaltyDiscountAmountSave,
         // Receipt total = bill amount (calculatedTotal) + tip (what customer pays)
         total: calculatedTotal + tip,
         taxBreakdown: taxBreakdown,
@@ -5790,7 +5823,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setProductItems([])
     setDiscountValue(0)
     setDiscountPercentage(0)
-    setGiftVoucher("")
     setTipLines([])
     setIsGlobalDiscountActive(false)
     setIsValueDiscountActive(false)
@@ -7566,14 +7598,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               </Button>
               <Button
                 type="button"
-                variant={addItemSection === 'gift-voucher' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setAddItemSection((prev) => (prev === 'gift-voucher' ? null : 'gift-voucher'))}
-              >
-                Add Gift Voucher
-              </Button>
-              <Button
-                type="button"
                 variant={addItemSection === 'prepaid' ? 'default' : 'outline'}
                 size="sm"
                 onClick={() => setAddItemSection((prev) => (prev === 'prepaid' ? null : 'prepaid'))}
@@ -7711,7 +7735,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   )}
                 </div>
               )}
-              {addItemSection === 'gift-voucher' && null}
               {addItemSection === "prepaid" && (
                 <div className="rounded-xl border border-amber-200/90 bg-gradient-to-br from-amber-50/90 to-orange-50/40 p-4 space-y-3 shadow-sm">
                   {!selectedCustomer || !isLikelyMongoObjectId(getCustomerId(selectedCustomer) || undefined) ? (
@@ -7888,7 +7911,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
               )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="discount-value">Disc. by Value</Label>
                 <div className="relative">
@@ -7920,16 +7943,6 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   />
                   <span className="absolute right-3 top-1/2 transform -translate-y-1/2 text-sm">%</span>
                 </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="gift-voucher">Redeem Gift Voucher</Label>
-                <Input
-                  id="gift-voucher"
-                  value={giftVoucher}
-                  onChange={(e) => setGiftVoucher(e.target.value)}
-                  placeholder="Eg: YKL/VPPM"
-                />
               </div>
             </div>
           </div>

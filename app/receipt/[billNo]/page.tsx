@@ -12,7 +12,9 @@ import { SettingsAPI } from "@/lib/api"
 import { SalesAPI } from "@/lib/api"
 import { ThermalReceiptGenerator } from "@/components/receipts/thermal-receipt-generator"
 import { useToast } from "@/hooks/use-toast"
-import { buildReceiptPaymentsFromSale } from "@/lib/sale-payment-lines"
+import { buildReceiptPaymentsWithLegacyFallback } from "@/lib/sale-payment-lines"
+import { formatSaleTimeForDisplay } from "@/lib/sale-datetime-format"
+import { receiptPreviewFromBillPageData } from "@/lib/receipt-preview-from-sale-api"
 
 interface ReceiptData {
   id: string
@@ -60,6 +62,10 @@ interface ReceiptData {
   shareToken?: string
   /** Excess cash credited to prepaid wallet (POS); amount in ₹ */
   billChangeCreditedToWallet?: number
+  discount?: number
+  discountType?: string
+  loyaltyDiscountAmount?: number
+  receiptTotalsBreakdown?: import("@/lib/data").ReceiptTotalsBreakdown
 }
 
 export default function ReceiptPage() {
@@ -147,10 +153,9 @@ export default function ReceiptPage() {
               tipStaffName: frontendData.tipStaffName,
               tipLines: frontendData.tipLines,
               paymentMode: frontendData.payments?.[0]?.type || 'Cash',
-              payments:
-                buildReceiptPaymentsFromSale({
+              payments: buildReceiptPaymentsWithLegacyFallback({
                   date: frontendData.date,
-                  payments: (frontendData.payments || [{ type: 'Cash', amount: frontendData.total }]).map(
+                  payments: (frontendData.payments || []).map(
                     (p: { type?: string; amount?: number }) => ({
                       mode: p.type,
                       amount: p.amount,
@@ -159,6 +164,16 @@ export default function ReceiptPage() {
                   paymentHistory: frontendData.paymentHistory || [],
                   loyaltyPointsRedeemed: frontendData.loyaltyPointsRedeemed,
                   loyaltyDiscountAmount: frontendData.loyaltyDiscountAmount,
+                  status:
+                    typeof frontendData.status === "string"
+                      ? frontendData.status
+                      : frontendData.invoiceDeleted
+                        ? "cancelled"
+                        : undefined,
+                  invoiceDeleted: frontendData.invoiceDeleted,
+                  grossTotal: frontendData.total - (frontendData.tip || 0),
+                  paymentMode: frontendData.payments?.[0]?.type || "",
+                  tip: frontendData.tip || 0,
                 }),
               staffName: frontendData.staffName,
               status:
@@ -200,12 +215,18 @@ export default function ReceiptPage() {
             console.log('🔍 Sale payments array:', saleData.payments)
             console.log('🔍 Sale payment mode:', saleData.paymentMode)
             
-            const receiptPaymentsFromSale = buildReceiptPaymentsFromSale({
+            const receiptPaymentsFromSale = buildReceiptPaymentsWithLegacyFallback({
               date: saleData.date,
               payments: saleData.payments,
               paymentHistory: saleData.paymentHistory || [],
               loyaltyPointsRedeemed: saleData.loyaltyPointsRedeemed,
               loyaltyDiscountAmount: saleData.loyaltyDiscountAmount,
+              status: saleData.status,
+              invoiceDeleted: saleData.invoiceDeleted,
+              paymentStatus: saleData.paymentStatus,
+              grossTotal: saleData.grossTotal,
+              paymentMode: saleData.paymentMode,
+              tip: saleData.tip,
             })
 
             const receiptData: ReceiptData = {
@@ -214,7 +235,7 @@ export default function ReceiptPage() {
               customerName: saleData.customerName,
               customerPhone: saleData.customerPhone || 'N/A',
               date: saleData.date,
-              time: new Date(saleData.date).toLocaleTimeString(),
+              time: formatSaleTimeForDisplay({ date: saleData.date, time: saleData.time }),
               items: (saleData.items || []).map((item: any) => ({
                 name: item.name,
                 type: item.type,
@@ -249,20 +270,7 @@ export default function ReceiptPage() {
                     .filter((tl: { amount: number }) => tl.amount > 0.005)
                 : undefined,
               paymentMode: saleData.paymentMode,
-              payments:
-                receiptPaymentsFromSale.length > 0
-                  ? receiptPaymentsFromSale
-                  : [
-                      {
-                        type: (saleData.paymentMode?.split?.(",")?.[0]?.toLowerCase() || "cash") as
-                          | "cash"
-                          | "card"
-                          | "online"
-                          | "unknown",
-                        amount: saleData.grossTotal,
-                        recordedAt: new Date(saleData.date).toISOString(),
-                      },
-                    ],
+              payments: receiptPaymentsFromSale,
               staffName: saleData.staffName,
               status: typeof saleData.status === "string" ? saleData.status : saleData.invoiceDeleted ? "cancelled" : "completed",
               invoiceDeleted: saleData.invoiceDeleted === true,
@@ -277,6 +285,10 @@ export default function ReceiptPage() {
                 Number(saleData.billChangeCreditedToWallet) > 0.005
                   ? Number(saleData.billChangeCreditedToWallet)
                   : undefined,
+              discount: Math.max(0, Number(saleData.discount) || 0),
+              discountType: saleData.discountType,
+              loyaltyDiscountAmount: Math.max(0, Number(saleData.loyaltyDiscountAmount) || 0),
+              receiptTotalsBreakdown: saleData.receiptTotalsBreakdown ?? undefined,
             }
             
             console.log('🔍 Final receipt data from API:', receiptData)
@@ -373,53 +385,14 @@ ${publicUrl}`
     if (!receipt || !businessSettings) return
     
     // Convert receipt data to the format expected by ThermalReceiptGenerator
-      const receiptForThermal = {
-      id: receipt.id,
-      receiptNumber: receipt.billNo,
-      clientId: receipt.id,
-      clientName: receipt.customerName,
-      clientPhone: receipt.customerPhone,
-      date: receipt.date,
-      time: receipt.time,
-      subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
-      items: receipt.items.map(item => ({
-        id: Math.random().toString(),
-        name: item.name,
-        type: item.type as "service" | "product",
-        quantity: item.quantity,
-        price: item.price,
-        total: item.total,
-        discount: item.discount ?? 0,
-        discountType: (item.discountType || "percentage") as "percentage" | "fixed",
-        staffId: "",
-        staffName: item.staffName || "",
-        staffContributions: item.staffContributions,
-        hsnSacCode: (item as any).hsnSacCode || "",
-        taxAmount: (item as any).taxAmount,
-        priceExcludingGST: (item as any).priceExcludingGST,
-        taxRate: (item as any).taxRate,
-        lineSource: (item as any).lineSource,
-      })),
-      subtotal: receipt.netTotal,
-      tip: receipt.tip || 0,
-      tipStaffName: receipt.tipStaffName,
-      tipLines: receipt.tipLines,
-      status: receipt.status,
-      invoiceDeleted: receipt.invoiceDeleted,
-      discount: 0,
-      tax: receipt.taxAmount,
-      roundOff: 0,
-      total: receipt.grossTotal + (receipt.tip || 0),
-      payments: receipt.payments.map(payment => ({
-        type: payment.type as "cash" | "card" | "online" | "wallet" | "unknown",
+      const receiptForThermal = receiptPreviewFromBillPageData({
+      ...receipt,
+      payments: receipt.payments.map((payment) => ({
+        mode: payment.type,
         amount: payment.amount,
         recordedAt: payment.recordedAt,
       })),
-      staffId: "",
-      staffName: receipt.staffName,
-      notes: "",
-      billChangeCreditedToWallet: receipt.billChangeCreditedToWallet,
-    }
+    })
 
     const { printThermalReceipt } = ThermalReceiptGenerator({ 
       receipt: receiptForThermal,
@@ -501,54 +474,16 @@ ${publicUrl}`
       {/* Receipt Content */}
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-          <ReceiptPreview 
-            receipt={{
-              id: receipt.id,
-              receiptNumber: receipt.billNo,
-              clientId: receipt.id,
-              clientName: receipt.customerName,
-              clientPhone: receipt.customerPhone,
-              date: receipt.date,
-              time: receipt.time,
-              items: receipt.items?.map(item => ({
-                id: item.name,
-                name: item.name,
-                type: item.type as "service" | "product",
-                price: item.price,
-                quantity: item.quantity,
-                discount: item.discount ?? 0,
-                discountType: (item.discountType || 'percentage') as "percentage" | "fixed",
-                staffId: receipt.id,
-                staffName: item.staffName || receipt.staffName,
-                staffContributions: item.staffContributions,
-                total: item.total,
-                hsnSacCode: (item as any).hsnSacCode || '',
-                taxAmount: (item as any).taxAmount,
-                priceExcludingGST: (item as any).priceExcludingGST,
-                taxRate: (item as any).taxRate
-              })) || [],
-              subtotal: receipt.netTotal,
-              subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
-              tip: receipt.tip || 0,
-              tipStaffName: receipt.tipStaffName,
-              tipLines: receipt.tipLines,
-              discount: 0,
-              tax: receipt.taxAmount,
-              total: receipt.grossTotal + (receipt.tip || 0),
-              payments: receipt.payments?.map(payment => ({
-                type: (payment?.type || 'unknown') as "cash" | "card" | "online" | "wallet" | "unknown",
-                amount: payment?.amount || 0,
-                recordedAt: payment?.recordedAt,
-              })) || [],
-              staffId: receipt.id,
-              staffName: receipt.staffName,
-              notes: '',
-              taxBreakdown: receipt.taxBreakdown,
-              status: receipt.status,
-              invoiceDeleted: receipt.invoiceDeleted,
-              billChangeCreditedToWallet: receipt.billChangeCreditedToWallet,
-            }} 
-            businessSettings={businessSettings} 
+          <ReceiptPreview
+            receipt={receiptPreviewFromBillPageData({
+              ...receipt,
+              payments: receipt.payments.map((payment) => ({
+                mode: payment.type,
+                amount: payment.amount,
+                recordedAt: payment.recordedAt,
+              })),
+            })}
+            businessSettings={businessSettings}
           />
         </div>
       </div>

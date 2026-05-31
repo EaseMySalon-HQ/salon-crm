@@ -704,10 +704,6 @@ export function AppointmentForm({
       setCustomerSearch(client.name)
       onClientSelect?.(client)
       if (!isEditMode || !appointmentId) {
-        toast({
-          title: "Client updated",
-          description: `${client.name} will be used for this checkout and appointment.`,
-        })
         return
       }
       try {

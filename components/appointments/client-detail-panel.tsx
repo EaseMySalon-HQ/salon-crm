@@ -34,13 +34,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Checkbox } from "@/components/ui/checkbox"
 import { SalesAPI, MembershipAPI, AppointmentsAPI, ClientWalletAPI, RewardPointsAPI, PackagesAPI } from "@/lib/api"
@@ -50,7 +43,7 @@ import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import { flattenClientWalletLedger, walletActivityStatusDisplay, type ClientWalletLedgerRow } from "@/lib/client-wallet-ledger"
 import { billNotesForCustomerDisplay } from "@/lib/quick-sale-helpers"
-import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
+import { SettleDuesDrawer } from "@/components/appointments/settle-dues-drawer"
 import { useToast } from "@/hooks/use-toast"
 
 interface CustomerNote {
@@ -149,38 +142,6 @@ function appointmentNotesDedupeKey(apt: any): string {
   return `id:${String(apt?._id || apt?.id || "")}`
 }
 
-/** Unpaid/partial rows for Settle Dues list — aligned with Quick Sale `fetchUnpaidBills` mapping. */
-function mapSalesToUnpaidBillRows(sales: any[]): any[] {
-  const unpaid = sales.filter((sale: any) => {
-    const remainingAmount = Number(sale.paymentStatus?.remainingAmount) || 0
-    return remainingAmount > 0
-  })
-  const rows = unpaid.map((sale: any) => ({
-    _id: sale._id || sale.id,
-    id: sale._id || sale.id,
-    billNo: sale.billNo,
-    date: sale.date,
-    time: sale.time || "00:00",
-    grossTotal: sale.grossTotal || sale.netTotal || 0,
-    totalAmount: sale.grossTotal || sale.netTotal || 0,
-    paidAmount: sale.paymentStatus?.paidAmount || 0,
-    remainingAmount: sale.paymentStatus?.remainingAmount || 0,
-    dueDate: sale.paymentStatus?.dueDate,
-    items: sale.items || [],
-    customerName: sale.customerName,
-    staffName: sale.staffName || "Unassigned Staff",
-    status: sale.paymentStatus?.status || sale.status || "partial",
-    paymentStatus: sale.paymentStatus,
-    paymentHistory: sale.paymentHistory || [],
-  }))
-  rows.sort((a, b) => {
-    const ta = new Date(a.date || 0).getTime()
-    const tb = new Date(b.date || 0).getTime()
-    return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb)
-  })
-  return rows
-}
-
 export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelProps) {
   const { formatAmount } = useCurrency()
   const { toast } = useToast()
@@ -268,20 +229,13 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     setWalletLedgerRows([])
     setPrepaidWallets([])
     setRewardSummary(null)
-    setDuesListDialogOpen(false)
-    setDuesDialogBills([])
-    setCollectDuesOpen(false)
-    setCollectDuesSale(null)
+    setSettleDuesOpen(false)
   }, [clientId])
 
   const [loadingNotes, setLoadingNotes] = useState(false)
   const appointmentNotesFetched = useRef<string | null>(null)
 
-  const [collectDuesOpen, setCollectDuesOpen] = useState(false)
-  const [collectDuesSale, setCollectDuesSale] = useState<any>(null)
-  const [duesListDialogOpen, setDuesListDialogOpen] = useState(false)
-  const [duesDialogBills, setDuesDialogBills] = useState<any[]>([])
-  const [duesDialogLoading, setDuesDialogLoading] = useState(false)
+  const [settleDuesOpen, setSettleDuesOpen] = useState(false)
 
   useEffect(() => {
     if (!clientId) {
@@ -423,12 +377,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
   const initial = (displayName?.charAt(0) || "?").toUpperCase()
   const activeMembershipPlanName = getActiveMembershipPlanName(membershipData)
 
-  const closeCollectDuesSheet = useCallback(() => {
-    setCollectDuesOpen(false)
-    setCollectDuesSale(null)
-  }, [])
-
-  const openDuesListDialog = useCallback(async () => {
+  const openDuesListDialog = useCallback(() => {
     if (duesUnpaid <= 0) return
     const phone = String(displayPhone || "").trim()
     if (!phone) {
@@ -439,99 +388,8 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
       })
       return
     }
-    setDuesListDialogOpen(true)
-    setDuesDialogLoading(true)
-    try {
-      const res = await SalesAPI.getByClient(phone)
-      const sales = Array.isArray(res?.data) ? res.data : []
-      const unpaid = mapSalesToUnpaidBillRows(sales)
-      setDuesDialogBills(unpaid)
-      if (unpaid.length === 0) {
-        toast({
-          title: "Nothing to collect",
-          description: "No unpaid bills were found. Try refreshing.",
-        })
-        setDuesListDialogOpen(false)
-        setStatsVersion((v) => v + 1)
-      }
-    } catch {
-      toast({
-        title: "Error",
-        description: "Failed to load unpaid bills. Please try again.",
-        variant: "destructive",
-      })
-      setDuesListDialogOpen(false)
-    } finally {
-      setDuesDialogLoading(false)
-    }
+    setSettleDuesOpen(true)
   }, [duesUnpaid, displayPhone, toast])
-
-  const handleCollectPaymentFromDuesList = useCallback(
-    async (bill: any) => {
-      const sid = String(bill._id || bill.id || "").trim()
-      if (!sid) return
-      setDuesDialogLoading(true)
-      try {
-        const res = await SalesAPI.getById(sid)
-        if (!res?.success || !res?.data) {
-          toast({
-            title: "Could not open payment",
-            description: (res as { error?: string })?.error || "Failed to load the invoice.",
-            variant: "destructive",
-          })
-          return
-        }
-        const remaining = Number(res.data?.paymentStatus?.remainingAmount ?? 0) || 0
-        if (remaining <= 0.02) {
-          toast({
-            title: "Already paid",
-            description: "This invoice has no remaining balance.",
-          })
-          const phone = String(displayPhone || "").trim()
-          if (phone) {
-            const r2 = await SalesAPI.getByClient(phone)
-            const sales = Array.isArray(r2?.data) ? r2.data : []
-            setDuesDialogBills(mapSalesToUnpaidBillRows(sales))
-          }
-          return
-        }
-        setCollectDuesSale(res.data)
-        setDuesListDialogOpen(false)
-        setCollectDuesOpen(true)
-      } catch {
-        toast({
-          title: "Error",
-          description: "Could not load the bill. Try again.",
-          variant: "destructive",
-        })
-      } finally {
-        setDuesDialogLoading(false)
-      }
-    },
-    [displayPhone, toast]
-  )
-
-  const handleDuesPaymentCollected = useCallback(async () => {
-    setStatsVersion((v) => v + 1)
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("appointments-refresh"))
-    }
-    setCollectDuesOpen(false)
-    setCollectDuesSale(null)
-    const phone = String(displayPhone || "").trim()
-    if (!phone) return
-    try {
-      const res = await SalesAPI.getByClient(phone)
-      const sales = Array.isArray(res?.data) ? res.data : []
-      const unpaid = mapSalesToUnpaidBillRows(sales)
-      setDuesDialogBills(unpaid)
-      if (unpaid.length > 0) {
-        setDuesListDialogOpen(true)
-      }
-    } catch {
-      /* list refresh is best-effort */
-    }
-  }, [displayPhone])
 
   const openClientWalletLedger = useCallback(async () => {
     const cid = clientId ? String(clientId) : ""
@@ -926,7 +784,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
               onClick={() => {
                 void openDuesListDialog()
               }}
-              disabled={duesDialogLoading || !String(displayPhone || "").trim()}
+              disabled={!String(displayPhone || "").trim()}
               title={
                 !String(displayPhone || "").trim()
                   ? "Add a phone number to this client to collect dues"
@@ -937,9 +795,6 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
               <span className="text-slate-600 flex items-center gap-2 min-w-0">
                 <AlertCircle className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-amber-500 shrink-0" aria-hidden />
                 <span className="min-w-0">Dues / Unpaid</span>
-                {duesDialogLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" aria-hidden />
-                ) : null}
               </span>
               <span className="font-semibold text-amber-600 truncate ml-2 tabular-nums">{formatAmount(duesUnpaid)}</span>
             </button>
@@ -1648,116 +1503,12 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         </DialogContent>
       </Dialog>
 
-      <Sheet open={duesListDialogOpen} onOpenChange={setDuesListDialogOpen}>
-        <SheetContent
-          side="right"
-          overlayClassName="z-[135]"
-          className={cn(
-            "z-[135] flex h-full max-h-[100dvh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-xl",
-          )}
-        >
-          <div className="shrink-0 border-b px-6 pb-4 pt-6 pr-14">
-            <SheetHeader className="space-y-1.5 p-0 text-left">
-              <SheetTitle className="text-xl font-bold text-slate-900">Settle Dues — {displayName}</SheetTitle>
-              <SheetDescription className="text-sm text-slate-600">
-                Unpaid and partially paid invoices. Choose one to collect payment.
-              </SheetDescription>
-            </SheetHeader>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-            {duesDialogLoading && duesDialogBills.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-16 text-sm text-slate-600">
-                <Loader2 className="h-8 w-8 shrink-0 animate-spin text-indigo-500" aria-hidden />
-                Loading bills…
-              </div>
-            ) : duesDialogBills.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-slate-500">
-                <CreditCard className="h-12 w-12 text-slate-300" aria-hidden />
-                <p className="text-sm">No pending bills found.</p>
-              </div>
-            ) : (
-              <div className="space-y-4 pb-2">
-                <div className="rounded-lg border border-red-200 bg-red-50/90 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="h-5 w-5 shrink-0 text-red-600" aria-hidden />
-                      <span className="font-semibold text-red-900">Total outstanding</span>
-                    </div>
-                    <span className="text-xl font-bold tabular-nums text-red-600 sm:text-2xl">
-                      {formatAmount(
-                        duesDialogBills.reduce((sum, bill) => sum + (Number(bill.remainingAmount) || 0), 0)
-                      )}
-                    </span>
-                  </div>
-                </div>
-                {duesDialogBills.map((bill) => {
-                  const paid = Number(bill.paidAmount) || 0
-                  const isPartial = paid > 0.02
-                  return (
-                    <div
-                      key={String(bill.id)}
-                      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition-colors hover:bg-slate-50/80"
-                    >
-                      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-                        <div>
-                          <h3 className="text-base font-semibold text-slate-900">Bill #{bill.billNo}</h3>
-                          <p className="text-sm text-slate-600">
-                            {bill.date
-                              ? `${format(new Date(bill.date), "dd MMM yyyy")} at ${String(bill.time || "00:00")}`
-                              : "—"}
-                          </p>
-                          <p className="text-sm text-slate-600">Staff: {bill.staffName}</p>
-                        </div>
-                        <Badge variant={isPartial ? "secondary" : "destructive"}>
-                          {isPartial ? "Partial" : "Unpaid"}
-                        </Badge>
-                      </div>
-                      <div className="mb-3 grid grid-cols-1 gap-3 rounded-lg bg-slate-50 p-3 sm:grid-cols-3">
-                        <div>
-                          <p className="text-xs text-slate-600">Total amount</p>
-                          <p className="text-lg font-semibold tabular-nums text-slate-900">
-                            {formatAmount(Number(bill.totalAmount) || 0)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-600">Paid amount</p>
-                          <p className="text-lg font-semibold tabular-nums text-emerald-700">
-                            {formatAmount(paid)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-600">Remaining</p>
-                          <p className="text-lg font-bold tabular-nums text-red-600">
-                            {formatAmount(Number(bill.remainingAmount) || 0)}
-                          </p>
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
-                        disabled={duesDialogLoading}
-                        onClick={() => void handleCollectPaymentFromDuesList(bill)}
-                      >
-                        <CreditCard className="mr-2 h-4 w-4 shrink-0" aria-hidden />
-                        Collect payment
-                      </Button>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      <PaymentCollectionModal
-        isOpen={collectDuesOpen}
-        presentation="sheet"
-        onClose={closeCollectDuesSheet}
-        sale={collectDuesSale}
-        onPaymentCollected={handleDuesPaymentCollected}
-        exitAfterPaymentSuccess={false}
-        nestedChromeZClassName="z-[135]"
+      <SettleDuesDrawer
+        open={settleDuesOpen}
+        onOpenChange={setSettleDuesOpen}
+        clientName={displayName}
+        clientPhone={String(displayPhone || "")}
+        onPaymentCollected={() => setStatsVersion((v) => v + 1)}
       />
 
       <AlertDialog open={redeemConfirmOpen} onOpenChange={setRedeemConfirmOpen}>
