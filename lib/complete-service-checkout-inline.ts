@@ -27,6 +27,7 @@ import { previewRedemptionLive } from "@/lib/reward-points-preview"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { buildRecordedPaymentsForCheckout } from "@/lib/quick-sale-recorded-payments"
 import { buildSalePaymentModeFromCheckout, buildReceiptPaymentsFromSale } from "@/lib/sale-payment-lines"
+import { buildReceiptTotalsBreakdown, itemCatalogPreTax } from "@/lib/receipt-totals-breakdown"
 import {
   extractAppointmentIdsFromPayload,
   resolveAppointmentIdsToComplete,
@@ -94,6 +95,95 @@ function isServiceTaxable(
   return service?.taxApplicable === true
 }
 
+function productTaxRateForProduct(product: any, ts: ServiceCheckoutTaxSettings): number {
+  if (!product?.taxCategory) return ts.standardProductRate ?? 18
+  switch (product.taxCategory) {
+    case "essential":
+      return ts.essentialProductRate || 5
+    case "intermediate":
+      return ts.intermediateProductRate || 12
+    case "standard":
+      return ts.standardProductRate || 18
+    case "luxury":
+      return ts.luxuryProductRate || 28
+    case "exempt":
+      return ts.exemptProductRate || 0
+    default:
+      return ts.standardProductRate ?? 18
+  }
+}
+
+function serviceLineTotalsWithItemDiscount(
+  item: any,
+  services: any[],
+  ts: ServiceCheckoutTaxSettings
+): { totalWithLineDisc: number; fullLineTotal: number } {
+  const priceInclusive = ts.priceInclusiveOfTax !== false
+  const taxOn = ts.enableTax !== false
+  const baseAmount = item.price * item.quantity
+  const itemDiscPct = item.discount || 0
+  const rate = ts.serviceTaxRate || 5
+  const applyTax = isServiceTaxable(item, taxOn, services)
+  const { total: totalWithLineDisc } = computeLineTotalAndTax(
+    baseAmount,
+    itemDiscPct,
+    rate,
+    applyTax,
+    priceInclusive
+  )
+  const { total: fullLineTotal } = computeLineTotalAndTax(baseAmount, 0, rate, applyTax, priceInclusive)
+  return { totalWithLineDisc, fullLineTotal }
+}
+
+function productLineTotalsWithItemDiscount(
+  item: any,
+  products: any[],
+  ts: ServiceCheckoutTaxSettings
+): { totalWithLineDisc: number; fullLineTotal: number } {
+  const priceInclusive = ts.priceInclusiveOfTax !== false
+  const taxOn = ts.enableTax !== false
+  const baseAmount = item.price * item.quantity
+  const itemDiscPct = item.discount || 0
+  const product = products.find((p) => p._id === item.productId || p.id === item.productId)
+  const productTaxRate = productTaxRateForProduct(product, ts)
+  const applyTax = taxOn
+  const { total: totalWithLineDisc } = computeLineTotalAndTax(
+    baseAmount,
+    itemDiscPct,
+    productTaxRate,
+    applyTax,
+    priceInclusive
+  )
+  const { total: fullLineTotal } = computeLineTotalAndTax(
+    baseAmount,
+    0,
+    productTaxRate,
+    applyTax,
+    priceInclusive
+  )
+  return { totalWithLineDisc, fullLineTotal }
+}
+
+function applyCartDiscountToLine(
+  item: any,
+  lineTotals: { totalWithLineDisc: number; fullLineTotal: number },
+  totalPayableAfterLineDisc: number,
+  cartDiscountAmount: number
+) {
+  const { totalWithLineDisc, fullLineTotal } = lineTotals
+  if (totalPayableAfterLineDisc <= 0 || cartDiscountAmount <= 0) {
+    return { ...item, discount: item.discount || 0, total: totalWithLineDisc }
+  }
+  const proportionalDiscountValue =
+    (totalWithLineDisc / totalPayableAfterLineDisc) * cartDiscountAmount
+  const finalTotal = totalWithLineDisc - proportionalDiscountValue
+  const effectiveDiscountPct =
+    fullLineTotal > 0.005
+      ? Math.min(100, Math.max(0, ((fullLineTotal - finalTotal) / fullLineTotal) * 100))
+      : item.discount || 0
+  return { ...item, discount: effectiveDiscountPct, total: finalTotal }
+}
+
 function recalculateServiceProductTotals(
   serviceItems: any[],
   productItems: any[],
@@ -103,215 +193,89 @@ function recalculateServiceProductTotals(
   products: any[],
   ts: ServiceCheckoutTaxSettings
 ): { serviceItems: any[]; productItems: any[] } {
-  const priceInclusive = ts.priceInclusiveOfTax !== false
-  const taxOn = ts.enableTax !== false
+  const sTotals = serviceItems.map((item) => serviceLineTotalsWithItemDiscount(item, services, ts))
+  const pTotals = productItems.map((item) => productLineTotalsWithItemDiscount(item, products, ts))
+  const totalPayableAfterLineDisc =
+    sTotals.reduce((sum, l) => sum + l.totalWithLineDisc, 0) +
+    pTotals.reduce((sum, l) => sum + l.totalWithLineDisc, 0)
 
+  let cartDiscountAmount = 0
   if (discountValue > 0) {
-    const sWith = serviceItems.map((item) => {
-      const baseAmount = item.price * item.quantity
-      const rate = ts.serviceTaxRate || 5
-      const applyTax = isServiceTaxable(item, taxOn, services)
-      const { total } = computeLineTotalAndTax(baseAmount, 0, rate, applyTax, priceInclusive)
-      return { ...item, totalWithGST: total }
-    })
-    const pWith = productItems.map((item) => {
-      const baseAmount = item.price * item.quantity
-      const product = products.find((p) => p._id === item.productId || p.id === item.productId)
-      let productTaxRate = 18
-      if (product?.taxCategory) {
-        switch (product.taxCategory) {
-          case "essential":
-            productTaxRate = ts.essentialProductRate || 5
-            break
-          case "intermediate":
-            productTaxRate = ts.intermediateProductRate || 12
-            break
-          case "standard":
-            productTaxRate = ts.standardProductRate || 18
-            break
-          case "luxury":
-            productTaxRate = ts.luxuryProductRate || 28
-            break
-          case "exempt":
-            productTaxRate = ts.exemptProductRate || 0
-            break
-        }
-      }
-      const applyTax = taxOn
-      const { total } = computeLineTotalAndTax(baseAmount, 0, productTaxRate, applyTax, priceInclusive)
-      return { ...item, totalWithGST: total }
-    })
-    const totalPayableAmount =
-      sWith.reduce((sum, item) => sum + item.totalWithGST, 0) +
-      pWith.reduce((sum, item) => sum + item.totalWithGST, 0)
-    if (totalPayableAmount <= 0) return { serviceItems, productItems }
-    const nextS = serviceItems.map((item, index) => {
-      const baseAmount = item.price * item.quantity
-      const serviceTaxRate = ts.serviceTaxRate || 5
-      const applyTax = isServiceTaxable(item, taxOn, services)
-      const { total: totalWithGST } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax, priceInclusive)
-      const tw = sWith[index]?.totalWithGST ?? totalWithGST
-      const proportionalDiscountValue = (tw / totalPayableAmount) * discountValue
-      const proportionalDiscountPercentage = (proportionalDiscountValue / tw) * 100
-      const finalTotal = tw - proportionalDiscountValue
-      return { ...item, discount: proportionalDiscountPercentage, total: finalTotal }
-    })
-    const nextP = productItems.map((item, index) => {
-      const baseAmount = item.price * item.quantity
-      const product = products.find((p) => p._id === item.productId || p.id === item.productId)
-      let productTaxRate = 18
-      if (product?.taxCategory) {
-        switch (product.taxCategory) {
-          case "essential":
-            productTaxRate = ts.essentialProductRate || 5
-            break
-          case "intermediate":
-            productTaxRate = ts.intermediateProductRate || 12
-            break
-          case "standard":
-            productTaxRate = ts.standardProductRate || 18
-            break
-          case "luxury":
-            productTaxRate = ts.luxuryProductRate || 28
-            break
-          case "exempt":
-            productTaxRate = ts.exemptProductRate || 0
-            break
-        }
-      }
-      const applyTax = taxOn
-      const { total: totalWithGST } = computeLineTotalAndTax(baseAmount, 0, productTaxRate, applyTax, priceInclusive)
-      const tw = pWith[index]?.totalWithGST ?? totalWithGST
-      const proportionalDiscountValue = (tw / totalPayableAmount) * discountValue
-      const proportionalDiscountPercentage = (proportionalDiscountValue / tw) * 100
-      const finalTotal = tw - proportionalDiscountValue
-      return { ...item, discount: proportionalDiscountPercentage, total: finalTotal }
-    })
+    cartDiscountAmount = Math.min(discountValue, totalPayableAfterLineDisc)
+  } else if (discountPercentage > 0) {
+    cartDiscountAmount = (totalPayableAfterLineDisc * discountPercentage) / 100
+  }
+
+  if (cartDiscountAmount <= 0) {
+    const nextS = serviceItems.map((item, index) => ({
+      ...item,
+      discount: item.discount || 0,
+      total: sTotals[index]?.totalWithLineDisc ?? 0,
+    }))
+    const nextP = productItems.map((item, index) => ({
+      ...item,
+      discount: item.discount || 0,
+      total: pTotals[index]?.totalWithLineDisc ?? 0,
+    }))
     return { serviceItems: nextS, productItems: nextP }
   }
 
-  if (discountPercentage > 0) {
-    const sWith = serviceItems.map((item) => {
-      const baseAmount = item.price * item.quantity
-      const serviceTaxRate = ts.serviceTaxRate || 5
-      const applyTax = isServiceTaxable(item, taxOn, services)
-      const { total } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax, priceInclusive)
-      return { ...item, totalWithGST: total }
-    })
-    const pWith = productItems.map((item) => {
-      const baseAmount = item.price * item.quantity
-      const product = products.find((p) => p._id === item.productId || p.id === item.productId)
-      let productTaxRate = 18
-      if (product?.taxCategory) {
-        switch (product.taxCategory) {
-          case "essential":
-            productTaxRate = ts.essentialProductRate || 5
-            break
-          case "intermediate":
-            productTaxRate = ts.intermediateProductRate || 12
-            break
-          case "standard":
-            productTaxRate = ts.standardProductRate || 18
-            break
-          case "luxury":
-            productTaxRate = ts.luxuryProductRate || 28
-            break
-          case "exempt":
-            productTaxRate = ts.exemptProductRate || 0
-            break
-        }
-      }
-      const applyTax = taxOn
-      const { total } = computeLineTotalAndTax(baseAmount, 0, productTaxRate, applyTax, priceInclusive)
-      return { ...item, totalWithGST: total }
-    })
-    const totalPayableAmount =
-      sWith.reduce((sum, item) => sum + item.totalWithGST, 0) +
-      pWith.reduce((sum, item) => sum + item.totalWithGST, 0)
-    const totalDiscountAmount = (totalPayableAmount * discountPercentage) / 100
-    if (totalPayableAmount <= 0) return { serviceItems, productItems }
-    const nextS = serviceItems.map((item, index) => {
-      const baseAmount = item.price * item.quantity
-      const serviceTaxRate = ts.serviceTaxRate || 5
-      const applyTax = isServiceTaxable(item, taxOn, services)
-      const { total: totalWithGST } = computeLineTotalAndTax(baseAmount, 0, serviceTaxRate, applyTax, priceInclusive)
-      const tw = sWith[index]?.totalWithGST ?? totalWithGST
-      const proportionalDiscountValue = (tw / totalPayableAmount) * totalDiscountAmount
-      const proportionalDiscountPercentage = (proportionalDiscountValue / tw) * 100
-      const finalTotal = tw - proportionalDiscountValue
-      return { ...item, discount: proportionalDiscountPercentage, total: finalTotal }
-    })
-    const nextP = productItems.map((item, index) => {
-      const baseAmount = item.price * item.quantity
-      const product = products.find((p) => p._id === item.productId || p.id === item.productId)
-      let productTaxRate = 18
-      if (product?.taxCategory) {
-        switch (product.taxCategory) {
-          case "essential":
-            productTaxRate = ts.essentialProductRate || 5
-            break
-          case "intermediate":
-            productTaxRate = ts.intermediateProductRate || 12
-            break
-          case "standard":
-            productTaxRate = ts.standardProductRate || 18
-            break
-          case "luxury":
-            productTaxRate = ts.luxuryProductRate || 28
-            break
-          case "exempt":
-            productTaxRate = ts.exemptProductRate || 0
-            break
-        }
-      }
-      const applyTax = taxOn
-      const { total: totalWithGST } = computeLineTotalAndTax(baseAmount, 0, productTaxRate, applyTax, priceInclusive)
-      const tw = pWith[index]?.totalWithGST ?? totalWithGST
-      const proportionalDiscountValue = (tw / totalPayableAmount) * totalDiscountAmount
-      const proportionalDiscountPercentage = (proportionalDiscountValue / tw) * 100
-      const finalTotal = tw - proportionalDiscountValue
-      return { ...item, discount: proportionalDiscountPercentage, total: finalTotal }
-    })
-    return { serviceItems: nextS, productItems: nextP }
-  }
-
-  const nextS = serviceItems.map((item) => {
-    const baseAmount = item.price * item.quantity
-    const itemDiscPct = item.discount || 0
-    const serviceTaxRate = ts.serviceTaxRate || 5
-    const applyTax = isServiceTaxable(item, taxOn, services)
-    const { total } = computeLineTotalAndTax(baseAmount, itemDiscPct, serviceTaxRate, applyTax, priceInclusive)
-    return { ...item, discount: itemDiscPct, total }
-  })
-  const nextP = productItems.map((item) => {
-    const baseAmount = item.price * item.quantity
-    const itemDiscPct = item.discount || 0
-    const product = products.find((p) => p._id === item.productId || p.id === item.productId)
-    let productTaxRate = 18
-    if (product?.taxCategory) {
-      switch (product.taxCategory) {
-        case "essential":
-          productTaxRate = ts.essentialProductRate || 5
-          break
-        case "intermediate":
-          productTaxRate = ts.intermediateProductRate || 12
-          break
-        case "standard":
-          productTaxRate = ts.standardProductRate || 18
-          break
-        case "luxury":
-          productTaxRate = ts.luxuryProductRate || 28
-          break
-        case "exempt":
-          productTaxRate = ts.exemptProductRate || 0
-          break
-      }
-    }
-    const applyTax = taxOn
-    const { total } = computeLineTotalAndTax(baseAmount, itemDiscPct, productTaxRate, applyTax, priceInclusive)
-    return { ...item, discount: itemDiscPct, total }
-  })
+  const nextS = serviceItems.map((item, index) =>
+    applyCartDiscountToLine(
+      item,
+      sTotals[index] ?? { totalWithLineDisc: 0, fullLineTotal: 0 },
+      totalPayableAfterLineDisc,
+      cartDiscountAmount
+    )
+  )
+  const nextP = productItems.map((item, index) =>
+    applyCartDiscountToLine(
+      item,
+      pTotals[index] ?? { totalWithLineDisc: 0, fullLineTotal: 0 },
+      totalPayableAfterLineDisc,
+      cartDiscountAmount
+    )
+  )
   return { serviceItems: nextS, productItems: nextP }
+}
+
+function serviceProductLineDiscountPreTax(
+  serviceItems: any[],
+  productItems: any[],
+  services: any[],
+  products: any[],
+  ts: ServiceCheckoutTaxSettings
+): number {
+  const taxOn = ts.enableTax !== false
+  const priceInclusive = ts.priceInclusiveOfTax !== false
+  const toPreTax = (incl: number, rate: number) =>
+    priceInclusive && rate > 0 ? incl / (1 + rate / 100) : incl
+
+  let gross = 0
+  let afterLine = 0
+
+  for (const item of serviceItems) {
+    const rate = isServiceTaxable(item, taxOn, services) ? ts.serviceTaxRate || 5 : 0
+    gross += itemCatalogPreTax({ price: item.price, quantity: item.quantity, taxRate: rate })
+    const { totalWithLineDisc } = serviceLineTotalsWithItemDiscount(item, services, ts)
+    afterLine += toPreTax(totalWithLineDisc, rate)
+  }
+
+  for (const item of productItems) {
+    const product = products.find((p) => p._id === item.productId || p.id === item.productId)
+    const rate = productTaxRateForProduct(product, ts)
+    const applyTax = taxOn && rate > 0
+    const effectiveRate = applyTax ? rate : 0
+    gross += itemCatalogPreTax({
+      price: item.price,
+      quantity: item.quantity,
+      taxRate: effectiveRate,
+    })
+    const { totalWithLineDisc } = productLineTotalsWithItemDiscount(item, products, ts)
+    afterLine += toPreTax(totalWithLineDisc, effectiveRate)
+  }
+
+  return Math.max(0, gross - afterLine)
 }
 
 async function generateReceiptNumber(): Promise<string> {
@@ -361,6 +325,7 @@ async function buildSaleLinesFromAppointmentPayload(
   remarks: string
   discountValue: number
   discountPercentage: number
+  lineDiscountPreTax: number
 }> {
   const priceInclusive = ts.priceInclusiveOfTax !== false
   const taxOn = ts.enableTax !== false
@@ -623,6 +588,7 @@ async function buildSaleLinesFromAppointmentPayload(
 
   let s = serviceItemsToAdd
   let p = productItemsToAdd
+  const lineDiscountPreTax = serviceProductLineDiscountPreTax(s, p, services, products, ts)
   if (discountValue > 0 || discountPercentage > 0) {
     const r = recalculateServiceProductTotals(s, p, discountValue, discountPercentage, services, products, ts)
     s = r.serviceItems
@@ -640,6 +606,7 @@ async function buildSaleLinesFromAppointmentPayload(
     remarks: mergedRemarks,
     discountValue,
     discountPercentage,
+    lineDiscountPreTax,
   }
 }
 
@@ -770,6 +737,16 @@ export async function completeServiceCheckoutInline(opts: {
     const baseTotalForSale = subtotal + membershipTotal + packageTotal + prepaidPlanTotal
     const roundedBaseTotalForSale = Math.round(baseTotalForSale)
     const roundOff = roundedBaseTotalForSale - baseTotalForSale
+
+    let cartDiscountInclTax = 0
+    let cartDiscountLabel = "Cart Discount"
+    if (built.discountValue > 0) {
+      cartDiscountInclTax = built.discountValue
+    } else if (built.discountPercentage > 0) {
+      cartDiscountInclTax =
+        (baseTotalForSale * built.discountPercentage) / (100 - built.discountPercentage)
+      cartDiscountLabel = `Cart Discount (${built.discountPercentage}%)`
+    }
 
     const payCfgMerged = mergePaymentConfiguration(payRaw as any)
     const allowBillingRedemption = payCfgMerged.billingRedemption.allowRedemptionInBilling !== false
@@ -1368,6 +1345,8 @@ export async function completeServiceCheckoutInline(opts: {
           totalWithTax: item.total,
           priceExcludingGST: (item.total - (taxAmount || 0)) / (item.quantity || 1),
           taxRate: applyTax ? serviceTaxRate : 0,
+          isMembershipFree: item.isMembershipFree ?? false,
+          membershipDiscountPercent: item.membershipDiscountPercent ?? 0,
         }
       }),
       ...validProductItems.map((item: any) => {
@@ -1516,6 +1495,23 @@ export async function completeServiceCheckoutInline(opts: {
         item.priceExcludingGST = (item.total - (taxAmount || 0)) / (item.quantity || 1)
         ;(item as any).taxRate = applyTax ? prepaidTaxRate : 0
       }
+    })
+
+    const subtotalExcludingTaxForReceipt = receiptItems.reduce(
+      (sum, item) => sum + (item.total - ((item as any).taxAmount || 0)),
+      0
+    )
+    const totalsBreakdown = buildReceiptTotalsBreakdown({
+      items: receiptItems,
+      tax: calculatedTax,
+      totalInclTaxBeforeLoyalty: calculatedTotal + loyaltyDiscountAmountSave,
+      roundOff,
+      loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+      tip,
+      cartDiscountAmount: cartDiscountInclTax,
+      cartDiscountLabel,
+      lineDiscountAmount: built.lineDiscountPreTax,
+      subtotalPreTax: subtotalExcludingTaxForReceipt,
     })
 
     const primaryStaff =
@@ -1693,6 +1689,7 @@ export async function completeServiceCheckoutInline(opts: {
         serviceRate: taxBreakdown.serviceRate,
         productTaxByRate: taxBreakdown.productTaxByRate,
       },
+      receiptTotalsBreakdown: totalsBreakdown,
       loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
       loyaltyDiscountAmount: loyaltyDiscountAmountSave,
       ...(raiseSaleLinkageVoided
@@ -1814,10 +1811,6 @@ export async function completeServiceCheckoutInline(opts: {
       }
     }
 
-    const subtotalExcludingTax = receiptItems.reduce(
-      (sum, item) => sum + (item.total - ((item as any).taxAmount || 0)),
-      0
-    )
     addReceipt({
       id: Date.now().toString(),
       receiptNumber,
@@ -1828,12 +1821,15 @@ export async function completeServiceCheckoutInline(opts: {
       time: format(new Date(), "HH:mm"),
       items: receiptItems,
       subtotal,
-      subtotalExcludingTax,
+      subtotalExcludingTax: subtotalExcludingTaxForReceipt,
       tip,
-      discount: built.discountValue + (subtotal * built.discountPercentage) / 100,
+      discount: isValueDiscountActive ? built.discountValue : isGlobalDiscountActive ? built.discountPercentage : 0,
+      discountType: isValueDiscountActive ? "fixed" : "percentage",
       tax: calculatedTax,
       roundOff,
       total: calculatedTotal + tip,
+      totalsBreakdown,
+      loyaltyDiscountAmount: loyaltyDiscountAmountSave,
       taxBreakdown,
       payments: buildReceiptPaymentsFromSale({
         date: (appointmentData.date ? new Date(String(appointmentData.date)) : new Date()).toISOString(),
@@ -1867,3 +1863,6 @@ export async function completeServiceCheckoutInline(opts: {
     return { ok: false, error: msg }
   }
 }
+
+/** @internal Exported for unit tests */
+export { recalculateServiceProductTotals }

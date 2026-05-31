@@ -79,6 +79,7 @@ import {
   prependWalkInIfMissing,
 } from "@/lib/walk-in-client"
 import { ClientDetailsDrawer } from "@/components/clients/client-details-drawer"
+import { SettleDuesDrawer } from "@/components/appointments/settle-dues-drawer"
 import {
   ClientWalletAPI,
   ClientsAPI,
@@ -875,6 +876,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const showInlineClientSearch = !clientProfileId && Boolean(onCustomerChange)
   const showClientSearchBox = showInlineClientSearch || isChangingClientProfile
   const [clientDetailsDrawerOpen, setClientDetailsDrawerOpen] = useState(false)
+  const [settleDuesDrawerOpen, setSettleDuesDrawerOpen] = useState(false)
+  const [checkoutClientStatsEpoch, bumpCheckoutClientStats] = useReducer((n: number) => n + 1, 0)
   const [checkoutTaxSettings, setCheckoutTaxSettings] = useState<CheckoutPaymentTaxSettings | null>(null)
   const [checkoutMembershipData, setCheckoutMembershipData] =
     useState<ServiceCheckoutMembershipSnapshot>(null)
@@ -1050,7 +1053,24 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     customer?.totalVisits,
     customer?.totalSpent,
     customer?.totalDues,
+    checkoutClientStatsEpoch,
   ])
+
+  const checkoutDuesAmount = checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0
+
+  const openSettleDuesFromCheckout = useCallback(() => {
+    if (checkoutDuesAmount <= 0) return
+    const phone = String(customer?.phone || "").trim()
+    if (!phone) {
+      toast({
+        title: "Phone required",
+        description: "This client needs a phone number on file to open bills and collect payment.",
+        variant: "destructive",
+      })
+      return
+    }
+    setSettleDuesDrawerOpen(true)
+  }, [checkoutDuesAmount, customer?.phone, toast])
 
   const serviceLinesMembershipSignature = useMemo(
     () =>
@@ -1131,7 +1151,10 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   }, [changeClientQuery, showClientSearchBox])
 
   useEffect(() => {
-    if (!open) setClientDetailsDrawerOpen(false)
+    if (!open) {
+      setClientDetailsDrawerOpen(false)
+      setSettleDuesDrawerOpen(false)
+    }
   }, [open])
 
   useEffect(() => {
@@ -4820,39 +4843,40 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                         )}
                       </span>
                     </span>
-                    <span
-                      className={cn(
-                        "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]",
-                        (checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0) > 0
-                          ? "border-red-200/80 bg-red-50/80"
-                          : "border-slate-200/80 bg-slate-50/80"
-                      )}
-                    >
-                      <span
+                    {(checkoutDuesAmount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={openSettleDuesFromCheckout}
+                        disabled={checkoutClientStats?.loading}
+                        title="Collect payment toward unpaid bills"
                         className={cn(
-                          "shrink-0",
-                          (checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0) > 0
-                            ? "text-red-700/90"
-                            : "text-muted-foreground"
+                          "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]",
+                          "border-red-200/80 bg-red-50/80 transition-colors",
+                          "hover:bg-red-100/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40",
+                          "disabled:pointer-events-none disabled:opacity-60"
                         )}
                       >
-                        Dues
+                        <span className="shrink-0 text-red-700/90">Dues</span>
+                        <span className="min-w-0 truncate font-semibold tabular-nums text-red-900">
+                          {checkoutClientStats?.loading ? (
+                            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" aria-hidden />
+                          ) : (
+                            formatAmount(checkoutDuesAmount)
+                          )}
+                        </span>
+                      </button>
+                    ) : (
+                      <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50/80 px-2.5 py-1 text-[11px]">
+                        <span className="shrink-0 text-muted-foreground">Dues</span>
+                        <span className="min-w-0 truncate font-semibold tabular-nums text-foreground">
+                          {checkoutClientStats?.loading ? (
+                            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" aria-hidden />
+                          ) : (
+                            formatAmount(checkoutDuesAmount)
+                          )}
+                        </span>
                       </span>
-                      <span
-                        className={cn(
-                          "min-w-0 truncate font-semibold tabular-nums",
-                          (checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0) > 0
-                            ? "text-red-900"
-                            : "text-foreground"
-                        )}
-                      >
-                        {checkoutClientStats?.loading ? (
-                          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" aria-hidden />
-                        ) : (
-                          formatAmount(checkoutClientStats?.duesAmount ?? customer?.totalDues ?? 0)
-                        )}
-                      </span>
-                    </span>
+                    ))}
                     <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200/80 bg-slate-50/80 px-2.5 py-1 text-[11px]">
                       <span className="shrink-0 text-muted-foreground">Membership</span>
                       <span className="min-w-0 truncate font-semibold text-foreground">
@@ -6666,6 +6690,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           client={customer}
           stackAboveAncestorChrome
         />
+        <SettleDuesDrawer
+          open={settleDuesDrawerOpen}
+          onOpenChange={setSettleDuesDrawerOpen}
+          clientName={customer?.name || "Walk-in"}
+          clientPhone={String(customer?.phone || "")}
+          stackAboveAncestorChrome
+          onPaymentCollected={bumpCheckoutClientStats}
+        />
       </>
     )
   }
@@ -6702,6 +6734,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         onOpenChange={setClientDetailsDrawerOpen}
         client={customer}
         stackAboveAncestorChrome
+      />
+      <SettleDuesDrawer
+        open={settleDuesDrawerOpen}
+        onOpenChange={setSettleDuesDrawerOpen}
+        clientName={customer?.name || "Walk-in"}
+        clientPhone={String(customer?.phone || "")}
+        stackAboveAncestorChrome
+        onPaymentCollected={bumpCheckoutClientStats}
       />
     </>
   )

@@ -10,7 +10,9 @@ import {
 import { Button } from "@/components/ui/button"
 import { Download } from "lucide-react"
 import { SalesAPI } from "@/lib/api"
-import { buildReceiptPaymentsFromSale } from "@/lib/sale-payment-lines"
+import { buildReceiptPaymentsWithLegacyFallback } from "@/lib/sale-payment-lines"
+import { formatSaleTimeForDisplay } from "@/lib/sale-datetime-format"
+import { receiptPreviewFromBillPageData } from "@/lib/receipt-preview-from-sale-api"
 
 interface ReceiptData {
   id: string
@@ -55,12 +57,18 @@ interface ReceiptData {
 }
 
 function mapSaleToReceiptData(saleData: any): ReceiptData {
-  const receiptPayments = buildReceiptPaymentsFromSale({
+  const receiptPayments = buildReceiptPaymentsWithLegacyFallback({
     date: saleData.date,
     payments: saleData.payments,
     paymentHistory: saleData.paymentHistory || [],
     loyaltyPointsRedeemed: saleData.loyaltyPointsRedeemed,
     loyaltyDiscountAmount: saleData.loyaltyDiscountAmount,
+    status: saleData.status,
+    invoiceDeleted: saleData.invoiceDeleted,
+    paymentStatus: saleData.paymentStatus,
+    grossTotal: saleData.grossTotal,
+    paymentMode: saleData.paymentMode,
+    tip: saleData.tip,
   })
 
   return {
@@ -69,7 +77,7 @@ function mapSaleToReceiptData(saleData: any): ReceiptData {
     customerName: saleData.customerName,
     customerPhone: saleData.customerPhone || "N/A",
     date: saleData.date,
-    time: saleData.time || new Date(saleData.date).toLocaleTimeString(),
+    time: formatSaleTimeForDisplay({ date: saleData.date, time: saleData.time }),
     items: saleData.items.map((item: any) => ({
       name: item.name,
       type: item.type,
@@ -98,17 +106,7 @@ function mapSaleToReceiptData(saleData: any): ReceiptData {
         return sum + base
       }, 0) || (saleData.grossTotal - saleData.taxAmount),
     paymentMode: saleData.paymentMode,
-    payments:
-      receiptPayments.length > 0
-        ? receiptPayments
-        : [
-            {
-              type: (String(saleData.paymentMode || "cash").split(",")[0]?.trim().toLowerCase() ||
-                "unknown") as "cash" | "card" | "online" | "wallet" | "reward" | "unknown",
-              amount: saleData.grossTotal,
-              recordedAt: new Date(saleData.date).toISOString(),
-            },
-          ],
+    payments: receiptPayments,
     staffName: saleData.staffName,
     status: saleData.status,
     taxBreakdown: saleData.taxBreakdown,
@@ -117,6 +115,11 @@ function mapSaleToReceiptData(saleData: any): ReceiptData {
       Number(saleData.billChangeCreditedToWallet) > 0.005
         ? Number(saleData.billChangeCreditedToWallet)
         : undefined,
+    tip: saleData.tip || 0,
+    discount: Math.max(0, Number(saleData.discount) || 0),
+    discountType: saleData.discountType,
+    loyaltyDiscountAmount: Math.max(0, Number(saleData.loyaltyDiscountAmount) || 0),
+    receiptTotalsBreakdown: saleData.receiptTotalsBreakdown ?? undefined,
   }
 }
 
@@ -249,55 +252,14 @@ export default function PublicReceiptPage() {
           receipt={
             <div className="bg-white rounded-lg shadow-sm overflow-hidden">
               <ReceiptPreview
-                receipt={{
-                  id: receipt.id,
-                  receiptNumber: receipt.billNo,
-                  clientId: receipt.id,
-                  clientName: receipt.customerName,
-                  clientPhone: receipt.customerPhone,
-                  date: receipt.date,
-                  time: receipt.time,
-                  items:
-                    receipt.items?.map((item) => ({
-                      id: item.name,
-                      name: item.name,
-                      type: item.type as "service" | "product",
-                      price: item.price,
-                      quantity: item.quantity,
-                      discount: (item as any).discount ?? 0,
-                      discountType: ((item as any).discountType || "percentage") as "percentage" | "fixed",
-                      staffId: receipt.id,
-                      staffName: item.staffName || receipt.staffName,
-                      staffContributions: item.staffContributions,
-                      total: item.total,
-                      hsnSacCode: (item as any).hsnSacCode || "",
-                      taxAmount: (item as any).taxAmount,
-                      priceExcludingGST: (item as any).priceExcludingGST,
-                      taxRate: (item as any).taxRate,
-                    })) || [],
-                  subtotal: receipt.netTotal,
-                  subtotalExcludingTax: (receipt as any).subtotalExcludingTax,
-                  tip: 0,
-                  discount: 0,
-                  tax: receipt.taxAmount,
-                  total: receipt.grossTotal,
-                  payments:
-                    receipt.payments?.map((payment) => ({
-                      type: (payment?.type || "unknown") as
-                        | "cash"
-                        | "card"
-                        | "online"
-                        | "wallet"
-                        | "unknown",
-                      amount: payment?.amount || 0,
-                      recordedAt: payment?.recordedAt,
-                    })) || [],
-                  staffId: receipt.id,
-                  staffName: receipt.staffName,
-                  notes: "",
-                  taxBreakdown: receipt.taxBreakdown,
-                  billChangeCreditedToWallet: receipt.billChangeCreditedToWallet,
-                }}
+                receipt={receiptPreviewFromBillPageData({
+                  ...receipt,
+                  payments: receipt.payments.map((payment) => ({
+                    mode: payment.type,
+                    amount: payment.amount,
+                    recordedAt: payment.recordedAt,
+                  })),
+                })}
                 businessSettings={businessSettings}
               />
             </div>

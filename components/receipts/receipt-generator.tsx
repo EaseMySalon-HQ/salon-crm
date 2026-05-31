@@ -5,10 +5,15 @@ import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
+import { formatReceiptDiscountPercent } from "@/lib/receipt-discount-format"
 import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { formatPaymentRecordedDateLabelFromIso, receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
+import {
+  buildReceiptTaxDetailHtml,
+  renderReceiptTotalsHtml,
+} from "@/lib/receipt-totals-breakdown"
 
 interface ReceiptGeneratorProps {
   receipt: Receipt
@@ -200,7 +205,7 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
                   <td style="padding: 3px 2px;">${item.hsnSacCode || "-"}</td>
                   <td style="padding: 3px 2px;">${item.name}${item.quantity > 1 ? ` (x${item.quantity})` : ""}${lineMeta || ""}</td>
                   <td style="text-align: right; padding: 3px 2px;">${formatCurrency(item.price, businessSettings)}</td>
-                  <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : formatCurrency(item.discount, businessSettings)) : "-"}</td>
+                  <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? formatReceiptDiscountPercent(item.discount) : formatCurrency(item.discount, businessSettings)) : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px; font-weight: bold;">${formatCurrency(item.total, businessSettings)}</td>
                 </tr>
@@ -213,120 +218,12 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
         </div>
 
         <div class="totals">
-          <div class="total-line">
-            <span>Subtotal (Excl. Tax):</span>
-            <span>${formatCurrency((receipt as any).subtotalExcludingTax ?? receipt.subtotal, businessSettings)}</span>
-          </div>
-          ${
-            receipt.discount > 0
-              ? `
-            <div class="total-line">
-              <span>Discount:</span>
-              <span>-${formatCurrency(receipt.discount, businessSettings)}</span>
-            </div>
-          `
-              : ""
-          }
-          ${
-            receipt.tax > 0
-              ? `
-            <div class="total-line">
-              <span>Tax (GST):</span>
-              <span>${formatCurrency(correctTaxAmount, businessSettings)}</span>
-            </div>
-            ${(() => {
-              // Use the tax breakdown from the receipt object if available
-              if (receipt.taxBreakdown) {
-                let breakdown = ''
-                
-                // Service Tax breakdown
-                if (receipt.taxBreakdown.serviceTax > 0) {
-                  const serviceTax = receipt.taxBreakdown.serviceTax
-                  const serviceRate = receipt.taxBreakdown.serviceRate || 5
-                  breakdown += `
-                  <div class="total-line" style="margin-left: 10px; font-size: 11px;">
-                    <span>Service Tax (${serviceRate}%):</span>
-                    <span>${formatCurrency(serviceTax, businessSettings)}</span>
-                  </div>
-                  <div class="total-line" style="margin-left: 20px; font-size: 10px;">
-                    <span>CGST (${serviceRate / 2}%):</span>
-                    <span>${formatCurrency(serviceTax / 2, businessSettings)}</span>
-                  </div>
-                  <div class="total-line" style="margin-left: 20px; font-size: 10px;">
-                    <span>SGST (${serviceRate / 2}%):</span>
-                    <span>${formatCurrency(serviceTax / 2, businessSettings)}</span>
-                  </div>
-                  `
-                }
-                
-                // Product Tax breakdown by rate
-                if (receipt.taxBreakdown.productTaxByRate) {
-                  Object.entries(receipt.taxBreakdown.productTaxByRate).forEach(([rate, amount]) => {
-                    if (amount > 0) {
-                      breakdown += `
-                      <div class="total-line" style="margin-left: 10px; font-size: 11px;">
-                        <span>Product Tax (${rate}%):</span>
-                        <span>${formatCurrency(amount, businessSettings)}</span>
-                      </div>
-                      <div class="total-line" style="margin-left: 20px; font-size: 10px;">
-                        <span>CGST (${parseFloat(rate) / 2}%):</span>
-                        <span>${formatCurrency(amount / 2, businessSettings)}</span>
-                      </div>
-                      <div class="total-line" style="margin-left: 20px; font-size: 10px;">
-                        <span>SGST (${parseFloat(rate) / 2}%):</span>
-                        <span>${formatCurrency(amount / 2, businessSettings)}</span>
-                      </div>
-                      `
-                    }
-                  })
-                }
-                
-                return breakdown
-              }
-              
-              // Fallback when taxBreakdown is not available: use 5% service rate (2.5% CGST + 2.5% SGST)
-              return `
-              <div class="total-line" style="margin-left: 10px; font-size: 11px;">
-                <span>CGST (2.5%):</span>
-                <span>${formatCurrency(receipt.tax / 2, businessSettings)}</span>
-              </div>
-              <div class="total-line" style="margin-left: 10px; font-size: 11px;">
-                <span>SGST (2.5%):</span>
-                <span>${formatCurrency(receipt.tax / 2, businessSettings)}</span>
-              </div>
-              `
-            })()}
-          `
-              : ""
-          }
-          ${
-            receipt.tip > 0
-              ? receiptTipDisplayLines(receipt)
-                  .map(
-                    (line) => `
-            <div class="total-line">
-              <span>${line.staffName ? `Tip (${line.staffName}):` : "Tip:"}</span>
-              <span>${formatCurrency(line.amount, businessSettings)}</span>
-            </div>
-          `,
-                  )
-                  .join("")
-              : ""
-          }
-          ${
-            receipt.roundOff && Math.abs(receipt.roundOff) > 0.01
-              ? `
-            <div class="total-line">
-              <span>Round Off:</span>
-              <span>${formatCurrency(receipt.roundOff, businessSettings)}</span>
-            </div>
-          `
-              : ""
-          }
-          <div class="total-line grand-total">
-            <span>TOTAL:</span>
-            <span>${formatCurrency(correctTotal, businessSettings)}</span>
-          </div>
+          ${renderReceiptTotalsHtml(receipt, (amount) => formatCurrency(amount, businessSettings), {
+            taxDetailHtml: buildReceiptTaxDetailHtml(receipt, (amount) =>
+              formatCurrency(amount, businessSettings)
+            ),
+            grandTotalOverride: correctTotal,
+          })}
           ${(() => {
             const s = getReceiptSettlementSummary(receipt)
             let out = ""

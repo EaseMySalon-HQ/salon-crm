@@ -73,6 +73,22 @@ export interface Appointment {
   price: number
 }
 
+export interface ReceiptTotalsBreakdown {
+  grossPreTaxTotal: number
+  lineDiscountAmount: number
+  membershipDiscountAmount: number
+  cartDiscountAmount: number
+  cartDiscountLabel?: string
+  totalBeforeCartInclTax?: number
+  subtotalPreTax: number
+  taxAmount: number
+  totalInclTax: number
+  roundOff: number
+  loyaltyDiscountAmount: number
+  tip: number
+  grandTotal: number
+}
+
 export interface Receipt {
   id: string
   receiptNumber: string
@@ -89,10 +105,15 @@ export interface Receipt {
   tipStaffName?: string
   /** Split tip allocations for receipt display (from Sale.tipLines). */
   tipLines?: Array<{ staffName?: string; amount: number }>
+  /** Cart-level discount config (fixed ₹ or %); line discounts are on items. */
   discount: number
+  discountType?: "percentage" | "fixed"
   tax: number
   roundOff?: number
   total: number
+  /** Saved checkout bifurcation (preferred for receipt totals). */
+  totalsBreakdown?: ReceiptTotalsBreakdown
+  loyaltyDiscountAmount?: number
   payments: PaymentMethod[]
   staffId: string
   staffName: string
