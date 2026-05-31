@@ -128,7 +128,7 @@ export default function ReceiptPage() {
               customerName: frontendData.clientName,
               customerPhone: frontendData.clientPhone || 'N/A',
               date: frontendData.date,
-              time: frontendData.time,
+              time: formatSaleTimeForDisplay({ date: frontendData.date, time: frontendData.time }),
               items: frontendData.items.map((item: any) => ({
                 name: item.name,
                 type: item.type,
