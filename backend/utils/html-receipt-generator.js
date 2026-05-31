@@ -1,9 +1,14 @@
 const puppeteer = require('puppeteer');
 const { formatReceiptItemStaffNames } = require('./receipt-staff-format');
+const { renderReceiptTotalsBreakdownHtml } = require('./receipt-totals-breakdown-html');
+
+function formatReceiptDiscountPercent(discount) {
+  const n = Number(discount);
+  if (!Number.isFinite(n) || n <= 0) return '-';
+  return `${parseFloat(n.toFixed(2))}%`;
+}
 
 /**
- * Format currency (backend version of frontend formatCurrency)
- */
 function formatCurrency(amount, businessSettings) {
   if (!businessSettings?.enableCurrency) {
     return amount.toFixed(2);
@@ -262,7 +267,7 @@ function generateReceiptHTML(receipt, businessSettings) {
                   <td style="padding: 3px 2px;">${item.hsnSacCode || "-"}</td>
                   <td style="padding: 3px 2px;">${item.name || "Item"}${(item.quantity || 1) > 1 ? " (x" + (item.quantity || 1) + ")" : ""}${(() => { const s = formatReceiptItemStaffNames(item); return s ? "<br><span style=\"font-size: 10px; color: #666;\">" + s + "</span>" : ""; })()}</td>
                   <td style="text-align: right; padding: 3px 2px;">${formatCurrency(item.price ?? 0, businessSettings)}</td>
-                  <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? item.discount + "%" : formatCurrency(item.discount, businessSettings)) : "-"}</td>
+                  <td style="text-align: right; padding: 3px 2px;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? formatReceiptDiscountPercent(item.discount) : formatCurrency(item.discount, businessSettings)) : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px;">${(item.taxRate || 0) > 0 ? item.taxRate + "%" : "-"}</td>
                   <td style="text-align: right; padding: 3px 2px; font-weight: bold;">${formatCurrency(item.total || item.price || 0, businessSettings)}</td>
                 </tr>
@@ -273,6 +278,15 @@ function generateReceiptHTML(receipt, businessSettings) {
       </div>
 
       <div class="totals">
+        ${(() => {
+          const breakdownHtml = renderReceiptTotalsBreakdownHtml(
+            receipt,
+            formatCurrency,
+            businessSettings,
+            correctTotal
+          );
+          if (breakdownHtml) return breakdownHtml;
+          return `
         <div class="total-line">
           <span>Subtotal (Excl. Tax):</span>
           <span>${formatCurrency(receipt.subtotalExcludingTax ?? receipt.subtotal ?? 0, businessSettings)}</span>
@@ -335,7 +349,6 @@ function generateReceiptHTML(receipt, businessSettings) {
               return breakdown;
             }
             
-            // Fallback when taxBreakdown is not available: use 5% service rate (2.5% CGST + 2.5% SGST)
             return `
               <div class="total-line" style="margin-left: 10px; font-size: 11px;">
                 <span>CGST (2.5%):</span>
@@ -358,7 +371,8 @@ function generateReceiptHTML(receipt, businessSettings) {
         <div class="total-line grand-total">
           <span>TOTAL:</span>
           <span>${formatCurrency(correctTotal, businessSettings)}</span>
-        </div>
+        </div>`;
+        })()}
         ${(() => {
           const totalPaid = (receipt.payments || []).reduce((sum, p) => sum + (p?.amount || 0), 0);
           const outstanding = correctTotal - totalPaid;

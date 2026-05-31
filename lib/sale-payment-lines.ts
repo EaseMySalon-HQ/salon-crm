@@ -13,6 +13,22 @@ export type SalePaymentSource = {
   loyaltyDiscountAmount?: number
 }
 
+/** Sale fields needed when inferring legacy receipt payments (pre–split-payment bills). */
+export type SaleReceiptPaymentSource = SalePaymentSource & {
+  status?: string
+  invoiceDeleted?: boolean
+  paymentStatus?: { paidAmount?: number; totalAmount?: number; remainingAmount?: number }
+  grossTotal?: number
+  paymentMode?: string
+  tip?: number
+}
+
+export type ReceiptPaymentLine = {
+  type: ReceiptPaymentType
+  amount: number
+  recordedAt: string
+}
+
 export type ReceiptPaymentType = "cash" | "card" | "online" | "wallet" | "reward" | "unknown"
 
 export type SalePaymentLine = {
@@ -185,4 +201,61 @@ export function buildReceiptPaymentsFromSale(sale: SalePaymentSource): Array<{
   }
 
   return lines
+}
+
+function legacyReceiptPaymentModeType(paymentMode?: string): ReceiptPaymentType {
+  const first = String(paymentMode ?? "cash").split(",")[0]?.trim().toLowerCase() || "cash"
+  return modeStringToReceiptType(normalizePaymentModeLabel(first))
+}
+
+function saleBillTotalAmount(sale: SaleReceiptPaymentSource): number {
+  const fromPaymentStatus = sale.paymentStatus?.totalAmount
+  if (typeof fromPaymentStatus === "number" && !Number.isNaN(fromPaymentStatus) && fromPaymentStatus > 0) {
+    return fromPaymentStatus
+  }
+  const tip = Number(sale.tip) || 0
+  return Math.max(0, Number(sale.grossTotal ?? 0) + tip)
+}
+
+function saleRecordedPaidAmount(sale: SaleReceiptPaymentSource): number {
+  const paid = sale.paymentStatus?.paidAmount
+  if (typeof paid === "number" && !Number.isNaN(paid)) return Math.max(0, paid)
+  return 0
+}
+
+/**
+ * Builds receipt payment lines from sale data. When `payments` / `paymentHistory` are empty,
+ * only infers a legacy single payment for completed or partially paid bills — not unpaid bills.
+ */
+export function buildReceiptPaymentsWithLegacyFallback(
+  sale: SaleReceiptPaymentSource
+): ReceiptPaymentLine[] {
+  const lines = buildReceiptPaymentsFromSale(sale)
+  if (lines.length > 0) return lines
+
+  if (sale.invoiceDeleted || String(sale.status || "").toLowerCase() === "cancelled") {
+    return []
+  }
+
+  const status = String(sale.status || "").toLowerCase()
+  const totalAmount = saleBillTotalAmount(sale)
+  const paidAmount = saleRecordedPaidAmount(sale)
+  const saleDate = parseSaleDate(sale.date)
+  const modeType = legacyReceiptPaymentModeType(sale.paymentMode)
+
+  if (status === "unpaid" || paidAmount < 0.005) {
+    if (status !== "completed") return []
+  }
+
+  if (status === "completed" || paidAmount >= totalAmount - 0.005) {
+    const amount = totalAmount > 0.005 ? totalAmount : Math.max(0, Number(sale.grossTotal ?? 0))
+    if (amount < 0.005) return []
+    return [{ type: modeType, amount, recordedAt: saleDate.toISOString() }]
+  }
+
+  if (paidAmount > 0.005) {
+    return [{ type: modeType, amount: paidAmount, recordedAt: saleDate.toISOString() }]
+  }
+
+  return []
 }
