@@ -1817,7 +1817,7 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                   </Button>
                 </>
               )}
-              {canExport ? (
+              {canExport && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -1842,16 +1842,6 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            ) : (
-              <Button
-                variant="outline"
-                className="flex items-center space-x-2 bg-gray-100 border-gray-300 cursor-not-allowed text-gray-500 rounded-xl px-4 py-2"
-                disabled
-                title="Data export requires Professional or Enterprise plan"
-              >
-                <Download className="h-4 w-4" />
-                <span className="font-medium">Export (Upgrade)</span>
-              </Button>
             )}
             </div>
           </div>

@@ -59,6 +59,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PackagesSettingsPanel } from "@/components/packages/packages-settings-panel"
 
 import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
+import { useEntitlements } from "@/hooks/use-entitlements"
 import type { LucideIcon } from "lucide-react"
 
 const SETTINGS_SECTION_IDS = [
@@ -270,6 +271,12 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 
 const ALL_SETTING_ITEMS: SettingsItem[] = SETTINGS_SECTIONS.flatMap((s) => s.items)
 
+/** Plan features required to open a settings module (beyond RBAC). */
+const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsSectionId, string>> = {
+  feedback: "feedback_management",
+  "reward-points": "reward_points",
+}
+
 function itemMatchesQuery(item: SettingsItem, q: string): boolean {
   if (!q.trim()) return true
   const needle = q.trim().toLowerCase()
@@ -293,7 +300,21 @@ export function SettingsPage() {
   )
   const [search, setSearch] = useState("")
   const { user, isLoading, hasPermission } = useAuth()
+  const { hasFeature, isLoading: entitlementsLoading } = useEntitlements()
   const router = useRouter()
+
+  useEffect(() => {
+    if (!activeSection || isLoading || entitlementsLoading || !user) return
+    const permissionModule = SETTINGS_PERMISSION_MAP[activeSection]
+    if (!permissionModule || !hasPermission(permissionModule, "view")) {
+      router.replace("/settings")
+      return
+    }
+    const requiredFeature = SETTINGS_PLAN_FEATURES[activeSection as SettingsSectionId]
+    if (requiredFeature && !hasFeature(requiredFeature)) {
+      router.replace("/settings")
+    }
+  }, [activeSection, isLoading, entitlementsLoading, user, hasFeature, hasPermission, router])
 
   // Keep UI in sync with ?section= (refresh, back/forward, external links)
   useEffect(() => {
@@ -340,7 +361,10 @@ export function SettingsPage() {
     if (!user) return false
     const permissionModule = SETTINGS_PERMISSION_MAP[categoryId]
     if (!permissionModule) return false
-    return hasPermission(permissionModule, "view")
+    if (!hasPermission(permissionModule, "view")) return false
+    const requiredFeature = SETTINGS_PLAN_FEATURES[categoryId as SettingsSectionId]
+    if (requiredFeature && !hasFeature(requiredFeature)) return false
+    return true
   }
 
   const navigateToSection = (id: string) => {

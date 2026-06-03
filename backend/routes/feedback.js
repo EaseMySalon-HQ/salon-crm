@@ -4,6 +4,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const { authenticateToken } = require('../middleware/auth');
 const { setupBusinessDatabase } = require('../middleware/business-db');
+const { gate, FEATURE } = require('../config/feature-routes');
 const { logger } = require('../utils/logger');
 
 const router = express.Router();
@@ -64,6 +65,7 @@ router.get(
   '/stats/summary',
   authenticateToken,
   setupBusinessDatabase,
+  gate(FEATURE.FEEDBACK_MANAGEMENT),
   requireFeedbackView,
   async (req, res) => {
     try {
@@ -118,6 +120,7 @@ router.get(
   '/branches',
   authenticateToken,
   setupBusinessDatabase,
+  gate(FEATURE.FEEDBACK_MANAGEMENT),
   requireFeedbackView,
   async (req, res) => {
     try {
@@ -142,6 +145,7 @@ router.get(
   '/',
   authenticateToken,
   setupBusinessDatabase,
+  gate(FEATURE.FEEDBACK_MANAGEMENT),
   requireFeedbackView,
   async (req, res) => {
     try {
@@ -225,6 +229,7 @@ router.get(
   '/:id',
   authenticateToken,
   setupBusinessDatabase,
+  gate(FEATURE.FEEDBACK_MANAGEMENT),
   requireFeedbackView,
   async (req, res) => {
     try {
@@ -279,6 +284,7 @@ router.patch(
   '/:id/status',
   authenticateToken,
   setupBusinessDatabase,
+  gate(FEATURE.FEEDBACK_MANAGEMENT),
   requireFeedbackEdit,
   async (req, res) => {
     try {
@@ -313,6 +319,7 @@ router.patch(
   '/:id/notes',
   authenticateToken,
   setupBusinessDatabase,
+  gate(FEATURE.FEEDBACK_MANAGEMENT),
   requireFeedbackEdit,
   async (req, res) => {
     try {

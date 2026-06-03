@@ -53,6 +53,9 @@ const {
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
 const modelFactory = require('./models/model-factory');
+// Central feature-gating registry (cache-backed; see config/feature-routes.js)
+const { gate, FEATURE } = require('./config/feature-routes');
+const INCENTIVE_MANAGEMENT = gate(FEATURE.INCENTIVE_MANAGEMENT);
 const { setupBusinessDatabase, setupMainDatabase } = require('./middleware/business-db');
 const { WALK_IN_PHONE } = require('./lib/ensure-walk-in-client');
 
@@ -130,6 +133,15 @@ dbPromise
   .then(() => logger.info('Admin access defaults ensured'))
   .catch((error) => {
     logger.error('Failed to initialize admin access defaults:', error);
+  });
+
+// Warm the plan-template cache so the first entitlement checks use the
+// admin-editable DB plans rather than the static config fallback.
+dbPromise
+  .then(() => require('./lib/plan-resolver').warmup())
+  .then(() => logger.info('Plan template cache warmed'))
+  .catch((error) => {
+    logger.warn('Failed to warm plan template cache:', error.message);
   });
 
 // Middleware
@@ -413,6 +425,7 @@ app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/packages', require('./routes/packages'));
 app.use('/api/public/feedback', require('./routes/public-feedback'));
 app.use('/api/public/demo-lead', require('./routes/public-demo-lead'));
+app.use('/api/public/pricing-matrix', require('./routes/public-pricing-matrix'));
 app.use('/api/feedback', require('./routes/feedback'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 
@@ -1369,7 +1382,8 @@ app.get('/api/business/plan', authenticateToken, async (req, res) => {
       const plan = business.plan || {};
       const pendingAt = plan.pendingEffectiveAt ? new Date(plan.pendingEffectiveAt) : null;
       if (plan.pendingPlanId && pendingAt && pendingAt <= new Date()) {
-        business.plan.planId = plan.pendingPlanId;
+        const { normalizePlanId } = require('./lib/plan-id');
+        business.plan.planId = normalizePlanId(plan.pendingPlanId);
         if (plan.pendingBillingPeriod) {
           business.plan.billingPeriod = plan.pendingBillingPeriod;
         }
@@ -1377,6 +1391,7 @@ app.get('/api/business/plan', authenticateToken, async (req, res) => {
         business.plan.pendingBillingPeriod = null;
         business.plan.pendingEffectiveAt = null;
         await business.save();
+        require('./lib/entitlements-cache').invalidate(business._id);
       }
     } catch (applyErr) {
       logger.warn('Could not apply pending plan change:', applyErr?.message || applyErr);
@@ -1458,40 +1473,31 @@ app.get('/api/business/plans', authenticateToken, setupMainDatabase, async (req,
     const { PlanTemplate } = req.mainModels;
     const { getAllPlans } = require('./config/plans');
     
-    // Get plans from database (active templates) and merge with config file
+    // Checkout / upgrade: active DB templates only. If none exist yet (fresh
+    // install), fall back to built-in config seeds.
     const dbPlans = await PlanTemplate.find({ isActive: true }).sort({ createdAt: 1 });
     const configPlans = getAllPlans();
 
-    // Merge database plans with config plans (database takes precedence)
-    const planMap = new Map();
-    
-    // First add config plans
-    configPlans.forEach(plan => {
-      planMap.set(plan.id, {
-        id: plan.id,
-        name: plan.name,
-        description: plan.description,
-        monthlyPrice: plan.monthlyPrice,
-        yearlyPrice: plan.yearlyPrice,
-        features: plan.features || [],
-        limits: plan.limits || {},
-      });
-    });
-    
-    // Then override/add database plans
-    dbPlans.forEach(dbPlan => {
-      planMap.set(dbPlan.id, {
-        id: dbPlan.id,
-        name: dbPlan.name,
-        description: dbPlan.description,
-        monthlyPrice: dbPlan.monthlyPrice,
-        yearlyPrice: dbPlan.yearlyPrice,
-        features: dbPlan.features || [],
-        limits: dbPlan.limits || {},
-      });
-    });
-
-    const plans = Array.from(planMap.values());
+    const plans =
+      dbPlans.length > 0
+        ? dbPlans.map((dbPlan) => ({
+            id: dbPlan.id,
+            name: dbPlan.name,
+            description: dbPlan.description,
+            monthlyPrice: dbPlan.monthlyPrice,
+            yearlyPrice: dbPlan.yearlyPrice,
+            features: dbPlan.features || [],
+            limits: dbPlan.limits || {},
+          }))
+        : configPlans.map((plan) => ({
+            id: plan.id,
+            name: plan.name,
+            description: plan.description,
+            monthlyPrice: plan.monthlyPrice,
+            yearlyPrice: plan.yearlyPrice,
+            features: plan.features || [],
+            limits: plan.limits || {},
+          }));
 
     res.json({
       success: true,
@@ -6910,7 +6916,7 @@ app.post('/api/supplier-payables/:id/payments', authenticateToken, setupBusiness
 
 // ==================== SUPPLIER & PURCHASE REPORTS ====================
 
-app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
+app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ADVANCED_REPORTS), reportCacheMiddleware, async (req, res) => {
   try {
     const { PurchaseOrder, SupplierPayable, Supplier } = req.businessModels;
     const branchId = req.user.branchId;
@@ -6975,7 +6981,7 @@ app.get('/api/reports/supplier', authenticateToken, setupBusinessDatabase, requi
   }
 });
 
-app.get('/api/reports/purchase', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
+app.get('/api/reports/purchase', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ADVANCED_REPORTS), reportCacheMiddleware, async (req, res) => {
   try {
     const { PurchaseOrder, Supplier } = req.businessModels;
     const branchId = req.user.branchId;
@@ -11571,7 +11577,7 @@ const analyticsTabOpts = (req) => ({
  * back and forth between tabs. Cache 3 minutes per (tenant, tab, filter) — mutation routes
  * invalidate the whole tenant slice so figures stay accurate after writes.
  */
-app.get('/api/analytics/revenue', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/analytics/revenue', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ANALYTICS), async (req, res) => {
   try {
     const payload = await withReportCache(req, res, {
       reportType: 'analytics:revenue',
@@ -11584,7 +11590,7 @@ app.get('/api/analytics/revenue', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-app.get('/api/analytics/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/analytics/services', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ANALYTICS), async (req, res) => {
   try {
     const payload = await withReportCache(req, res, {
       reportType: 'analytics:services',
@@ -11597,7 +11603,7 @@ app.get('/api/analytics/services', authenticateToken, setupBusinessDatabase, req
   }
 });
 
-app.get('/api/analytics/clients', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/analytics/clients', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ANALYTICS), async (req, res) => {
   try {
     const payload = await withReportCache(req, res, {
       reportType: 'analytics:clients',
@@ -11610,7 +11616,7 @@ app.get('/api/analytics/clients', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-app.get('/api/analytics/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/analytics/products', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ANALYTICS), async (req, res) => {
   try {
     const payload = await withReportCache(req, res, {
       reportType: 'analytics:products',
@@ -11623,7 +11629,7 @@ app.get('/api/analytics/products', authenticateToken, setupBusinessDatabase, req
   }
 });
 
-app.get('/api/analytics/staff', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/analytics/staff', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ANALYTICS), async (req, res) => {
   try {
     const payload = await withReportCache(req, res, {
       reportType: 'analytics:staff',
@@ -11636,7 +11642,7 @@ app.get('/api/analytics/staff', authenticateToken, setupBusinessDatabase, requir
   }
 });
 
-app.get('/api/analytics/staff/:staffId/trends', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/analytics/staff/:staffId/trends', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ANALYTICS), async (req, res) => {
   try {
     const payload = await withReportCache(req, res, {
       reportType: 'analytics:staff-trends',
@@ -13687,7 +13693,7 @@ app.post('/api/consumption-rules/bulk', authenticateToken, setupBusinessDatabase
 });
 
 // Get inventory consumption logs (filtered)
-app.get('/api/consumption-logs', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/consumption-logs', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ADVANCED_INVENTORY), async (req, res) => {
   try {
     const { InventoryConsumptionLog } = req.businessModels;
     const branchId = req.user.branchId;
@@ -13928,7 +13934,20 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
             businessSettings.phone = businessSettings.phone || business.contact?.phone || business.phone || '';
             businessSettings.email = businessSettings.email || business.contact?.email || business.email || '';
           }
-          
+
+          // Custom receipt template only applies for plans that include the
+          // `custom_receipt_templates` feature; otherwise drop it so the
+          // receipt renders with the default layout.
+          try {
+            const { hasFeature } = require('./lib/entitlements');
+            if (businessSettings.receiptTemplate && !hasFeature(business, 'custom_receipt_templates')) {
+              delete businessSettings.receiptTemplate;
+            }
+          } catch (e) {
+            // Be safe: if entitlement check fails, do not expose the template.
+            if (businessSettings.receiptTemplate) delete businessSettings.receiptTemplate;
+          }
+
           // Return sale with business settings
           return res.json({ 
             success: true, 
@@ -15141,6 +15160,61 @@ app.put("/api/settings/pos", authenticateToken, setupBusinessDatabase, requirePe
       success: false,
       error: "Internal server error"
     });
+  }
+});
+
+// Custom Receipt Template settings (gated by the `custom_receipt_templates`
+// plan feature). Controls receipt header/footer copy and optional sections.
+const RECEIPT_TEMPLATE_DEFAULTS = {
+  headerText: "",
+  footerText: "",
+  showLogo: true,
+  showGstNumber: true,
+  showStaffName: true,
+  showClientInfo: true,
+  accentColor: "",
+};
+
+app.get("/api/settings/receipt-template", authenticateToken, setupBusinessDatabase, requirePermission('pos_settings', 'view'), gate(FEATURE.CUSTOM_RECEIPT_TEMPLATES), async (req, res) => {
+  try {
+    const { BusinessSettings } = req.businessModels;
+    const settings = await BusinessSettings.findOne();
+    const template = (settings && settings.receiptTemplate) || {};
+    res.json({
+      success: true,
+      data: { ...RECEIPT_TEMPLATE_DEFAULTS, ...(template.toObject ? template.toObject() : template) },
+    });
+  } catch (error) {
+    logger.error("Get receipt template error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+app.put("/api/settings/receipt-template", authenticateToken, setupBusinessDatabase, requirePermission('pos_settings', 'edit'), gate(FEATURE.CUSTOM_RECEIPT_TEMPLATES), async (req, res) => {
+  try {
+    const { BusinessSettings } = req.businessModels;
+    const settings = await BusinessSettings.findOne();
+    if (!settings) {
+      return res.status(404).json({ success: false, error: "Business settings not found" });
+    }
+
+    const body = req.body || {};
+    const next = { ...RECEIPT_TEMPLATE_DEFAULTS, ...(settings.receiptTemplate || {}) };
+    if (typeof body.headerText === "string") next.headerText = body.headerText.slice(0, 500);
+    if (typeof body.footerText === "string") next.footerText = body.footerText.slice(0, 500);
+    if (typeof body.showLogo === "boolean") next.showLogo = body.showLogo;
+    if (typeof body.showGstNumber === "boolean") next.showGstNumber = body.showGstNumber;
+    if (typeof body.showStaffName === "boolean") next.showStaffName = body.showStaffName;
+    if (typeof body.showClientInfo === "boolean") next.showClientInfo = body.showClientInfo;
+    if (typeof body.accentColor === "string") next.accentColor = body.accentColor.slice(0, 32);
+
+    settings.receiptTemplate = next;
+    await settings.save();
+
+    res.json({ success: true, data: next, message: "Receipt template updated successfully" });
+  } catch (error) {
+    logger.error("Update receipt template error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
   }
 });
 
@@ -16598,11 +16672,10 @@ app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, r
   }
 });
 
-// Commission Profiles API
-const { requireFeature } = require('./middleware/feature-gate');
+// Commission Profiles API — Incentive Management (target, service, and item profiles).
 
 // Get all commission profiles
-app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireManager, requireFeature('staff_commissions'), async (req, res) => {
+app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireManager, INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const commissionProfiles = await CommissionProfile.find().sort({ createdAt: -1 });
@@ -16621,7 +16694,7 @@ app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, re
 });
 
 // Create commission profile
-app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireAdmin, requireFeature('staff_commissions'), async (req, res) => {
+app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireAdmin, INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const profile = await CommissionProfile.create({
@@ -16643,7 +16716,7 @@ app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, r
 });
 
 // Update commission profile
-app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, requireFeature('staff_commissions'), async (req, res) => {
+app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const { id } = req.params;
@@ -16679,7 +16752,7 @@ app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase
 });
 
 // Delete commission profile
-app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, requireFeature('staff_commissions'), async (req, res) => {
+app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const { id } = req.params;
@@ -16765,7 +16838,7 @@ function respondReportExportError(res, error, fallbackMessage, logLabel) {
 }
 
 // Export products report (emailed to admin)
-app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
     
@@ -16791,7 +16864,7 @@ app.post('/api/reports/export/products', authenticateToken, setupBusinessDatabas
 });
 
 // Export services catalog report (emailed to admin) — used by Settings → Services export
-app.post('/api/reports/export/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/services', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
 
@@ -16817,7 +16890,7 @@ app.post('/api/reports/export/services', authenticateToken, setupBusinessDatabas
 });
 
 // Export sales report (emailed to admin)
-app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
     
@@ -16843,7 +16916,7 @@ app.post('/api/reports/export/sales', authenticateToken, setupBusinessDatabase, 
 });
 
 // Export summary report (emailed to admin)
-app.post('/api/reports/export/summary', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/summary', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
     const { exportSummaryReport } = require('./utils/report-exporter');
@@ -16867,7 +16940,7 @@ app.post('/api/reports/export/summary', authenticateToken, setupBusinessDatabase
 });
 
 // Export staff performance report (emailed to admin)
-app.post('/api/reports/export/staff-performance', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/staff-performance', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {}, data = [] } = req.body;
     const { exportStaffPerformanceReport } = require('./utils/report-exporter');
@@ -16892,7 +16965,7 @@ app.post('/api/reports/export/staff-performance', authenticateToken, setupBusine
 });
 
 // Export service list report (emailed to admin)
-app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
     const { exportServiceListReport } = require('./utils/report-exporter');
@@ -16916,7 +16989,7 @@ app.post('/api/reports/export/service-list', authenticateToken, setupBusinessDat
 });
 
 // Export product list report (emailed to admin)
-app.post('/api/reports/export/product-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/product-list', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
     const { exportProductListReport } = require('./utils/report-exporter');
@@ -17070,7 +17143,7 @@ app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabas
 });
 
 // Get unpaid/part-paid bills for report (includes dues settled column + merged dues-only rows when status=all)
-app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
+app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ADVANCED_REPORTS), reportCacheMiddleware, async (req, res) => {
   try {
     const { Sale } = req.businessModels;
     const { dateFrom, dateTo, status } = req.query;
@@ -17098,7 +17171,7 @@ app.get('/api/reports/unpaid-part-paid', authenticateToken, setupBusinessDatabas
 });
 
 // Get deleted invoices (archived bills) for report
-app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
+app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ADVANCED_REPORTS), reportCacheMiddleware, async (req, res) => {
   try {
     const { archivedAtRangeFromParams } = require('./utils/archived-date-query');
     const { BillArchive } = req.businessModels;
@@ -17135,7 +17208,7 @@ app.get('/api/reports/deleted-invoices', authenticateToken, setupBusinessDatabas
 });
 
 // Export unpaid/part-paid report (emailed to admin only)
-app.post('/api/reports/export/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/unpaid-part-paid', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), gate(FEATURE.ADVANCED_REPORTS), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
     const { exportUnpaidPartPaidReport } = require('./utils/report-exporter');
@@ -17159,7 +17232,7 @@ app.post('/api/reports/export/unpaid-part-paid', authenticateToken, setupBusines
 });
 
 // Export deleted invoices report (emailed to admin only)
-app.post('/api/reports/export/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/deleted-invoices', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), gate(FEATURE.ADVANCED_REPORTS), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
     const { exportDeletedInvoicesReport } = require('./utils/report-exporter');
@@ -17183,7 +17256,7 @@ app.post('/api/reports/export/deleted-invoices', authenticateToken, setupBusines
 });
 
 // Export appointment list report (emailed to admin only)
-app.post('/api/reports/export/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/export/appointment-list', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.DATA_EXPORT), async (req, res) => {
   try {
     const { format = 'xlsx', filters = {} } = req.body;
     const { exportAppointmentListReport } = require('./utils/report-exporter');
@@ -17207,7 +17280,7 @@ app.post('/api/reports/export/appointment-list', authenticateToken, setupBusines
 });
 
 // Tip payouts (for Staff Tip report - Mark as Paid)
-app.get('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, reportCacheMiddleware, async (req, res) => {
+app.get('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ADVANCED_REPORTS), reportCacheMiddleware, async (req, res) => {
   try {
     const { TipPayout } = req.businessModels;
     const { dateFrom, dateTo } = req.query;
@@ -17225,7 +17298,7 @@ app.get('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, re
   }
 });
 
-app.post('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/reports/tip-payouts', authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.ADVANCED_REPORTS), async (req, res) => {
   try {
     const { TipPayout } = req.businessModels;
     const { staffId, staffName, amount, dateFrom, dateTo } = req.body;

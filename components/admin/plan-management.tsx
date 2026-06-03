@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import { planBadgeClass } from "@/lib/plan-ids"
 
 interface Plan {
   id: string
@@ -275,18 +276,7 @@ export function PlanManagement() {
     }
   }
 
-  const getPlanBadgeColor = (planId: string) => {
-    switch (planId) {
-      case 'starter':
-        return 'bg-blue-100 text-blue-800'
-      case 'professional':
-        return 'bg-purple-100 text-purple-800'
-      case 'enterprise':
-        return 'bg-amber-100 text-amber-800'
-      default:
-        return 'bg-gray-100 text-gray-800'
-    }
-  }
+  const getPlanBadgeColor = (planId: string) => planBadgeClass(planId).replace(/ border-\S+/g, "")
 
   if (loading && businesses.length === 0) {
     return (

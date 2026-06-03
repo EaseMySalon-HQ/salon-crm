@@ -10,15 +10,20 @@ import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context"
 import { useSidebar } from "@/lib/sidebar-context"
 import { SETTINGS_MODULES } from "@/lib/permission-mappings"
+import { useEntitlements } from "@/hooks/use-entitlements"
 
 export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean } = {}) {
   const pathname = usePathname()
   const { user } = useAuth()
+  const { hasFeature, isLoading: entitlementsLoading } = useEntitlements()
   const { isCollapsed, toggleCollapsed } = useSidebar() ?? {
     isCollapsed: false,
     toggleCollapsed: () => {},
   }
 
+  // `featureId` (optional) gates a nav item behind the business plan, in
+  // addition to the staff-permission check. Items whose plan feature is not
+  // entitled are hidden entirely (see isFeatureAllowed below).
   const navigationItems = [
     { title: "Dashboard", href: "/dashboard", icon: Home, permissionModule: "dashboard" },
     { title: "Quick Sale", href: "/quick-sale", icon: Receipt, permissionModule: "sales" },
@@ -27,11 +32,19 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
     { title: "Leads", href: "/leads", icon: Phone, permissionModule: "lead_management" },
     { title: "Campaigns", href: "/campaigns", icon: Megaphone, permissionModule: "campaigns" },
     { title: "Cash Register", href: "/cash-registry", icon: Banknote, permissionModule: "cash_registry" },
-    { title: "Analytics", href: "/analytics", icon: BarChart3, permissionModule: "analytics" },
+    { title: "Analytics", href: "/analytics", icon: BarChart3, permissionModule: "analytics", featureId: "analytics" },
     { title: "Reports", href: "/reports", icon: PieChart, permissionModule: "reports" },
     { title: "Staff Directory", href: "/staff", icon: Users, permissionModule: "staff" },
     { title: "Settings", href: "/settings", icon: Settings, permissionModule: "settings" },
   ]
+
+  // Hide an item only once entitlements have loaded and the plan lacks the
+  // feature, so the nav doesn't flicker on first paint.
+  const isFeatureAllowed = (item: { featureId?: string }) => {
+    if (!item.featureId) return true
+    if (entitlementsLoading) return true
+    return hasFeature(item.featureId)
+  }
 
   const hasAccess = (item: (typeof navigationItems)[0]) => {
     if (!user) return false
@@ -120,6 +133,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
           <TooltipProvider delayDuration={50}>
             <nav className="grid gap-2.5">
               {navigationItems.map((item) => {
+                if (!isFeatureAllowed(item)) return null
                 const canAccess = hasAccess(item)
                 const Icon = item.icon
                 const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href))

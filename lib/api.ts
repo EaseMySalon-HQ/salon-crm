@@ -12,6 +12,7 @@ import type {
   AnalyticsStaffTabData,
 } from "@/lib/types/analytics"
 import type { PaymentConfiguration } from "./payment-redemption-eligibility"
+import type { PlanSubscriptionId } from "@/lib/plan-ids"
 
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
@@ -2190,6 +2191,16 @@ export class SettingsAPI {
     return response.data
   }
 
+  static async getReceiptTemplate(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/settings/receipt-template')
+    return response.data
+  }
+
+  static async updateReceiptTemplate(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put('/settings/receipt-template', data)
+    return response.data
+  }
+
   static async getAppointmentSettings(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/settings/appointments')
     return response.data
@@ -3325,7 +3336,7 @@ export class RewardPointsAPI {
 
 export type PlanCheckoutKind = "renewal" | "upgrade" | "change" | "new"
 export type PlanBillingPeriod = "monthly" | "yearly"
-export type PlanSubscriptionId = "starter" | "professional" | "enterprise"
+export type { PlanSubscriptionId } from "@/lib/plan-ids"
 
 export interface PlanCheckoutOrder {
   provider: WalletProvider

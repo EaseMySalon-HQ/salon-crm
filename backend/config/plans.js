@@ -1,15 +1,47 @@
 /**
  * Pricing Plan Configuration
- * Defines features, limits, and pricing for each plan tier
+ * Defines features, limits, and pricing for each plan tier.
+ *
+ * Product has three tiers: Starter (`starter`), Growth (`growth`), Pro (`pro`).
  */
 
 const PLANS = {
   starter: {
     id: 'starter',
     name: 'Starter',
-    description: 'Perfect for small salons just getting started.',
-    monthlyPrice: 999,
-    yearlyPrice: 9590, // 20% discount
+    description: 'Everything you need to run your salon smoothly — no credit card required.',
+    monthlyPrice: 199,
+    yearlyPrice: 1990,
+    features: [
+      'pos',
+      'appointments',
+      'crm',
+      'service_management',
+      'product_management',
+      'basic_inventory',
+      'receipts',
+      'cash_register',
+      'staff_management',
+      'basic_reports',
+    ],
+    limits: {
+      locations: 1,
+      staff: Infinity,
+      whatsappMessages: 0,
+      smsMessages: 0,
+    },
+    support: {
+      email: true,
+      phone: false,
+      priority: false,
+    },
+  },
+  growth: {
+    id: 'growth',
+    name: 'Growth',
+    description: 'Win back clients and build lasting loyalty with automated feedback and rewards.',
+    monthlyPrice: 699,
+    yearlyPrice: 6990,
     features: [
       'pos',
       'appointments',
@@ -22,13 +54,12 @@ const PLANS = {
       'staff_management',
       'basic_reports',
       'incentive_management',
+      'reward_points',
+      'feedback_management',
     ],
     limits: {
       locations: 1,
-      staff: Infinity, // Unlimited
-      // whatsappMessages / smsMessages are DEPRECATED — every message is
-      // billed per-message from the business wallet (see lib/wallet-deduction).
-      // Kept at 0 for backward-compat with consumers that still read them.
+      staff: Infinity,
       whatsappMessages: 0,
       smsMessages: 0,
     },
@@ -38,12 +69,12 @@ const PLANS = {
       priority: false,
     },
   },
-  professional: {
-    id: 'professional',
-    name: 'Professional',
-    description: 'For growing salons with multiple staff.',
-    monthlyPrice: 2499,
-    yearlyPrice: 23990, // 20% discount
+  pro: {
+    id: 'pro',
+    name: 'Pro',
+    description: 'The full growth stack — loyalty, feedback, analytics, and automation in one plan.',
+    monthlyPrice: 999,
+    yearlyPrice: 9990,
     features: [
       'pos',
       'appointments',
@@ -54,46 +85,12 @@ const PLANS = {
       'receipts',
       'cash_register',
       'staff_management',
+      'basic_reports',
       'advanced_reports',
       'analytics',
-      'staff_commissions',
       'incentive_management',
-      'custom_receipt_templates',
-      'data_export',
-    ],
-    limits: {
-      locations: 3,
-      staff: Infinity,
-      // DEPRECATED — see starter plan note. Wallet-billed per message.
-      whatsappMessages: 0,
-      smsMessages: 0,
-    },
-    support: {
-      email: true,
-      phone: true,
-      priority: true,
-    },
-  },
-  enterprise: {
-    id: 'enterprise',
-    name: 'Enterprise',
-    description: 'For salon chains and large businesses.',
-    monthlyPrice: null, // Custom pricing
-    yearlyPrice: null,
-    features: [
-      'pos',
-      'appointments',
-      'crm',
-      'service_management',
-      'product_management',
-      'advanced_inventory',
-      'receipts',
-      'cash_register',
-      'staff_management',
-      'advanced_reports',
-      'analytics',
-      'staff_commissions',
-      'incentive_management',
+      'reward_points',
+      'feedback_management',
       'custom_receipt_templates',
       'data_export',
       'multi_location',
@@ -103,9 +100,8 @@ const PLANS = {
       'approval_workflows',
     ],
     limits: {
-      locations: Infinity,
+      locations: 3,
       staff: Infinity,
-      // DEPRECATED — see starter plan note. Wallet-billed per message.
       whatsappMessages: 0,
       smsMessages: 0,
     },
@@ -113,8 +109,6 @@ const PLANS = {
       email: true,
       phone: true,
       priority: true,
-      dedicatedManager: true,
-      onSiteTraining: true,
     },
   },
 };
@@ -201,17 +195,23 @@ const FEATURES = {
     description: 'Business analytics and insights',
     category: 'growth',
   },
-  staff_commissions: {
-    id: 'staff_commissions',
-    name: 'Staff Commission Tracking',
-    description: 'Track and calculate staff commissions',
-    category: 'growth',
-  },
   incentive_management: {
     id: 'incentive_management',
     name: 'Incentive Management',
-    description: 'Manage staff incentives and targets',
-    category: 'core',
+    description: 'Commission profiles — by target, service, or item — and staff assignments',
+    category: 'growth',
+  },
+  reward_points: {
+    id: 'reward_points',
+    name: 'Reward Points',
+    description: 'Customer loyalty points — earn and redeem on bills',
+    category: 'growth',
+  },
+  feedback_management: {
+    id: 'feedback_management',
+    name: 'Feedback Management',
+    description: 'Post-visit feedback collection, NPS, and review follow-up',
+    category: 'growth',
   },
   custom_receipt_templates: {
     id: 'custom_receipt_templates',
@@ -229,41 +229,37 @@ const FEATURES = {
     id: 'multi_location',
     name: 'Multi-Location Support',
     description: 'Manage multiple salon locations',
-    category: 'enterprise',
+    category: 'pro',
   },
   centralized_reporting: {
     id: 'centralized_reporting',
     name: 'Centralized Reporting',
     description: 'Centralized reports across locations',
-    category: 'enterprise',
+    category: 'pro',
   },
   api_access: {
     id: 'api_access',
     name: 'API Access',
     description: 'Access to REST API',
-    category: 'enterprise',
+    category: 'pro',
   },
   custom_integrations: {
     id: 'custom_integrations',
     name: 'Custom Integrations',
     description: 'Custom third-party integrations',
-    category: 'enterprise',
+    category: 'pro',
   },
   approval_workflows: {
     id: 'approval_workflows',
     name: 'Approval Workflows',
     description: 'Custom approval workflows',
-    category: 'enterprise',
+    category: 'pro',
   },
 };
 
 /**
  * Addon definitions
  */
-// NOTE: SMS and WhatsApp addons no longer ship with any free quota — every
-// message is debited from the business wallet (see lib/wallet-deduction.js).
-// `defaultQuota` is retained at 0 purely for backward compatibility with any
-// caller that still reads the value.
 const ADDONS = {
   whatsapp: {
     id: 'whatsapp',
@@ -279,44 +275,38 @@ const ADDONS = {
   },
 };
 
-/**
- * Get plan configuration by ID
- */
 function getPlanConfig(planId) {
-  return PLANS[planId] || null;
+  const { normalizePlanId } = require('../lib/plan-id');
+  const id = normalizePlanId(planId);
+  return PLANS[id] || null;
 }
 
-/**
- * Get all available plans
- */
 function getAllPlans() {
   return Object.values(PLANS);
 }
 
-/**
- * Get feature definition
- */
+function getAllPlanIds() {
+  return Object.keys(PLANS);
+}
+
+function isBuiltInPlanId(planId) {
+  const { normalizePlanId } = require('../lib/plan-id');
+  const id = normalizePlanId(planId);
+  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(PLANS, id);
+}
+
 function getFeature(featureId) {
   return FEATURES[featureId] || null;
 }
 
-/**
- * Get all features
- */
 function getAllFeatures() {
   return Object.values(FEATURES);
 }
 
-/**
- * Get addon definition
- */
 function getAddon(addonId) {
   return ADDONS[addonId] || null;
 }
 
-/**
- * Get all addons
- */
 function getAllAddons() {
   return Object.values(ADDONS);
 }
@@ -327,9 +317,10 @@ module.exports = {
   ADDONS,
   getPlanConfig,
   getAllPlans,
+  getAllPlanIds,
+  isBuiltInPlanId,
   getFeature,
   getAllFeatures,
   getAddon,
   getAllAddons,
 };
-

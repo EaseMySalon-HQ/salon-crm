@@ -3,7 +3,9 @@
  * Handles feature access, limits, and plan-based permissions
  */
 
-const { getPlanConfig, getFeature, getAddon } = require('../config/plans');
+const { getFeature, getAddon } = require('../config/plans');
+const { resolvePlanConfig } = require('./plan-resolver');
+const { normalizePlanId } = require('./plan-id');
 
 /**
  * Get effective features for a business
@@ -16,7 +18,7 @@ function getEffectiveFeatures(business) {
     return [];
   }
 
-  const planConfig = getPlanConfig(business.plan.planId);
+  const planConfig = resolvePlanConfig(normalizePlanId(business.plan.planId));
   if (!planConfig) {
     return [];
   }
@@ -38,6 +40,14 @@ function getEffectiveFeatures(business) {
 
   // Merge plan features with overrides (overrides take precedence)
   const effectiveFeatures = [...new Set([...planFeatures, ...overrideFeatures])];
+
+  // Legacy alias: old templates used `staff_commissions` before consolidation.
+  if (
+    effectiveFeatures.includes('staff_commissions') &&
+    !effectiveFeatures.includes('incentive_management')
+  ) {
+    effectiveFeatures.push('incentive_management');
+  }
 
   return effectiveFeatures;
 }
@@ -68,7 +78,7 @@ function getEffectiveLimit(business, limitName) {
     return 0;
   }
 
-  const planConfig = getPlanConfig(business.plan.planId);
+  const planConfig = resolvePlanConfig(normalizePlanId(business.plan.planId));
   if (!planConfig || !planConfig.limits) {
     return 0;
   }
@@ -156,7 +166,8 @@ function getPlanInfo(business) {
     return null;
   }
 
-  const planConfig = getPlanConfig(business.plan.planId);
+  const canonicalPlanId = normalizePlanId(business.plan.planId);
+  const planConfig = resolvePlanConfig(canonicalPlanId);
   if (!planConfig) {
     return null;
   }
@@ -165,7 +176,7 @@ function getPlanInfo(business) {
   const overrides = business.plan.overrides || {};
 
   return {
-    planId: business.plan.planId,
+    planId: canonicalPlanId,
     name: planConfig.name,
     planName: planConfig.name,
     description: planConfig.description,

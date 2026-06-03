@@ -19,6 +19,7 @@ import {
   ProductCommissionRule
 } from "@/lib/commission-profile-types"
 import { ProductsAPI, ServicesAPI } from "@/lib/api"
+import { useFeature } from "@/hooks/use-entitlements"
 
 interface AddCommissionProfileModalProps {
   isOpen: boolean
@@ -46,6 +47,8 @@ const emptyProductRule = (): ProductCommissionRule => ({
 })
 
 export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommissionProfileModalProps) {
+  const { hasAccess: canIncentive } = useFeature("incentive_management")
+
   const [formData, setFormData] = useState<CommissionProfileFormData>({
     name: "",
     type: "target_based",
@@ -363,54 +366,60 @@ export function AddCommissionProfileModal({ isOpen, onClose, onSave }: AddCommis
 
         <div className="space-y-6">
           <div className="flex flex-wrap items-center gap-4 p-4 bg-gray-50 rounded-lg">
-            <div className="flex items-center space-x-2">
-              <input
-                type="radio"
-                id="target_based"
-                name="type"
-                value="target_based"
-                checked={formData.type === "target_based"}
-                onChange={(e) => handleInputChange("type", e.target.value)}
-                className="w-4 h-4 text-blue-600"
-                aria-label="Commission by Target"
-              />
-              <Label htmlFor="target_based" className="flex items-center space-x-2 cursor-pointer">
-                <Target className="h-4 w-4" />
-                <span>Commission by Target</span>
-              </Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <input
-                type="radio"
-                id="service_based"
-                name="type"
-                value="service_based"
-                checked={formData.type === "service_based"}
-                onChange={(e) => handleInputChange("type", e.target.value)}
-                className="w-4 h-4 text-blue-600"
-                aria-label="Commission by Service"
-              />
-              <Label htmlFor="service_based" className="flex items-center space-x-2 cursor-pointer">
-                <Scissors className="h-4 w-4" />
-                <span>Commission by Service</span>
-              </Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <input
-                type="radio"
-                id="item_based"
-                name="type"
-                value="item_based"
-                checked={formData.type === "item_based"}
-                onChange={(e) => handleInputChange("type", e.target.value)}
-                className="w-4 h-4 text-blue-600"
-                aria-label="Commission by Item"
-              />
-              <Label htmlFor="item_based" className="flex items-center space-x-2 cursor-pointer">
-                <Package className="h-4 w-4" />
-                <span>Commission by Item</span>
-              </Label>
-            </div>
+            {canIncentive && (
+              <div className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  id="target_based"
+                  name="type"
+                  value="target_based"
+                  checked={formData.type === "target_based"}
+                  onChange={(e) => handleInputChange("type", e.target.value)}
+                  className="w-4 h-4 text-blue-600"
+                  aria-label="Commission by Target"
+                />
+                <Label htmlFor="target_based" className="flex items-center space-x-2 cursor-pointer">
+                  <Target className="h-4 w-4" />
+                  <span>Commission by Target</span>
+                </Label>
+              </div>
+            )}
+            {canIncentive && (
+              <div className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  id="service_based"
+                  name="type"
+                  value="service_based"
+                  checked={formData.type === "service_based"}
+                  onChange={(e) => handleInputChange("type", e.target.value)}
+                  className="w-4 h-4 text-blue-600"
+                  aria-label="Commission by Service"
+                />
+                <Label htmlFor="service_based" className="flex items-center space-x-2 cursor-pointer">
+                  <Scissors className="h-4 w-4" />
+                  <span>Commission by Service</span>
+                </Label>
+              </div>
+            )}
+            {canIncentive && (
+              <div className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  id="item_based"
+                  name="type"
+                  value="item_based"
+                  checked={formData.type === "item_based"}
+                  onChange={(e) => handleInputChange("type", e.target.value)}
+                  className="w-4 h-4 text-blue-600"
+                  aria-label="Commission by Item"
+                />
+                <Label htmlFor="item_based" className="flex items-center space-x-2 cursor-pointer">
+                  <Package className="h-4 w-4" />
+                  <span>Commission by Item</span>
+                </Label>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

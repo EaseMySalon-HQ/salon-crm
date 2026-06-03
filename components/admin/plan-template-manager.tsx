@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Plus, Save, Trash2, Settings, CheckCircle2, XCircle } from "lucide-react"
+import Link from "next/link"
+import { Save, Trash2, Settings, TableProperties } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,6 +16,8 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import { formatAdminPlanMonthlyPrice, parseAdminPlanPriceInput } from "@/lib/admin-plan-price"
+import { isCanonicalPlanId } from "@/lib/plan-ids"
 
 interface Plan {
   id: string
@@ -41,6 +44,47 @@ interface Feature {
   name: string
   description: string
   category: string
+}
+
+/**
+ * How each feature toggle is enforced in the product today. Surfaced as a badge
+ * so admins know which toggles actually gate access vs. which are not yet wired.
+ *  - "gated": enforced at API + UI (toggling changes tenant access)
+ *  - "core": always-on for every plan; included for completeness
+ *  - "partial": enforced where surfaces exist, product split is partial
+ *  - "planned": defined but no product surface yet (no-op if toggled)
+ */
+const FEATURE_ENFORCEMENT: Record<string, "gated" | "core" | "partial" | "planned"> = {
+  pos: "core",
+  appointments: "core",
+  crm: "core",
+  service_management: "core",
+  product_management: "core",
+  basic_inventory: "core",
+  receipts: "core",
+  cash_register: "core",
+  staff_management: "core",
+  basic_reports: "core",
+  incentive_management: "gated",
+  reward_points: "gated",
+  feedback_management: "gated",
+  analytics: "gated",
+  advanced_inventory: "gated",
+  advanced_reports: "gated",
+  data_export: "gated",
+  custom_receipt_templates: "gated",
+  multi_location: "planned",
+  centralized_reporting: "planned",
+  api_access: "planned",
+  custom_integrations: "planned",
+  approval_workflows: "planned",
+}
+
+const ENFORCEMENT_BADGE: Record<string, { label: string; className: string }> = {
+  gated: { label: "Gated", className: "bg-emerald-100 text-emerald-700 border-emerald-200" },
+  core: { label: "Core", className: "bg-slate-100 text-slate-600 border-slate-200" },
+  partial: { label: "Partial", className: "bg-amber-100 text-amber-700 border-amber-200" },
+  planned: { label: "Planned", className: "bg-gray-100 text-gray-500 border-gray-200" },
 }
 
 export function PlanTemplateManager() {
@@ -276,12 +320,18 @@ export function PlanTemplateManager() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Plan Templates</h1>
-          <p className="text-gray-600">Create and manage pricing plan templates with granular feature control</p>
+          <p className="text-gray-600">
+            Manage the three subscription tiers — Starter, Growth, and Pro — and their feature sets
+          </p>
         </div>
-        <Button onClick={handleCreatePlan}>
-          <Plus className="h-4 w-4 mr-2" />
-          Create Plan
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" asChild>
+            <Link href="/admin/plans/pricing-matrix">
+              <TableProperties className="h-4 w-4 mr-2" />
+              Manage Pricing Matrix on Pricing Page
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* Plans List */}
@@ -302,6 +352,7 @@ export function PlanTemplateManager() {
                   >
                     <Settings className="h-4 w-4" />
                   </Button>
+                  {!isCanonicalPlanId(plan.id) ? (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -310,6 +361,7 @@ export function PlanTemplateManager() {
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
+                  ) : null}
                 </div>
               </div>
             </CardHeader>
@@ -317,7 +369,7 @@ export function PlanTemplateManager() {
               <div className="space-y-4">
                 <div>
                   <div className="text-2xl font-bold">
-                    {plan.monthlyPrice ? `₹${plan.monthlyPrice.toLocaleString()}` : 'Custom'}
+                    {formatAdminPlanMonthlyPrice(plan.monthlyPrice)}
                   </div>
                   <div className="text-sm text-gray-500">per month</div>
                 </div>
@@ -365,7 +417,7 @@ export function PlanTemplateManager() {
                   <Input
                     value={formData.id}
                     onChange={(e) => setFormData({ ...formData, id: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
-                    placeholder="e.g., premium"
+                    placeholder="e.g., starter, growth, pro"
                     disabled={!isCreateDialogOpen}
                   />
                   {!isCreateDialogOpen && (
@@ -392,18 +444,24 @@ export function PlanTemplateManager() {
                   <Label>Monthly Price (₹)</Label>
                   <Input
                     type="number"
-                    value={formData.monthlyPrice || ''}
-                    onChange={(e) => setFormData({ ...formData, monthlyPrice: e.target.value ? parseInt(e.target.value) : null })}
-                    placeholder="Leave empty for custom pricing"
+                    min={0}
+                    value={formData.monthlyPrice ?? ''}
+                    onChange={(e) =>
+                      setFormData({ ...formData, monthlyPrice: parseAdminPlanPriceInput(e.target.value) })
+                    }
+                    placeholder="0 for free plan, empty for custom pricing"
                   />
                 </div>
                 <div>
                   <Label>Yearly Price (₹)</Label>
                   <Input
                     type="number"
-                    value={formData.yearlyPrice || ''}
-                    onChange={(e) => setFormData({ ...formData, yearlyPrice: e.target.value ? parseInt(e.target.value) : null })}
-                    placeholder="Leave empty for custom pricing"
+                    min={0}
+                    value={formData.yearlyPrice ?? ''}
+                    onChange={(e) =>
+                      setFormData({ ...formData, yearlyPrice: parseAdminPlanPriceInput(e.target.value) })
+                    }
+                    placeholder="0 for free plan, empty for custom pricing"
                   />
                 </div>
               </div>
@@ -412,25 +470,46 @@ export function PlanTemplateManager() {
             <TabsContent value="features" className="space-y-4">
               <div>
                 <Label>Select Features for this Plan</Label>
-                <p className="text-sm text-gray-500 mb-4">
+                <p className="text-sm text-gray-500 mb-2">
                   Toggle features to include in this plan template
                 </p>
+                <div className="flex flex-wrap items-center gap-3 mb-4 text-[11px] text-gray-500">
+                  <span className="inline-flex items-center gap-1">
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-emerald-100 text-emerald-700 border-emerald-200">Gated</Badge>
+                    Enforced at API + UI
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-slate-100 text-slate-600 border-slate-200">Core</Badge>
+                    Always on for every plan
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-gray-100 text-gray-500 border-gray-200">Planned</Badge>
+                    No product surface yet
+                  </span>
+                </div>
                 <div className="space-y-4 max-h-96 overflow-y-auto border rounded p-4">
                   {Object.entries(groupedFeatures).map(([category, categoryFeatures]) => (
                     <div key={category} className="space-y-2">
                       <div className="font-semibold text-sm text-gray-700 capitalize">{category}</div>
                       <div className="grid grid-cols-2 gap-2">
-                        {categoryFeatures.map((feature) => (
-                          <div key={feature.id} className="flex items-center space-x-2">
-                            <Switch
-                              checked={formData.features.includes(feature.id)}
-                              onCheckedChange={() => toggleFeature(feature.id)}
-                            />
-                            <Label className="text-sm cursor-pointer">
-                              {feature.name}
-                            </Label>
-                          </div>
-                        ))}
+                        {categoryFeatures.map((feature) => {
+                          const enforcement = FEATURE_ENFORCEMENT[feature.id] || "planned"
+                          const badge = ENFORCEMENT_BADGE[enforcement]
+                          return (
+                            <div key={feature.id} className="flex items-center space-x-2">
+                              <Switch
+                                checked={formData.features.includes(feature.id)}
+                                onCheckedChange={() => toggleFeature(feature.id)}
+                              />
+                              <Label className="text-sm cursor-pointer flex items-center gap-1.5">
+                                {feature.name}
+                                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${badge.className}`}>
+                                  {badge.label}
+                                </Badge>
+                              </Label>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   ))}

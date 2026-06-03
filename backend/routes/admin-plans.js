@@ -2,46 +2,52 @@ const express = require('express');
 const { logger } = require('../utils/logger');
 const router = express.Router();
 const { setupMainDatabase } = require('../middleware/business-db');
-const { getPlanConfig, getAllPlans, getAllFeatures, getAllAddons } = require('../config/plans');
+const { getPlanConfig, getAllFeatures, getAllAddons } = require('../config/plans');
+const { normalizePlanId, CANONICAL_PLAN_IDS, isCanonicalPlanId } = require('../lib/plan-id');
 const { getPlanInfo, getEffectiveFeatures, hasFeature } = require('../lib/entitlements');
+const planResolver = require('../lib/plan-resolver');
+const entitlementsCache = require('../lib/entitlements-cache');
+const {
+  normalizeCategories,
+  serializeMatrixDocument,
+  DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES,
+} = require('../lib/public-pricing-matrix-service');
 const { authenticateAdmin, checkAdminPermission } = require('../middleware/admin-auth');
+
+function normalizeOptionalPrice(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
 // GET /api/admin/plans/config - Get all plan configurations
 router.get('/config', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'view'), async (req, res) => {
   try {
     const { PlanTemplate } = req.mainModels;
-    
-    // Get plans from database (active templates) and merge with config file
-    const dbPlans = await PlanTemplate.find({ isActive: true }).sort({ createdAt: 1 });
-    const configPlans = getAllPlans();
+
+    await planResolver.syncLegacyBusinessPlanIds();
+    await planResolver.syncBuiltInPlanTemplates();
+
+    // Admin UI lists only the three canonical plan templates.
+    const dbPlans = await PlanTemplate.find({
+      isActive: true,
+      id: { $in: CANONICAL_PLAN_IDS },
+    }).sort({ createdAt: 1 });
     const features = getAllFeatures();
     const addons = getAllAddons();
 
-    // Merge database plans with config plans (database takes precedence)
-    const planMap = new Map();
-    
-    // First add config plans
-    configPlans.forEach(plan => {
-      planMap.set(plan.id, plan);
-    });
-    
-    // Then override/add database plans
-    dbPlans.forEach(dbPlan => {
-      planMap.set(dbPlan.id, {
-        id: dbPlan.id,
-        name: dbPlan.name,
-        description: dbPlan.description,
-        monthlyPrice: dbPlan.monthlyPrice,
-        yearlyPrice: dbPlan.yearlyPrice,
-        features: dbPlan.features,
-        limits: dbPlan.limits,
-        support: dbPlan.support,
-        isDefault: dbPlan.isDefault,
-        isActive: dbPlan.isActive,
-      });
-    });
-
-    const plans = Array.from(planMap.values());
+    const plans = dbPlans.map((dbPlan) => ({
+      id: dbPlan.id,
+      name: dbPlan.name,
+      description: dbPlan.description,
+      monthlyPrice: dbPlan.monthlyPrice,
+      yearlyPrice: dbPlan.yearlyPrice,
+      features: dbPlan.features,
+      limits: dbPlan.limits,
+      support: dbPlan.support,
+      isDefault: dbPlan.isDefault,
+      isActive: dbPlan.isActive,
+    }));
 
     res.json({
       success: true,
@@ -56,6 +62,83 @@ router.get('/config', authenticateAdmin, setupMainDatabase, checkAdminPermission
     res.status(500).json({
       success: false,
       error: 'Failed to fetch plan configuration',
+    });
+  }
+});
+
+// GET /api/admin/plans/pricing-matrix — public pricing page feature matrix (admin)
+router.get('/pricing-matrix', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'view'), async (req, res) => {
+  try {
+    const { PublicPricingMatrix } = req.mainModels;
+    const doc = await PublicPricingMatrix.getMatrixDocument();
+    res.json({
+      success: true,
+      data: serializeMatrixDocument(doc),
+    });
+  } catch (error) {
+    logger.error('Error fetching admin pricing matrix:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch pricing matrix',
+    });
+  }
+});
+
+// PUT /api/admin/plans/pricing-matrix — update public pricing page feature matrix
+router.put('/pricing-matrix', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'update'), async (req, res) => {
+  try {
+    const { PublicPricingMatrix } = req.mainModels;
+    const categories = normalizeCategories(req.body?.categories);
+
+    let doc = await PublicPricingMatrix.findOne();
+    if (!doc) {
+      doc = new PublicPricingMatrix({ categories });
+    } else {
+      doc.categories = categories;
+    }
+    doc.updatedByAdminId = req.admin?._id || null;
+    await doc.save();
+
+    res.json({
+      success: true,
+      data: serializeMatrixDocument(doc),
+      message: 'Pricing matrix updated successfully',
+    });
+  } catch (error) {
+    logger.error('Error updating pricing matrix:', error);
+    const message = error.message?.includes('requires') || error.message?.includes('must')
+      ? error.message
+      : 'Failed to update pricing matrix';
+    res.status(error.message?.includes('requires') || error.message?.includes('must') ? 400 : 500).json({
+      success: false,
+      error: message,
+    });
+  }
+});
+
+// POST /api/admin/plans/pricing-matrix/reset — restore default matrix
+router.post('/pricing-matrix/reset', authenticateAdmin, setupMainDatabase, checkAdminPermission('plans', 'update'), async (req, res) => {
+  try {
+    const { PublicPricingMatrix } = req.mainModels;
+    let doc = await PublicPricingMatrix.findOne();
+    if (!doc) {
+      doc = new PublicPricingMatrix({ categories: DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES });
+    } else {
+      doc.categories = DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES;
+    }
+    doc.updatedByAdminId = req.admin?._id || null;
+    await doc.save();
+
+    res.json({
+      success: true,
+      data: serializeMatrixDocument(doc),
+      message: 'Pricing matrix reset to defaults',
+    });
+  } catch (error) {
+    logger.error('Error resetting pricing matrix:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to reset pricing matrix',
     });
   }
 });
@@ -105,8 +188,16 @@ router.post('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermis
       });
     }
 
+    const canonicalId = normalizePlanId(id);
+    if (!isCanonicalPlanId(canonicalId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Plan ID must be one of: starter, growth, pro',
+      });
+    }
+
     // Check if plan ID already exists
-    const existing = await PlanTemplate.findOne({ id });
+    const existing = await PlanTemplate.findOne({ id: canonicalId });
     if (existing) {
       return res.status(400).json({
         success: false,
@@ -115,11 +206,11 @@ router.post('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermis
     }
 
     const template = new PlanTemplate({
-      id,
+      id: canonicalId,
       name,
       description: description || '',
-      monthlyPrice: monthlyPrice || null,
-      yearlyPrice: yearlyPrice || null,
+      monthlyPrice: normalizeOptionalPrice(monthlyPrice),
+      yearlyPrice: normalizeOptionalPrice(yearlyPrice),
       features: features || [],
       limits: limits || {
         locations: 1,
@@ -141,6 +232,11 @@ router.post('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermis
     });
 
     await template.save();
+
+    // Plan definitions changed — refresh the resolver cache and drop any
+    // per-business entitlement caches so tenants pick up the new plan.
+    planResolver.invalidate();
+    entitlementsCache.invalidateAll();
 
     res.json({
       success: true,
@@ -176,33 +272,67 @@ router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, checkAdmi
     } = req.body;
 
     const template = await PlanTemplate.findOne({ id: planId });
-    if (!template) {
-      return res.status(404).json({
-        success: false,
-        error: 'Plan template not found',
+    let doc = template;
+    if (!doc) {
+      const configPlan = getPlanConfig(planId);
+      if (!configPlan) {
+        return res.status(404).json({
+          success: false,
+          error: 'Plan template not found',
+        });
+      }
+      doc = new PlanTemplate({
+        id: planId,
+        name: configPlan.name,
+        description: configPlan.description || '',
+        monthlyPrice: configPlan.monthlyPrice,
+        yearlyPrice: configPlan.yearlyPrice,
+        features: configPlan.features || [],
+        limits: configPlan.limits || {
+          locations: 1,
+          staff: Infinity,
+          whatsappMessages: 0,
+          smsMessages: 0,
+        },
+        support: configPlan.support || {
+          email: true,
+          phone: false,
+          priority: false,
+        },
+        isActive: true,
+        metadata: {
+          createdBy: req.admin._id,
+          updatedBy: req.admin._id,
+        },
       });
     }
 
     // Update fields
-    if (name !== undefined) template.name = name;
-    if (description !== undefined) template.description = description;
-    if (monthlyPrice !== undefined) template.monthlyPrice = monthlyPrice;
-    if (yearlyPrice !== undefined) template.yearlyPrice = yearlyPrice;
-    if (features !== undefined) template.features = features;
-    if (limits !== undefined) template.limits = limits;
-    if (support !== undefined) template.support = support;
-    if (isDefault !== undefined) template.isDefault = isDefault;
-    if (isActive !== undefined) template.isActive = isActive;
-    
-    template.metadata.updatedBy = req.admin._id;
+    if (name !== undefined) doc.name = name;
+    if (description !== undefined) doc.description = description;
+    if (monthlyPrice !== undefined) doc.monthlyPrice = normalizeOptionalPrice(monthlyPrice);
+    if (yearlyPrice !== undefined) doc.yearlyPrice = normalizeOptionalPrice(yearlyPrice);
+    if (features !== undefined) doc.features = features;
+    if (limits !== undefined) doc.limits = limits;
+    if (support !== undefined) doc.support = support;
+    if (isDefault !== undefined) doc.isDefault = isDefault;
+    if (isActive !== undefined) doc.isActive = isActive;
 
-    await template.save();
+    doc.metadata = doc.metadata || {};
+    doc.metadata.updatedBy = req.admin._id;
+
+    await doc.save();
+
+    // Feature toggles / limits changed — refresh resolver + per-business caches
+    // so the change takes effect immediately for all tenants on this plan.
+    planResolver.invalidate();
+    entitlementsCache.invalidateAll();
 
     res.json({
       success: true,
       message: 'Plan template updated successfully',
       data: {
-        template,
+        template: doc,
       },
     });
   } catch (error) {
@@ -220,6 +350,13 @@ router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, checkA
     const { PlanTemplate } = req.mainModels;
     const { planId } = req.params;
 
+    if (isCanonicalPlanId(planId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Starter, Growth, and Pro templates cannot be deleted',
+      });
+    }
+
     const template = await PlanTemplate.findOne({ id: planId });
     if (!template) {
       return res.status(404).json({
@@ -236,7 +373,10 @@ router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, checkA
       // Instead of deleting, deactivate
       template.isActive = false;
       await template.save();
-      
+
+      planResolver.invalidate();
+      entitlementsCache.invalidateAll();
+
       return res.json({
         success: true,
         message: 'Plan template deactivated (businesses are using this plan)',
@@ -247,6 +387,9 @@ router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, checkA
     }
 
     await PlanTemplate.deleteOne({ id: planId });
+
+    planResolver.invalidate();
+    entitlementsCache.invalidateAll();
 
     res.json({
       success: true,
@@ -412,15 +555,6 @@ router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, checkA
       });
     }
 
-    // Validate plan
-    if (planId && !getPlanConfig(planId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid plan ID',
-      });
-    }
-
-    // Store previous values for audit
     const previousPlan = {
       planId: business.plan?.planId,
       billingPeriod: business.plan?.billingPeriod,
@@ -430,15 +564,21 @@ router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, checkA
       addons: business.plan?.addons,
     };
 
-    // Update plan fields
     if (!business.plan) {
       business.plan = {};
     }
 
     if (planId !== undefined) {
-      business.plan.planId = planId;
+      const canonicalPlanId = normalizePlanId(planId);
+      if (!getPlanConfig(canonicalPlanId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid plan ID',
+        });
+      }
+      business.plan.planId = canonicalPlanId;
       // Sync addon quota/enabled from plan limits when plan changes
-      const planConfig = getPlanConfig(planId);
+      const planConfig = getPlanConfig(canonicalPlanId);
       if (planConfig && planConfig.limits) {
         if (!business.plan.addons) business.plan.addons = {};
         const smsLimit = planConfig.limits.smsMessages ?? 0;
@@ -488,6 +628,10 @@ router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, checkA
     }
 
     await business.save();
+
+    // The business's plan/overrides/addons changed — drop its cached
+    // entitlements so the next request re-resolves them.
+    entitlementsCache.invalidate(business._id);
 
     // Log the change
     const changeLog = new PlanChangeLog({

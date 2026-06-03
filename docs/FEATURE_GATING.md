@@ -8,6 +8,66 @@ The system uses a two-tier approach:
 1. **Frontend Gating**: Hide/disable features in the UI based on plan
 2. **Backend Gating**: Enforce feature access at the API level
 
+## Architecture (source of truth + caching)
+
+Admin feature toggles are the source of truth and they actually drive access:
+
+- **Plan definitions** are edited in the admin Plan Template Manager and stored
+  in the `PlanTemplate` collection. [`backend/lib/plan-resolver.js`](../backend/lib/plan-resolver.js)
+  resolves a plan to its features/limits from the DB template (falling back to
+  the static `backend/config/plans.js` seed), backed by a short‑TTL in‑memory
+  cache that is warmed at startup and invalidated on admin writes.
+- **Entitlement resolution** ([`backend/lib/entitlements.js`](../backend/lib/entitlements.js))
+  reads from the resolver, so toggling a feature in admin changes what tenants
+  can access (after cache invalidation / TTL).
+- **Per-business entitlements cache** ([`backend/lib/entitlements-cache.js`](../backend/lib/entitlements-cache.js))
+  resolves a business's effective features ONCE and caches them (short TTL), so
+  gating does not hit the DB on every request. It is invalidated on plan
+  changes (checkout activation, scheduled downgrade apply, admin reassignment)
+  and on any plan-template edit.
+- **Central route registry** ([`backend/config/feature-routes.js`](../backend/config/feature-routes.js))
+  is the single source of truth for which API surfaces each feature gates. Use
+  `gate(FEATURE.X)` inline on the matching routes; it is a thin, cache-backed
+  wrapper over `requireFeature` (no extra auth, one cache lookup per request).
+- **Frontend** uses React Query in [`hooks/use-entitlements.ts`](../hooks/use-entitlements.ts)
+  so every `useFeature` / `FeatureGate` call shares ONE cached `/api/business/plan`
+  fetch. Call `useInvalidateEntitlements()` (or `refetch`) after plan changes.
+
+### Enforcement status of each feature
+
+| Status | Meaning |
+| --- | --- |
+| Gated | Enforced at API + UI; toggling changes tenant access |
+| Core | Always on for every plan (included for completeness) |
+| Planned | Defined but no product surface yet; toggling is a no-op |
+
+- **Gated**: `analytics`, `incentive_management`, `reward_points`, `feedback_management`,
+  `advanced_inventory`,
+  `advanced_reports`, `data_export`, `custom_receipt_templates`.
+- **Core**: `pos`, `appointments`, `crm`, `service_management`,
+  `product_management`, `basic_inventory`, `receipts`, `cash_register`,
+  `staff_management`, `basic_reports`.
+- **Planned (no tenant surface yet)**: `custom_integrations`, `multi_location`,
+  `centralized_reporting`, `api_access`, `approval_workflows`. The registry
+  already maps `/api/integrations` → `custom_integrations`, so future
+  integration routes are gated automatically by adding `gate(FEATURE.CUSTOM_INTEGRATIONS)`.
+
+### Plan tiers (Starter, Growth, Pro)
+
+Built-in subscription plans use ids **`starter`**, **`growth`**, and **`pro`** only.
+Admin Plan Template Manager shows these three templates. On startup the server
+seeds missing templates, migrates legacy business plan ids to canonical ids,
+and deactivates retired plan templates (`free`, `professional`, `enterprise`).
+
+**Incentive Management** (`incentive_management`) gates the full commission
+surface: target-based, service-based, and item-based commission profiles,
+staff assignments, and the Staff Performance report tab. It is included on
+Growth and above, not on Starter. API routes under `/api/commission-profiles`
+use `gate(FEATURE.INCENTIVE_MANAGEMENT)`.
+
+Legacy plan templates that still list the removed `staff_commissions` feature
+id are aliased to `incentive_management` at entitlement resolution time.
+
 ## Frontend Feature Gating
 
 ### Using the FeatureGate Component
@@ -24,7 +84,7 @@ function MyComponent() {
       <BasicFeature />
       
       {/* This feature is only available to Professional and Enterprise plans */}
-      <FeatureGate featureId="advanced_analytics">
+      <FeatureGate featureId="analytics">
         <AdvancedAnalytics />
       </FeatureGate>
       
@@ -113,14 +173,17 @@ Protect API routes with feature requirements:
 ```javascript
 const { requireFeature } = require('../middleware/feature-gate');
 
-// Protect a route that requires advanced analytics
-router.get('/api/analytics/advanced', 
+// Protect a route that requires analytics. Prefer the central registry:
+const { gate, FEATURE } = require('../config/feature-routes');
+
+app.get('/api/analytics/revenue',
   authenticateToken,
   setupBusinessDatabase,
-  requireFeature('advanced_analytics'),
+  requireStaff,
+  gate(FEATURE.ANALYTICS),
   async (req, res) => {
-    // This code only runs if business has access to advanced_analytics
-    const analytics = await getAdvancedAnalytics(req.business);
+    // This code only runs if the business plan includes `analytics`
+    const analytics = await getAnalytics(req);
     res.json({ success: true, data: analytics });
   }
 );
@@ -185,13 +248,14 @@ Common feature IDs used in the system:
 - `cash_register` - Cash Register Management
 - `staff_management` - Staff Management
 - `basic_reports` - Basic Reports
-- `incentive_management` - Incentive Management
 
-### Growth Features (Available in Professional+)
+### Growth Features (Available in Starter/Growth+)
 - `advanced_inventory` - Advanced Inventory Management
 - `advanced_reports` - Advanced Reports
 - `analytics` - Analytics
-- `staff_commissions` - Staff Commission Tracking
+- `incentive_management` - Incentive Management (commission by target, service, or item)
+- `reward_points` - Reward Points
+- `feedback_management` - Feedback Management
 - `custom_receipt_templates` - Custom Receipt Templates
 - `data_export` - Data Export
 
@@ -246,15 +310,15 @@ function ExportButton() {
 
 ```javascript
 // backend/routes/analytics.js
-const { requireFeature } = require('../middleware/feature-gate');
+const { gate, FEATURE } = require('../config/feature-routes');
 
 router.get('/advanced',
   authenticateToken,
   setupBusinessDatabase,
-  requireFeature('advanced_analytics'),
+  gate(FEATURE.ANALYTICS),
   async (req, res) => {
-    // Only accessible to Professional+ plans
-    const data = await getAdvancedAnalytics(req.business);
+    // Only accessible to plans that include `analytics`
+    const data = await getAnalytics(req);
     res.json({ success: true, data });
   }
 );

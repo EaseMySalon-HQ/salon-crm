@@ -187,7 +187,7 @@ export function ClientsListPage() {
                   </div>
                   
                   <div className="flex items-center gap-3">
-                    {canExport ? (
+                    {canExport && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
@@ -212,16 +212,6 @@ export function ClientsListPage() {
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        className="bg-gray-100 cursor-not-allowed text-gray-500 px-6 py-2.5 shadow-md rounded-xl font-medium border-gray-200"
-                        disabled
-                        title="Data export requires Professional or Enterprise plan"
-                      >
-                        <Download className="mr-2 h-5 w-5" />
-                        Export (Upgrade)
-                      </Button>
                     )}
                     
                     {canCreateClient && (

@@ -6,21 +6,25 @@ import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProtectedRoute } from "@/components/auth/protected-route"
-import { FeatureGate } from "@/components/ui/feature-gate"
 import { SalesReport } from "@/components/reports/sales-report"
 import { MembershipReport } from "@/components/reports/membership-report"
 import { ExpenseReport } from "@/components/reports/expense-report"
 import { StaffPerformanceReport } from "@/components/reports/staff-performance-report"
 import { BarChart3, TrendingUp, Receipt, Users, CreditCard } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
+import { useFeature } from "@/hooks/use-entitlements"
 
 function ReportsTabsBody() {
   const { user, hasPermission } = useAuth()
+  const { hasAccess: canIncentiveManagement, isLoading: entitlementsLoading } = useFeature("incentive_management")
   const router = useRouter()
   const searchParams = useSearchParams()
 
   const canViewFinancialReports = !user || hasPermission("reports", "view_financial_reports")
-  const canViewStaffCommission = !user || hasPermission("reports", "view_staff_commission")
+  const canViewStaffCommission =
+    (!user || hasPermission("reports", "view_staff_commission")) &&
+    !entitlementsLoading &&
+    canIncentiveManagement
 
   const allowedTabs = useMemo(() => {
     const t: string[] = []
@@ -94,10 +98,12 @@ function ReportsTabsBody() {
                 <div className="w-2 h-2 bg-indigo-500 rounded-full" />
                 <span>Expense tracking & insights</span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-purple-500 rounded-full" />
-                <span>Staff performance analytics</span>
-              </div>
+              {canViewStaffCommission && (
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-purple-500 rounded-full" />
+                  <span>Staff performance analytics</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -185,16 +191,11 @@ function ReportsTabsBody() {
             {canViewStaffCommission && (
               <TabsContent value="staff" className="space-y-6">
                 {activeTab === "staff" && (
-                  <FeatureGate
-                    featureId="staff_commissions"
-                    upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to track staff commissions and performance analytics."
-                  >
-                    <Card className="border-0 shadow-sm bg-slate-50/50">
-                      <CardContent className="pt-6">
-                        <StaffPerformanceReport />
-                      </CardContent>
-                    </Card>
-                  </FeatureGate>
+                  <Card className="border-0 shadow-sm bg-slate-50/50">
+                    <CardContent className="pt-6">
+                      <StaffPerformanceReport />
+                    </CardContent>
+                  </Card>
                 )}
               </TabsContent>
             )}

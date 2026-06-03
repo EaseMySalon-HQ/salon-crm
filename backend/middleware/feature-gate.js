@@ -3,9 +3,62 @@
  * Enforces feature access based on business plan and overrides
  */
 
-const { hasFeature, getEffectiveLimit, hasReachedLimit, canUseAddon } = require('../lib/entitlements');
+const { canUseAddon } = require('../lib/entitlements');
 const databaseManager = require('../config/database-manager');
+const entitlementsCache = require('../lib/entitlements-cache');
 const { logger } = require('../utils/logger');
+
+/**
+ * Resolve the business id for the current request.
+ */
+function resolveBusinessId(req) {
+  return req.user?.branchId || req.businessId || req.params?.businessId || null;
+}
+
+/**
+ * Middleware that loads the business's effective entitlements ONCE per request
+ * (from the short-TTL cache) and attaches them to `req.entitlements`. Mount it
+ * right after `setupBusinessDatabase` so all downstream feature/limit checks
+ * read from `req.entitlements` instead of hitting the DB per route.
+ *
+ * This is intentionally non-fatal: if the business cannot be resolved we leave
+ * `req.entitlements` undefined and let the per-gate middleware decide.
+ */
+async function loadEntitlements(req, res, next) {
+  try {
+    const businessId = resolveBusinessId(req);
+    if (!businessId) {
+      return next();
+    }
+    const entry = await entitlementsCache.resolve(businessId);
+    if (entry) {
+      req.entitlements = entry;
+    }
+    next();
+  } catch (error) {
+    logger.warn('loadEntitlements failed (continuing without cache):', error.message);
+    next();
+  }
+}
+
+/**
+ * Ensure `req.entitlements` is populated, resolving + caching on demand.
+ * Returns the entry, or null if the business is missing.
+ */
+async function ensureEntitlements(req) {
+  if (req.entitlements) {
+    return req.entitlements;
+  }
+  const businessId = resolveBusinessId(req);
+  if (!businessId) {
+    return null;
+  }
+  const entry = await entitlementsCache.resolve(businessId);
+  if (entry) {
+    req.entitlements = entry;
+  }
+  return entry || null;
+}
 
 /**
  * Middleware to check if business has access to a specific feature
@@ -16,43 +69,27 @@ const { logger } = require('../utils/logger');
 function requireFeature(featureId, options = {}) {
   return async (req, res, next) => {
     try {
-      // Get business ID from user or request
-      const businessId = req.user?.branchId || req.businessId || req.params.businessId;
+      const entitlements = await ensureEntitlements(req);
 
-      if (!businessId) {
-        return res.status(400).json({
+      if (!entitlements) {
+        // Either no business id, or the business doesn't exist.
+        return res.status(resolveBusinessId(req) ? 404 : 400).json({
           success: false,
-          error: 'Business ID not found',
-        });
-      }
-
-      // Get main connection and Business model
-      const mainConnection = await databaseManager.getMainConnection();
-      const Business = mainConnection.model('Business', require('../models/Business').schema);
-
-      // Fetch business with plan info
-      const business = await Business.findById(businessId).select('plan status');
-
-      if (!business) {
-        return res.status(404).json({
-          success: false,
-          error: 'Business not found',
+          error: resolveBusinessId(req) ? 'Business not found' : 'Business ID not found',
         });
       }
 
       // Check if business is active
-      if (business.status !== 'active') {
+      if (entitlements.status !== 'active') {
         return res.status(403).json({
           success: false,
           error: 'Business account is not active',
         });
       }
 
-      // Check feature access
-      const hasAccess = hasFeature(business, featureId);
-
-      if (!hasAccess) {
-        const planName = business.plan?.planId || 'none';
+      // Check feature access (from cached effective features)
+      if (!entitlements.features.has(featureId)) {
+        const planName = entitlements.planId || 'none';
         return res.status(403).json({
           success: false,
           error: `Feature "${featureId}" is not available in your current plan (${planName})`,
@@ -63,11 +100,59 @@ function requireFeature(featureId, options = {}) {
         });
       }
 
-      // Attach business to request for downstream use
-      req.business = business;
       next();
     } catch (error) {
       logger.error('Error in feature gate middleware:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to verify feature access',
+      });
+    }
+  };
+}
+
+/**
+ * Middleware that grants access if the business has ANY of the listed features.
+ * Useful when one route surface is shared by multiple plan features.
+ * @param {string[]} featureIds
+ */
+function requireAnyFeature(featureIds) {
+  const list = Array.isArray(featureIds) ? featureIds : [featureIds];
+  return async (req, res, next) => {
+    try {
+      const entitlements = await ensureEntitlements(req);
+
+      if (!entitlements) {
+        return res.status(resolveBusinessId(req) ? 404 : 400).json({
+          success: false,
+          error: resolveBusinessId(req) ? 'Business not found' : 'Business ID not found',
+        });
+      }
+
+      if (entitlements.status !== 'active') {
+        return res.status(403).json({
+          success: false,
+          error: 'Business account is not active',
+        });
+      }
+
+      const allowed = list.some((f) => entitlements.features.has(f));
+      if (!allowed) {
+        const planName = entitlements.planId || 'none';
+        return res.status(403).json({
+          success: false,
+          error: `This feature is not available in your current plan (${planName})`,
+          code: 'FEATURE_NOT_AVAILABLE',
+          planId: planName,
+          featureId: list[0],
+          requiredAnyOf: list,
+          upgradeRequired: true,
+        });
+      }
+
+      next();
+    } catch (error) {
+      logger.error('Error in requireAnyFeature middleware:', error);
       res.status(500).json({
         success: false,
         error: 'Failed to verify feature access',
@@ -85,42 +170,30 @@ function requireFeature(featureId, options = {}) {
 function requireLimit(limitName, getCurrentUsage) {
   return async (req, res, next) => {
     try {
-      const businessId = req.user?.branchId || req.businessId || req.params.businessId;
+      const entitlements = await ensureEntitlements(req);
 
-      if (!businessId) {
-        return res.status(400).json({
+      if (!entitlements) {
+        return res.status(resolveBusinessId(req) ? 404 : 400).json({
           success: false,
-          error: 'Business ID not found',
+          error: resolveBusinessId(req) ? 'Business not found' : 'Business ID not found',
         });
       }
 
-      const mainConnection = await databaseManager.getMainConnection();
-      const Business = mainConnection.model('Business', require('../models/Business').schema);
-
-      const business = await Business.findById(businessId).select('plan status');
-
-      if (!business) {
-        return res.status(404).json({
-          success: false,
-          error: 'Business not found',
-        });
-      }
-
-      if (business.status !== 'active') {
+      if (entitlements.status !== 'active') {
         return res.status(403).json({
           success: false,
           error: 'Business account is not active',
         });
       }
 
-      // Get current usage
-      const currentUsage = await getCurrentUsage(req, business);
+      const limit = entitlements.limits?.[limitName] ?? 0;
 
-      // Check if limit reached
-      const limitReached = hasReachedLimit(business, limitName, currentUsage);
+      // Get current usage
+      const currentUsage = await getCurrentUsage(req, entitlements);
+
+      const limitReached = limit !== Infinity && currentUsage >= limit;
 
       if (limitReached) {
-        const limit = getEffectiveLimit(business, limitName);
         return res.status(403).json({
           success: false,
           error: `Usage limit reached for ${limitName}`,
@@ -132,9 +205,8 @@ function requireLimit(limitName, getCurrentUsage) {
         });
       }
 
-      req.business = business;
       req.currentUsage = currentUsage;
-      req.limit = getEffectiveLimit(business, limitName);
+      req.limit = limit;
       next();
     } catch (error) {
       logger.error('Error in limit check middleware:', error);
@@ -154,36 +226,27 @@ function requireLimit(limitName, getCurrentUsage) {
 function requireAddon(addonId) {
   return async (req, res, next) => {
     try {
-      const businessId = req.user?.branchId || req.businessId || req.params.businessId;
+      const entitlements = await ensureEntitlements(req);
 
-      if (!businessId) {
-        return res.status(400).json({
+      if (!entitlements) {
+        return res.status(resolveBusinessId(req) ? 404 : 400).json({
           success: false,
-          error: 'Business ID not found',
+          error: resolveBusinessId(req) ? 'Business not found' : 'Business ID not found',
         });
       }
 
-      const mainConnection = await databaseManager.getMainConnection();
-      const Business = mainConnection.model('Business', require('../models/Business').schema);
-
-      const business = await Business.findById(businessId).select('plan status');
-
-      if (!business) {
-        return res.status(404).json({
-          success: false,
-          error: 'Business not found',
-        });
-      }
-
-      if (business.status !== 'active') {
+      if (entitlements.status !== 'active') {
         return res.status(403).json({
           success: false,
           error: 'Business account is not active',
         });
       }
 
-      // Check addon availability
-      const canUse = canUseAddon(business, addonId);
+      // Check addon availability against the cached plan info.
+      const canUse = canUseAddon(
+        { plan: { addons: entitlements.planInfo?.addons || {} } },
+        addonId,
+      );
 
       if (!canUse) {
         return res.status(403).json({
@@ -195,7 +258,6 @@ function requireAddon(addonId) {
         });
       }
 
-      req.business = business;
       next();
     } catch (error) {
       logger.error('Error in addon check middleware:', error);
@@ -230,7 +292,10 @@ async function getBusinessFromRequest(req) {
 }
 
 module.exports = {
+  loadEntitlements,
+  ensureEntitlements,
   requireFeature,
+  requireAnyFeature,
   requireLimit,
   requireAddon,
   getBusinessFromRequest,

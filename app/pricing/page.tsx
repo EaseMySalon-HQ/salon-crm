@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import {
   ArrowRight,
@@ -13,43 +13,18 @@ import {
 } from "lucide-react"
 
 import { PublicShell } from "@/components/layout/public-shell"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { PricingFeatureMatrix } from "@/components/pricing/pricing-feature-matrix"
-import { FEATURE_CATEGORIES, PRICING_PLANS, type PricingPlan } from "@/lib/pricing-matrix"
-
-function formatInr(n: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(n)
-}
+import { PricingTierCards } from "@/components/pricing/pricing-tier-cards"
+import { FEATURE_CATEGORIES, PRICING_PLANS, type FeatureCategory } from "@/lib/pricing-matrix"
+import { fetchPublicPricingMatrix } from "@/lib/public-pricing-api"
 
 const TRUST_ITEMS = [
   { icon: ShieldCheck, label: "99.99% uptime SLA" },
   { icon: Sparkles, label: "Free setup, training & data migration" },
   { icon: Headphones, label: "24/7 support available" },
 ] as const
-
-const PLAN_HIGHLIGHTS: Record<PricingPlan["id"], string[]> = {
-  starter: [
-    "Single outlet — run day-to-day smoothly",
-    "Core appointments, billing & client records",
-    "Basic reports & cash tracking",
-  ],
-  growth: [
-    "Scale operations with richer scheduling & alerts",
-    "Stronger billing, inventory & lead workflows",
-    "Advanced analytics & marketing filters",
-  ],
-  professional: [
-    "Multi-outlet: centralized dashboards & consolidation",
-    "Memberships, packages & incentive engines",
-    "Premium support options for chains",
-  ],
-}
 
 const pricingFaq = [
   {
@@ -58,7 +33,7 @@ const pricingFaq = [
   },
   {
     q: "Is there a free trial?",
-    a: "Yes. Start with a full-featured trial before you commit. No credit card required to explore the product.",
+    a: "Yes. Start with a 7 Day Trial before you commit. No credit card required to explore the product.",
   },
   {
     q: "Can we switch between monthly and annual billing?",
@@ -66,7 +41,7 @@ const pricingFaq = [
   },
   {
     q: "What happens to our data if we upgrade or downgrade?",
-    a: "Your data stays yours. You can move between Starter, Growth, and Professional — we never sell or share your salon data.",
+    a: "Your data stays yours. You can move between Free, Growth, and Pro — we never sell or share your salon data.",
   },
   {
     q: "Do you support custom multi-outlet or enterprise pricing?",
@@ -75,7 +50,13 @@ const pricingFaq = [
 ]
 
 export default function PricingPage() {
-  const [billingPeriod, setBillingPeriod] = useState<"monthly" | "yearly">("yearly")
+  const [matrixCategories, setMatrixCategories] = useState<FeatureCategory[]>(FEATURE_CATEGORIES)
+
+  useEffect(() => {
+    fetchPublicPricingMatrix().then((categories) => {
+      if (categories.length > 0) setMatrixCategories(categories)
+    })
+  }, [])
 
   return (
     <PublicShell>
@@ -90,11 +71,12 @@ export default function PricingPage() {
             EaseMySalon · Salon OS for India
           </p>
           <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-            Three tiers. Built for Indian salons &amp; spas.
+            Free to start. Grow when you&apos;re ready.
           </h1>
           <p className="mx-auto mt-5 max-w-2xl text-lg text-purple-100 sm:text-xl">
-            Start lean, scale as you grow, or go full-power across every outlet. All prices in ₹ per outlet,{" "}
-            <span className="font-medium text-white">GST exclusive</span> — effective April&nbsp;2026.
+            Run your salon on Free, unlock feedback &amp; loyalty on Growth, or go all-in with Pro — WhatsApp
+            automation included. All prices in ₹ per outlet,{" "}
+            <span className="font-medium text-white">GST exclusive</span>.
           </p>
           <div className="mt-10 flex flex-wrap items-center justify-center gap-3 sm:gap-4">
             {TRUST_ITEMS.map(({ icon: Icon, label }) => (
@@ -111,122 +93,21 @@ export default function PricingPage() {
       </section>
 
       {/* Plans */}
-      <section className="border-b border-slate-200 bg-slate-50/80 py-16 sm:py-20">
+      <section className="border-b border-slate-200 bg-white py-16 sm:py-20">
         <div className="container mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-between sm:gap-6">
-            <div className="text-center sm:text-left">
-              <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Pick your tier</h2>
-              <p className="mt-1 max-w-xl text-sm text-slate-600 sm:text-base">
-                Upgrade or downgrade anytime — your data stays yours. Annual billing saves more at every tier.
-              </p>
-            </div>
-            <div
-              className="inline-flex shrink-0 rounded-full border border-slate-200 bg-white p-1 shadow-sm"
-              role="group"
-              aria-label="Billing period"
-            >
-              <button
-                type="button"
-                onClick={() => setBillingPeriod("monthly")}
-                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
-                  billingPeriod === "monthly"
-                    ? "bg-slate-900 text-white shadow-md"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                Monthly
-              </button>
-              <button
-                type="button"
-                onClick={() => setBillingPeriod("yearly")}
-                className={`relative rounded-full px-5 py-2.5 text-sm font-semibold transition-all ${
-                  billingPeriod === "yearly"
-                    ? "bg-[#7C3AED] text-white shadow-md"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                Annual
-                <span className="absolute -right-1 -top-2 rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow">
-                  Save
-                </span>
-              </button>
-            </div>
+          <div className="mx-auto max-w-2xl text-center">
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Pick your tier</h2>
+            <p className="mt-2 text-sm text-slate-600 sm:text-base">
+              Start free, upgrade anytime — your data stays yours.
+            </p>
           </div>
 
-          <div className="mt-12 grid gap-6 lg:grid-cols-3 lg:gap-8">
-            {PRICING_PLANS.map((plan) => {
-              const isYearly = billingPeriod === "yearly"
-              const headlineAmount = isYearly ? Math.round(plan.annualInr / 12) : plan.monthlyInr
-              const displayMain = formatInr(headlineAmount)
-              const subLine = isYearly
-                ? `${formatInr(plan.annualInr)} per outlet / year · Save ${formatInr(plan.annualSavingsInr)} vs paying monthly`
-                : "Billed monthly per outlet · Cancel anytime"
-
-              return (
-                <Card
-                  key={plan.id}
-                  className={`relative flex flex-col overflow-hidden border-2 transition-shadow hover:shadow-xl ${
-                    plan.popular
-                      ? "border-[#7C3AED] shadow-lg ring-2 ring-[#7C3AED]/20 lg:-translate-y-1"
-                      : "border-slate-200 bg-white"
-                  }`}
-                >
-                  {plan.popular && (
-                    <div className="absolute right-4 top-4">
-                      <Badge className="bg-[#7C3AED] text-white hover:bg-[#7C3AED]">Most popular</Badge>
-                    </div>
-                  )}
-                  <CardHeader className="space-y-3 pb-4 pt-8">
-                    <div>
-                      <CardTitle className="text-2xl font-bold text-slate-900">{plan.name}</CardTitle>
-                      <CardDescription className="mt-2 text-base text-slate-600">{plan.tagline}</CardDescription>
-                    </div>
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      <span className="text-4xl font-bold tracking-tight text-slate-900 tabular-nums sm:text-5xl">
-                        {displayMain}
-                      </span>
-                      <span className="text-base font-medium text-slate-500">/mo</span>
-                      <span className="w-full text-xs font-normal text-slate-500 sm:text-sm">
-                        {isYearly ? "effective when billed annually" : "per outlet"}
-                      </span>
-                    </div>
-                    <p className="text-sm font-medium leading-snug text-[#6D28D9]">{subLine}</p>
-                  </CardHeader>
-                  <CardContent className="flex flex-1 flex-col gap-6 pt-0">
-                    <ul className="flex-1 space-y-3">
-                      {PLAN_HIGHLIGHTS[plan.id].map((line) => (
-                        <li key={line} className="flex gap-3 text-sm text-slate-700">
-                          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" aria-hidden />
-                          <span>{line}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    <div className="mt-auto space-y-2">
-                      <Button
-                        asChild
-                        size="lg"
-                        className={`h-12 w-full text-base font-semibold ${
-                          plan.popular
-                            ? "bg-[#7C3AED] hover:bg-[#6D28D9]"
-                            : "bg-slate-900 hover:bg-slate-800"
-                        }`}
-                      >
-                        <Link href="/contact">
-                          Start free trial
-                          <ArrowRight className="ml-2 h-4 w-4" />
-                        </Link>
-                      </Button>
-                      <p className="text-center text-xs text-slate-500">14-day trial · No credit card required</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              )
-            })}
+          <div className="mt-12">
+            <PricingTierCards plans={PRICING_PLANS} />
           </div>
 
           <p className="mt-10 text-center text-xs text-slate-500 sm:text-sm">
-            Annual plans are billed upfront. Figures may change with notice — for enterprise or custom multi-outlet
-            agreements,{" "}
+            Prices shown are monthly per outlet. For enterprise or custom multi-outlet agreements,{" "}
             <Link href="/contact" className="font-medium text-[#7C3AED] underline-offset-2 hover:underline">
               contact sales
             </Link>
@@ -244,8 +125,8 @@ export default function PricingPage() {
             </Badge>
             <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">What&apos;s included</h2>
             <p className="mt-3 text-slate-600">
-              What&apos;s included at every tier — condensed from our April 2026 matrix. Integrations marked Add-on
-              are available as paid extras where noted.
+              Compare Free, Growth, and Pro — from core salon ops to feedback, loyalty, and WhatsApp.
+              Integrations marked Add-on are available as paid extras where noted.
             </p>
           </div>
 
@@ -268,12 +149,12 @@ export default function PricingPage() {
                 Paid add-on
               </span>
               <span className="inline-flex items-center gap-2">
-                <Badge className="bg-purple-100 text-[#5B21B6] hover:bg-purple-100 text-[10px]">Free</Badge>
-                Complimentary where shown
+                <span className="text-xs font-semibold text-amber-600">Soon</span>
+                Coming soon
               </span>
             </div>
 
-            <PricingFeatureMatrix categories={FEATURE_CATEGORIES} />
+            <PricingFeatureMatrix categories={matrixCategories} plans={PRICING_PLANS} />
 
             <p className="mt-6 text-center text-xs text-slate-500">
               For the full printable matrix and the latest line-by-line availability, ask our team or refer to your
@@ -295,7 +176,7 @@ export default function PricingPage() {
           <Building2 className="h-10 w-10 text-[#7C3AED]" aria-hidden />
           <h2 className="text-2xl font-bold text-slate-900">Chains &amp; enterprise</h2>
           <p className="max-w-2xl text-slate-600">
-            Professional covers full multi-outlet power. For custom commercials, SLAs, or dedicated rollout — we
+            Pro covers full multi-outlet power. For custom commercials, SLAs, or dedicated rollout — we
             build agreements that match how you operate.
           </p>
           <Button asChild size="lg" variant="secondary" className="mt-2">

@@ -88,13 +88,19 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
       )
     ) : null
 
+  // Custom receipt template (only present when the business plan includes the
+  // `custom_receipt_templates` feature; backend strips it otherwise).
+  const tpl = businessSettings?.receiptTemplate || {}
+  const showLogo = tpl.showLogo !== false
+  const showGst = tpl.showGstNumber !== false
+
   return (
     <Card className="max-w-2xl w-full mx-auto bg-white relative">
       <CardContent className="p-6 font-mono text-sm">
         {/* Header */}
         <div className="text-center border-b-2 border-black pb-3 mb-4">
           {/* Logo */}
-          {businessSettings?.logo && (
+          {showLogo && businessSettings?.logo && (
             <div className="mb-3">
               <img 
                 src={businessSettings.logo} 
@@ -118,10 +124,13 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
           <div className="text-xs">
             Email: {businessSettings?.email || "info@glamoursalon.com"}
           </div>
-          {businessSettings?.gstNumber && (
+          {showGst && businessSettings?.gstNumber && (
             <div className="text-xs font-semibold mt-1">
               GST: {businessSettings.gstNumber}
             </div>
+          )}
+          {tpl.headerText && (
+            <div className="text-xs mt-2 whitespace-pre-line">{tpl.headerText}</div>
           )}
         </div>
 
@@ -283,8 +292,14 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
 
         {/* Footer */}
         <div className="text-center border-t border-dashed border-black pt-3 text-xs">
-          <div>Thank you for visiting!</div>
-          <div>We appreciate your business</div>
+          {tpl.footerText ? (
+            <div className="whitespace-pre-line">{tpl.footerText}</div>
+          ) : (
+            <>
+              <div>Thank you for visiting!</div>
+              <div>We appreciate your business</div>
+            </>
+          )}
           <div className="mt-2">
             Follow us on social media
             <br />

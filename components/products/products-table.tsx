@@ -294,7 +294,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
         </div>
         
         <div className="flex items-center gap-3">
-          {canExport ? (
+          {canExport && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -319,31 +319,9 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          ) : (
-            <Button
-              variant="outline"
-              className="h-10 px-4 bg-gray-100 cursor-not-allowed text-gray-500 border-gray-200"
-              disabled
-              title="Data export requires Professional or Enterprise plan"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Export (Upgrade Required)
-            </Button>
           )}
           
-          {canAccessInventoryLogs ? (
-            <InventoryLogs />
-          ) : (
-            <Button
-              variant="outline"
-              className="h-10 px-4 bg-gray-100 cursor-not-allowed text-gray-500 border-gray-200"
-              disabled
-              title="Advanced inventory management requires Professional or Enterprise plan"
-            >
-              <Package className="h-4 w-4 mr-2" />
-              Inventory Logs (Upgrade Required)
-            </Button>
-          )}
+          {canAccessInventoryLogs && <InventoryLogs />}
           
           {canCreateProduct && (
             <>

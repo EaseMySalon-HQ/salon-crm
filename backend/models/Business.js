@@ -185,8 +185,8 @@ const businessSchema = new mongoose.Schema({
   plan: {
     planId: { 
       type: String, 
-      enum: ['starter', 'professional', 'enterprise'], 
-      default: 'starter' 
+      enum: ['starter', 'growth', 'pro'],
+      default: 'starter'
     },
     billingPeriod: { 
       type: String, 
@@ -204,7 +204,7 @@ const businessSchema = new mongoose.Schema({
     // while a downgrade is queued — in that case we clear the queue).
     pendingPlanId: {
       type: String,
-      enum: ['starter', 'professional', 'enterprise', null],
+      enum: ['starter', 'growth', 'pro', null],
       default: null,
     },
     pendingBillingPeriod: {
