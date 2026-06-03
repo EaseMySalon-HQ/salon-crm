@@ -6,6 +6,7 @@ const { requirePermission } = require('../middleware/permissions');
 const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/business-db');
 const whatsappService = require('../services/whatsapp-service');
 const databaseManager = require('../config/database-manager');
+const { getAddonStatus } = require('../lib/entitlements');
 
 /**
  * Helper function to get recipients for a campaign
@@ -379,6 +380,15 @@ router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusi
       return res.status(404).json({
         success: false,
         error: 'Campaign not found'
+      });
+    }
+
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const businessForAddon = await Business.findById(businessId).select('plan.addons').lean();
+    if (!getAddonStatus(businessForAddon, 'whatsapp').enabled) {
+      return res.status(403).json({
+        success: false,
+        error: 'WhatsApp add-on is not enabled for this business. Enable it in your plan before sending campaigns.',
       });
     }
 

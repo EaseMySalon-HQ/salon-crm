@@ -413,7 +413,13 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       });
       
       if (whatsappEnabled && adminAppointmentNotificationsEnabled) {
-        const business = await Business.findById(req.user.branchId);
+        const { getAddonStatus } = require('../lib/entitlements');
+        const business = await Business.findById(req.user.branchId).lean();
+        if (!business) {
+          logger.warn('Business not found for WhatsApp appointment notifications');
+        } else if (!getAddonStatus(business, 'whatsapp').enabled) {
+          logger.info('WhatsApp add-on disabled for business; skipping appointment WhatsApp confirmations');
+        } else {
         const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
         const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
         const businessWhatsappEnabled = whatsappSettings.enabled === true;
@@ -529,6 +535,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
           } else {
             logger.info('WhatsApp quiet hours active, skipping appointment message');
           }
+        }
         }
       }
     }

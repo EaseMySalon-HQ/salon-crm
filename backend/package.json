@@ -9,7 +9,8 @@
     "create-admin": "node create-admin-user.js",
     "test": "jest --config jest.config.js",
     "delete:appointments": "node scripts/delete-all-appointments.js",
-    "cleanup:scheduling": "node scripts/cleanup-scheduling-stale.js"
+    "cleanup:scheduling": "node scripts/cleanup-scheduling-stale.js",
+    "wa:rotate-tunnel": "node scripts/rotate-meta-webhook-tunnel.js"
   },
   "keywords": [
     "salon",

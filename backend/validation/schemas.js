@@ -69,6 +69,24 @@ const bookingIdParamSchema = z.object({ bookingId: objectIdHex }).strict();
 
 // --- Customers (clients) ---
 
+const whatsappConsentInputSchema = z
+  .object({
+    optedIn: z.boolean().optional(),
+    source: z
+      .enum(['booking', 'checkout', 'manual', 'import', 'staff', 'inbound_message', 'system'])
+      .optional(),
+    /**
+     * Reasons can come from the form as `null` when the inverse toggle is
+     * being unset (e.g. opting in clears `optOutReason`). Accept null AND
+     * undefined so the form's "clear the other side" pattern doesn't make
+     * the whole update fail with 400.
+     */
+    optInReason: z.string().max(500).nullable().optional(),
+    optOutReason: z.string().max(500).nullable().optional(),
+  })
+  .strict()
+  .optional();
+
 const createClientBodySchema = z
   .object({
     name: z.string().trim().min(1).max(200),
@@ -79,6 +97,7 @@ const createClientBodySchema = z
     status: z.enum(['active', 'inactive']).optional(),
     gender: z.enum(['male', 'female', 'other']).optional(),
     dob: z.union([z.string(), z.date()]).optional(),
+    whatsappConsent: whatsappConsentInputSchema,
   })
   .passthrough();
 
@@ -93,6 +112,7 @@ const updateClientBodySchema = z
     status: z.enum(['active', 'inactive']).optional(),
     gender: z.enum(['male', 'female', 'other']).optional(),
     dob: z.union([z.string(), z.date()]).optional(),
+    whatsappConsent: whatsappConsentInputSchema,
   })
   .passthrough();
 
@@ -396,6 +416,101 @@ const gstStatusBodySchema = z
   })
   .strict();
 
+/* ------------------------------------------------------------------------ *
+ * WhatsApp template payloads (mirrors Meta's message_templates request).
+ * Kept loose on the inner Mongoose-shaped pieces (variables / samples) since
+ * Meta lets ops define arbitrary placeholder maps.
+ * ------------------------------------------------------------------------ */
+
+const wa_buttonSchema = z
+  .object({
+    type: z.enum(['QUICK_REPLY', 'URL', 'PHONE_NUMBER']),
+    text: z.string().trim().min(1).max(25),
+    /** UI sends `""` for unused fields; treat as absent so url() / min() do not run. */
+    url: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : v),
+      z.string().trim().url().max(2000).optional()
+    ),
+    phone: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : v),
+      z.string().trim().min(3).max(32).optional()
+    ),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    if (val.type === 'URL' && !val.url) {
+      ctx.addIssue({ code: 'custom', message: 'URL button requires url', path: ['url'] });
+    }
+    if (val.type === 'PHONE_NUMBER' && !val.phone) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'PHONE_NUMBER button requires phone',
+        path: ['phone'],
+      });
+    }
+  });
+
+const wa_componentSchema = z
+  .object({
+    header: z
+      .object({
+        format: z.enum(['TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT']).nullable().optional(),
+        text: z.string().trim().max(60).optional().nullable(),
+        mediaSampleUrl: z.string().trim().url().max(2000).optional().nullable(),
+        examples: z.array(z.string()).max(10).optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    body: z
+      .object({
+        text: z.string().trim().min(1).max(1024),
+        examples: z.array(z.array(z.string()).max(10)).max(10).optional(),
+      })
+      .strict()
+      .optional()
+      .nullable(),
+    footer: z
+      .object({ text: z.string().trim().max(60) })
+      .strict()
+      .nullable()
+      .optional(),
+    buttons: z.array(wa_buttonSchema).max(10).optional(),
+  })
+  .strict();
+
+const whatsappTemplateBodySchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(512)
+      .regex(/^[a-z0-9_]+$/, 'name must be lowercase snake_case (a-z, 0-9, _)'),
+    language: z.string().trim().min(2).max(16).optional(),
+    category: z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION']),
+    components: wa_componentSchema.optional(),
+    /**
+     * Zod v4 requires `z.record(keySchema, valueSchema)`. Variables and
+     * samples are loose maps of arbitrary placeholder labels → arbitrary
+     * sample values (string, object, or array), so we keep both sides open.
+     */
+    variables: z.record(z.string(), z.any()).optional(),
+    samples: z.record(z.string(), z.any()).optional(),
+  })
+  .strict();
+
+const whatsappTemplateUpdateBodySchema = whatsappTemplateBodySchema.partial();
+
+const whatsappTemplateListQuerySchema = z
+  .object({
+    status: z.string().optional(),
+    search: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+    skip: z.coerce.number().int().min(0).optional(),
+  })
+  .strict();
+
 /** Marketing site “Book demo” form → admin platform lead */
 const publicDemoLeadSchema = z
   .object({
@@ -448,5 +563,8 @@ module.exports = {
   gstExportBodySchema,
   gstFilingBodySchema,
   gstStatusBodySchema,
+  whatsappTemplateBodySchema,
+  whatsappTemplateUpdateBodySchema,
+  whatsappTemplateListQuerySchema,
   publicDemoLeadSchema,
 };

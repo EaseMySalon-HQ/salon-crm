@@ -24,6 +24,7 @@ import { UserSettings } from "./admin-settings/user-settings"
 import { DatabaseSettings } from "./admin-settings/database-settings"
 import { NotificationSettings } from "./admin-settings/notification-settings"
 import { APISettings } from "./admin-settings/api-settings"
+import { WhatsAppMetaConfigSettings } from "./admin-settings/whatsapp-meta-config"
 const settingsCategories = [
   {
     id: "system",
@@ -309,11 +310,14 @@ export function AdminSettingsPage() {
         return <NotificationSettings settings={categorySettings} onSettingsChange={handleCategorySettingsChange} />
       case "api":
         return (
-          <APISettings
-            settings={categorySettings}
-            onSettingsChange={handleCategorySettingsChange}
-            jwtSecretConfigured={jwtSecretConfigured}
-          />
+          <div className="space-y-6">
+            <WhatsAppMetaConfigSettings />
+            <APISettings
+              settings={categorySettings}
+              onSettingsChange={handleCategorySettingsChange}
+              jwtSecretConfigured={jwtSecretConfigured}
+            />
+          </div>
         )
       default:
         return (

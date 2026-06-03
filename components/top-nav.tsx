@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useRouter } from "next/navigation"
-import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet, AlertTriangle, CreditCard } from "lucide-react"
+import { useRouter, usePathname } from "next/navigation"
+import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet, AlertTriangle, CreditCard, MessageCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -22,7 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
-import { SettingsAPI, ClientsAPI, WalletAPI, type NotificationFeedItem } from "@/lib/api"
+import { SettingsAPI, ClientsAPI, WalletAPI, WhatsAppInboxAPI, type NotificationFeedItem } from "@/lib/api"
 import { STALE_TIME } from "@/lib/queries/staleness"
 import { useNotificationsFeed } from "@/lib/queries/notifications"
 import { Input } from "@/components/ui/input"
@@ -143,9 +143,16 @@ function NotificationAlertMenuRow({
   )
 }
 
+function normalizePathname(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
 export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
-  const { user, logout } = useAuth()
+  const { user, logout, hasPermission } = useAuth()
   const router = useRouter()
+  const pathname = normalizePathname(usePathname())
+  const canAccessWhatsAppInbox = hasPermission("campaigns", "view")
+  const isInboxActive = pathname.startsWith("/whatsapp/inbox")
   const [showExpenseDialog, setShowExpenseDialog] = useState(false)
   const [showCashRegistryModal, setShowCashRegistryModal] = useState(false)
   const { amount: todayOnlineSales } = useTodayOnlineSales(showCashRegistryModal)
@@ -218,6 +225,23 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const notifCount = visibleNotificationItems.length
   const badgeLabel =
     notifCount > 9 ? "9+" : notifCount > 0 ? String(notifCount) : ""
+
+  const { data: inboxUnreadTotal = 0 } = useQuery({
+    queryKey: ["whatsapp", "inbox", "unread-total"],
+    queryFn: async () => {
+      const res = await WhatsAppInboxAPI.list({ filter: "unread", limit: 100 })
+      if (!res.success || !Array.isArray(res.data)) return 0
+      return res.data.reduce((sum, row) => sum + Number(row?.unreadCount || 0), 0)
+    },
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    enabled: !!user && canAccessWhatsAppInbox,
+    retry: false,
+  })
+
+  const inboxBadgeLabel =
+    inboxUnreadTotal > 9 ? "9+" : inboxUnreadTotal > 0 ? String(inboxUnreadTotal) : ""
 
   const { data: businessSettingsData, isLoading: isLoadingBusinessName } = useQuery({
     queryKey: ["settings", "business"],
@@ -481,7 +505,36 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
           )}
 
           {rightSlot}
-          
+
+          {canAccessWhatsAppInbox ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="WhatsApp inbox"
+              title="WhatsApp inbox"
+              onClick={() => router.push("/whatsapp/inbox")}
+              className={`relative p-2.5 transition-all duration-300 transform hover:scale-105 hover:shadow-md rounded-lg group ${
+                isInboxActive
+                  ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                  : "hover:bg-gradient-to-r hover:from-emerald-50 hover:to-green-50"
+              }`}
+            >
+              <MessageCircle
+                className={`h-4 w-4 transition-colors duration-300 ${
+                  isInboxActive ? "text-emerald-700" : "text-gray-600 group-hover:text-emerald-600"
+                }`}
+              />
+              {inboxBadgeLabel ? (
+                <Badge
+                  variant="destructive"
+                  className="absolute -top-1 -right-1 min-h-5 min-w-5 px-0 flex items-center justify-center text-[10px] font-bold p-0 shadow-md group-hover:animate-none"
+                >
+                  {inboxBadgeLabel}
+                </Badge>
+              ) : null}
+            </Button>
+          ) : null}
+
           {/* Notifications — server-derived alerts (inventory & expiries) */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

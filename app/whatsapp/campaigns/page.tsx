@@ -1,14 +1,13 @@
-import { CampaignsListPage } from "@/components/campaigns/campaigns-list"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
+import { WhatsAppCampaignsPage } from "@/components/whatsapp/campaigns/whatsapp-campaigns-page"
 
-export default function CampaignsPage() {
+export default function Page() {
   return (
     <ProtectedRoute requiredModule="campaigns">
       <ProtectedLayout>
-        <CampaignsListPage />
+        <WhatsAppCampaignsPage />
       </ProtectedLayout>
     </ProtectedRoute>
   )
 }
-

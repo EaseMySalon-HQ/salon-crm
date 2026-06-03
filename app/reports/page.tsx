@@ -10,7 +10,9 @@ import { SalesReport } from "@/components/reports/sales-report"
 import { MembershipReport } from "@/components/reports/membership-report"
 import { ExpenseReport } from "@/components/reports/expense-report"
 import { StaffPerformanceReport } from "@/components/reports/staff-performance-report"
-import { BarChart3, TrendingUp, Receipt, Users, CreditCard } from "lucide-react"
+import { PackageReport } from "@/components/reports/package-report"
+import { WhatsAppMessagesReport } from "@/components/reports/whatsapp-messages-report"
+import { BarChart3, TrendingUp, Receipt, Users, CreditCard, Package, MessageCircle } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { useFeature } from "@/hooks/use-entitlements"
 
@@ -25,16 +27,26 @@ function ReportsTabsBody() {
     (!user || hasPermission("reports", "view_staff_commission")) &&
     !entitlementsLoading &&
     canIncentiveManagement
+  const canViewPackageReports = !user || hasPermission("packages", "view")
 
   const allowedTabs = useMemo(() => {
     const t: string[] = []
     if (canViewFinancialReports) t.push("sales", "membership", "expense")
     if (canViewStaffCommission) t.push("staff")
+    if (canViewPackageReports) t.push("package")
+    t.push("messages")
     return t
-  }, [canViewFinancialReports, canViewStaffCommission])
+  }, [canViewFinancialReports, canViewStaffCommission, canViewPackageReports])
 
   const tabCount = allowedTabs.length
 
+  /**
+   * The grid must size each tab equally on the lg breakpoint, otherwise the
+   * "leftover" tab (e.g. Messages when 6 are visible against a 5-column grid)
+   * wraps onto its own row and stretches full-width — which is what looked
+   * broken before this fix. We always pick `lg:grid-cols-N` matching the
+   * exact tab count and let smaller breakpoints stack to 2-3 columns.
+   */
   const tabGridClass =
     tabCount <= 1
       ? "grid-cols-1"
@@ -44,7 +56,11 @@ function ReportsTabsBody() {
           ? "grid-cols-3"
           : tabCount === 4
             ? "grid-cols-2 sm:grid-cols-4"
-            : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5"
+            : tabCount === 5
+              ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5"
+              : tabCount === 6
+                ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"
+                : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-7"
 
   const [activeTab, setActiveTab] = useState<string>(() => {
     const u = searchParams.get("tab")
@@ -147,6 +163,22 @@ function ReportsTabsBody() {
                   Staff Performance
                 </TabsTrigger>
               )}
+              {canViewPackageReports && (
+                <TabsTrigger
+                  value="package"
+                  className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                >
+                  <Package className="h-4 w-4 mr-2 shrink-0" />
+                  Package
+                </TabsTrigger>
+              )}
+              <TabsTrigger
+                value="messages"
+                className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+              >
+                <MessageCircle className="h-4 w-4 mr-2 shrink-0" />
+                Messages
+              </TabsTrigger>
             </TabsList>
 
             {/**
@@ -200,6 +232,23 @@ function ReportsTabsBody() {
               </TabsContent>
             )}
 
+            {canViewPackageReports && (
+              <TabsContent value="package" className="space-y-6">
+                <Card className="border-0 shadow-sm bg-slate-50/50">
+                  <CardContent className="pt-6">
+                    <PackageReport embedded />
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
+
+            <TabsContent value="messages" className="space-y-6">
+              <Card className="border-0 shadow-sm bg-slate-50/50">
+                <CardContent className="pt-6">
+                  <WhatsAppMessagesReport />
+                </CardContent>
+              </Card>
+            </TabsContent>
           </Tabs>
         </div>
       </div>

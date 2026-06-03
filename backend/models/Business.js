@@ -225,7 +225,24 @@ const businessSchema = new mongoose.Schema({
     // (see backend/lib/wallet-deduction.js). Fields are retained only to
     // avoid breaking older documents and any legacy read paths.
     addons: {
+      /**
+       * Legacy MSG91 WhatsApp channel. When ON, message sites route through
+       * the existing MSG91 pipeline. Kept untouched for backwards compat.
+       */
       whatsapp: {
+        enabled: { type: Boolean, default: false },
+        quota: { type: Number, default: 0 },
+        used: { type: Number, default: 0 },
+        lastResetAt: { type: Date },
+      },
+      /**
+       * Native Meta Cloud API integration ("WABA"). When ON, the new
+       * WhatsApp module (templates, campaigns, inbox, webhook-driven status)
+       * takes over routing — `whatsapp-router.route()` returns provider:'meta'
+       * only when this flag is true AND the WABA is connected. When this is
+       * OFF, calls fall back to the legacy MSG91 path (if `whatsapp` is on).
+       */
+      waba: {
         enabled: { type: Boolean, default: false },
         quota: { type: Number, default: 0 },
         used: { type: Number, default: 0 },
