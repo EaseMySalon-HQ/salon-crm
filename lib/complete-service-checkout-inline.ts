@@ -1692,9 +1692,11 @@ export async function completeServiceCheckoutInline(opts: {
       receiptTotalsBreakdown: totalsBreakdown,
       loyaltyPointsRedeemed: loyaltyPointsRedeemedSave,
       loyaltyDiscountAmount: loyaltyDiscountAmountSave,
+      // Walk-in / Quick Sale checkout: sale cards only — never also create synthetic
+      // walk-in Appointment rows (multi-staff standalone sale).
+      suppressStandaloneWalkInCalendarCards: true,
       ...(raiseSaleLinkageVoided
         ? {
-            suppressStandaloneWalkInCalendarCards: true,
             voidBookingAppointmentIds: resolveAppointmentIdsToComplete(linkedAppointmentIds, linkedAppointmentId),
           }
         : {}),
