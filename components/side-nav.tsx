@@ -50,6 +50,7 @@ type NavGroupItem = {
   title: string
   icon: LucideIcon
   permissionModule: string
+  featureId?: string
   items: { title: string; href: string; icon: LucideIcon }[]
 }
 
@@ -85,6 +86,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
       title: "Marketing",
       icon: Megaphone,
       permissionModule: "campaigns",
+      featureId: "whatsapp_integration",
       items: [
         { title: "WA Templates", href: "/whatsapp/templates", icon: FileText },
         { title: "WA Campaigns", href: "/whatsapp/campaigns", icon: MessageCircle },
@@ -196,7 +198,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                 if (entry.kind === "link") {
                   const item = entry
                   if (!isFeatureAllowed(item)) return null
-                  const canAccess = hasAccess(item)
+                  if (!hasAccess(item)) return null
                   const Icon = item.icon
                   const isActive =
                     pathname === item.href ||
@@ -209,20 +211,14 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                           <TooltipTrigger asChild>
                             <Link
                               prefetch={false}
-                              href={canAccess ? item.href : "#"}
+                              href={item.href}
                               className={cn(
                                 "flex items-center justify-center w-full h-12 rounded-xl transition-all duration-300 group",
-                                !canAccess && "opacity-50 cursor-not-allowed",
                                 isActive
                                   ? "bg-indigo-600 text-white shadow-lg hover:bg-indigo-600 hover:text-white"
                                   : "hover:bg-indigo-50 hover:text-indigo-600 text-gray-600"
                               )}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                if (!canAccess) {
-                                  e.preventDefault()
-                                }
-                              }}
+                              onClick={(e) => e.stopPropagation()}
                             >
                               <Icon className={cn("h-5 w-5 transition-all", isActive ? "text-white" : "")} />
                               {isActive && (
@@ -239,15 +235,13 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                           variant={isActive ? "secondary" : "ghost"}
                           className={cn(
                             "w-full h-12 rounded-xl transition-all duration-300 group/item justify-start text-left px-4",
-                            !canAccess && "opacity-50 cursor-not-allowed",
                             isActive
                               ? "bg-indigo-600 text-white shadow-lg !text-white hover:!bg-indigo-600 hover:!text-white"
                               : "hover:bg-indigo-50 hover:text-indigo-700 hover:shadow-md text-gray-700"
                           )}
-                          disabled={!canAccess}
                           asChild
                         >
-                          <Link prefetch={false} href={canAccess ? item.href : "#"} className="flex items-center w-full">
+                          <Link prefetch={false} href={item.href} className="flex items-center w-full">
                             <div
                               className={cn(
                                 "p-2 rounded-lg transition-all duration-300 mr-3 flex-shrink-0",
@@ -266,18 +260,13 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                             >
                               {item.title}
                             </span>
-                            {!canAccess && (
-                              <span className="ml-auto text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full flex-shrink-0">
-                                restricted
-                              </span>
-                            )}
                             {isActive && (
                               <div className="absolute right-4 w-2 h-2 bg-white rounded-full animate-pulse" />
                             )}
                           </Link>
                         </Button>
                       )}
-                      {!isActive && canAccess && !isCollapsed && (
+                      {!isActive && !isCollapsed && (
                         <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-0 bg-indigo-600 rounded-r-full opacity-0 group-hover/item:opacity-100 group-hover/item:h-8 transition-all duration-300" />
                       )}
                     </div>
@@ -285,7 +274,8 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                 }
 
                 const group = entry
-                const canAccessGroup = hasAccess(group)
+                if (!isFeatureAllowed(group)) return null
+                if (!hasAccess(group)) return null
                 const GroupIcon = group.icon
                 const childActive = group.items.some(
                   (c) => pathname === c.href || pathname.startsWith(`${c.href}/`)
@@ -300,10 +290,8 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                             <DropdownMenuTrigger asChild>
                               <button
                                 type="button"
-                                disabled={!canAccessGroup}
                                 className={cn(
                                   "flex items-center justify-center w-full h-12 rounded-xl transition-all duration-300 outline-none",
-                                  !canAccessGroup && "opacity-50 cursor-not-allowed",
                                   childActive
                                     ? "bg-indigo-600 text-white shadow-lg"
                                     : "text-gray-600 hover:bg-indigo-50 hover:text-indigo-600"
@@ -329,10 +317,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                               <DropdownMenuItem key={child.href} asChild className="p-0">
                                 <Link
                                   prefetch={false}
-                                  href={canAccessGroup ? child.href : "#"}
-                                  onClick={(e) => {
-                                    if (!canAccessGroup) e.preventDefault()
-                                  }}
+                                  href={child.href}
                                   className={cn(
                                     "flex w-full cursor-pointer items-center gap-2 px-2 py-2 text-sm rounded-sm",
                                     active && "bg-indigo-50 text-indigo-900"
@@ -355,24 +340,22 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                     <Button
                       type="button"
                       variant="ghost"
-                      disabled={!canAccessGroup}
                       className={cn(
                         "w-full h-12 rounded-xl transition-all duration-300 justify-start text-left px-4",
-                        !canAccessGroup && "opacity-50 cursor-not-allowed",
                         marketingOpen && childActive
                           ? "bg-indigo-600 text-white shadow-lg !text-white hover:!bg-indigo-700 hover:!text-white"
-                          : marketingOpen && !childActive && canAccessGroup
+                          : marketingOpen && !childActive
                             ? "bg-indigo-50 text-indigo-900 hover:bg-indigo-100"
                             : "hover:bg-indigo-50 hover:text-indigo-700 hover:shadow-md text-gray-700"
                       )}
-                      onClick={() => canAccessGroup && setMarketingOpen((v) => !v)}
+                      onClick={() => setMarketingOpen((v) => !v)}
                     >
                       <div
                         className={cn(
                           "p-2 rounded-lg transition-all duration-300 mr-3 flex-shrink-0",
                           marketingOpen && childActive
                             ? "bg-white/20 text-white"
-                            : marketingOpen && !childActive && canAccessGroup
+                            : marketingOpen && !childActive
                               ? "bg-indigo-100 text-indigo-700"
                               : "bg-gray-100 text-gray-600"
                         )}
@@ -380,21 +363,14 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                         <GroupIcon className="h-5 w-5" />
                       </div>
                       <span className="font-medium flex-1 text-left">Marketing</span>
-                      {!canAccessGroup && (
-                        <span className="ml-auto text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full shrink-0">
-                          restricted
-                        </span>
-                      )}
-                      {canAccessGroup && (
-                        <ChevronDown
-                          className={cn(
-                            "h-4 w-4 shrink-0 transition-transform opacity-70",
-                            marketingOpen && "rotate-180"
-                          )}
-                        />
-                      )}
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 shrink-0 transition-transform opacity-70",
+                          marketingOpen && "rotate-180"
+                        )}
+                      />
                     </Button>
-                    {marketingOpen && canAccessGroup && (
+                    {marketingOpen && (
                       <div className="ml-3 pl-3 border-l-2 border-indigo-100 flex flex-col gap-0.5 pb-1">
                         {group.items.map((child) => {
                           const Ch = child.icon

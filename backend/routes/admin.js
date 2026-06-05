@@ -328,7 +328,10 @@ router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin,
     const business = await Business.findById(businessId).populate('owner');
     if (!business) return res.status(404).json({ success: false, error: 'Business not found' });
     if (!business.owner) return res.status(400).json({ success: false, error: 'Business has no owner' });
-    if (business.status === 'suspended') return res.status(403).json({ success: false, error: 'Cannot impersonate suspended business' });
+    const { isAccessBlockedBySuspension } = require('../lib/suspension-grace');
+    if (isAccessBlockedBySuspension(business)) {
+      return res.status(403).json({ success: false, error: 'Cannot impersonate suspended business (grace period ended)' });
+    }
 
     const owner = business.owner;
     const token = signTenantAccess(
@@ -903,9 +906,10 @@ router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPe
 router.patch('/businesses/:id/status', setupMainDatabase, authenticateAdmin, checkAdminPermission('businesses', 'update'), async (req, res) => {
   try {
     const { status } = req.body;
+    const { statusUpdateFields } = require('../lib/suspension-grace');
     const business = await req.mainModels.Business.findByIdAndUpdate(
       req.params.id,
-      { status, updatedAt: new Date() },
+      statusUpdateFields(status),
       { new: true }
     );
 

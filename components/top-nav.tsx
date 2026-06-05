@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
 import { SettingsAPI, ClientsAPI, WalletAPI, WhatsAppInboxAPI, type NotificationFeedItem } from "@/lib/api"
+import { useFeature } from "@/hooks/use-entitlements"
 import { STALE_TIME } from "@/lib/queries/staleness"
 import { useNotificationsFeed } from "@/lib/queries/notifications"
 import { Input } from "@/components/ui/input"
@@ -147,11 +148,28 @@ function normalizePathname(value: unknown): string {
   return typeof value === "string" ? value : ""
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+
+/** Whole days until suspension grace ends (minimum 1 while grace is active). */
+function suspensionGraceDaysLeft(endsAt: string | null | undefined): number {
+  if (!endsAt) return 3
+  const end = new Date(endsAt).getTime()
+  if (Number.isNaN(end)) return 3
+  const ms = end - Date.now()
+  if (ms <= 0) return 0
+  return Math.max(1, Math.ceil(ms / MS_PER_DAY))
+}
+
 export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const { user, logout, hasPermission } = useAuth()
   const router = useRouter()
   const pathname = normalizePathname(usePathname())
-  const canAccessWhatsAppInbox = hasPermission("campaigns", "view")
+  const { hasAccess: hasWhatsAppIntegration, isLoading: whatsAppEntitlementsLoading } =
+    useFeature("whatsapp_integration")
+  const canAccessWhatsAppInbox =
+    hasPermission("campaigns", "view") &&
+    !whatsAppEntitlementsLoading &&
+    hasWhatsAppIntegration
   const isInboxActive = pathname.startsWith("/whatsapp/inbox")
   const [showExpenseDialog, setShowExpenseDialog] = useState(false)
   const [showCashRegistryModal, setShowCashRegistryModal] = useState(false)
@@ -279,6 +297,9 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
     return `₹${r.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   })()
 
+  const suspensionGraceDays =
+    user?.suspensionGraceActive ? suspensionGraceDaysLeft(user.suspensionGraceEndsAt) : null
+
   const [clientSearch, setClientSearch] = useState("")
   const [clientResults, setClientResults] = useState<any[]>([])
   const [clientSearchOpen, setClientSearchOpen] = useState(false)
@@ -397,6 +418,19 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
               )}
             </span>
           </button>
+
+          {suspensionGraceDays != null && (
+            <p
+              role="alert"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-200/90 bg-amber-50/95 px-2.5 py-1.5 text-xs font-medium text-amber-900 sm:text-sm"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+              <span>
+                Please renew the plan. {suspensionGraceDays}{" "}
+                {suspensionGraceDays === 1 ? "day" : "days"} left
+              </span>
+            </p>
+          )}
         </div>
 
         {/* Right side - Quick Add, Notifications, and User */}

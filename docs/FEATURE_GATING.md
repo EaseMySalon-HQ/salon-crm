@@ -5,7 +5,7 @@ This document explains how to implement feature gating in the application to enf
 ## Overview
 
 The system uses a two-tier approach:
-1. **Frontend Gating**: Hide/disable features in the UI based on plan
+1. **Frontend Gating**: Hide features in the UI when the plan or role does not allow access (no greyed-out placeholders in nav/settings hub)
 2. **Backend Gating**: Enforce feature access at the API level
 
 ## Architecture (source of truth + caching)
@@ -64,6 +64,12 @@ surface: target-based, service-based, and item-based commission profiles,
 staff assignments, and the Staff Performance report tab. It is included on
 Growth and above, not on Starter. API routes under `/api/commission-profiles`
 use `gate(FEATURE.INCENTIVE_MANAGEMENT)`.
+
+**WhatsApp Integration** (`whatsapp_integration`) gates the Meta WABA module: Marketing
+sidebar (templates & campaigns), WhatsApp Inbox in the top nav, Settings → WhatsApp
+Integration, and `/api/whatsapp/*` routes (requires plan feature plus the per-business
+`waba` add-on where applicable). Pro-only in the default plan seed; toggle in Plan
+Template Manager.
 
 Legacy plan templates that still list the removed `staff_commissions` feature
 id are aliased to `incentive_management` at entitlement resolution time.

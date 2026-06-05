@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button"
 import { LogOut } from "lucide-react"
 import { SidebarProvider, useSidebar } from "@/lib/sidebar-context"
 import { cn } from "@/lib/utils"
-
 interface ProtectedLayoutProps {
   children: React.ReactNode
   /** Permission module to check. Access granted only when user has the required feature on this module. */

@@ -18,6 +18,7 @@
 
 const databaseManager = require('../config/database-manager');
 const { resolveTenantBusinessObjectId } = require('../lib/tenant-business-id');
+const entitlementsCache = require('../lib/entitlements-cache');
 const { logger } = require('../utils/logger');
 
 async function requireWabaAddon(req, res, next) {
@@ -35,6 +36,15 @@ async function requireWabaAddon(req, res, next) {
       return res.status(400).json({ success: false, error: resolved.error || 'Invalid business id' });
     }
     req._tenantBusinessObjectId = resolved.businessObjectId;
+
+    const entry = await entitlementsCache.resolve(resolved.businessObjectId);
+    if (!entry?.features?.has('whatsapp_integration')) {
+      return res.status(403).json({
+        success: false,
+        code: 'FEATURE_NOT_AVAILABLE',
+        error: 'WhatsApp Integration is not included in your plan.',
+      });
+    }
 
     const Business = main.model('Business', require('../models/Business').schema);
     const business = await Business.findById(resolved.businessObjectId).select('plan.addons.waba').lean();

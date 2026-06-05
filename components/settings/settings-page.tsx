@@ -3,7 +3,6 @@
 import { useState, useEffect, useMemo } from "react"
 import { useSearchParams } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -184,6 +183,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         icon: CircleDollarSign,
         searchTerms: ["prepaid", "credit", "wallet plans", "liability"],
       },
+      {
+        id: "reward-points",
+        title: "Reward points",
+        description: "Loyalty earning and redemption rules for customer bills.",
+        icon: Gift,
+        searchTerms: ["loyalty", "points", "rewards", "earn", "redeem"],
+      },
     ],
   },
   {
@@ -204,13 +210,6 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "Tender types, payment methods, and how you get paid.",
         icon: CreditCard,
         searchTerms: ["upi", "card", "methods"],
-      },
-      {
-        id: "reward-points",
-        title: "Reward points",
-        description: "Loyalty earning and redemption rules for customer bills.",
-        icon: Gift,
-        searchTerms: ["loyalty", "points", "rewards", "earn", "redeem"],
       },
       {
         id: "plan-billing",
@@ -285,6 +284,7 @@ const ALL_SETTING_ITEMS: SettingsItem[] = SETTINGS_SECTIONS.flatMap((s) => s.ite
 const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsSectionId, string>> = {
   feedback: "feedback_management",
   "reward-points": "reward_points",
+  "whatsapp-integration": "whatsapp_integration",
 }
 
 function itemMatchesQuery(item: SettingsItem, q: string): boolean {
@@ -342,10 +342,25 @@ export function SettingsPage() {
     }
   }, [user, isLoading, router])
 
-  const filteredSections = useMemo(
-    () => SETTINGS_SECTIONS.map((s) => sectionAfterSearch(s, search)).filter(Boolean) as SettingsSection[],
-    [search]
-  )
+  const canAccessSetting = (categoryId: string) => {
+    if (!user) return false
+    const permissionModule = SETTINGS_PERMISSION_MAP[categoryId]
+    if (!permissionModule) return false
+    if (!hasPermission(permissionModule, "view")) return false
+    const requiredFeature = SETTINGS_PLAN_FEATURES[categoryId as SettingsSectionId]
+    if (requiredFeature && !hasFeature(requiredFeature)) return false
+    return true
+  }
+
+  const filteredSections = useMemo(() => {
+    return SETTINGS_SECTIONS.map((section) => {
+      const afterSearch = sectionAfterSearch(section, search)
+      if (!afterSearch) return null
+      const items = afterSearch.items.filter((item) => canAccessSetting(item.id))
+      if (items.length === 0) return null
+      return { ...afterSearch, items }
+    }).filter(Boolean) as SettingsSection[]
+  }, [search, user, hasPermission, hasFeature])
 
   // Show loading while checking authentication
   if (isLoading) {
@@ -365,16 +380,6 @@ export function SettingsPage() {
   // Don't render if not authenticated
   if (!user) {
     return null
-  }
-
-  const canAccessSetting = (categoryId: string) => {
-    if (!user) return false
-    const permissionModule = SETTINGS_PERMISSION_MAP[categoryId]
-    if (!permissionModule) return false
-    if (!hasPermission(permissionModule, "view")) return false
-    const requiredFeature = SETTINGS_PLAN_FEATURES[categoryId as SettingsSectionId]
-    if (requiredFeature && !hasFeature(requiredFeature)) return false
-    return true
   }
 
   const navigateToSection = (id: string) => {
@@ -580,35 +585,16 @@ export function SettingsPage() {
                 <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 list-none p-0 m-0">
                   {section.items.map((item) => {
                     const Icon = item.icon
-                    const hasAccess = canAccessSetting(item.id)
                     return (
                       <li key={item.id} className="min-w-0">
                         <button
                           type="button"
                           onClick={() => navigateToSection(item.id)}
-                          disabled={!hasAccess}
-                          className={[
-                            "group w-full text-left rounded-xl border p-3.5 min-h-[88px] transition-all",
-                            "focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50",
-                            hasAccess
-                              ? "border-slate-200/90 bg-white shadow-sm hover:border-slate-300 hover:shadow-md active:scale-[0.99]"
-                              : "border-slate-100 bg-slate-50/80 cursor-not-allowed opacity-70",
-                          ].join(" ")}
-                          aria-label={
-                            hasAccess
-                              ? `Open ${item.title}`
-                              : `${item.title} (restricted)`
-                          }
+                          className="group w-full text-left rounded-xl border border-slate-200/90 bg-white p-3.5 min-h-[88px] shadow-sm transition-all hover:border-slate-300 hover:shadow-md active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50"
+                          aria-label={`Open ${item.title}`}
                         >
                           <div className="flex items-start gap-3">
-                            <span
-                              className={[
-                                "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border",
-                                hasAccess
-                                  ? "border-slate-200/80 bg-slate-50 text-slate-700 group-hover:border-slate-300 group-hover:bg-white"
-                                  : "border-slate-200 text-slate-400",
-                              ].join(" ")}
-                            >
+                            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200/80 bg-slate-50 text-slate-700 group-hover:border-slate-300 group-hover:bg-white">
                               <Icon className="h-4 w-4" strokeWidth={1.75} aria-hidden />
                             </span>
                             <div className="min-w-0 flex-1">
@@ -616,24 +602,14 @@ export function SettingsPage() {
                                 <h3 className="text-sm font-medium text-slate-900 leading-snug pr-1">
                                   {item.title}
                                 </h3>
-                                {hasAccess && (
-                                  <ChevronRight
-                                    className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600 mt-0.5"
-                                    aria-hidden
-                                  />
-                                )}
+                                <ChevronRight
+                                  className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600 mt-0.5"
+                                  aria-hidden
+                                />
                               </div>
                               <p className="mt-0.5 text-xs text-slate-500 leading-relaxed line-clamp-2">
                                 {item.description}
                               </p>
-                              {!hasAccess && (
-                                <Badge
-                                  variant="secondary"
-                                  className="mt-2 h-5 text-[10px] font-medium uppercase tracking-wide text-slate-500 border-slate-200"
-                                >
-                                  No access
-                                </Badge>
-                              )}
                             </div>
                           </div>
                         </button>

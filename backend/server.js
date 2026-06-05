@@ -684,9 +684,10 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
 
       // Reactivate inactive businesses (but not suspended ones)
       if (ownerBusiness.status === 'inactive') {
+        const { statusUpdateFields } = require('./lib/suspension-grace');
         await Business.updateMany(
           { owner: user._id, status: 'inactive' },
-          { status: 'active', updatedAt: new Date() }
+          statusUpdateFields('active')
         );
       }
     }
@@ -701,18 +702,9 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
     const csrfToken = setCsrfCookie(res);
     const { password: _, ...userWithoutPassword } = user.toObject();
 
-    const nextBill =
-      ownerBusiness?.plan?.renewalDate || ownerBusiness?.plan?.trialEndsAt || null;
+    const { buildSuspensionMeta } = require('./lib/suspension-grace');
     const suspensionMeta =
-      user.branchId && ownerBusiness
-        ? {
-            businessSuspended: ownerBusiness.status === 'suspended',
-            nextBillingDate: nextBill ? new Date(nextBill).toISOString() : null,
-            suspensionSupportEmail:
-              process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
-            suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
-          }
-        : {};
+      user.branchId && ownerBusiness ? buildSuspensionMeta(ownerBusiness) : {};
 
     if (user.branchId) {
       scheduleActivityLog(
@@ -833,15 +825,8 @@ app.post('/api/auth/staff-login', validate(staffLoginSchema), async (req, res) =
       staffPermissions = roleDefinitions[staff.role]?.permissions || [];
     }
 
-    const staffNextBill =
-      business.plan?.renewalDate || business.plan?.trialEndsAt || null;
-    const staffSuspensionMeta = {
-      businessSuspended: business.status === 'suspended',
-      nextBillingDate: staffNextBill ? new Date(staffNextBill).toISOString() : null,
-      suspensionSupportEmail:
-        process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
-      suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
-    };
+    const { buildSuspensionMeta: buildStaffSuspensionMeta } = require('./lib/suspension-grace');
+    const staffSuspensionMeta = buildStaffSuspensionMeta(business);
 
     scheduleActivityLog(
       {
@@ -1331,6 +1316,8 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           updatedAt: req.user.updatedAt,
           ...(req.user.isImpersonation && { isImpersonation: true, impersonatedBy: req.user.impersonatedBy }),
           businessSuspended: !!req.businessSuspended,
+          suspensionGraceActive: !!req.suspensionGraceActive,
+          suspensionGraceEndsAt: req.suspensionGraceEndsAt ?? null,
           nextBillingDate: req.businessNextBillingDate ?? null,
           suspensionSupportEmail:
             process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',

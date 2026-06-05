@@ -78,6 +78,7 @@ const FEATURE_ENFORCEMENT: Record<string, "gated" | "core" | "partial" | "planne
   api_access: "planned",
   custom_integrations: "planned",
   approval_workflows: "planned",
+  whatsapp_integration: "gated",
 }
 
 const ENFORCEMENT_BADGE: Record<string, { label: string; className: string }> = {

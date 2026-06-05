@@ -23,8 +23,11 @@ export interface User {
   isImpersonation?: boolean
   impersonatedBy?: string
   branchId?: string
-  /** Tenant billing suspension — user may sign in but cannot use salon APIs until resolved */
+  /** True when suspension grace has ended — app and APIs are blocked */
   businessSuspended?: boolean
+  /** Suspended but still within the 3-day extension window */
+  suspensionGraceActive?: boolean
+  suspensionGraceEndsAt?: string | null
   nextBillingDate?: string | null
   suspensionSupportEmail?: string
   suspensionSupportPhone?: string

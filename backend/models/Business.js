@@ -173,6 +173,8 @@ const businessSchema = new mongoose.Schema({
     enum: ['active', 'inactive', 'suspended', 'deleted'], 
     default: 'active' 
   },
+  /** When status became suspended — starts the 3-day grace period for tenant access */
+  suspendedAt: { type: Date, default: null },
   isOnboarded: { type: Boolean, default: false },
   onboardingStep: { type: Number, default: 0 },
   deletedAt: { type: Date },

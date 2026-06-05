@@ -19,6 +19,8 @@ import { useFeature } from "@/hooks/use-entitlements"
 function ReportsTabsBody() {
   const { user, hasPermission } = useAuth()
   const { hasAccess: canIncentiveManagement, isLoading: entitlementsLoading } = useFeature("incentive_management")
+  const { hasAccess: canWhatsAppIntegration, isLoading: whatsAppEntitlementsLoading } =
+    useFeature("whatsapp_integration")
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -34,9 +36,9 @@ function ReportsTabsBody() {
     if (canViewFinancialReports) t.push("sales", "membership", "expense")
     if (canViewStaffCommission) t.push("staff")
     if (canViewPackageReports) t.push("package")
-    t.push("messages")
+    if (!whatsAppEntitlementsLoading && canWhatsAppIntegration) t.push("messages")
     return t
-  }, [canViewFinancialReports, canViewStaffCommission, canViewPackageReports])
+  }, [canViewFinancialReports, canViewStaffCommission, canViewPackageReports, canWhatsAppIntegration, whatsAppEntitlementsLoading])
 
   const tabCount = allowedTabs.length
 
@@ -172,6 +174,7 @@ function ReportsTabsBody() {
                   Package
                 </TabsTrigger>
               )}
+              {!whatsAppEntitlementsLoading && canWhatsAppIntegration ? (
               <TabsTrigger
                 value="messages"
                 className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
@@ -179,6 +182,7 @@ function ReportsTabsBody() {
                 <MessageCircle className="h-4 w-4 mr-2 shrink-0" />
                 Messages
               </TabsTrigger>
+              ) : null}
             </TabsList>
 
             {/**
@@ -242,6 +246,7 @@ function ReportsTabsBody() {
               </TabsContent>
             )}
 
+            {!whatsAppEntitlementsLoading && canWhatsAppIntegration ? (
             <TabsContent value="messages" className="space-y-6">
               <Card className="border-0 shadow-sm bg-slate-50/50">
                 <CardContent className="pt-6">
@@ -249,6 +254,7 @@ function ReportsTabsBody() {
                 </CardContent>
               </Card>
             </TabsContent>
+            ) : null}
           </Tabs>
         </div>
       </div>

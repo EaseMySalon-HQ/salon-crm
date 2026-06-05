@@ -117,7 +117,7 @@ export const PRICING_PLANS: PricingPlan[] = [
           { label: "Two-way chat from dashboard", state: "included" },
           { label: "Campaign analytics (open rate, CTR)", state: "included" },
           { label: "Priority customer support", state: "included" },
-          { label: "Custom Features", state: "included" },
+          { label: "Custom Integrations", state: "included" },
         ],
       },
       {

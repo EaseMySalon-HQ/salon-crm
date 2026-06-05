@@ -98,6 +98,7 @@ const PLANS = {
       'api_access',
       'custom_integrations',
       'approval_workflows',
+      'whatsapp_integration',
     ],
     limits: {
       locations: 3,
@@ -253,6 +254,12 @@ const FEATURES = {
     id: 'approval_workflows',
     name: 'Approval Workflows',
     description: 'Custom approval workflows',
+    category: 'pro',
+  },
+  whatsapp_integration: {
+    id: 'whatsapp_integration',
+    name: 'WhatsApp Integration',
+    description: 'Meta WABA — templates, campaigns, inbox, and Business API connect',
     category: 'pro',
   },
 };

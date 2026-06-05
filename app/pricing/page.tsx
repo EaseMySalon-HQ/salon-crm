@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { PricingFeatureMatrix } from "@/components/pricing/pricing-feature-matrix"
 import { PricingTierCards } from "@/components/pricing/pricing-tier-cards"
+import { PRICING_FAQ } from "@/lib/pricing-faq"
 import { FEATURE_CATEGORIES, PRICING_PLANS, type FeatureCategory } from "@/lib/pricing-matrix"
 import { fetchPublicPricingMatrix } from "@/lib/public-pricing-api"
 
@@ -25,29 +26,6 @@ const TRUST_ITEMS = [
   { icon: Sparkles, label: "Free setup, training & data migration" },
   { icon: Headphones, label: "24/7 support available" },
 ] as const
-
-const pricingFaq = [
-  {
-    q: "Are prices inclusive of GST?",
-    a: "All figures are per outlet and GST exclusive, as shown on our official pricing matrix. GST is applied at checkout as per applicable law.",
-  },
-  {
-    q: "Is there a free trial?",
-    a: "Yes. Start with a 7 Day Trial before you commit. No credit card required to explore the product.",
-  },
-  {
-    q: "Can we switch between monthly and annual billing?",
-    a: "You can move between monthly and annual billing according to your agreement. Annual plans are billed upfront and include the savings shown on each tier.",
-  },
-  {
-    q: "What happens to our data if we upgrade or downgrade?",
-    a: "Your data stays yours. You can move between Free, Growth, and Pro — we never sell or share your salon data.",
-  },
-  {
-    q: "Do you support custom multi-outlet or enterprise pricing?",
-    a: "Yes. For larger chains or custom agreements, contact our sales team — we’ll tailor rollout, training, and commercials.",
-  },
-]
 
 export default function PricingPage() {
   const [matrixCategories, setMatrixCategories] = useState<FeatureCategory[]>(FEATURE_CATEGORIES)
@@ -196,7 +174,7 @@ export default function PricingPage() {
             <p className="mt-2 text-slate-600">Straight answers — same tone as our pricing matrix.</p>
           </div>
           <div className="mt-10 space-y-3">
-            {pricingFaq.map((item, idx) => (
+            {PRICING_FAQ.map((item, idx) => (
               <details
                 key={item.q}
                 className="group rounded-xl border border-slate-200 bg-slate-50/50 px-4 shadow-sm open:bg-white open:shadow-md"

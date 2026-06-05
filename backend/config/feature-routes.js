@@ -42,6 +42,7 @@ const FEATURE = {
   REWARD_POINTS: 'reward_points',
   FEEDBACK_MANAGEMENT: 'feedback_management',
   CUSTOM_INTEGRATIONS: 'custom_integrations',
+  WHATSAPP_INTEGRATION: 'whatsapp_integration',
 };
 
 /**
@@ -112,6 +113,12 @@ const FEATURE_ROUTE_RULES = [
     methods: ['PUT', 'POST', 'DELETE'],
     pathPattern: /^\/api\/integrations(\/|$)/,
     description: 'Third-party integration configuration',
+  },
+  {
+    feature: FEATURE.WHATSAPP_INTEGRATION,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    pathPattern: /^\/api\/whatsapp(\/|$)/,
+    description: 'Meta WABA module — connect, templates, campaigns, inbox',
   },
 ];
 
