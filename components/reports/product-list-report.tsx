@@ -1,6 +1,11 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
+import { useReportClientPagination } from "@/hooks/use-report-client-pagination"
+import {
+  ReportTablePaginationFooter,
+  ReportTablePaginationHeader,
+} from "@/components/reports/report-table-pagination"
 import { DollarSign, Package, Ticket, TrendingUp, Users, ShoppingBag } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -12,6 +17,10 @@ import { format } from "date-fns"
 import { SalesAPI, ProductsAPI, StaffDirectoryAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
 import { splitLineRevenueByStaff } from "@/lib/staff-line-revenue"
+import {
+  getReportActiveDateRange,
+  resolveReportSalesApiDateParams,
+} from "@/lib/report-sales-date-params"
 import type { DatePeriod } from "@/components/reports/service-list-report"
 import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
 
@@ -38,6 +47,8 @@ export interface ProductListControlledFilters {
   setDatePeriod: (p: DatePeriod) => void
   dateRange: { from?: Date; to?: Date }
   setDateRange: (r: { from?: Date; to?: Date }) => void
+  categoryFilter: string
+  setCategoryFilter: (v: string) => void
   productFilter: string
   setProductFilter: (v: string) => void
   staffFilter: string
@@ -55,11 +66,12 @@ interface ProductListReportProps {
 export function ProductListReport({ controlledFilters }: ProductListReportProps) {
   const { getSymbol } = useCurrency()
   const [salesData, setSalesData] = useState<any[]>([])
-  const [productsList, setProductsList] = useState<{ _id: string; name: string }[]>([])
+  const [productsList, setProductsList] = useState<{ _id: string; name: string; category?: string }[]>([])
   const [staffList, setStaffList] = useState<{ _id: string; name: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("today")
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [categoryFilter, setCategoryFilter] = useState<string>("all")
   const [productFilter, setProductFilter] = useState<string>("all")
   const [staffFilter, setStaffFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
@@ -67,60 +79,115 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
 
   const period = controlledFilters?.datePeriod ?? datePeriod
   const range = controlledFilters?.dateRange ?? dateRange
+  const categoryF = controlledFilters?.categoryFilter ?? categoryFilter
   const productF = controlledFilters?.productFilter ?? productFilter
   const staffF = controlledFilters?.staffFilter ?? staffFilter
   const statusF = controlledFilters?.statusFilter ?? statusFilter
   const modeF = controlledFilters?.modeFilter ?? modeFilter
 
   useEffect(() => {
-    async function fetchData() {
-      setLoading(true)
+    let cancelled = false
+    async function fetchCatalog() {
       try {
-        const [salesRows, productsRes, staffRes] = await Promise.all([
-          SalesAPI.getAllMergePages({ batchSize: 500 }),
+        const [productsRes, staffRes] = await Promise.all([
           ProductsAPI.getAll({ limit: 500 }),
           StaffDirectoryAPI.getAll(),
         ])
-        setSalesData(Array.isArray(salesRows) ? salesRows : [])
+        if (cancelled) return
         const pdata = (productsRes as any)?.data
         setProductsList(Array.isArray(pdata) ? pdata : [])
         const staffData = staffRes?.data && Array.isArray(staffRes.data) ? staffRes.data : []
         setStaffList(staffData.map((s: any) => ({ _id: s._id, name: s.name || s.firstName || "—" })))
       } catch {
-        setSalesData([])
-        setProductsList([])
-        setStaffList([])
+        if (!cancelled) {
+          setProductsList([])
+          setStaffList([])
+        }
       }
-      setLoading(false)
     }
-    fetchData()
+    void fetchCatalog()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  const getDateRangeFromPeriod = (p: DatePeriod) => {
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    switch (p) {
-      case "today":
-        return { from: today, to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "yesterday": {
-        const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
-        return { from: yesterday, to: new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1) }
+  const salesDateParams = useMemo(
+    () => resolveReportSalesApiDateParams(period, range),
+    [period, range.from, range.to]
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    if (salesDateParams === null) {
+      setSalesData([])
+      setLoading(false)
+      return
+    }
+    async function fetchSales() {
+      setLoading(true)
+      try {
+        const salesRows = await SalesAPI.getAllMergePages({
+          ...salesDateParams,
+          batchSize: 500,
+        })
+        if (!cancelled) setSalesData(Array.isArray(salesRows) ? salesRows : [])
+      } catch {
+        if (!cancelled) setSalesData([])
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-      case "last7days":
-        return { from: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000), to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "last30days":
-        return { from: new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000), to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "currentMonth":
-        return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) }
-      case "all":
-      case "custom":
-      default:
-        return { from: undefined, to: undefined }
+    }
+    void fetchSales()
+    return () => {
+      cancelled = true
+    }
+  }, [salesDateParams])
+
+  const productCategoryById = useMemo(() => {
+    const map: Record<string, string> = {}
+    productsList.forEach((p) => {
+      const cat = (p.category || "").trim()
+      if (p._id && cat) map[p._id] = cat
+    })
+    return map
+  }, [productsList])
+
+  const productCategoryByName = useMemo(() => {
+    const map: Record<string, string> = {}
+    productsList.forEach((p) => {
+      const cat = (p.category || "").trim()
+      if (p.name && cat) map[p.name] = cat
+    })
+    return map
+  }, [productsList])
+
+  const categoryOptions = useMemo(() => {
+    const set = new Set<string>()
+    productsList.forEach((p) => {
+      const cat = (p.category || "").trim()
+      if (cat) set.add(cat)
+    })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [productsList])
+
+  const productsForFilter = useMemo(() => {
+    if (categoryF === "all") return productsList
+    return productsList.filter((p) => (p.category || "").trim() === categoryF)
+  }, [productsList, categoryF])
+
+  const handleCategoryFilterChange = (next: string) => {
+    const setCat = controlledFilters?.setCategoryFilter ?? setCategoryFilter
+    const setProd = controlledFilters?.setProductFilter ?? setProductFilter
+    setCat(next)
+    if (productF !== "all") {
+      const selected = productsList.find((p) => p._id === productF)
+      if (next !== "all" && selected && (selected.category || "").trim() !== next) {
+        setProd("all")
+      }
     }
   }
 
-  const activeDateFrom = range.from ?? getDateRangeFromPeriod(period).from
-  const activeDateTo = range.to ?? getDateRangeFromPeriod(period).to
+  const { from: activeDateFrom, to: activeDateTo } = getReportActiveDateRange(period, range)
 
   const flattenedRows = useMemo((): ProductRow[] => {
     const rows: ProductRow[] = []
@@ -140,6 +207,13 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
 
       ;(sale.items || []).forEach((item: any, idx: number) => {
         if (item.type !== "product") return
+        if (categoryF !== "all") {
+          const pid = item.productId?.toString?.() ?? item.productId
+          const itemCategory =
+            (pid ? productCategoryById[String(pid)] : undefined) ||
+            (item.name ? productCategoryByName[item.name] : undefined)
+          if (itemCategory !== categoryF) return
+        }
         if (productF !== "all") {
           const pid = item.productId?.toString?.() ?? item.productId
           const matchById = pid === productF
@@ -192,7 +266,7 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
       })
     })
     return rows.sort((a, b) => b.saleDate.getTime() - a.saleDate.getTime())
-  }, [salesData, activeDateFrom, activeDateTo, statusF, modeF, staffF, productF, staffList])
+  }, [salesData, productCategoryById, productCategoryByName, activeDateFrom, activeDateTo, statusF, modeF, staffF, productF, categoryF, staffList])
 
   const totalRevenue = useMemo(() => flattenedRows.reduce((s, r) => s + r.total, 0), [flattenedRows])
   const unitsSold = flattenedRows.length
@@ -223,6 +297,27 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
     return Array.from(set).sort()
   }, [flattenedRows])
   const uniqueProductCount = uniqueProductNames.length
+
+  const {
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    totalRows,
+    totalPages,
+    pageStartRow,
+    pageEndRow,
+    paginatedRows,
+  } = useReportClientPagination(flattenedRows, [
+    period,
+    range.from,
+    range.to,
+    categoryF,
+    productF,
+    staffF,
+    statusF,
+    modeF,
+  ])
 
   if (loading) {
     return (
@@ -308,12 +403,26 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
               <ProductFilterCombobox
                 value={productF}
                 onValueChange={controlledFilters?.setProductFilter ?? setProductFilter}
-                products={productsList}
+                products={productsForFilter}
                 extraOptions={uniqueProductNames
                   .filter((n) => !productsList.some((p) => p.name === n))
+                  .filter((n) => categoryF === "all" || productCategoryByName[n] === categoryF)
                   .map((name) => ({ value: name, label: name }))}
                 triggerClassName="w-44 border-slate-200"
               />
+              <Select value={categoryF} onValueChange={handleCategoryFilterChange}>
+                <SelectTrigger className="w-44 border-slate-200">
+                  <SelectValue placeholder="Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All categories</SelectItem>
+                  {categoryOptions.map((cat) => (
+                    <SelectItem key={cat} value={cat}>
+                      {cat}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="w-44 justify-start text-left font-normal border-slate-200">
@@ -420,6 +529,16 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
       )}
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <ReportTablePaginationHeader
+          title="Product Records"
+          totalRows={totalRows}
+          pageStartRow={pageStartRow}
+          pageEndRow={pageEndRow}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
+          loading={loading}
+          rowLabel="products"
+        />
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -443,7 +562,7 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
                   </TableCell>
                 </TableRow>
               ) : (
-                flattenedRows.map((row) => (
+                paginatedRows.map((row) => (
                   <TableRow key={row.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                     <TableCell className="text-slate-800 font-mono text-sm whitespace-nowrap">{row.billNo}</TableCell>
                     <TableCell className="text-slate-700 whitespace-nowrap">{format(row.saleDate, "dd/MM/yyyy")}</TableCell>
@@ -491,6 +610,14 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
             </TableBody>
           </Table>
         </div>
+        <ReportTablePaginationFooter
+          totalRows={totalRows}
+          page={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          loading={loading}
+          rowLabel="products"
+        />
       </div>
     </div>
   )

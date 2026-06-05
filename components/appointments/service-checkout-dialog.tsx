@@ -222,10 +222,27 @@ export type ServiceCheckoutPackageLine = {
 
 type CatalogCartLineKind = "membership" | "prepaid" | "package"
 
+/** Synthetic line id while capturing price for a zero-priced catalog service before cart add. */
+const PENDING_ZERO_PRICE_SERVICE_LINE_ID = "__pending-zero-price-service__"
+
+const CHECKOUT_NO_STAFF_SELECT_VALUE = "__none__"
+const CHECKOUT_NO_STAFF_LABEL = "Select Staff"
+
+type PendingCatalogService = {
+  serviceId: string
+  name: string
+  duration: number
+}
+
 type CartLineEditDraft = {
   price: number
   quantity: number
   staffId: string
+}
+
+type ServiceLineEditDraft = CartLineEditDraft & {
+  discountValue: number
+  discountIsPercent: boolean
 }
 
 function cartLineEditDraftFrom(line: {
@@ -509,22 +526,28 @@ function CheckoutLineDiscountRow({
   onDiscountValueChange,
   onSetPercentMode,
   onSetFixedMode,
+  variant = "compact",
+  inputId,
 }: {
   discountValue: number
   discountIsPercent: boolean
   onDiscountValueChange: (v: number) => void
   onSetPercentMode: () => void
   onSetFixedMode: () => void
+  variant?: "compact" | "form"
+  inputId?: string
 }) {
   const [discountFieldFocused, setDiscountFieldFocused] = useState(false)
+  const isForm = variant === "form"
 
   const modeChipClass = (active: boolean) =>
     cn(
-      "flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-all",
+      "flex shrink-0 items-center justify-center transition-all",
       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+      isForm ? "h-10 w-10 border-l border-border/80" : "h-6 w-6 rounded-sm",
       active
         ? "bg-violet-600 text-white shadow-sm"
-        : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+        : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
     )
 
   const isZeroish = Math.abs(Number(discountValue) || 0) < Number.EPSILON
@@ -537,23 +560,42 @@ function CheckoutLineDiscountRow({
 
   return (
     <div
-      className="flex h-7 w-[min(100%,6.5rem)] shrink-0 items-stretch rounded-md border border-border/80 bg-muted/45 p-px shadow-sm"
+      className={cn(
+        "flex items-stretch",
+        isForm
+          ? "h-10 w-full rounded-lg border border-input bg-background"
+          : "h-7 w-[min(100%,6.5rem)] shrink-0 rounded-md border border-border/80 bg-muted/45 p-px shadow-sm"
+      )}
       role="group"
       aria-label="Line discount"
     >
-      <div className="flex min-w-0 flex-1 items-center gap-px border-r border-border/45 px-1 pr-0.5">
+      <div
+        className={cn(
+          "flex min-w-0 flex-1 items-center",
+          isForm ? "gap-2 px-3" : "gap-px border-r border-border/45 px-1 pr-0.5"
+        )}
+      >
         <span
-          className="shrink-0 text-[10px] leading-none tabular-nums text-muted-foreground"
+          className={cn(
+            "shrink-0 tabular-nums text-muted-foreground",
+            isForm ? "text-sm" : "text-[10px] leading-none"
+          )}
           aria-hidden
         >
           {discountIsPercent ? "%" : "₹"}
         </span>
         <Input
+          id={inputId}
           type="number"
           min={0}
           max={discountIsPercent ? 100 : undefined}
           step={discountIsPercent ? 1 : 0.01}
-          className="h-6 min-w-0 flex-1 border-0 bg-transparent p-0 pl-0.5 text-right text-[11px] font-medium leading-none shadow-none outline-none focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          className={cn(
+            "min-w-0 flex-1 border-0 bg-transparent shadow-none outline-none focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+            isForm
+              ? "h-10 p-0 text-sm"
+              : "h-6 p-0 pl-0.5 text-right text-[11px] font-medium leading-none"
+          )}
           value={inputDisplayValue}
           onFocus={() => setDiscountFieldFocused(true)}
           onBlur={() => setDiscountFieldFocused(false)}
@@ -579,7 +621,7 @@ function CheckoutLineDiscountRow({
         aria-label="Fixed rupee discount"
         aria-pressed={!discountIsPercent}
       >
-        <Coins className="h-3 w-3" />
+        <Coins className={isForm ? "h-4 w-4" : "h-3 w-3"} />
       </button>
       <button
         type="button"
@@ -588,7 +630,7 @@ function CheckoutLineDiscountRow({
         aria-label="Percent discount"
         aria-pressed={discountIsPercent}
       >
-        <Percent className="h-3 w-3" />
+        <Percent className={isForm ? "h-4 w-4" : "h-3 w-3"} />
       </button>
     </div>
   )
@@ -838,11 +880,12 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const [saleStaffCatalog, setSaleStaffCatalog] = useState<any[]>([])
 
   const [editingServiceLineId, setEditingServiceLineId] = useState<string | null>(null)
-  const [serviceEditDraft, setServiceEditDraft] = useState<{
-    price: number
-    quantity: number
-    staffId: string
-  } | null>(null)
+  const [pendingCatalogService, setPendingCatalogService] = useState<PendingCatalogService | null>(
+    null
+  )
+  const [serviceEditDraft, setServiceEditDraft] = useState<ServiceLineEditDraft | null>(null)
+  /** When true, price input shows empty instead of 0 while focused for easier entry. */
+  const [servicePriceInputEmpty, setServicePriceInputEmpty] = useState(false)
 
   const [editingProductLineId, setEditingProductLineId] = useState<string | null>(null)
   const [productEditDraft, setProductEditDraft] = useState<CartLineEditDraft | null>(null)
@@ -2020,8 +2063,27 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     setTipDialogOpen(false)
   }
 
+  function openPendingZeroPriceServiceAdd(svc: any) {
+    const sid = String(svc._id || svc.id || "")
+    if (!sid) return
+    closeProductEdit()
+    closeCatalogLineEdit()
+    setPendingCatalogService({
+      serviceId: sid,
+      name: svc.name || "Service",
+      duration: Number(svc.duration) || 60,
+    })
+    setEditingServiceLineId(PENDING_ZERO_PRICE_SERVICE_LINE_ID)
+    setServiceEditDraft({
+      price: 0,
+      quantity: 1,
+      staffId: "",
+      discountValue: 0,
+      discountIsPercent: true,
+    })
+  }
+
   function addCatalogService(svc: any) {
-    const defaultStaffId = defaultStaffAcrossCart()
 
     if (isBundleService(svc)) {
       const expanded = expandBundleToLines(svc, catalogServices || [])
@@ -2038,7 +2100,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         const additions = expanded.map((line, i) => ({
           id: `add-${ts}-${i}-${Math.random().toString(36).slice(2, 7)}`,
           serviceId: line.serviceId,
-          staffId: defaultStaffId,
+          staffId: "",
           name: line.name || "Service",
           duration: Number(line.duration) || 60,
           price: Number(line.price) || 0,
@@ -2056,12 +2118,17 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
     const sid = String(svc._id || svc.id || "")
     if (!sid) return
+    const catalogPrice = Number(svc.price) || 0
+    if (catalogPrice <= 0) {
+      openPendingZeroPriceServiceAdd(svc)
+      return
+    }
     setLines((prev) => [
       ...prev,
       {
         id: `add-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         serviceId: sid,
-        staffId: defaultStaffId,
+        staffId: "",
         name: svc.name || "Service",
         duration: Number(svc.duration) || 60,
         price: Number(svc.price) || 0,
@@ -2104,25 +2171,72 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       price: Math.max(0, Number(line.price) || 0),
       quantity: serviceLineQuantity(line),
       staffId: line.staffId || "",
+      discountValue: Math.max(0, Number(line.discountValue) || 0),
+      discountIsPercent: line.discountIsPercent !== false,
     })
   }
 
   function closeServiceEdit() {
     setEditingServiceLineId(null)
     setServiceEditDraft(null)
+    setPendingCatalogService(null)
+    setServicePriceInputEmpty(false)
   }
 
   function applyServiceEdit() {
     if (!editingServiceLineId || !serviceEditDraft) return
+    if (editingServiceLineId === PENDING_ZERO_PRICE_SERVICE_LINE_ID) {
+      if (!pendingCatalogService) return
+      const price = Math.max(0, Number(serviceEditDraft.price) || 0)
+      if (price <= 0) {
+        toast({
+          title: "Enter service price",
+          description: "Set a price above ₹0 before adding this service to the cart.",
+          variant: "destructive",
+        })
+        return
+      }
+      const quantity = Math.max(1, Math.floor(serviceEditDraft.quantity) || 1)
+      const discountValue = Math.max(0, Number(serviceEditDraft.discountValue) || 0)
+      const discountIsPercent = serviceEditDraft.discountIsPercent !== false
+      setLines((prev) => [
+        ...prev,
+        {
+          id: `add-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          serviceId: pendingCatalogService.serviceId,
+          staffId: serviceEditDraft.staffId,
+          name: pendingCatalogService.name,
+          duration: pendingCatalogService.duration,
+          price,
+          quantity,
+          locked: false,
+          discountValue,
+          discountIsPercent,
+        },
+      ])
+      closeServiceEdit()
+      return
+    }
     setLines((prev) =>
       prev.map((l) =>
         l.id === editingServiceLineId
-          ? {
-              ...l,
-              price: serviceEditDraft.price,
-              quantity: Math.max(1, Math.floor(serviceEditDraft.quantity) || 1),
-              staffId: serviceEditDraft.staffId,
-            }
+          ? (() => {
+              const quantity = Math.max(1, Math.floor(serviceEditDraft.quantity) || 1)
+              const discountValue = Math.max(0, Number(serviceEditDraft.discountValue) || 0)
+              const discountIsPercent = serviceEditDraft.discountIsPercent !== false
+              const discountTouched =
+                discountValue !== Math.max(0, Number(l.discountValue) || 0) ||
+                discountIsPercent !== (l.discountIsPercent !== false)
+              return {
+                ...l,
+                price: serviceEditDraft.price,
+                quantity,
+                staffId: serviceEditDraft.staffId,
+                discountValue,
+                discountIsPercent,
+                membershipAutoDiscount: discountTouched ? false : l.membershipAutoDiscount,
+              }
+            })()
           : l
       )
     )
@@ -2131,6 +2245,10 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
   function removeServiceFromEditDialog() {
     if (!editingServiceLineId) return
+    if (editingServiceLineId === PENDING_ZERO_PRICE_SERVICE_LINE_ID) {
+      closeServiceEdit()
+      return
+    }
     removeLine(editingServiceLineId)
     closeServiceEdit()
   }
@@ -3237,9 +3355,36 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     }
   }, [newClient, changeClientQuery, toast, pickCheckoutClient])
 
-  const editingServiceLine = editingServiceLineId
-    ? lines.find((l) => l.id === editingServiceLineId)
-    : undefined
+  const isPendingZeroPriceServiceAdd =
+    editingServiceLineId === PENDING_ZERO_PRICE_SERVICE_LINE_ID && pendingCatalogService != null
+
+  const editingServiceLine =
+    isPendingZeroPriceServiceAdd && pendingCatalogService
+      ? {
+          id: PENDING_ZERO_PRICE_SERVICE_LINE_ID,
+          serviceId: pendingCatalogService.serviceId,
+          staffId: serviceEditDraft?.staffId || "",
+          name: pendingCatalogService.name,
+          duration: pendingCatalogService.duration,
+          price: serviceEditDraft?.price ?? 0,
+          quantity: serviceEditDraft?.quantity ?? 1,
+          locked: false,
+          discountValue: serviceEditDraft?.discountValue ?? 0,
+          discountIsPercent: serviceEditDraft?.discountIsPercent !== false,
+        }
+      : editingServiceLineId
+        ? lines.find((l) => l.id === editingServiceLineId)
+        : undefined
+
+  const serviceEditItemTotal =
+    serviceEditDraft != null
+      ? lineNetAfterLineDiscount(
+          serviceEditDraft.price,
+          Math.max(1, Math.floor(serviceEditDraft.quantity) || 1),
+          serviceEditDraft.discountValue,
+          serviceEditDraft.discountIsPercent
+        )
+      : 0
 
   const editingProductLine = editingProductLineId
     ? productLines.find((l) => l.id === editingProductLineId)
@@ -3295,8 +3440,17 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       >
         <DialogHeader>
           <DialogTitle className="text-base font-semibold tracking-tight">
-            {editingServiceLine ? `Edit ${editingServiceLine.name}` : "Edit service"}
+            {editingServiceLine
+              ? isPendingZeroPriceServiceAdd
+                ? `Set price for ${editingServiceLine.name}`
+                : `Edit ${editingServiceLine.name}`
+              : "Edit service"}
           </DialogTitle>
+          {isPendingZeroPriceServiceAdd ? (
+            <DialogDescription>
+              This service has no catalog price. Enter an amount to add it to the cart.
+            </DialogDescription>
+          ) : null}
         </DialogHeader>
         {serviceEditDraft && editingServiceLine ? (
           <div className="space-y-4">
@@ -3308,12 +3462,27 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   type="number"
                   min={0}
                   step={0.01}
-                  value={serviceEditDraft.price}
-                  onChange={(e) =>
-                    setServiceEditDraft((d) =>
-                      d ? { ...d, price: Math.max(0, parseFloat(e.target.value) || 0) } : d
-                    )
+                  value={
+                    servicePriceInputEmpty && serviceEditDraft.price === 0
+                      ? ""
+                      : serviceEditDraft.price
                   }
+                  onFocus={() => {
+                    if (serviceEditDraft.price === 0) setServicePriceInputEmpty(true)
+                  }}
+                  onBlur={() => setServicePriceInputEmpty(false)}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    setServicePriceInputEmpty(raw === "")
+                    setServiceEditDraft((d) =>
+                      d
+                        ? {
+                            ...d,
+                            price: raw === "" ? 0 : Math.max(0, parseFloat(raw) || 0),
+                          }
+                        : d
+                    )
+                  }}
                   className="rounded-lg"
                 />
               </div>
@@ -3365,40 +3534,72 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 </div>
               </div>
             </div>
-            <div className="space-y-2">
-              <Label>Staff</Label>
-              {staffOptions.length > 0 ? (
-                <Select
-                  value={serviceEditDraft.staffId || undefined}
-                  onValueChange={(v) =>
-                    setServiceEditDraft((d) => (d ? { ...d, staffId: v } : d))
-                  }
-                >
-                  <SelectTrigger className="h-10 rounded-lg text-sm">
-                    <SelectValue placeholder="Select staff" />
-                  </SelectTrigger>
-                  <SelectContent
-                    position="popper"
-                    className="z-[260] max-h-[min(24rem,70vh)]"
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Staff</Label>
+                {staffOptions.length > 0 ? (
+                  <Select
+                    value={
+                      serviceEditDraft.staffId
+                        ? serviceEditDraft.staffId
+                        : CHECKOUT_NO_STAFF_SELECT_VALUE
+                    }
+                    onValueChange={(v) =>
+                      setServiceEditDraft((d) =>
+                        d
+                          ? {
+                              ...d,
+                              staffId: v === CHECKOUT_NO_STAFF_SELECT_VALUE ? "" : v,
+                            }
+                          : d
+                      )
+                    }
                   >
-                    {staffOptions.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name}
+                    <SelectTrigger className="h-10 rounded-lg text-sm">
+                      <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
+                    </SelectTrigger>
+                    <SelectContent
+                      position="popper"
+                      className="z-[260] max-h-[min(24rem,70vh)]"
+                    >
+                      <SelectItem value={CHECKOUT_NO_STAFF_SELECT_VALUE}>
+                        {CHECKOUT_NO_STAFF_LABEL}
                       </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  No staff loaded — refresh the page or add staff in settings.
-                </p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label>Discounts</Label>
-              <p className="rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-                Line discounts can be applied on Quick Sale before taking payment.
-              </p>
+                      {staffOptions.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    No staff loaded — refresh the page or add staff in settings.
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="svc-checkout-discount">Discount</Label>
+                <CheckoutLineDiscountRow
+                  variant="form"
+                  inputId="svc-checkout-discount"
+                  discountValue={serviceEditDraft.discountValue}
+                  discountIsPercent={serviceEditDraft.discountIsPercent}
+                  onDiscountValueChange={(v) =>
+                    setServiceEditDraft((d) => (d ? { ...d, discountValue: v } : d))
+                  }
+                  onSetPercentMode={() =>
+                    setServiceEditDraft((d) =>
+                      d ? { ...d, discountIsPercent: true, discountValue: 0 } : d
+                    )
+                  }
+                  onSetFixedMode={() =>
+                    setServiceEditDraft((d) =>
+                      d ? { ...d, discountIsPercent: false, discountValue: 0 } : d
+                    )
+                  }
+                />
+              </div>
             </div>
             <div className="flex flex-row flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
               <div>
@@ -3407,23 +3608,31 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 </p>
                 <p className="text-lg font-semibold tabular-nums text-foreground">
                   ₹
-                  {(
-                    serviceEditDraft.price *
-                    Math.max(1, Math.floor(serviceEditDraft.quantity) || 1)
-                  ).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  {serviceEditItemTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="h-10 w-10 shrink-0 rounded-full border-destructive/40 text-destructive hover:bg-destructive/10"
-                  onClick={removeServiceFromEditDialog}
-                  aria-label="Remove from cart"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                {isPendingZeroPriceServiceAdd ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 rounded-full px-5"
+                    onClick={closeServiceEdit}
+                  >
+                    Cancel
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-10 w-10 shrink-0 rounded-full border-destructive/40 text-destructive hover:bg-destructive/10"
+                    onClick={removeServiceFromEditDialog}
+                    aria-label="Remove from cart"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
                 <Button
                   type="button"
                   className="h-10 rounded-full bg-violet-600 px-6 font-semibold text-white hover:bg-violet-700"
@@ -4907,7 +5116,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 ) : null}
                 {lines.map((line) => {
                   const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
+                    staffOptions.find((s) => s.id === line.staffId)?.name ||
+                    CHECKOUT_NO_STAFF_LABEL
                   const isLocked = line.locked === true
                   const qty = serviceLineQuantity(line)
                   const unit = Number(line.price) || 0
@@ -5045,16 +5255,26 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             {staffOptions.length > 0 ? (
                               <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
                                 <Select
-                                  value={line.staffId || undefined}
-                                  onValueChange={(v) => setServiceLineStaff(line.id, v)}
+                                  value={
+                                    line.staffId ? line.staffId : CHECKOUT_NO_STAFF_SELECT_VALUE
+                                  }
+                                  onValueChange={(v) =>
+                                    setServiceLineStaff(
+                                      line.id,
+                                      v === CHECKOUT_NO_STAFF_SELECT_VALUE ? "" : v
+                                    )
+                                  }
                                 >
                                   <SelectTrigger
                                     id={staffTriggerId}
                                     className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
                                   >
-                                    <SelectValue placeholder="Staff" />
+                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
                                   </SelectTrigger>
                                   <SelectContent position="popper" className={cartSelectContentClass}>
+                                    <SelectItem value={CHECKOUT_NO_STAFF_SELECT_VALUE}>
+                                      {CHECKOUT_NO_STAFF_LABEL}
+                                    </SelectItem>
                                     {staffOptions.map((s) => (
                                       <SelectItem key={s.id} value={s.id}>
                                         {s.name}

@@ -1364,6 +1364,34 @@ export const AppointmentsCalendarGrid = forwardRef<
 
   const WALK_IN_SALE_DURATION = 30
 
+  /** Staff+service keys already covered by standalone walk-in sale cards (no appointmentId). */
+  const standaloneWalkInSaleLineKeys = useMemo(() => {
+    const keys = new Set<string>()
+    const add = (staffId: string, serviceRef: unknown, serviceName: unknown) => {
+      const sid = String(staffId || "").trim()
+      if (!sid) return
+      const name = serviceName != null ? String(serviceName).trim().toLowerCase() : ""
+      if (name) keys.add(`${sid}:n:${name}`)
+      const svcId =
+        serviceRef != null && typeof serviceRef === "object" && (serviceRef as { _id?: unknown })._id != null
+          ? String((serviceRef as { _id: unknown })._id)
+          : serviceRef != null
+            ? String(serviceRef).trim()
+            : ""
+      if (svcId) keys.add(`${sid}:id:${svcId}`)
+    }
+    for (const sale of effectiveWalkInSales) {
+      for (const item of sale.items || []) {
+        if (item?.type !== "service") continue
+        const rawStaffId = item.staffId || item.staffContributions?.[0]?.staffId || sale.staffId
+        const staffId =
+          typeof rawStaffId === "object" && rawStaffId?._id ? String(rawStaffId._id) : String(rawStaffId || "")
+        add(staffId, item.serviceId, item.name)
+      }
+    }
+    return keys
+  }, [effectiveWalkInSales])
+
   /**
    * Walk-in Appointment docs (services added during checkout) — rendered as
    * walk-in cards instead of scheduled-appointment cards, gated by the same
@@ -1379,6 +1407,20 @@ export const AppointmentsCalendarGrid = forwardRef<
         if (staffFilter) {
           const primaryId = getPrimaryStaffId(apt)
           if (primaryId !== staffFilter) return false
+        }
+        if (standaloneWalkInSaleLineKeys.size > 0) {
+          const staffId = getPrimaryStaffId(apt)
+          const serviceName = apt.serviceId?.name
+          const serviceId = apt.serviceId?._id ?? apt.serviceId
+          const nameKey =
+            serviceName != null ? `${staffId}:n:${String(serviceName).trim().toLowerCase()}` : ""
+          const idKey = serviceId != null ? `${staffId}:id:${String(serviceId)}` : ""
+          if (
+            (nameKey && standaloneWalkInSaleLineKeys.has(nameKey)) ||
+            (idKey && standaloneWalkInSaleLineKeys.has(idKey))
+          ) {
+            return false
+          }
         }
         return true
       })
@@ -1407,7 +1449,7 @@ export const AppointmentsCalendarGrid = forwardRef<
           __walkInAppointmentStartM: parseTimeToMinutes(apt.time),
         }
       })
-  }, [appointments, showWalkInCards, selectedDate, staffFilter])
+  }, [appointments, showWalkInCards, selectedDate, staffFilter, standaloneWalkInSaleLineKeys])
 
   const combinedWalkInSales = useMemo(
     () => [...effectiveWalkInSales, ...walkInAppointmentSales],

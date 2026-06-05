@@ -250,20 +250,22 @@ export function SalesReport() {
   // Service List filters (when report type is service-list; shown in same bar)
   const [serviceListDatePeriod, setServiceListDatePeriod] = useState<ServiceListDatePeriod>("today")
   const [serviceListDateRange, setServiceListDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [serviceListCategoryFilter, setServiceListCategoryFilter] = useState<string>("all")
   const [serviceListServiceFilter, setServiceListServiceFilter] = useState<string>("all")
   const [serviceListStaffFilter, setServiceListStaffFilter] = useState<string>("all")
   const [serviceListStatusFilter, setServiceListStatusFilter] = useState<string>("all")
   const [serviceListModeFilter, setServiceListModeFilter] = useState<string>("all")
-  const [serviceListServices, setServiceListServices] = useState<{ _id: string; name: string; duration?: number }[]>([])
+  const [serviceListServices, setServiceListServices] = useState<{ _id: string; name: string; duration?: number; category?: string }[]>([])
   const [serviceListStaff, setServiceListStaff] = useState<{ _id: string; name: string }[]>([])
 
   const [productListDatePeriod, setProductListDatePeriod] = useState<ServiceListDatePeriod>("today")
   const [productListDateRange, setProductListDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [productListCategoryFilter, setProductListCategoryFilter] = useState<string>("all")
   const [productListProductFilter, setProductListProductFilter] = useState<string>("all")
   const [productListStaffFilter, setProductListStaffFilter] = useState<string>("all")
   const [productListStatusFilter, setProductListStatusFilter] = useState<string>("all")
   const [productListModeFilter, setProductListModeFilter] = useState<string>("all")
-  const [productListProducts, setProductListProducts] = useState<{ _id: string; name: string }[]>([])
+  const [productListProducts, setProductListProducts] = useState<{ _id: string; name: string; category?: string }[]>([])
   const [productListStaff, setProductListStaff] = useState<{ _id: string; name: string }[]>([])
 
   // Appointment List filters
@@ -740,6 +742,30 @@ export function SalesReport() {
     return () => { cancelled = true }
   }, [reportType])
 
+  const serviceListCategoryOptions = useMemo(() => {
+    const set = new Set<string>()
+    serviceListServices.forEach((s) => {
+      const cat = (s.category || "").trim()
+      if (cat) set.add(cat)
+    })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [serviceListServices])
+
+  const serviceListServicesForFilter = useMemo(() => {
+    if (serviceListCategoryFilter === "all") return serviceListServices
+    return serviceListServices.filter((s) => (s.category || "").trim() === serviceListCategoryFilter)
+  }, [serviceListServices, serviceListCategoryFilter])
+
+  const handleServiceListCategoryFilterChange = (next: string) => {
+    setServiceListCategoryFilter(next)
+    if (serviceListServiceFilter !== "all") {
+      const selected = serviceListServices.find((s) => s._id === serviceListServiceFilter)
+      if (next !== "all" && selected && (selected.category || "").trim() !== next) {
+        setServiceListServiceFilter("all")
+      }
+    }
+  }
+
   useEffect(() => {
     if (reportType !== "product-list") return
     let cancelled = false
@@ -764,6 +790,30 @@ export function SalesReport() {
     fetchProductListOptions()
     return () => { cancelled = true }
   }, [reportType])
+
+  const productListCategoryOptions = useMemo(() => {
+    const set = new Set<string>()
+    productListProducts.forEach((p) => {
+      const cat = (p.category || "").trim()
+      if (cat) set.add(cat)
+    })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [productListProducts])
+
+  const productListProductsForFilter = useMemo(() => {
+    if (productListCategoryFilter === "all") return productListProducts
+    return productListProducts.filter((p) => (p.category || "").trim() === productListCategoryFilter)
+  }, [productListProducts, productListCategoryFilter])
+
+  const handleProductListCategoryFilterChange = (next: string) => {
+    setProductListCategoryFilter(next)
+    if (productListProductFilter !== "all") {
+      const selected = productListProducts.find((p) => p._id === productListProductFilter)
+      if (next !== "all" && selected && (selected.category || "").trim() !== next) {
+        setProductListProductFilter("all")
+      }
+    }
+  }
 
   // Fetch summary when Summary report is selected (uses same date range as sales)
   useEffect(() => {
@@ -1888,9 +1938,22 @@ export function SalesReport() {
                   <ServiceFilterCombobox
                     value={serviceListServiceFilter}
                     onValueChange={setServiceListServiceFilter}
-                    services={serviceListServices}
+                    services={serviceListServicesForFilter}
                     triggerClassName="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
                   />
+                  <Select value={serviceListCategoryFilter} onValueChange={handleServiceListCategoryFilterChange}>
+                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All categories</SelectItem>
+                      {serviceListCategoryOptions.map((cat) => (
+                        <SelectItem key={cat} value={cat}>
+                          {cat}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Select value={serviceListDatePeriod} onValueChange={handleServiceListDatePeriodChange}>
                     <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
@@ -1987,9 +2050,22 @@ export function SalesReport() {
                   <ProductFilterCombobox
                     value={productListProductFilter}
                     onValueChange={setProductListProductFilter}
-                    products={productListProducts}
+                    products={productListProductsForFilter}
                     triggerClassName="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
                   />
+                  <Select value={productListCategoryFilter} onValueChange={handleProductListCategoryFilterChange}>
+                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                      <SelectValue placeholder="Category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All categories</SelectItem>
+                      {productListCategoryOptions.map((cat) => (
+                        <SelectItem key={cat} value={cat}>
+                          {cat}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Select value={productListDatePeriod} onValueChange={handleProductListDatePeriodChange}>
                     <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
@@ -2944,6 +3020,8 @@ export function SalesReport() {
             setDatePeriod: setServiceListDatePeriod,
             dateRange: serviceListDateRange,
             setDateRange: setServiceListDateRange,
+            categoryFilter: serviceListCategoryFilter,
+            setCategoryFilter: setServiceListCategoryFilter,
             serviceFilter: serviceListServiceFilter,
             setServiceFilter: setServiceListServiceFilter,
             staffFilter: serviceListStaffFilter,
@@ -2961,6 +3039,8 @@ export function SalesReport() {
             setDatePeriod: setProductListDatePeriod,
             dateRange: productListDateRange,
             setDateRange: setProductListDateRange,
+            categoryFilter: productListCategoryFilter,
+            setCategoryFilter: setProductListCategoryFilter,
             productFilter: productListProductFilter,
             setProductFilter: setProductListProductFilter,
             staffFilter: productListStaffFilter,
