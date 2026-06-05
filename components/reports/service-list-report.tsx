@@ -1,6 +1,11 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
+import { useReportClientPagination } from "@/hooks/use-report-client-pagination"
+import {
+  ReportTablePaginationFooter,
+  ReportTablePaginationHeader,
+} from "@/components/reports/report-table-pagination"
 import { DollarSign, Scissors, Ticket, TrendingUp, Users, Clock } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -12,6 +17,11 @@ import { format } from "date-fns"
 import { SalesAPI, ServicesAPI, StaffDirectoryAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
 import { splitLineRevenueByStaff } from "@/lib/staff-line-revenue"
+import {
+  getReportActiveDateRange,
+  resolveReportSalesApiDateParams,
+  type ReportDatePeriod,
+} from "@/lib/report-sales-date-params"
 import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
 
 interface ServiceRow {
@@ -35,13 +45,15 @@ interface ServiceRow {
   paymentMode: string
 }
 
-export type DatePeriod = "today" | "yesterday" | "last7days" | "last30days" | "currentMonth" | "all" | "custom"
+export type DatePeriod = ReportDatePeriod
 
 export interface ServiceListControlledFilters {
   datePeriod: DatePeriod
   setDatePeriod: (p: DatePeriod) => void
   dateRange: { from?: Date; to?: Date }
   setDateRange: (r: { from?: Date; to?: Date }) => void
+  categoryFilter: string
+  setCategoryFilter: (v: string) => void
   serviceFilter: string
   setServiceFilter: (v: string) => void
   staffFilter: string
@@ -60,11 +72,12 @@ interface ServiceListReportProps {
 export function ServiceListReport({ controlledFilters }: ServiceListReportProps) {
   const { getSymbol } = useCurrency()
   const [salesData, setSalesData] = useState<any[]>([])
-  const [servicesList, setServicesList] = useState<{ _id: string; name: string; duration?: number }[]>([])
+  const [servicesList, setServicesList] = useState<{ _id: string; name: string; duration?: number; category?: string }[]>([])
   const [staffList, setStaffList] = useState<{ _id: string; name: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [datePeriod, setDatePeriod] = useState<DatePeriod>("today")
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({})
+  const [categoryFilter, setCategoryFilter] = useState<string>("all")
   const [serviceFilter, setServiceFilter] = useState<string>("all")
   const [staffFilter, setStaffFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
@@ -72,33 +85,68 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
 
   const period = controlledFilters?.datePeriod ?? datePeriod
   const range = controlledFilters?.dateRange ?? dateRange
+  const categoryF = controlledFilters?.categoryFilter ?? categoryFilter
   const serviceF = controlledFilters?.serviceFilter ?? serviceFilter
   const staffF = controlledFilters?.staffFilter ?? staffFilter
   const statusF = controlledFilters?.statusFilter ?? statusFilter
   const modeF = controlledFilters?.modeFilter ?? modeFilter
 
   useEffect(() => {
-    async function fetchData() {
-      setLoading(true)
+    let cancelled = false
+    async function fetchCatalog() {
       try {
-        const [salesRows, servicesRes, staffRes] = await Promise.all([
-          SalesAPI.getAllMergePages({ batchSize: 500 }),
+        const [servicesRes, staffRes] = await Promise.all([
           ServicesAPI.getAll({ limit: 500 }),
-          StaffDirectoryAPI.getAll()
+          StaffDirectoryAPI.getAll(),
         ])
-        setSalesData(Array.isArray(salesRows) ? salesRows : [])
+        if (cancelled) return
         setServicesList((servicesRes?.data && Array.isArray(servicesRes.data)) ? servicesRes.data : [])
         const staffData = staffRes?.data && Array.isArray(staffRes.data) ? staffRes.data : []
         setStaffList(staffData.map((s: any) => ({ _id: s._id, name: s.name || s.firstName || "—" })))
       } catch {
-        setSalesData([])
-        setServicesList([])
-        setStaffList([])
+        if (!cancelled) {
+          setServicesList([])
+          setStaffList([])
+        }
       }
-      setLoading(false)
     }
-    fetchData()
+    void fetchCatalog()
+    return () => {
+      cancelled = true
+    }
   }, [])
+
+  const salesDateParams = useMemo(
+    () => resolveReportSalesApiDateParams(period, range),
+    [period, range.from, range.to]
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    if (salesDateParams === null) {
+      setSalesData([])
+      setLoading(false)
+      return
+    }
+    async function fetchSales() {
+      setLoading(true)
+      try {
+        const salesRows = await SalesAPI.getAllMergePages({
+          ...salesDateParams,
+          batchSize: 500,
+        })
+        if (!cancelled) setSalesData(Array.isArray(salesRows) ? salesRows : [])
+      } catch {
+        if (!cancelled) setSalesData([])
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void fetchSales()
+    return () => {
+      cancelled = true
+    }
+  }, [salesDateParams])
 
   const serviceDurationMap = useMemo(() => {
     const map: Record<string, number> = {}
@@ -108,31 +156,51 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
     return map
   }, [servicesList])
 
-  const getDateRangeFromPeriod = (period: DatePeriod) => {
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    switch (period) {
-      case "today":
-        return { from: today, to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "yesterday": {
-        const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
-        return { from: yesterday, to: new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1) }
+  const serviceCategoryById = useMemo(() => {
+    const map: Record<string, string> = {}
+    servicesList.forEach((s) => {
+      const cat = (s.category || "").trim()
+      if (s._id && cat) map[s._id] = cat
+    })
+    return map
+  }, [servicesList])
+
+  const serviceCategoryByName = useMemo(() => {
+    const map: Record<string, string> = {}
+    servicesList.forEach((s) => {
+      const cat = (s.category || "").trim()
+      if (s.name && cat) map[s.name] = cat
+    })
+    return map
+  }, [servicesList])
+
+  const categoryOptions = useMemo(() => {
+    const set = new Set<string>()
+    servicesList.forEach((s) => {
+      const cat = (s.category || "").trim()
+      if (cat) set.add(cat)
+    })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [servicesList])
+
+  const servicesForFilter = useMemo(() => {
+    if (categoryF === "all") return servicesList
+    return servicesList.filter((s) => (s.category || "").trim() === categoryF)
+  }, [servicesList, categoryF])
+
+  const handleCategoryFilterChange = (next: string) => {
+    const setCat = controlledFilters?.setCategoryFilter ?? setCategoryFilter
+    const setSvc = controlledFilters?.setServiceFilter ?? setServiceFilter
+    setCat(next)
+    if (serviceF !== "all") {
+      const selected = servicesList.find((s) => s._id === serviceF)
+      if (next !== "all" && selected && (selected.category || "").trim() !== next) {
+        setSvc("all")
       }
-      case "last7days":
-        return { from: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000), to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "last30days":
-        return { from: new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000), to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) }
-      case "currentMonth":
-        return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) }
-      case "all":
-      case "custom":
-      default:
-        return { from: undefined, to: undefined }
     }
   }
 
-  const activeDateFrom = range.from ?? getDateRangeFromPeriod(period).from
-  const activeDateTo = range.to ?? getDateRangeFromPeriod(period).to
+  const { from: activeDateFrom, to: activeDateTo } = getReportActiveDateRange(period, range)
 
   const flattenedRows = useMemo((): ServiceRow[] => {
     const rows: ServiceRow[] = []
@@ -153,6 +221,13 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
 
       ;(sale.items || []).forEach((item: any, idx: number) => {
         if (item.type !== "service") return
+        if (categoryF !== "all") {
+          const sid = item.serviceId?.toString?.() ?? item.serviceId
+          const itemCategory =
+            (sid ? serviceCategoryById[String(sid)] : undefined) ||
+            (item.name ? serviceCategoryByName[item.name] : undefined)
+          if (itemCategory !== categoryF) return
+        }
         if (serviceF !== "all") {
           const sid = item.serviceId?.toString?.() ?? item.serviceId
           const matchById = sid === serviceF
@@ -245,7 +320,7 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
       })
     })
     return rows.sort((a, b) => b.saleDate.getTime() - a.saleDate.getTime())
-  }, [salesData, serviceDurationMap, activeDateFrom, activeDateTo, statusF, modeF, staffF, serviceF, staffList])
+  }, [salesData, serviceDurationMap, serviceCategoryById, serviceCategoryByName, activeDateFrom, activeDateTo, statusF, modeF, staffF, serviceF, categoryF, staffList])
 
   const totalRevenue = useMemo(() => flattenedRows.reduce((s, r) => s + r.total, 0), [flattenedRows])
   const noOfServices = flattenedRows.length
@@ -273,6 +348,27 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
     const set = new Set(flattenedRows.map((r) => r.service))
     return Array.from(set).sort()
   }, [flattenedRows])
+
+  const {
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    totalRows,
+    totalPages,
+    pageStartRow,
+    pageEndRow,
+    paginatedRows,
+  } = useReportClientPagination(flattenedRows, [
+    period,
+    range.from,
+    range.to,
+    categoryF,
+    serviceF,
+    staffF,
+    statusF,
+    modeF,
+  ])
 
   if (loading) {
     return (
@@ -350,12 +446,26 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
               <ServiceFilterCombobox
                 value={serviceF}
                 onValueChange={controlledFilters?.setServiceFilter ?? setServiceFilter}
-                services={servicesList}
+                services={servicesForFilter}
                 extraOptions={uniqueServiceNames
                   .filter((n) => !servicesList.some((s) => s.name === n))
+                  .filter((n) => categoryF === "all" || serviceCategoryByName[n] === categoryF)
                   .map((name) => ({ value: name, label: name }))}
                 triggerClassName="w-44 border-slate-200"
               />
+              <Select value={categoryF} onValueChange={handleCategoryFilterChange}>
+                <SelectTrigger className="w-44 border-slate-200">
+                  <SelectValue placeholder="Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All categories</SelectItem>
+                  {categoryOptions.map((cat) => (
+                    <SelectItem key={cat} value={cat}>
+                      {cat}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="w-44 justify-start text-left font-normal border-slate-200">
@@ -416,6 +526,16 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
 
       {/* Table */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <ReportTablePaginationHeader
+          title="Service Records"
+          totalRows={totalRows}
+          pageStartRow={pageStartRow}
+          pageEndRow={pageEndRow}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
+          loading={loading}
+          rowLabel="services"
+        />
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -440,7 +560,7 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
                   </TableCell>
                 </TableRow>
               ) : (
-                flattenedRows.map((row) => (
+                paginatedRows.map((row) => (
                   <TableRow key={row.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                     <TableCell className="text-slate-800 font-mono text-sm whitespace-nowrap">{row.billNo}</TableCell>
                     <TableCell className="text-slate-700 whitespace-nowrap">{format(row.saleDate, "dd/MM/yyyy")}</TableCell>
@@ -474,6 +594,14 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
             </TableBody>
           </Table>
         </div>
+        <ReportTablePaginationFooter
+          totalRows={totalRows}
+          page={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          loading={loading}
+          rowLabel="services"
+        />
       </div>
     </div>
   )
