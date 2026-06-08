@@ -18,6 +18,8 @@ interface ProtectedLayoutProps {
   requiredFeature?: string
   topNavQuickAdd?: boolean
   topNavRightSlot?: React.ReactNode
+  /** Optional secondary nav rendered between the main sidebar and page content. */
+  secondaryNav?: React.ReactNode
 }
 
 function ProtectedLayoutContent({
@@ -26,12 +28,14 @@ function ProtectedLayoutContent({
   exitImpersonation,
   topNavQuickAdd,
   topNavRightSlot,
+  secondaryNav,
 }: {
   children: React.ReactNode
   user: NonNullable<ReturnType<typeof useAuth>["user"]>
   exitImpersonation: () => void
   topNavQuickAdd: boolean
   topNavRightSlot?: React.ReactNode
+  secondaryNav?: React.ReactNode
 }) {
   const sidebar = useSidebar()
 
@@ -53,10 +57,17 @@ function ProtectedLayoutContent({
       )}
       <div className="flex flex-1 min-w-0 min-h-0 overflow-hidden">
         <SideNav isImpersonation={!!user?.isImpersonation} />
+        {secondaryNav}
         <div
           className={cn(
             "flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden",
-            sidebar?.isCollapsed ? "md:ml-24" : "md:ml-56"
+            secondaryNav
+              ? sidebar?.isCollapsed
+                ? "md:ml-[18rem]"
+                : "md:ml-[26rem]"
+              : sidebar?.isCollapsed
+                ? "md:ml-24"
+                : "md:ml-56"
           )}
         >
           <TopNav showQuickAdd={topNavQuickAdd} rightSlot={topNavRightSlot} />
@@ -69,7 +80,7 @@ function ProtectedLayoutContent({
   )
 }
 
-export function ProtectedLayout({ children, requiredModule, requiredFeature = "view", topNavQuickAdd = true, topNavRightSlot }: ProtectedLayoutProps) {
+export function ProtectedLayout({ children, requiredModule, requiredFeature = "view", topNavQuickAdd = true, topNavRightSlot, secondaryNav }: ProtectedLayoutProps) {
   const { user, isLoading, hasPermission, exitImpersonation } = useAuth()
   const router = useRouter()
 
@@ -153,6 +164,7 @@ export function ProtectedLayout({ children, requiredModule, requiredFeature = "v
         exitImpersonation={exitImpersonation}
         topNavQuickAdd={topNavQuickAdd}
         topNavRightSlot={topNavRightSlot}
+        secondaryNav={secondaryNav}
       >
         {children}
       </ProtectedLayoutContent>

@@ -179,6 +179,7 @@ router.get(
       if (filterMode === 'optedout') {
         enriched = enriched.filter(
           (c) =>
+            c.client?.promotionalWhatsappEnabled === false ||
             c.client?.whatsappConsent?.optedIn === false ||
             Boolean(c.client?.whatsappConsent?.waMarketingOptOut)
         );
@@ -563,6 +564,7 @@ router.post(
       }
 
       client.whatsappConsent = finalConsent;
+      client.promotionalWhatsappEnabled = optedIn;
       await client.save();
 
       await recordConsentEvent({

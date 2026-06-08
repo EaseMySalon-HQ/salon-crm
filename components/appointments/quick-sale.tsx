@@ -42,6 +42,7 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { BranchHistoryBadge } from "@/components/branch-management/branch-history-badge"
 import {
   Dialog,
   DialogContent,
@@ -102,6 +103,13 @@ import {
 } from "@/lib/payment-redemption-eligibility"
 import type { RewardPointsSettings } from "@/lib/api"
 import { clientStore, type Client } from "@/lib/client-store"
+import { ensureLocalSharedClient } from "@/lib/shared-client-import"
+import {
+  DEFAULT_CLIENT_COMMUNICATION_CONSENT,
+  communicationConsentPayload,
+} from "@/lib/client-communication-consent"
+import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
+import { ClientGenderRadioField, isClientGenderSelected } from "@/components/clients/client-gender-radio-field"
 import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay } from "@/lib/walk-in-client"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
@@ -344,6 +352,9 @@ function mapSaleToCustomerBill(sale: any) {
     staffNames: collectStaffNamesFromSale(sale),
     isEdited: sale.isEdited,
     editedAt: sale.editedAt,
+    branchId: sale.branchId,
+    branchName: sale.branchName,
+    isCurrentBranch: sale.isCurrentBranch,
   }
 }
 
@@ -619,6 +630,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     lastName: "",
     phone: "",
     email: "",
+    gender: "" as "" | "male" | "female",
+    ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
   })
   const customerSearchRef = useRef<HTMLDivElement>(null)
   /** Measured height of the Customer Snapshot card — side panel matches this when visible (md+ row). */
@@ -1971,14 +1984,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   // Handle customer selection with statistics fetch
   const handleCustomerSelect = async (customer: Client) => {
     console.log('🔍 Customer selected:', customer)
-    console.log('🔑 Customer ID (id):', customer.id)
-    console.log('🔑 Customer ID (_id):', customer._id)
-    console.log('🔑 Final ID to use:', getCustomerId(customer))
-    
-    // Validate that the customer has a valid ID
-    const customerId = getCustomerId(customer)
+    setShowCustomerDropdown(false)
+
+    let resolved = customer
+    try {
+      resolved = await ensureLocalSharedClient(customer)
+    } catch (err) {
+      toast({
+        title: "Could not load client",
+        description: err instanceof Error ? err.message : "Failed to import client profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    console.log('🔑 Customer ID (id):', resolved.id)
+    console.log('🔑 Customer ID (_id):', resolved._id)
+    console.log('🔑 Final ID to use:', getCustomerId(resolved))
+
+    const customerId = getCustomerId(resolved)
     if (!customerId) {
-      console.error('❌ Customer selected but no valid ID found:', customer)
+      console.error('❌ Customer selected but no valid ID found:', resolved)
       toast({
         title: "Invalid Customer",
         description: "Selected customer has no valid ID. Please try selecting again.",
@@ -1986,12 +2012,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       })
       return
     }
-    
-    setSelectedCustomer(customer)
-    setCustomerSearch(customer.name)
-    setShowCustomerDropdown(false)
-    
-    // Fetch customer statistics when customer is selected
+
+    setSelectedCustomer(resolved)
+    setCustomerSearch(resolved.name)
+
     await fetchCustomerStats(customerId)
   }
 
@@ -2032,6 +2056,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       lastName: "",
       phone: customerSearch,
       email: "",
+      gender: "",
+      ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
     })
     setShowNewCustomerDialog(true)
     setShowCustomerDropdown(false)
@@ -2061,15 +2087,26 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       return
     }
 
+    if (!isClientGenderSelected(newCustomer.gender)) {
+      toast({
+        title: "Missing Information",
+        description: "Please select a gender.",
+        variant: "destructive",
+      })
+      return
+    }
+
     const customer: Client = {
       id: Date.now().toString(),
       name: newCustomer.lastName ? `${newCustomer.firstName} ${newCustomer.lastName}` : newCustomer.firstName,
       phone: phoneNumber,
       email: newCustomer.email,
+      gender: newCustomer.gender,
       totalVisits: 0,
       totalSpent: 0,
       createdAt: new Date().toISOString(),
       status: "active",
+      ...communicationConsentPayload(newCustomer),
     }
 
     try {
@@ -2101,6 +2138,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           lastName: "",
           phone: "",
           email: "",
+          gender: "",
+          ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
         })
 
         toast({
@@ -2582,6 +2621,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         title: "Missing bill number",
         description: "Cannot load this invoice.",
         variant: "destructive",
+      })
+      return
+    }
+    const billMeta = customerBills.find((b) => quickSaleBillNoForBillingRoute(b) === billNo)
+    if (billMeta?.isCurrentBranch === false) {
+      toast({
+        title: "Bill at another branch",
+        description: billMeta.branchName
+          ? `This invoice belongs to ${billMeta.branchName}. Switch to that branch to open the receipt.`
+          : "This invoice belongs to another branch. Switch branches to open it.",
       })
       return
     }
@@ -6288,14 +6337,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   </div>
                 </div>
                 
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium text-gray-700">Phone</Label>
-                  <Input
-                    type="tel"
-                    value={newCustomer.phone}
-                    onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })}
-                    placeholder="Enter phone number"
-                    className="border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20"
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium text-gray-700">Phone *</Label>
+                    <Input
+                      type="tel"
+                      value={newCustomer.phone}
+                      onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })}
+                      placeholder="Enter phone number"
+                      className="border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20"
+                    />
+                  </div>
+                  <ClientGenderRadioField
+                    idPrefix="quick-sale-new-customer"
+                    value={newCustomer.gender}
+                    onChange={(gender) => setNewCustomer({ ...newCustomer, gender })}
                   />
                 </div>
                 
@@ -6309,6 +6365,16 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     className="border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20"
                   />
                 </div>
+
+                <ClientCommunicationConsentFields
+                  variant="compact"
+                  value={{
+                    promotionalWhatsappEnabled: newCustomer.promotionalWhatsappEnabled,
+                    transactionalWhatsappEnabled: newCustomer.transactionalWhatsappEnabled,
+                    transactionalSmsEnabled: newCustomer.transactionalSmsEnabled,
+                  }}
+                  onChange={(next) => setNewCustomer({ ...newCustomer, ...next })}
+                />
               </div>
               
               <div className="flex justify-end space-x-3 mt-6">
@@ -6939,6 +7005,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                         #{bill.receiptNumber || bill.id || "—"}
                                       </span>
                                     ) : null}
+                                    <BranchHistoryBadge
+                                      branchId={bill.branchId}
+                                      branchName={bill.branchName}
+                                      isCurrentBranch={bill.isCurrentBranch}
+                                    />
                                     {staffLabel ? (
                                       <span className="text-[10px] text-slate-600 sm:text-xs">• {staffLabel}</span>
                                     ) : null}
@@ -6949,8 +7020,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                 </>
                               )
                               return (
-                                <li key={`inline-note-${bill.id}`}>
-                                  {billNo ? (
+                                <li key={`inline-note-${bill.id}-${bill.branchId || "local"}`}>
+                                  {billNo && bill.isCurrentBranch !== false ? (
                                     <button
                                       type="button"
                                       className={cn(cardClass, "cursor-pointer font-inherit")}
@@ -6983,8 +7054,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         <div key={bill.id} className="rounded-md border border-slate-100/90 p-3 hover:bg-slate-50/80">
                           <div className="flex flex-wrap items-start justify-between gap-2">
                             <div className="min-w-0 flex-1">
-                              <h4 className="font-medium text-sm text-slate-900">
+                              <h4 className="font-medium text-sm text-slate-900 flex flex-wrap items-center gap-1.5">
                                 #{bill.receiptNumber}
+                                <BranchHistoryBadge
+                                  branchId={bill.branchId}
+                                  branchName={bill.branchName}
+                                  isCurrentBranch={bill.isCurrentBranch}
+                                />
                                 {(bill.isEdited === true || bill.editedAt) && (
                                   <span className="ml-1 text-[11px] font-normal text-slate-500">(edited)</span>
                                 )}
@@ -9012,56 +9088,64 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
               </div>
               
-              <div style={{marginBottom: '20px'}}>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  color: '#374151',
-                  marginBottom: '10px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Phone Number *
-                </label>
-                <input
-                  type="tel"
-                  value={newCustomer.phone}
-                  onChange={(e) => {
-                    // Only allow digits and limit to 10
-                    const value = e.target.value.replace(/\D/g, '').slice(0, 10)
-                    setNewCustomer({ ...newCustomer, phone: value })
-                  }}
-                  placeholder="Enter 10-digit phone number"
-                  maxLength={10}
-                  style={{
-                    width: '100%',
-                    padding: '14px 16px',
-                    border: newCustomer.phone && newCustomer.phone.length !== 10 ? '2px solid #ef4444' : '2px solid #e5e7eb',
-                    borderRadius: '12px',
-                    fontSize: '15px',
-                    backgroundColor: '#fafafa',
-                    transition: 'all 0.2s ease',
-                    outline: 'none'
-                  }}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = newCustomer.phone && newCustomer.phone.length !== 10 ? '#ef4444' : '#8b5cf6'
-                    e.target.style.backgroundColor = 'white'
-                    e.target.style.boxShadow = newCustomer.phone && newCustomer.phone.length !== 10 
-                      ? '0 0 0 3px rgba(239, 68, 68, 0.1)' 
-                      : '0 0 0 3px rgba(139, 92, 246, 0.1)'
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = newCustomer.phone && newCustomer.phone.length !== 10 ? '#ef4444' : '#e5e7eb'
-                    e.target.style.backgroundColor = '#fafafa'
-                    e.target.style.boxShadow = 'none'
-                  }}
-                />
-                {newCustomer.phone && newCustomer.phone.length > 0 && newCustomer.phone.length !== 10 && (
-                  <p style={{ fontSize: '12px', color: '#ef4444', marginTop: '4px' }}>
-                    Phone number must be exactly 10 digits. Current: {newCustomer.phone.length} digits
-                  </p>
-                )}
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", alignItems: "start" }}>
+                  <div>
+                    <label style={{
+                      display: "block",
+                      fontSize: "14px",
+                      fontWeight: "600",
+                      color: "#374151",
+                      marginBottom: "10px",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.5px"
+                    }}>
+                      Phone Number *
+                    </label>
+                    <input
+                      type="tel"
+                      value={newCustomer.phone}
+                      onChange={(e) => {
+                        const value = e.target.value.replace(/\D/g, "").slice(0, 10)
+                        setNewCustomer({ ...newCustomer, phone: value })
+                      }}
+                      placeholder="Enter 10-digit phone number"
+                      maxLength={10}
+                      style={{
+                        width: "100%",
+                        padding: "14px 16px",
+                        border: newCustomer.phone && newCustomer.phone.length !== 10 ? "2px solid #ef4444" : "2px solid #e5e7eb",
+                        borderRadius: "12px",
+                        fontSize: "15px",
+                        backgroundColor: "#fafafa",
+                        transition: "all 0.2s ease",
+                        outline: "none"
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = newCustomer.phone && newCustomer.phone.length !== 10 ? "#ef4444" : "#8b5cf6"
+                        e.target.style.backgroundColor = "white"
+                        e.target.style.boxShadow = newCustomer.phone && newCustomer.phone.length !== 10
+                          ? "0 0 0 3px rgba(239, 68, 68, 0.1)"
+                          : "0 0 0 3px rgba(139, 92, 246, 0.1)"
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = newCustomer.phone && newCustomer.phone.length !== 10 ? "#ef4444" : "#e5e7eb"
+                        e.target.style.backgroundColor = "#fafafa"
+                        e.target.style.boxShadow = "none"
+                      }}
+                    />
+                    {newCustomer.phone && newCustomer.phone.length > 0 && newCustomer.phone.length !== 10 && (
+                      <p style={{ fontSize: "12px", color: "#ef4444", marginTop: "4px" }}>
+                        Phone number must be exactly 10 digits. Current: {newCustomer.phone.length} digits
+                      </p>
+                    )}
+                  </div>
+                  <ClientGenderRadioField
+                    idPrefix="quick-sale-new-customer-alt"
+                    value={newCustomer.gender}
+                    onChange={(gender) => setNewCustomer({ ...newCustomer, gender })}
+                  />
+                </div>
               </div>
               
               <div style={{marginBottom: '20px'}}>
@@ -9101,6 +9185,18 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                     e.target.style.backgroundColor = '#fafafa'
                     e.target.style.boxShadow = 'none'
                   }}
+                />
+              </div>
+
+              <div style={{ marginBottom: "8px" }}>
+                <ClientCommunicationConsentFields
+                  variant="compact"
+                  value={{
+                    promotionalWhatsappEnabled: newCustomer.promotionalWhatsappEnabled,
+                    transactionalWhatsappEnabled: newCustomer.transactionalWhatsappEnabled,
+                    transactionalSmsEnabled: newCustomer.transactionalSmsEnabled,
+                  }}
+                  onChange={(next) => setNewCustomer({ ...newCustomer, ...next })}
                 />
               </div>
             </div>

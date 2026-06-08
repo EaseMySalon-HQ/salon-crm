@@ -8,6 +8,10 @@ import { SessionTimeoutManager } from "@/components/auth/session-timeout-manager
 import { AUTH_LOGOUT_EVENT, clearAuthStorage } from "@/lib/auth-utils"
 import { setCsrfTokenPersisted } from "@/lib/csrf"
 
+/** Multi-branch picker hand-off (login -> /select-branch). Session-scoped, cleared after selection. */
+export const BRANCH_PREAUTH_STORAGE_KEY = "salon-ems-preauth"
+export const BRANCH_OPTIONS_STORAGE_KEY = "salon-ems-branch-options"
+
 export interface User {
   _id: string
   name?: string
@@ -38,6 +42,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<{
     success: boolean
     businessSuspended?: boolean
+    requiresBranchSelect?: boolean
     error?: string
     message?: string
   }>
@@ -146,6 +151,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
          */
         const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/')
         const isPublicRoute = pathname === '/login' ||
+                             pathname === '/select-branch' ||
                              pathname === '/forgot-password' ||
                              pathname === '/reset-password' ||
                              pathname.includes('/receipt/public/') ||
@@ -243,6 +249,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await AuthAPI.login(email, password)
       
       if (response.success) {
+        // Multi-branch: owner has 2+ active branches. No session cookies were set;
+        // stash the pre-auth token + branch options for the picker screen and stop.
+        if (response.data?.requiresBranchSelect) {
+          if (typeof window !== 'undefined') {
+            try {
+              sessionStorage.setItem(BRANCH_PREAUTH_STORAGE_KEY, response.data.preAuthToken || '')
+              sessionStorage.setItem(
+                BRANCH_OPTIONS_STORAGE_KEY,
+                JSON.stringify(response.data.branches || [])
+              )
+            } catch {
+              /* private mode / quota — picker page will redirect to /login if empty */
+            }
+          }
+          setIsLoading(false)
+          return { success: true, requiresBranchSelect: true }
+        }
+
         const { csrfToken } = response.data
         if (csrfToken && typeof csrfToken === 'string') {
           setCsrfTokenPersisted(csrfToken)

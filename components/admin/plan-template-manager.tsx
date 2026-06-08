@@ -73,7 +73,7 @@ const FEATURE_ENFORCEMENT: Record<string, "gated" | "core" | "partial" | "planne
   advanced_reports: "gated",
   data_export: "gated",
   custom_receipt_templates: "gated",
-  multi_location: "planned",
+  multi_location: "gated",
   centralized_reporting: "planned",
   api_access: "planned",
   custom_integrations: "planned",

@@ -12,6 +12,30 @@ const databaseManager = require('../config/database-manager');
 const { logger } = require('../utils/logger');
 const auditMain = require('./whatsapp-audit');
 
+/** Default consent for new real clients in the directory (not walk-ins). */
+function defaultWhatsappConsentForNewClient(source = 'system') {
+  return {
+    optedIn: true,
+    source,
+    optedInAt: new Date(),
+    optedOutAt: null,
+    optInReason: null,
+    optOutReason: null,
+    waMarketingOptOut: false,
+    waMarketingOptOutAt: null,
+  };
+}
+
+/**
+ * Resolve consent payload on create when the caller omitted whatsappConsent.
+ */
+function resolveConsentForNewClient(incoming, source = 'staff') {
+  if (incoming === undefined || incoming === null) {
+    return defaultWhatsappConsentForNewClient(source);
+  }
+  return incoming;
+}
+
 /**
  * Apply a consent payload to an in-memory client doc and return:
  *  - the normalised whatsappConsent object to persist
@@ -107,4 +131,9 @@ async function recordConsentEvent({
   return true;
 }
 
-module.exports = { normaliseConsentUpdate, recordConsentEvent };
+module.exports = {
+  defaultWhatsappConsentForNewClient,
+  resolveConsentForNewClient,
+  normaliseConsentUpdate,
+  recordConsentEvent,
+};

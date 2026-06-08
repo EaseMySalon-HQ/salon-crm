@@ -75,17 +75,19 @@ const whatsappConsentInputSchema = z
     source: z
       .enum(['booking', 'checkout', 'manual', 'import', 'staff', 'inbound_message', 'system'])
       .optional(),
-    /**
-     * Reasons can come from the form as `null` when the inverse toggle is
-     * being unset (e.g. opting in clears `optOutReason`). Accept null AND
-     * undefined so the form's "clear the other side" pattern doesn't make
-     * the whole update fail with 400.
-     */
     optInReason: z.string().max(500).nullable().optional(),
     optOutReason: z.string().max(500).nullable().optional(),
   })
   .strict()
   .optional();
+
+const clientCommunicationConsentSchema = z
+  .object({
+    promotionalWhatsappEnabled: z.boolean().optional(),
+    transactionalWhatsappEnabled: z.boolean().optional(),
+    transactionalSmsEnabled: z.boolean().optional(),
+  })
+  .partial();
 
 const createClientBodySchema = z
   .object({
@@ -97,6 +99,9 @@ const createClientBodySchema = z
     status: z.enum(['active', 'inactive']).optional(),
     gender: z.enum(['male', 'female', 'other']).optional(),
     dob: z.union([z.string(), z.date()]).optional(),
+    promotionalWhatsappEnabled: z.boolean().optional(),
+    transactionalWhatsappEnabled: z.boolean().optional(),
+    transactionalSmsEnabled: z.boolean().optional(),
     whatsappConsent: whatsappConsentInputSchema,
   })
   .passthrough();
@@ -112,6 +117,9 @@ const updateClientBodySchema = z
     status: z.enum(['active', 'inactive']).optional(),
     gender: z.enum(['male', 'female', 'other']).optional(),
     dob: z.union([z.string(), z.date()]).optional(),
+    promotionalWhatsappEnabled: z.boolean().optional(),
+    transactionalWhatsappEnabled: z.boolean().optional(),
+    transactionalSmsEnabled: z.boolean().optional(),
     whatsappConsent: whatsappConsentInputSchema,
   })
   .passthrough();

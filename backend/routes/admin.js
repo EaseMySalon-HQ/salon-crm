@@ -551,53 +551,86 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       return res.status(400).json({ success: false, error: 'Owner password is required' });
     }
 
-    // Create owner user first — they are the first user and have full control as business admin
-    const hashedPassword = await bcrypt.hash(ownerData.password, 10);
-    const owner = new req.mainModels.User({
-      firstName: ownerData.firstName,
-      lastName: ownerData.lastName,
-      email: ownerData.email,
-      mobile: ownerData.phone,
-      password: hashedPassword,
-      role: 'admin',
-      hasLoginAccess: true,
-      allowAppointmentScheduling: true,
-      isActive: true,
-      permissions: [
-        // Business admin gets all permissions for their business
-        { module: 'dashboard', feature: 'view', enabled: true },
-        { module: 'dashboard', feature: 'edit', enabled: true },
-        { module: 'appointments', feature: 'view', enabled: true },
-        { module: 'appointments', feature: 'create', enabled: true },
-        { module: 'appointments', feature: 'edit', enabled: true },
-        { module: 'appointments', feature: 'delete', enabled: true },
-        { module: 'clients', feature: 'view', enabled: true },
-        { module: 'clients', feature: 'create', enabled: true },
-        { module: 'clients', feature: 'edit', enabled: true },
-        { module: 'clients', feature: 'delete', enabled: true },
-        { module: 'services', feature: 'view', enabled: true },
-        { module: 'services', feature: 'create', enabled: true },
-        { module: 'services', feature: 'edit', enabled: true },
-        { module: 'services', feature: 'delete', enabled: true },
-        { module: 'products', feature: 'view', enabled: true },
-        { module: 'products', feature: 'create', enabled: true },
-        { module: 'products', feature: 'edit', enabled: true },
-        { module: 'products', feature: 'delete', enabled: true },
-        { module: 'staff', feature: 'view', enabled: true },
-        { module: 'staff', feature: 'create', enabled: true },
-        { module: 'staff', feature: 'edit', enabled: true },
-        { module: 'staff', feature: 'delete', enabled: true },
-        { module: 'sales', feature: 'view', enabled: true },
-        { module: 'sales', feature: 'create', enabled: true },
-        { module: 'sales', feature: 'edit', enabled: true },
-        { module: 'sales', feature: 'delete', enabled: true },
-        { module: 'reports', feature: 'view', enabled: true },
-        { module: 'settings', feature: 'view', enabled: true },
-        { module: 'settings', feature: 'edit', enabled: true },
-      ]
-    });
-    
-    await owner.save();
+    // Find-or-create owner. Multi-branch: one User per email, many Business docs
+    // pointing to the same User._id. The unique index on User.email is preserved.
+    const ownerEmail = String(ownerData.email || '').toLowerCase().trim();
+    let owner = await req.mainModels.User.findOne({ email: ownerEmail });
+
+    if (!owner) {
+      // First branch for this email — create the owner user with full business-admin access
+      const hashedPassword = await bcrypt.hash(ownerData.password, 10);
+      owner = new req.mainModels.User({
+        firstName: ownerData.firstName,
+        lastName: ownerData.lastName,
+        email: ownerEmail,
+        mobile: ownerData.phone,
+        password: hashedPassword,
+        role: 'admin',
+        hasLoginAccess: true,
+        allowAppointmentScheduling: true,
+        isActive: true,
+        permissions: [
+          // Business admin gets all permissions for their business
+          { module: 'dashboard', feature: 'view', enabled: true },
+          { module: 'dashboard', feature: 'edit', enabled: true },
+          { module: 'appointments', feature: 'view', enabled: true },
+          { module: 'appointments', feature: 'create', enabled: true },
+          { module: 'appointments', feature: 'edit', enabled: true },
+          { module: 'appointments', feature: 'delete', enabled: true },
+          { module: 'clients', feature: 'view', enabled: true },
+          { module: 'clients', feature: 'create', enabled: true },
+          { module: 'clients', feature: 'edit', enabled: true },
+          { module: 'clients', feature: 'delete', enabled: true },
+          { module: 'services', feature: 'view', enabled: true },
+          { module: 'services', feature: 'create', enabled: true },
+          { module: 'services', feature: 'edit', enabled: true },
+          { module: 'services', feature: 'delete', enabled: true },
+          { module: 'products', feature: 'view', enabled: true },
+          { module: 'products', feature: 'create', enabled: true },
+          { module: 'products', feature: 'edit', enabled: true },
+          { module: 'products', feature: 'delete', enabled: true },
+          { module: 'staff', feature: 'view', enabled: true },
+          { module: 'staff', feature: 'create', enabled: true },
+          { module: 'staff', feature: 'edit', enabled: true },
+          { module: 'staff', feature: 'delete', enabled: true },
+          { module: 'sales', feature: 'view', enabled: true },
+          { module: 'sales', feature: 'create', enabled: true },
+          { module: 'sales', feature: 'edit', enabled: true },
+          { module: 'sales', feature: 'delete', enabled: true },
+          { module: 'reports', feature: 'view', enabled: true },
+          { module: 'settings', feature: 'view', enabled: true },
+          { module: 'settings', feature: 'edit', enabled: true },
+        ]
+      });
+
+      await owner.save();
+    } else {
+      // Email already exists — this owner is adding another branch. Verify the
+      // password matches their existing account before attaching a new business.
+      const validPassword = await bcrypt.compare(ownerData.password, owner.password);
+      if (!validPassword) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'This email is already registered. Please enter your existing password to add a new branch to your account.',
+        });
+      }
+
+      // Defense-in-depth: only allow attaching a new business to an account that
+      // already owns at least one business (prevents accidentally binding a new
+      // branch to an unrelated user record that happens to share the email).
+      const ownsAny = await req.mainModels.Business.exists({
+        owner: owner._id,
+        status: { $ne: 'deleted' },
+      });
+      if (!ownsAny) {
+        return res.status(409).json({
+          success: false,
+          message:
+            'This email already belongs to a non-owner account and cannot be used to register a new business.',
+        });
+      }
+    }
 
     // Generate unique business code
     let businessCode;
@@ -693,9 +726,14 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
 
     await business.save();
 
-    // Update owner with business reference
-    owner.branchId = business._id;
-    await owner.save();
+    // Set the owner's primary/default branch only on their first business. For
+    // subsequent branches we leave User.branchId untouched so existing single-branch
+    // flows (and anything reading user.branchId) keep their current semantics; the
+    // owner's full set of branches is derived from Business docs, not from User.
+    if (!owner.branchId) {
+      owner.branchId = business._id;
+      await owner.save();
+    }
 
     // Create default business settings in the business-specific database (optional)
     try {
@@ -1179,9 +1217,36 @@ router.delete('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdmi
     business.deletedBy = req.admin._id; // Track who deleted it
     await business.save();
 
-    // Delete the business owner from main database (hard delete owner)
+    // Delete the business owner from the main database ONLY if they do not own any
+    // other non-deleted business. Multi-branch owners share a single User across
+    // every branch, so deleting one branch must not orphan the owner's remaining
+    // branches (which would lock them out of those branches entirely).
     if (business.owner) {
-      await req.mainModels.User.findByIdAndDelete(business.owner._id);
+      const remainingOwned = await req.mainModels.Business.countDocuments({
+        owner: business.owner._id,
+        _id: { $ne: business._id },
+        status: { $ne: 'deleted' },
+      });
+
+      if (remainingOwned === 0) {
+        await req.mainModels.User.findByIdAndDelete(business.owner._id);
+      } else if (String(business.owner.branchId) === String(business._id)) {
+        // Owner still has active branches but their active-branch pointer referenced
+        // the branch being deleted — repoint it to a surviving branch so login and
+        // branch resolution keep working.
+        const fallbackBranch = await req.mainModels.Business.findOne({
+          owner: business.owner._id,
+          _id: { $ne: business._id },
+          status: { $ne: 'deleted' },
+        })
+          .sort({ createdAt: 1 })
+          .select('_id');
+
+        await req.mainModels.User.findByIdAndUpdate(business.owner._id, {
+          branchId: fallbackBranch?._id,
+          updatedAt: new Date(),
+        });
+      }
     }
 
     // Delete the business-specific database

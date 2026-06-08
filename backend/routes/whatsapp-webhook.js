@@ -559,6 +559,7 @@ async function applyOptOut({ businessId, recipientPhone, source, payload }) {
       optedOutAt: new Date(),
       optOutReason: 'STOP',
     };
+    client.promotionalWhatsappEnabled = false;
     await client.save();
     if (previouslyOptedIn) {
       await ClientConsentEvent.create({

@@ -54,7 +54,7 @@ const clientSchema = new mongoose.Schema({
    * Business module). History is recorded in `ClientConsentEvent`.
    */
   whatsappConsent: {
-    optedIn: { type: Boolean, default: false },
+    optedIn: { type: Boolean, default: true },
     source: {
       type: String,
       enum: [
@@ -92,7 +92,13 @@ const clientSchema = new mongoose.Schema({
   isWalkIn: {
     type: Boolean,
     default: false
-  }
+  },
+  /** Bulk campaigns, offers, and marketing broadcasts via WhatsApp. */
+  promotionalWhatsappEnabled: { type: Boolean, default: true },
+  /** Utility WhatsApp: confirmations, reminders, invoices, booking updates. */
+  transactionalWhatsappEnabled: { type: Boolean, default: true },
+  /** Utility SMS: confirmations, reminders, invoices, payment updates. */
+  transactionalSmsEnabled: { type: Boolean, default: true },
 }, {
   timestamps: true
 });
@@ -102,7 +108,7 @@ clientSchema.index({ branchId: 1, lastVisit: -1 });
 clientSchema.index({ branchId: 1, createdAt: -1 });
 clientSchema.index({ branchId: 1, name: 1 });
 clientSchema.index({ branchId: 1, phone: 1 });
-clientSchema.index({ branchId: 1, 'whatsappConsent.optedIn': 1 });
+clientSchema.index({ branchId: 1, promotionalWhatsappEnabled: 1 });
 
 // Export both schema and model for flexibility
 module.exports = {

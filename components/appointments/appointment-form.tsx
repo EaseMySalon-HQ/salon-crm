@@ -62,6 +62,13 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { clientStore, type Client } from "@/lib/client-store"
+import { ensureLocalSharedClient } from "@/lib/shared-client-import"
+import {
+  DEFAULT_CLIENT_COMMUNICATION_CONSENT,
+  communicationConsentPayload,
+} from "@/lib/client-communication-consent"
+import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
+import { ClientGenderRadioField, isClientGenderSelected } from "@/components/clients/client-gender-radio-field"
 import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI, SettingsAPI, type ApiResponse } from "@/lib/api"
 import type { Receipt as InvoiceReceipt } from "@/lib/data"
 import { isHiddenAppointment, getAppointmentStatusPillClass, getAppointmentEditAppearanceStatus, toMongoIdString } from "@/lib/appointment-calendar-helpers"
@@ -578,6 +585,8 @@ export function AppointmentForm({
     lastName: "",
     phone: "",
     email: "",
+    gender: "" as "" | "male" | "female",
+    ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
   })
 
   // Date picker popover state
@@ -1646,10 +1655,21 @@ export function AppointmentForm({
 
   // Handle customer selection
   const handleCustomerSelect = (customer: Client) => {
-    setSelectedCustomer(customer)
-    setCustomerSearch(customer.name)
-    setShowCustomerDropdown(false)
-    onClientSelect?.(customer)
+    void (async () => {
+      try {
+        const resolved = await ensureLocalSharedClient(customer)
+        setSelectedCustomer(resolved)
+        setCustomerSearch(resolved.name)
+        setShowCustomerDropdown(false)
+        onClientSelect?.(resolved)
+      } catch (err) {
+        toast({
+          title: "Could not load client",
+          description: err instanceof Error ? err.message : "Failed to import client profile",
+          variant: "destructive",
+        })
+      }
+    })()
   }
 
   // Handle customer search input
@@ -1687,6 +1707,8 @@ export function AppointmentForm({
       lastName: "",
       phone: customerSearch,
       email: "",
+      gender: "",
+      ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
     })
     setShowNewClientDialog(true)
     setShowCustomerDropdown(false)
@@ -1714,13 +1736,24 @@ export function AppointmentForm({
       return
     }
 
+    if (!isClientGenderSelected(newClient.gender)) {
+      toast({
+        title: "Missing Information",
+        description: "Please select a gender.",
+        variant: "destructive",
+      })
+      return
+    }
+
     try {
       const newClientData = {
         id: `new-${Date.now()}`,
         name: newClient.lastName ? `${newClient.firstName} ${newClient.lastName}` : newClient.firstName,
         phone: phoneNumber,
         email: newClient.email,
+        gender: newClient.gender,
         status: "active" as const,
+        ...communicationConsentPayload(newClient),
       }
 
       const success = await clientStore.addClient(newClientData)
@@ -1742,6 +1775,8 @@ export function AppointmentForm({
           lastName: "",
           phone: "",
           email: "",
+          gender: "",
+          ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
         })
         setShowNewClientDialog(false)
 
@@ -3478,24 +3513,31 @@ export function AppointmentForm({
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="phone">Phone *</Label>
-              <Input
-                id="phone"
-                type="tel"
-                placeholder="Enter 10-digit phone number"
-                maxLength={10}
-                value={newClient.phone}
-                onChange={(e) => {
-                  // Only allow digits and limit to 10
-                  const value = e.target.value.replace(/\D/g, '').slice(0, 10)
-                  setNewClient({ ...newClient, phone: value })
-                }}
-                className={newClient.phone && newClient.phone.length !== 10 ? "border-red-500 focus:border-red-500" : ""}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="phone">Phone *</Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  placeholder="Enter 10-digit phone number"
+                  maxLength={10}
+                  value={newClient.phone}
+                  onChange={(e) => {
+                    // Only allow digits and limit to 10
+                    const value = e.target.value.replace(/\D/g, '').slice(0, 10)
+                    setNewClient({ ...newClient, phone: value })
+                  }}
+                  className={newClient.phone && newClient.phone.length !== 10 ? "border-red-500 focus:border-red-500" : ""}
+                />
+                {newClient.phone && newClient.phone.length > 0 && newClient.phone.length !== 10 && (
+                  <p className="text-sm text-red-500">Phone number must be exactly 10 digits. Current: {newClient.phone.length} digits</p>
+                )}
+              </div>
+              <ClientGenderRadioField
+                idPrefix="appointment-new-client"
+                value={newClient.gender}
+                onChange={(gender) => setNewClient({ ...newClient, gender })}
               />
-              {newClient.phone && newClient.phone.length > 0 && newClient.phone.length !== 10 && (
-                <p className="text-sm text-red-500">Phone number must be exactly 10 digits. Current: {newClient.phone.length} digits</p>
-              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
@@ -3506,6 +3548,15 @@ export function AppointmentForm({
                 onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
               />
             </div>
+            <ClientCommunicationConsentFields
+              variant="compact"
+              value={{
+                promotionalWhatsappEnabled: newClient.promotionalWhatsappEnabled,
+                transactionalWhatsappEnabled: newClient.transactionalWhatsappEnabled,
+                transactionalSmsEnabled: newClient.transactionalSmsEnabled,
+              }}
+              onChange={(next) => setNewClient({ ...newClient, ...next })}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowNewClientDialog(false)}>

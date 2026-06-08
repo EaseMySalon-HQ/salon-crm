@@ -21,6 +21,12 @@ export interface Client {
   phone: string
   /** Server-managed anonymous checkout profile */
   isWalkIn?: boolean
+  /** Sibling-branch match — not yet imported at this branch until profile is opened. */
+  sharedPreview?: boolean
+  sourceBranchId?: string
+  promotionalWhatsappEnabled?: boolean
+  transactionalWhatsappEnabled?: boolean
+  transactionalSmsEnabled?: boolean
   lastVisit?: string
   status?: "active" | "inactive"
   totalVisits?: number
@@ -339,7 +345,13 @@ class ClientStore {
   private normalizeList(data: any[]): Client[] {
     return (data || []).map((c: any) => {
       const clientId = c._id || c.id
-      return { ...c, id: clientId, _id: clientId }
+      return {
+        ...c,
+        id: clientId || c.id,
+        _id: c.sharedPreview ? undefined : clientId,
+        sharedPreview: c.sharedPreview === true,
+        sourceBranchId: c.sourceBranchId,
+      }
     })
   }
 

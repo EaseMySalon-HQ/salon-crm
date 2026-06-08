@@ -450,6 +450,8 @@ app.use('/api/public/demo-lead', require('./routes/public-demo-lead'));
 app.use('/api/public/pricing-matrix', require('./routes/public-pricing-matrix'));
 app.use('/api/feedback', require('./routes/feedback'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
+app.use('/api/branch-management', require('./routes/branch-management'));
+app.use('/api/inventory/transfers', require('./routes/inventory-transfers'));
 
 const {
   signTenantAccess,
@@ -671,7 +673,75 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
       const mainConnection = await databaseManager.getMainConnection();
       const Business = mainConnection.model('Business', require('./models/Business').schema);
 
-      ownerBusiness = await Business.findOne({ owner: user._id });
+      // Reactivate inactive (manually paused) businesses, but not suspended ones.
+      // Done before listing so they count as active branches below.
+      const { statusUpdateFields } = require('./lib/suspension-grace');
+      await Business.updateMany(
+        { owner: user._id, status: 'inactive' },
+        statusUpdateFields('active')
+      );
+
+      // List all branches this owner has, to decide single- vs multi-branch login.
+      const ownedBranches = await Business.find({
+        owner: user._id,
+        status: { $ne: 'deleted' },
+      }).select('_id code name address status settings.branding.logo');
+
+      const activeBranches = ownedBranches.filter((b) => b.status === 'active');
+
+      // MULTI-BRANCH FLOW: any owner with 2+ active branches picks a branch at login.
+      // Branch Management remains gated by the multi_location plan feature separately.
+      if (activeBranches.length >= 2) {
+        const branchList = activeBranches.map((b) => ({
+          id: b._id,
+          code: b.code,
+          name: b.name,
+          city: b.address?.city || '',
+          logo: b.settings?.branding?.logo || '',
+        }));
+
+        const preAuthToken = jwt.sign(
+          {
+            id: user._id,
+            email: user.email,
+            role: user.role,
+            tokenUse: 'tenant_preauth',
+            stage: 'branch-select',
+            branchList,
+          },
+          JWT_SECRET,
+          { expiresIn: '15m' }
+        );
+
+        await User.findByIdAndUpdate(user._id, {
+          lastLoginAt: new Date(),
+          updatedAt: new Date(),
+        });
+
+        logTenantLoginSuccess(req, {
+          subjectType: 'user',
+          userId: user._id,
+          email: user.email,
+          branchId: undefined,
+        });
+
+        return res.json({
+          success: true,
+          data: {
+            requiresBranchSelect: true,
+            preAuthToken,
+            branches: branchList,
+          },
+        });
+      }
+
+      // SINGLE-BRANCH (or zero active, or multi-location not on plan) — unchanged behavior.
+      const preferredBranch =
+        activeBranches.find((b) => String(b._id) === String(user.branchId)) ||
+        activeBranches[0] ||
+        ownedBranches[0] ||
+        null;
+      ownerBusiness = preferredBranch;
 
       if (!ownerBusiness) {
         return res.status(403).json({
@@ -681,15 +751,6 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
       }
 
       // Suspended businesses may sign in; tenant APIs are blocked in auth middleware (except auth routes)
-
-      // Reactivate inactive businesses (but not suspended ones)
-      if (ownerBusiness.status === 'inactive') {
-        const { statusUpdateFields } = require('./lib/suspension-grace');
-        await Business.updateMany(
-          { owner: user._id, status: 'inactive' },
-          statusUpdateFields('active')
-        );
-      }
     }
 
     // Update last login timestamp
@@ -740,6 +801,222 @@ app.post('/api/auth/login', setupMainDatabase, validate(tenantLoginSchema), asyn
       success: false,
       error: 'Internal server error'
     });
+  }
+});
+
+/**
+ * Multi-branch: owner picks a branch from the picker screen.
+ * Auth surface is the short-lived pre-auth token issued by /api/auth/login
+ * (Authorization: Bearer <preAuthToken>). No tenant session exists yet, so this
+ * route is exempt from CSRF (see SKIP_PREFIXES in middleware/csrf.js). The DB is
+ * the source of truth — the branch must still be active and owned by this user.
+ */
+app.post('/api/auth/select-branch', setupMainDatabase, async (req, res) => {
+  try {
+    const header = req.headers['authorization'] || '';
+    const preAuthToken = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!preAuthToken) {
+      return res.status(401).json({ success: false, error: 'Missing pre-auth token' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(preAuthToken, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ success: false, error: 'Invalid or expired pre-auth token' });
+    }
+
+    if (decoded.tokenUse !== 'tenant_preauth' || decoded.stage !== 'branch-select') {
+      return res.status(403).json({ success: false, error: 'Invalid pre-auth token' });
+    }
+
+    const requestedBranchId = String(req.body?.branchId || '');
+    if (!requestedBranchId) {
+      return res.status(400).json({ success: false, error: 'branchId required' });
+    }
+
+    const inList =
+      Array.isArray(decoded.branchList) &&
+      decoded.branchList.some((b) => String(b.id) === requestedBranchId);
+    if (!inList) {
+      return res.status(403).json({ success: false, error: 'Branch not allowed for this session' });
+    }
+
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+
+    // Re-verify against the DB — branches may have been suspended or deleted
+    // between login and selection.
+    const branch = await Business.findOne({
+      _id: requestedBranchId,
+      owner: decoded.id,
+      status: 'active',
+    });
+    if (!branch) {
+      return res.status(403).json({ success: false, error: 'Branch is no longer available' });
+    }
+
+    const { User } = req.mainModels;
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'User not found' });
+    }
+
+    // Persist the chosen branch as the owner's active branch. For owners,
+    // middleware/auth.js resolves req.user.branchId from the User document (not the
+    // JWT), so the DB must reflect the selection for it to take effect everywhere.
+    await User.findByIdAndUpdate(user._id, {
+      branchId: branch._id,
+      lastLoginAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Issue full tenant session for the chosen branch.
+    await issueTenantSession(res, { ...user.toObject(), branchId: branch._id });
+    const csrfToken = setCsrfCookie(res);
+
+    const { buildSuspensionMeta } = require('./lib/suspension-grace');
+    const { password: _, ...userWithoutPassword } = user.toObject();
+
+    scheduleActivityLog(
+      {
+        businessId: branch._id,
+        actorType: tenantActorTypeFromRole(user.role),
+        actorId: user._id,
+        action: ACTIVITY_ACTIONS.USER_LOGIN,
+        entity: 'auth',
+        summary: `Branch selected: ${user.email} → ${branch.code}`,
+      },
+      req
+    );
+
+    logTenantLoginSuccess(req, {
+      subjectType: 'user',
+      userId: user._id,
+      email: user.email,
+      branchId: branch._id,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        user: {
+          ...userWithoutPassword,
+          branchId: branch._id,
+          isOwner: true,
+          ...buildSuspensionMeta(branch),
+        },
+        csrfToken,
+      },
+    });
+  } catch (error) {
+    logger.error('select-branch error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * Multi-branch: owner switches branch mid-session from the top nav.
+ * Auth surface is the existing full tenant session (authenticateToken + standard
+ * CSRF). Branch eligibility is derived from the DB (owner + active), never from a
+ * JWT claim, so middleware/auth.js is left untouched.
+ */
+app.post('/api/auth/switch-branch', authenticateToken, async (req, res) => {
+  try {
+    const requestedBranchId = String(req.body?.branchId || '');
+    if (!requestedBranchId) {
+      return res.status(400).json({ success: false, error: 'branchId required' });
+    }
+
+    // Owners only — staff sessions never span multiple branches.
+    if (!req.user || req.user.authSubject !== 'user') {
+      return res.status(403).json({ success: false, error: 'Branch switching is owner-only' });
+    }
+
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+
+    const branch = await Business.findOne({
+      _id: requestedBranchId,
+      owner: req.user._id,
+      status: 'active',
+    });
+    if (!branch) {
+      return res.status(403).json({ success: false, error: 'Branch not allowed' });
+    }
+
+    const User = mainConnection.model('User', require('./models/User').schema);
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'User not found' });
+    }
+
+    // Persist the active branch. middleware/auth.js derives req.user.branchId from
+    // the User document for owners, so without this the switch would not stick.
+    await User.findByIdAndUpdate(user._id, {
+      branchId: branch._id,
+      updatedAt: new Date(),
+    });
+
+    await issueTenantSession(res, { ...user.toObject(), branchId: branch._id });
+    const csrfToken = setCsrfCookie(res);
+
+    scheduleActivityLog(
+      {
+        businessId: branch._id,
+        actorType: tenantActorTypeFromRole(user.role),
+        actorId: user._id,
+        action: ACTIVITY_ACTIONS.USER_LOGIN,
+        entity: 'auth',
+        summary: `Branch switched: ${user.email} → ${branch.code}`,
+      },
+      req
+    );
+
+    return res.json({ success: true, data: { csrfToken } });
+  } catch (error) {
+    logger.error('switch-branch error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+/**
+ * Multi-branch: list the active branches owned by the current owner. Used by the
+ * SPA to decide whether to render the branch switcher (the branch list cannot be
+ * read from the HttpOnly access JWT). Owner-only; staff get an empty list.
+ */
+app.get('/api/auth/my-branches', authenticateToken, async (req, res) => {
+  try {
+    if (!req.user || req.user.authSubject !== 'user') {
+      return res.json({ success: true, data: { branches: [] } });
+    }
+
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+
+    const branches = await Business.find({
+      owner: req.user._id,
+      status: 'active',
+    }).select('_id code name address settings.branding.logo');
+
+    return res.json({
+      success: true,
+      data: {
+        branches: branches.map((b) => ({
+          id: b._id,
+          code: b.code,
+          name: b.name,
+          city: b.address?.city || '',
+          logo: b.settings?.branding?.logo || '',
+        })),
+      },
+    });
+  } catch (error) {
+    logger.error('my-branches error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -2316,16 +2593,60 @@ app.get('/api/clients', authenticateToken, requireStaff, setupBusinessDatabase, 
     // Use business-specific Client model
     const { Client } = req.businessModels;
 
+    const databaseManager = require('./config/database-manager');
+    const {
+      resolveOwnerShareClientsContext,
+      buildClientSearchQuery,
+      mergeSharedClientSearchResults,
+    } = require('./lib/share-clients-across-branches');
+    const mainConnection = await databaseManager.getMainConnection();
+    const shareCtx = await resolveOwnerShareClientsContext(mainConnection, req.user.branchId);
+    const projection = 'name phone email lastVisit totalVisits totalSpent status createdAt isWalkIn';
+
     // Build query for business-specific database
-    let query = {};
+    let query = { isWalkIn: { $ne: true } };
     if (search) {
       query = {
+        isWalkIn: { $ne: true },
         $or: [
           { name: { $regex: search, $options: 'i' } },
           { email: { $regex: search, $options: 'i' } },
           { phone: { $regex: search, $options: 'i' } }
         ]
       };
+    }
+
+    if (search && shareCtx?.shareClientsAcrossBranches) {
+      const searchQuery = buildClientSearchQuery(String(search));
+      if (searchQuery) {
+        const localMatches = await Client.find({ isWalkIn: { $ne: true }, ...searchQuery })
+          .select(projection)
+          .sort({ createdAt: -1 })
+          .limit(Math.min(limitNum * pageNum, 500))
+          .lean();
+        const merged = await mergeSharedClientSearchResults({
+          mainConnection,
+          ownerId: shareCtx.ownerId,
+          currentBranchId: req.user.branchId,
+          localClients: localMatches,
+          query: searchQuery,
+          limit: Math.min(limitNum * pageNum, 500),
+          projection,
+        });
+        const total = merged.length;
+        const start = (pageNum - 1) * limitNum;
+        const pageRows = merged.slice(start, start + limitNum);
+        return res.json({
+          success: true,
+          data: pageRows,
+          pagination: {
+            page: pageNum,
+            limit: limitNum,
+            total,
+            totalPages: Math.ceil(total / limitNum)
+          }
+        });
+      }
     }
 
     const totalClients = await Client.countDocuments(query);
@@ -2357,15 +2678,24 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
     const { q } = req.query;
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const projection = 'name phone email lastVisit status isWalkIn';
+    const databaseManager = require('./config/database-manager');
+    const {
+      resolveOwnerShareClientsContext,
+      buildClientSearchQuery,
+      mergeSharedClientSearchResults,
+    } = require('./lib/share-clients-across-branches');
+
+    const mainConnection = await databaseManager.getMainConnection();
+    const shareCtx = await resolveOwnerShareClientsContext(mainConnection, req.user.branchId);
 
     if (!q) {
-      const clients = await Client.find({})
+      const clients = await Client.find({ isWalkIn: { $ne: true } })
         .select(projection)
         .sort({ lastVisit: -1, createdAt: -1 })
         .limit(limit)
         .lean();
-      const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
       let merged = clients;
+      const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
       if (walkIn && !merged.some((c) => String(c._id) === String(walkIn._id))) {
         merged = [walkIn, ...merged];
         if (merged.length > limit) merged = merged.slice(0, limit);
@@ -2377,24 +2707,28 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
       return res.json({ success: true, data: [] });
     }
 
-    const escaped = String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const isDigits = /^\d+$/.test(escaped);
-
-    const conditions = isDigits
-      ? [{ phone: { $regex: `^${escaped}` } }]
-      : [
-          { name: { $regex: `^${escaped}`, $options: 'i' } },
-          { phone: { $regex: `^${escaped}` } },
-        ];
-
-    const searchResults = await Client.find({ $or: conditions })
+    const searchQuery = buildClientSearchQuery(String(q));
+    const searchResults = await Client.find({ isWalkIn: { $ne: true }, ...searchQuery })
       .select(projection)
       .sort({ lastVisit: -1, createdAt: -1 })
       .limit(limit)
       .lean();
 
-    const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
     let merged = searchResults;
+    if (shareCtx?.shareClientsAcrossBranches && searchQuery) {
+      merged = await mergeSharedClientSearchResults({
+        mainConnection,
+        ownerId: shareCtx.ownerId,
+        currentBranchId: req.user.branchId,
+        localClients: searchResults,
+        query: searchQuery,
+        limit,
+        projection,
+      });
+    }
+
+    const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
+    const escaped = String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const qt = String(q).trim();
     if (
       walkIn &&
@@ -2411,6 +2745,50 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
   } catch (error) {
     logger.error('Error searching clients:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/clients/ensure-shared', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const phone = String(req.body?.phone || '').trim();
+    if (!phone) {
+      return res.status(400).json({ success: false, error: 'Phone is required' });
+    }
+
+    const databaseManager = require('./config/database-manager');
+    const {
+      resolveOwnerShareClientsContext,
+      ensureSharedClientAtCurrentBranch,
+      findClientByPhone,
+    } = require('./lib/share-clients-across-branches');
+    const mainConnection = await databaseManager.getMainConnection();
+    const shareCtx = await resolveOwnerShareClientsContext(mainConnection, req.user.branchId);
+    const { Client } = req.businessModels;
+
+    if (!shareCtx?.shareClientsAcrossBranches) {
+      const local = await findClientByPhone(Client, phone);
+      if (!local) {
+        return res.status(404).json({ success: false, error: 'Client not found' });
+      }
+      return res.json({ success: true, data: local, created: false });
+    }
+
+    const result = await ensureSharedClientAtCurrentBranch({
+      mainConnection,
+      ownerId: shareCtx.ownerId,
+      currentBranchId: req.user.branchId,
+      currentModels: req.businessModels,
+      phone,
+    });
+
+    if (!result?.client) {
+      return res.status(404).json({ success: false, error: 'Client not found in any branch' });
+    }
+
+    res.json({ success: true, data: result.client, created: result.created });
+  } catch (error) {
+    logger.error('Error ensuring shared client profile:', error);
+    res.status(500).json({ success: false, error: 'Failed to import client profile' });
   }
 });
 
@@ -2443,7 +2821,7 @@ app.post(
   validate(createClientBodySchema),
   async (req, res) => {
   try {
-    const { name, email, phone, address, notes, whatsappConsent } = req.body;
+    const { name, email, phone, address, notes } = req.body;
 
     if (String(phone || '').trim() === WALK_IN_PHONE) {
       return res.status(400).json({
@@ -2472,11 +2850,17 @@ app.post(
     }
 
     const { normaliseConsentUpdate, recordConsentEvent } = require('./lib/client-consent');
-    const consentResult = normaliseConsentUpdate({
-      existing: null,
-      incoming: whatsappConsent,
-      actor: { actorType: 'staff', actorId: req.user._id },
-    });
+    const {
+      resolveCommunicationConsentForCreate,
+      syncWhatsappConsentFromPromotional,
+    } = require('./lib/client-communication-consent');
+
+    const communication = resolveCommunicationConsentForCreate(req.body);
+    const consentResult = syncWhatsappConsentFromPromotional(
+      null,
+      communication.promotionalWhatsappEnabled,
+      { actorType: 'staff', actorId: req.user._id }
+    );
 
     const newClient = new Client({
       name,
@@ -2488,6 +2872,7 @@ app.post(
       totalVisits: 0,
       totalSpent: 0,
       branchId: req.user.branchId,
+      ...communication,
       whatsappConsent: consentResult.next || undefined,
     });
 
@@ -2553,9 +2938,11 @@ app.put(
   async (req, res) => {
   try {
     const { Client } = req.businessModels;
-    const { phone, whatsappConsent } = req.body;
+    const { phone } = req.body;
 
-    const existingDoc = await Client.findById(req.params.id).select('isWalkIn phone').lean();
+    const existingDoc = await Client.findById(req.params.id)
+      .select('isWalkIn phone whatsappConsent promotionalWhatsappEnabled transactionalWhatsappEnabled transactionalSmsEnabled')
+      .lean();
     if (!existingDoc) {
       return res.status(404).json({
         success: false,
@@ -2591,15 +2978,36 @@ app.put(
     }
 
     const { normaliseConsentUpdate, recordConsentEvent } = require('./lib/client-consent');
+    const {
+      resolveCommunicationConsentForUpdate,
+      syncWhatsappConsentFromPromotional,
+    } = require('./lib/client-communication-consent');
+
+    const communication = resolveCommunicationConsentForUpdate(req.body, existingDoc);
     const updatePayload = { ...req.body };
+    delete updatePayload.whatsappConsent;
+
+    updatePayload.promotionalWhatsappEnabled = communication.promotionalWhatsappEnabled;
+    updatePayload.transactionalWhatsappEnabled = communication.transactionalWhatsappEnabled;
+    updatePayload.transactionalSmsEnabled = communication.transactionalSmsEnabled;
+
     let consentResult = null;
-    if (whatsappConsent !== undefined) {
-      const previous = await Client.findById(req.params.id).select('whatsappConsent').lean();
-      consentResult = normaliseConsentUpdate({
-        existing: previous?.whatsappConsent || null,
-        incoming: whatsappConsent,
-        actor: { actorType: 'staff', actorId: req.user._id },
-      });
+    const previousPromo =
+      existingDoc.promotionalWhatsappEnabled !== undefined
+        ? existingDoc.promotionalWhatsappEnabled !== false
+        : existingDoc.whatsappConsent?.waMarketingOptOut
+          ? false
+          : existingDoc.whatsappConsent?.optedIn !== false;
+
+    if (
+      communication.promotionalWhatsappEnabled !== previousPromo ||
+      req.body.promotionalWhatsappEnabled !== undefined
+    ) {
+      consentResult = syncWhatsappConsentFromPromotional(
+        existingDoc.whatsappConsent,
+        communication.promotionalWhatsappEnabled,
+        { actorType: 'staff', actorId: req.user._id }
+      );
       updatePayload.whatsappConsent = consentResult.next;
     }
 
@@ -3113,7 +3521,11 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
           totalVisits: mappedData.visits ? parseInt(mappedData.visits) || 0 : 0,
           totalSpent: mappedData.totalSpent ? parseFloat(mappedData.totalSpent) || 0 : 0,
           status: 'active',
-          branchId: req.user.branchId
+          branchId: req.user.branchId,
+          promotionalWhatsappEnabled: true,
+          transactionalWhatsappEnabled: true,
+          transactionalSmsEnabled: true,
+          whatsappConsent: require('./lib/client-consent').defaultWhatsappConsentForNewClient('import'),
         };
 
         // Parse date of birth
@@ -3802,7 +4214,11 @@ app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusine
         phone: lead.phone,
         email: lead.email,
         branchId: req.user.branchId,
-        status: 'active'
+        status: 'active',
+        promotionalWhatsappEnabled: true,
+        transactionalWhatsappEnabled: true,
+        transactionalSmsEnabled: true,
+        whatsappConsent: require('./lib/client-consent').defaultWhatsappConsentForNewClient('system'),
       });
       await client.save();
       try {
@@ -3977,10 +4393,17 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
       .limit(limitNum)
       .sort({ category: 1, name: 1 }); // Sort by category alphabetically, then by name
 
+    const {
+      loadServiceOverridesForBranch,
+      applyOverridesToServiceDocs,
+    } = require('./lib/apply-service-overrides');
+    const serviceOverrides = await loadServiceOverridesForBranch(req.user.branchId);
+    const data = applyOverridesToServiceDocs(services, serviceOverrides);
+
     logger.debug('Services found: %d', services.length);
     res.json({
       success: true,
-      data: services,
+      data,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -9187,6 +9610,58 @@ const createWalkInCardsForStandaloneSale = async (sale, businessModels, branchId
 };
 
 // Appointments routes
+app.get('/api/appointments/by-phone/:phone', authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const phone = decodeURIComponent(req.params.phone || '').trim();
+    if (!phone) {
+      return res.json({ success: true, data: [], shared: false });
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 200, 300);
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const { resolveOwnerShareClientsContext } = require('./lib/share-clients-across-branches');
+    const { fetchSharedAppointmentsByPhone } = require('./lib/client-shared-history');
+
+    const shareCtx = await resolveOwnerShareClientsContext(mainConnection, req.user.branchId);
+    if (shareCtx?.shareClientsAcrossBranches) {
+      const appointments = await fetchSharedAppointmentsByPhone({
+        mainConnection,
+        ownerId: shareCtx.ownerId,
+        currentBranchId: req.user.branchId,
+        phone,
+        limit,
+      });
+      return res.json({ success: true, data: appointments, shared: true });
+    }
+
+    const { Client, Appointment } = req.businessModels;
+    const { findClientByPhone } = require('./lib/share-clients-across-branches');
+    const client = await findClientByPhone(Client, phone);
+    if (!client) {
+      return res.json({ success: true, data: [], shared: false });
+    }
+
+    const apts = await Appointment.find({ clientId: client._id, branchId: req.user.branchId })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    res.json({
+      success: true,
+      data: apts.map((a) => ({
+        ...a,
+        branchId: String(req.user.branchId),
+        isCurrentBranch: true,
+      })),
+      shared: false,
+    });
+  } catch (error) {
+    logger.error('Error fetching appointments by phone:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch appointments' });
+  }
+});
+
 app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {
     const { Appointment } = req.businessModels;
@@ -13870,20 +14345,46 @@ app.get('/api/sales/by-phone/:phone', authenticateToken, setupBusinessDatabase, 
     const phone = decodeURIComponent(req.params.phone || '').trim();
     
     if (!phone) {
-      return res.json({ success: true, data: [] });
+      return res.json({ success: true, data: [], shared: false });
     }
     
     const { Sale } = req.businessModels;
-    
     const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const sales = await Sale.find({ customerPhone: phone })
-      .sort({ date: -1 })
-      .limit(limit)
-      .lean();
-    
+    const databaseManager = require('./config/database-manager');
+    const mainConnection = await databaseManager.getMainConnection();
+    const {
+      resolveOwnerShareClientsContext,
+    } = require('./lib/share-clients-across-branches');
+    const { fetchSharedSalesByPhone } = require('./lib/client-shared-history');
+
+    const shareCtx = await resolveOwnerShareClientsContext(mainConnection, req.user.branchId);
+    if (shareCtx?.shareClientsAcrossBranches) {
+      const sales = await fetchSharedSalesByPhone({
+        mainConnection,
+        ownerId: shareCtx.ownerId,
+        currentBranchId: req.user.branchId,
+        phone,
+        limit,
+      });
+      return res.json({ success: true, data: sales, shared: true });
+    }
+
+    const { phoneMatchFilter } = require('./lib/client-shared-history');
+    const filter = phoneMatchFilter(phone);
+    const sales = filter
+      ? await Sale.find(filter).sort({ date: -1 }).limit(limit).lean()
+      : [];
+
+    const local = sales.map((s) => ({
+      ...s,
+      branchId: String(req.user.branchId),
+      isCurrentBranch: true,
+    }));
+
     res.json({
       success: true,
-      data: sales
+      data: local,
+      shared: false,
     });
   } catch (error) {
     logger.error('Error fetching sales by client phone:', error);
@@ -17897,6 +18398,9 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   // Setup email scheduler jobs
   const { setupEmailScheduler } = require('./jobs/email-scheduler');
   setupEmailScheduler();
+
+  const { setupBranchManagementJobs } = require('./jobs/branch-management-nightly');
+  setupBranchManagementJobs();
 
   const { startClientWalletExpiryJob } = require('./jobs/client-wallet-expiry-job');
   startClientWalletExpiryJob();

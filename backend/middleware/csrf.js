@@ -33,6 +33,8 @@ const SKIP_PREFIXES = [
   '/api/auth/staff-login',
   '/api/auth/forgot-password',
   '/api/auth/reset-password',
+  /** Multi-branch picker: authenticated via short-lived pre-auth Bearer token, no session cookie/CSRF state yet. */
+  '/api/auth/select-branch',
   /** Refresh uses HttpOnly rotation cookie; SameSite + short-lived access reduce CSRF risk. */
   '/api/auth/refresh',
   '/api/auth/logout',

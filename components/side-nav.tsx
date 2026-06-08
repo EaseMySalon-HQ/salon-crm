@@ -21,6 +21,7 @@ import {
   FileText,
   Megaphone,
   ChevronDown,
+  Building2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -35,6 +36,7 @@ import { useAuth } from "@/lib/auth-context"
 import { useSidebar } from "@/lib/sidebar-context"
 import { SETTINGS_MODULES } from "@/lib/permission-mappings"
 import { useEntitlements } from "@/hooks/use-entitlements"
+import { useMyBranches } from "@/hooks/use-my-branches"
 
 type NavLinkItem = {
   kind: "link"
@@ -64,6 +66,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
   const pathname = usePathname()
   const { user } = useAuth()
   const { hasFeature, isLoading: entitlementsLoading } = useEntitlements()
+  const { canManageBranches } = useMyBranches()
   const { isCollapsed, toggleCollapsed } = useSidebar() ?? {
     isCollapsed: false,
     toggleCollapsed: () => {},
@@ -102,6 +105,19 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
       featureId: "analytics",
     },
     { kind: "link", title: "Reports", href: "/reports", icon: PieChart, permissionModule: "reports" },
+    // Owner-only; requires Multi-Location Support plan feature and 2+ branches.
+    ...(canManageBranches
+      ? [
+          {
+            kind: "link" as const,
+            title: "Branch Management",
+            href: "/branch-management/dashboard",
+            icon: Building2,
+            permissionModule: "dashboard",
+            featureId: "multi_location",
+          },
+        ]
+      : []),
     { kind: "link", title: "Staff Directory", href: "/staff", icon: Users, permissionModule: "staff" },
     { kind: "link", title: "Settings", href: "/settings", icon: Settings, permissionModule: "settings" },
   ]
@@ -202,7 +218,11 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                   const Icon = item.icon
                   const isActive =
                     pathname === item.href ||
-                    (item.href !== "/" && pathname.startsWith(item.href))
+                    (item.href.startsWith("/branch-management") &&
+                      pathname.startsWith("/branch-management")) ||
+                    (item.href !== "/" &&
+                      !item.href.startsWith("/branch-management") &&
+                      pathname.startsWith(item.href))
 
                   return (
                     <div key={item.href} className="relative group/item">

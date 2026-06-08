@@ -52,12 +52,8 @@ import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { RewardPointsProgramSettings } from "./reward-points-settings"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
-import { ProductsTable } from "@/components/products/products-table"
-import { ProductStatsCards } from "@/components/dashboard/stats-cards"
-import { CategoryManagement } from "@/components/categories/category-management"
-import { SuppliersAndOrdersTab } from "@/components/suppliers/suppliers-and-orders-tab"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PackagesSettingsPanel } from "@/components/packages/packages-settings-panel"
+import { ProductsSettingsTabs } from "@/components/settings/products-settings-tabs"
 
 import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
 import { useEntitlements } from "@/hooks/use-entitlements"
@@ -443,59 +439,8 @@ export function SettingsPage() {
             </TabsContent>
           </Tabs>
         )
-      case "products": {
-        const productsTabRaw = searchParams.get("productsTab")
-        const productsTab =
-          productsTabRaw === "categories" || productsTabRaw === "suppliers" ? productsTabRaw : "products"
-        const setProductsTab = (tab: string) => {
-          const params = new URLSearchParams(searchParams.toString())
-          params.set("section", "products")
-          params.set("productsTab", tab)
-          if (tab !== "suppliers") {
-            params.delete("supplierOrdersTab")
-            params.delete("pi")
-            params.delete("piEdit")
-            params.delete("purchaseOrderId")
-            params.delete("newPurchaseInvoice")
-            params.delete("purchaseInvoiceSupplierId")
-          }
-          router.replace(`/settings?${params.toString()}`)
-        }
-        return (
-          <Tabs value={productsTab} onValueChange={setProductsTab} className="w-full">
-            <TabsList className="mb-6 grid grid-cols-3">
-              <TabsTrigger value="products" className="gap-2">
-                <Package className="h-4 w-4" />
-                Products
-              </TabsTrigger>
-              <TabsTrigger value="categories" className="gap-2">
-                <FolderTree className="h-4 w-4" />
-                Categories
-              </TabsTrigger>
-              <TabsTrigger value="suppliers" className="gap-2">
-                <Truck className="h-4 w-4" />
-                Suppliers & orders
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="products" className="space-y-6">
-              <ProductStatsCards />
-              <div className="rounded-xl border border-slate-200/80 overflow-hidden">
-                <ProductsTable />
-              </div>
-            </TabsContent>
-            <TabsContent value="categories">
-              <CategoryManagement
-                type="product"
-                title="Product categories"
-                description="Manage categories for your salon products"
-              />
-            </TabsContent>
-            <TabsContent value="suppliers">
-              <SuppliersAndOrdersTab />
-            </TabsContent>
-          </Tabs>
-        )
-      }
+      case "products":
+        return <ProductsSettingsTabs />
       case "packages":
         return <PackagesSettingsPanel />
       case "whatsapp-integration":

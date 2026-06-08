@@ -51,7 +51,29 @@ const businessSchema = new mongoose.Schema({
       slotDuration: { type: Number, default: 30 }, // minutes
       advanceBookingDays: { type: Number, default: 30 },
       bufferTime: { type: Number, default: 15 }, // minutes
-      allowOnlineBooking: { type: Boolean, default: false }
+      allowOnlineBooking: { type: Boolean, default: false },
+      allowCrossBranchBooking: { type: Boolean, default: false },
+      cancellationWindowHours: { type: Number, default: 24, min: 0 },
+    },
+
+    /** Monthly revenue target for branch-management overview (INR). */
+    revenueTarget: {
+      monthly: { type: Number, default: 0, min: 0 },
+    },
+
+    /** Org-wide multi-location preferences (kept in sync on all branches for the owner). */
+    multiLocation: {
+      /** When true, client profiles are visible and searchable at every branch. */
+      shareClientsAcrossBranches: { type: Boolean, default: false },
+    },
+
+    /**
+     * HQ service overrides keyed by merge key (SKU or normalized name).
+     * Tenant Service docs are unchanged until booking APIs read overrides.
+     */
+    serviceOverrides: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
     },
     
     /** When true, platform admin has disabled all tenant operational email for this business */

@@ -8,7 +8,7 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from "@tanstack/react-table"
-import { MoreHorizontal, Pencil, Trash2, User, Phone, Mail, Calendar, TrendingUp, Eye, Receipt, Upload, Edit, RefreshCw, MessageCircle } from "lucide-react"
+import { MoreHorizontal, Pencil, Trash2, User, Phone, Mail, Calendar, TrendingUp, Eye, Receipt, Upload, Edit, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -33,10 +33,12 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { clientStore } from "@/lib/client-store"
 import { SalesAPI, ClientsAPI } from "@/lib/api"
+import { ClientCommunicationIndicators } from "@/components/clients/client-communication-indicators"
 import { isWalkInClient } from "@/lib/walk-in-client"
 import { useAuth } from "@/lib/auth-context"
 import { ClientImportModal } from "./client-import-modal"
 import { ClientDetailsDrawer } from "./client-details-drawer"
+import { ensureLocalSharedClient } from "@/lib/shared-client-import"
 
 interface Client {
   id?: string
@@ -120,7 +122,9 @@ export function ClientsTable({ clients }: ClientsTableProps) {
     const start = currentPageIndex * currentPageSize
     const end = Math.min(start + currentPageSize, clients.length)
     const visible = clients.slice(start, end)
-    const clientIds = visible.map(c => c._id || c.id).filter(Boolean) as string[]
+    const clientIds = visible
+      .map((c) => c._id || c.id)
+      .filter((id): id is string => Boolean(id) && !String(id).startsWith("shared-preview:"))
     const requestKey = clientIds.join('|')
     if (!requestKey || requestKey === lastStatsRequestKeyRef.current || requestKey === activeStatsRequestKeyRef.current) {
       return
@@ -163,26 +167,44 @@ export function ClientsTable({ clients }: ClientsTableProps) {
 
   // NOTE: This effect is declared later in the file after pageIndex/pageSize are defined
 
-  const openClientDetailsDrawer = (client: Client) => {
-    const clientId = client._id || client.id
-    if (!clientId) {
-      console.error("Client missing ID:", client)
-      return
+  const openClientDetailsDrawer = async (client: Client) => {
+    try {
+      const resolved = await ensureLocalSharedClient(client)
+      const clientId = resolved._id || resolved.id
+      if (!clientId) {
+        console.error("Client missing ID:", resolved)
+        return
+      }
+      setDetailsDrawerForEdit(false)
+      setDetailsClient(resolved)
+      setDetailsDrawerOpen(true)
+    } catch (err) {
+      toast({
+        title: "Could not open profile",
+        description: err instanceof Error ? err.message : "Failed to import client profile",
+        variant: "destructive",
+      })
     }
-    setDetailsDrawerForEdit(false)
-    setDetailsClient(client)
-    setDetailsDrawerOpen(true)
   }
 
-  const openClientDetailsDrawerForEdit = (client: Client) => {
-    const clientId = client._id || client.id
-    if (!clientId) {
-      console.error("Client missing ID:", client)
-      return
+  const openClientDetailsDrawerForEdit = async (client: Client) => {
+    try {
+      const resolved = await ensureLocalSharedClient(client)
+      const clientId = resolved._id || resolved.id
+      if (!clientId) {
+        console.error("Client missing ID:", resolved)
+        return
+      }
+      setDetailsDrawerForEdit(true)
+      setDetailsClient(resolved)
+      setDetailsDrawerOpen(true)
+    } catch (err) {
+      toast({
+        title: "Could not open profile",
+        description: err instanceof Error ? err.message : "Failed to import client profile",
+        variant: "destructive",
+      })
     }
-    setDetailsDrawerForEdit(true)
-    setDetailsClient(client)
-    setDetailsDrawerOpen(true)
   }
 
   const onDetailsDrawerOpenChange = (open: boolean) => {
@@ -341,15 +363,7 @@ export function ClientsTable({ clients }: ClientsTableProps) {
                 >
                   {client.name}
                 </button>
-                {client.whatsappConsent?.optedIn && (
-                  <Badge
-                    variant="secondary"
-                    className="px-2 py-0.5 text-[10px] font-medium bg-emerald-50 text-emerald-700 border-emerald-200"
-                  >
-                    <MessageCircle className="h-3 w-3 mr-1" />
-                    WhatsApp
-                  </Badge>
-                )}
+                <ClientCommunicationIndicators client={client} />
               </div>
               <div className="flex items-center space-x-4 text-xs text-gray-500 mt-1">
                 <span className="flex items-center space-x-1">

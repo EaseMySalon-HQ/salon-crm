@@ -43,6 +43,7 @@ const FEATURE = {
   FEEDBACK_MANAGEMENT: 'feedback_management',
   CUSTOM_INTEGRATIONS: 'custom_integrations',
   WHATSAPP_INTEGRATION: 'whatsapp_integration',
+  MULTI_LOCATION: 'multi_location',
 };
 
 /**
@@ -119,6 +120,12 @@ const FEATURE_ROUTE_RULES = [
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     pathPattern: /^\/api\/whatsapp(\/|$)/,
     description: 'Meta WABA module — connect, templates, campaigns, inbox',
+  },
+  {
+    feature: FEATURE.MULTI_LOCATION,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    pathPattern: /^\/api\/branch-management(\/|$)/,
+    description: 'Multi-branch admin dashboard, add/deactivate branches, cross-branch reports',
   },
 ];
 

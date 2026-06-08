@@ -17,6 +17,33 @@ export function downloadTableXlsx(filenameBase: string, sheetName: string, heade
   XLSX.writeFile(wb, `${filenameBase.replace(/[/\\?%*:|"<>]/g, "-")}.xlsx`)
 }
 
+/**
+ * Export multiple sheets into a single workbook (e.g. one sheet per branch).
+ * Sheet names are de-duplicated and clamped to Excel's 31-char limit.
+ */
+export function downloadMultiSheetXlsx(
+  filenameBase: string,
+  sheets: { name: string; headers: string[]; rows: (string | number)[][] }[]
+) {
+  const wb = XLSX.utils.book_new()
+  const usedNames = new Set<string>()
+  sheets.forEach((sheet, idx) => {
+    let safe = (sheet.name || `Sheet${idx + 1}`).replace(/[\\/?*[\]:]/g, " ").slice(0, 28).trim() || `Sheet${idx + 1}`
+    let candidate = safe
+    let suffix = 1
+    while (usedNames.has(candidate.toLowerCase())) {
+      candidate = `${safe.slice(0, 25)} ${++suffix}`
+    }
+    usedNames.add(candidate.toLowerCase())
+    const ws = XLSX.utils.aoa_to_sheet([sheet.headers, ...sheet.rows])
+    XLSX.utils.book_append_sheet(wb, ws, candidate)
+  })
+  if (sheets.length === 0) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["No data"]]), "Data")
+  }
+  XLSX.writeFile(wb, `${filenameBase.replace(/[/\\?%*:|"<>]/g, "-")}.xlsx`)
+}
+
 export function downloadTablePdf(
   title: string,
   subtitle: string | undefined,

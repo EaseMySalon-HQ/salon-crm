@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import { PlusCircle, Search, Download, FileText, FileSpreadsheet, ChevronDown, Users, MessageCircle } from "lucide-react"
+import { normalizeClientCommunicationConsent } from "@/lib/client-communication-consent"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ClientsTable } from "@/components/clients/clients-table"
@@ -82,7 +83,9 @@ export function ClientsListPage() {
 
     // Apply WhatsApp opted-in filter
     if (whatsappFilter) {
-      filtered = filtered.filter((client) => Boolean(client.whatsappConsent?.optedIn))
+      filtered = filtered.filter(
+        (client) => normalizeClientCommunicationConsent(client).promotionalWhatsappEnabled
+      )
     }
 
     // Apply search query

@@ -383,7 +383,7 @@ async function resolveAudience({ campaign, businessModels }) {
    *    excluded; the previous duplicate $ne keys collapsed in the object).
    */
   const filter = {
-    'whatsappConsent.optedIn': true,
+    promotionalWhatsappEnabled: { $ne: false },
     'whatsappConsent.waMarketingOptOut': { $ne: true },
     phone: { $exists: true, $nin: [null, ''] },
   };
