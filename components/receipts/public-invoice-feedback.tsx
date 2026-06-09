@@ -161,6 +161,26 @@ export function PublicInvoiceFeedbackSection({
       const submittedComment = reviewText.trim()
       setLastSubmittedReviewText(submittedComment)
       setSubmittedHadText(submittedComment.length > 0)
+      if (submittedComment.length > 0) {
+        try {
+          if (typeof navigator.clipboard?.writeText === "function") {
+            await navigator.clipboard.writeText(submittedComment)
+          } else {
+            const ta = document.createElement("textarea")
+            ta.value = submittedComment
+            ta.setAttribute("readonly", "")
+            ta.style.position = "fixed"
+            ta.style.left = "-9999px"
+            ta.style.opacity = "0"
+            document.body.appendChild(ta)
+            ta.select()
+            document.execCommand("copy")
+            document.body.removeChild(ta)
+          }
+        } catch {
+          /* clipboard unavailable */
+        }
+      }
       setJustSubmitted(true)
       setOpen(true)
       if (d?.thankYouType === "google") {
@@ -284,7 +304,7 @@ export function PublicInvoiceFeedbackSection({
                       </Button>
                       <p className="text-xs text-slate-500">
                         {submittedHadText
-                          ? "Your comment will be copied to the clipboard before Google opens—you can paste it into your review."
+                          ? "Your comment was copied to the clipboard. Paste it into your Google review."
                           : "Opens Google Reviews on this tab."}
                       </p>
                     </div>

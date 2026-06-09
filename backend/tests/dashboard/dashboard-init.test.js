@@ -66,10 +66,12 @@ describe('buildDashboardInitPayload', () => {
         aggregate: jest.fn().mockResolvedValue([{ _id: null, total: 1200 }]),
       },
       Sale: {
+        countDocuments: jest.fn().mockResolvedValue(8),
         aggregate: jest
           .fn()
           .mockResolvedValueOnce([{ _id: null, total: 500 }])
-          .mockResolvedValueOnce([{ _id: 4, revenue: 300 }]),
+          .mockResolvedValueOnce([{ _id: 4, revenue: 300 }])
+          .mockResolvedValue([]),
       },
       MembershipSubscription: {
         countDocuments: jest.fn().mockResolvedValue(2),

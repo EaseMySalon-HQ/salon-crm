@@ -467,6 +467,7 @@ let adminSettingsFallback = {
           welcomeMessage: "",
           businessAccountCreated: "",
           receipt: "",
+          receiptWithFeedback: "",
           receiptCancellation: "",
           appointmentScheduling: "",
           appointmentConfirmation: "",
@@ -713,21 +714,30 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
           const originalConfig = whatsappService.config;
           const originalEnabled = whatsappService.enabled;
           
+          const requestedTemplateType = templateType || 'default';
+          const mergedTemplates = {
+            ...(originalConfig?.templates || {}),
+            ...(testSettings.templates || {})
+          };
+          const mergedTemplateVariables = {
+            ...(originalConfig?.templateVariables || {}),
+            ...(testSettings.templateVariables || {})
+          };
+
           // Temporarily set test config
           whatsappService.config = {
             ...(originalConfig || {}),
             ...testSettings,
             provider: 'msg91',
-            // Ensure templates object exists
-            templates: {
-              ...(originalConfig?.templates || {}),
-              ...(testSettings.templates || {})
-            }
+            templates: mergedTemplates,
+            templateVariables: mergedTemplateVariables,
           };
-          // Check if at least one template is configured or legacy template ID exists
-          const hasTemplate = testSettings.templates?.[templateType || 'default'] || 
-                             testSettings.templates?.default || 
-                             testSettings.msg91TemplateId;
+
+          const templateIdForType = mergedTemplates[requestedTemplateType];
+          const hasTemplate =
+            (templateIdForType && String(templateIdForType).trim()) ||
+            (mergedTemplates.default && String(mergedTemplates.default).trim()) ||
+            (testSettings.msg91TemplateId && String(testSettings.msg91TemplateId).trim());
           whatsappService.enabled = testSettings.enabled !== false && testSettings.msg91ApiKey && hasTemplate;
           
           try {

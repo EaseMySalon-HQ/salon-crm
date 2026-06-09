@@ -11,9 +11,12 @@ import { Receipt, Settings, Lock } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { SettingsAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { useFeature } from "@/hooks/use-entitlements"
+import { ReceiptTemplateSettings } from "@/components/settings/receipt-template-settings"
 
 export function POSSettings() {
   const { hasPermission } = useAuth()
+  const { hasAccess: canCustomReceipts } = useFeature("custom_receipt_templates")
   const canEdit = hasPermission("pos_settings", "edit")
   const canManage = hasPermission("pos_settings", "manage")
   const { toast } = useToast()
@@ -276,6 +279,8 @@ export function POSSettings() {
           </div>
         </div>
       </div>
+
+      {canCustomReceipts && <ReceiptTemplateSettings />}
     </div>
   )
 } 

@@ -67,7 +67,7 @@ export function AccountSuspended({
             </CardTitle>
             <CardDescription className="text-amber-900/90 text-base">
               {message ||
-                "Your subscription billing needs attention. The business owner or billing contact should reach out to restore access."}
+                "Subscription billing needs attention — the business owner or billing contact should renew the plan to restore access."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">

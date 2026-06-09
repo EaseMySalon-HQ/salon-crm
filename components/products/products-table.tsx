@@ -16,10 +16,12 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Plus, Search, MoreHorizontal, Edit, Trash2, Package, Download, FileText, FileSpreadsheet, ChevronDown, Filter, Minus, Upload } from "lucide-react"
+import { Plus, Search, MoreHorizontal, Edit, Trash2, Package, Download, FileText, FileSpreadsheet, ChevronDown, Filter, Minus, Upload, ArrowRightLeft } from "lucide-react"
 import { ProductsAPI } from "@/lib/api"
 import { ProductForm } from "@/components/products/product-form"
 import { ProductOutForm } from "@/components/products/product-out-form"
+import { TransferRequestForm, type TransferFormPrefill } from "@/components/products/transfer-request-form"
+import { useTransferEligibility } from "@/hooks/use-transfer-eligibility"
 import { InventoryLogs } from "@/components/products/inventory-logs"
 import { ProductImportModal } from "@/components/products/product-import-modal"
 import { useAuth } from "@/lib/auth-context"
@@ -59,9 +61,15 @@ interface ProductsTableProps {
   productTypeFilter?: string
   onProductTypeFilterChange?: (filter: string) => void
   lowStockFilter?: boolean
+  transfersEnabled?: boolean
 }
 
-export function ProductsTable({ productTypeFilter: externalFilter, onProductTypeFilterChange, lowStockFilter = false }: ProductsTableProps = {}) {
+export function ProductsTable({
+  productTypeFilter: externalFilter,
+  onProductTypeFilterChange,
+  lowStockFilter = false,
+  transfersEnabled = false,
+}: ProductsTableProps = {}) {
   const { formatAmount } = useCurrency()
   const { toast } = useToast()
   const { hasAccess: canExport } = useFeature("data_export")
@@ -81,6 +89,9 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isProductOutDialogOpen, setIsProductOutDialogOpen] = useState(false)
+  const [isTransferFormOpen, setIsTransferFormOpen] = useState(false)
+  const [transferPrefill, setTransferPrefill] = useState<TransferFormPrefill | undefined>()
+  const { data: transferEligibility } = useTransferEligibility()
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false)
   const [selectedProduct, setSelectedProduct] = useState<any>(null)
   const [products, setProducts] = useState<any[]>([])
@@ -294,7 +305,7 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
         </div>
         
         <div className="flex items-center gap-3">
-          {canExport ? (
+          {canExport && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -319,31 +330,9 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          ) : (
-            <Button
-              variant="outline"
-              className="h-10 px-4 bg-gray-100 cursor-not-allowed text-gray-500 border-gray-200"
-              disabled
-              title="Data export requires Professional or Enterprise plan"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Export (Upgrade Required)
-            </Button>
           )}
           
-          {canAccessInventoryLogs ? (
-            <InventoryLogs />
-          ) : (
-            <Button
-              variant="outline"
-              className="h-10 px-4 bg-gray-100 cursor-not-allowed text-gray-500 border-gray-200"
-              disabled
-              title="Advanced inventory management requires Professional or Enterprise plan"
-            >
-              <Package className="h-4 w-4 mr-2" />
-              Inventory Logs (Upgrade Required)
-            </Button>
-          )}
+          {canAccessInventoryLogs && <InventoryLogs />}
           
           {canCreateProduct && (
             <>
@@ -370,31 +359,24 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                 </DialogContent>
               </Dialog>
 
-              <Dialog open={isProductOutDialogOpen} onOpenChange={setIsProductOutDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="outline" className="h-10 px-4 border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300">
-                    <Minus className="mr-2 h-4 w-4" />
-                    Product Out
-                  </Button>
-                </DialogTrigger>
-                <DialogContent
-                  className="max-w-md"
-                  onCloseAutoFocus={(e) => e.preventDefault()}
-                >
-                  <DialogHeader>
-                    <DialogTitle>Product Out - Deduct Stock</DialogTitle>
-                  </DialogHeader>
-                  <ProductOutForm 
-                    onClose={() => setIsProductOutDialogOpen(false)} 
-                    onTransactionCreated={() => {
-                      fetchProducts()
-                      // Refresh inventory logs if the component is mounted
-                      window.dispatchEvent(new CustomEvent('inventoryTransactionCreated'))
-                    }}
-                  />
-                </DialogContent>
-              </Dialog>
-              
+              <Button
+                variant="outline"
+                className="h-10 px-4 border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300"
+                onClick={() => setIsProductOutDialogOpen(true)}
+              >
+                <Minus className="mr-2 h-4 w-4" />
+                Product Out
+              </Button>
+              {isProductOutDialogOpen && (
+                <ProductOutForm
+                  onClose={() => setIsProductOutDialogOpen(false)}
+                  onTransactionCreated={() => {
+                    fetchProducts()
+                    window.dispatchEvent(new CustomEvent("inventoryTransactionCreated"))
+                  }}
+                />
+              )}
+
               <Button 
                 onClick={() => setIsImportDialogOpen(true)}
                 variant="outline"
@@ -404,6 +386,20 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                 Import Products
               </Button>
             </>
+          )}
+
+          {transfersEnabled && canEditProduct && (
+            <Button
+              variant="outline"
+              className="h-10 border-indigo-200 px-4 text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50"
+              onClick={() => {
+                setTransferPrefill(undefined)
+                setIsTransferFormOpen(true)
+              }}
+            >
+              <ArrowRightLeft className="mr-2 h-4 w-4" />
+              Transfer Request
+            </Button>
           )}
         </div>
 
@@ -588,6 +584,22 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
                                   Edit
                                 </DropdownMenuItem>
                               )}
+                              {transfersEnabled &&
+                                canEditProduct &&
+                                product.stock !== undefined &&
+                                product.stock <= (product.minimumStock ?? product.minStock ?? 10) && (
+                                  <DropdownMenuItem
+                                    className="cursor-pointer"
+                                    onClick={() => {
+                                      const id = String(product._id || product.id)
+                                      setTransferPrefill({ productId: id, direction: "request_in" })
+                                      setIsTransferFormOpen(true)
+                                    }}
+                                  >
+                                    <ArrowRightLeft className="mr-2 h-4 w-4" />
+                                    Request from branch…
+                                  </DropdownMenuItem>
+                                )}
                               {canDeleteProduct && (
                                 <DropdownMenuItem 
                                   className="text-red-600 cursor-pointer hover:bg-red-50 hover:text-red-700 transition-colors duration-200"
@@ -609,6 +621,19 @@ export function ProductsTable({ productTypeFilter: externalFilter, onProductType
           </Table>
         </div>
       </div>
+
+      {transfersEnabled && transferEligibility?.enabled && (
+        <TransferRequestForm
+          open={isTransferFormOpen}
+          onClose={() => {
+            setIsTransferFormOpen(false)
+            setTransferPrefill(undefined)
+          }}
+          branches={transferEligibility.branches}
+          currentBranchId={transferEligibility.currentBranchId}
+          prefill={transferPrefill}
+        />
+      )}
 
       {/* Product Import Modal */}
       <ProductImportModal

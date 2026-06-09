@@ -6,7 +6,7 @@ import axios from "axios"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Star } from "lucide-react"
+import { Loader2, Sparkles, Star } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
@@ -34,6 +34,7 @@ export default function PublicFeedbackPage() {
   const [reviewText, setReviewText] = useState("")
   const [submittedReviewSnapshot, setSubmittedReviewSnapshot] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [generatingSuggestion, setGeneratingSuggestion] = useState(false)
   const [done, setDone] = useState<null | {
     kind: "google" | "internal"
     googleReviewUrl?: string | null
@@ -42,30 +43,59 @@ export default function PublicFeedbackPage() {
 
   const sourceParam = useMemo(() => searchParams.get("s") || undefined, [searchParams])
 
-  async function copySubmittedReviewOpenGoogle(url: string) {
-    const t = submittedReviewSnapshot.trim()
-    if (t.length > 0) {
-      try {
-        if (typeof navigator.clipboard?.writeText === "function") {
-          await navigator.clipboard.writeText(t)
-        } else {
-          const ta = document.createElement("textarea")
-          ta.value = t
-          ta.setAttribute("readonly", "")
-          ta.style.position = "fixed"
-          ta.style.left = "-9999px"
-          ta.style.opacity = "0"
-          document.body.appendChild(ta)
-          ta.select()
-          document.execCommand("copy")
-          document.body.removeChild(ta)
-        }
-      } catch {
-        /* continue to Google */
+  async function copyTextToClipboard(text: string) {
+    const t = text.trim()
+    if (!t) return
+    try {
+      if (typeof navigator.clipboard?.writeText === "function") {
+        await navigator.clipboard.writeText(t)
+      } else {
+        const ta = document.createElement("textarea")
+        ta.value = t
+        ta.setAttribute("readonly", "")
+        ta.style.position = "fixed"
+        ta.style.left = "-9999px"
+        ta.style.opacity = "0"
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand("copy")
+        document.body.removeChild(ta)
       }
+    } catch {
+      /* clipboard unavailable */
     }
+  }
 
+  async function copySubmittedReviewOpenGoogle(url: string) {
+    await copyTextToClipboard(submittedReviewSnapshot)
     window.location.assign(url)
+  }
+
+  const generateWithAi = async () => {
+    if (!businessId || !token || rating !== 5 || generatingSuggestion) return
+    setGeneratingSuggestion(true)
+    setError(null)
+    try {
+      const res = await axios.post(
+        `${API_BASE}/public/feedback/${businessId}/${token}/suggest-feedback`,
+        { rating },
+        { headers: { "Content-Type": "application/json" }, timeout: 20000 }
+      )
+      if (!res.data?.success) {
+        setError(res.data?.error || "Could not generate a suggestion")
+        return
+      }
+      const text = (res.data.data as { text?: string } | undefined)?.text
+      if (text?.trim()) {
+        setReviewText(text.trim())
+      } else {
+        setError("No suggestion returned. Try again.")
+      }
+    } catch (e: any) {
+      setError(e?.response?.data?.error || "Could not generate a suggestion")
+    } finally {
+      setGeneratingSuggestion(false)
+    }
   }
 
   useEffect(() => {
@@ -130,6 +160,7 @@ export default function PublicFeedbackPage() {
       const payload = res.data.data
       const snap = reviewText.trim()
       setSubmittedReviewSnapshot(snap)
+      await copyTextToClipboard(snap)
       if (payload.thankYouType === "google") {
         setDone({
           kind: "google",
@@ -192,7 +223,7 @@ export default function PublicFeedbackPage() {
                     </Button>
                     <p className="text-xs text-slate-500 leading-relaxed">
                       {submittedReviewSnapshot.trim()
-                        ? "Your comment will be copied to the clipboard before Google opens—you can paste it into your review."
+                        ? "Your comment was copied to the clipboard. Paste it into your Google review."
                         : "Opens Google Reviews on this tab."}
                     </p>
                   </>
@@ -232,7 +263,7 @@ export default function PublicFeedbackPage() {
         {ctx?.items?.length ? (
           <Card className="border-slate-200/80 shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-slate-800">Your visit</CardTitle>
+              <CardTitle className="text-sm font-medium text-slate-800">Your Services</CardTitle>
             </CardHeader>
             <CardContent>
               <ul className="space-y-2 text-sm text-slate-600">
@@ -279,7 +310,29 @@ export default function PublicFeedbackPage() {
                 ))}
               </div>
               <div className="space-y-2">
-                <label className="text-xs font-medium text-slate-600">Comment (optional)</label>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-medium text-slate-600">Comment (optional)</label>
+                  {rating === 5 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 shrink-0 gap-1 px-2 text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700"
+                      disabled={generatingSuggestion}
+                      onClick={generateWithAi}
+                      title="Draft a Maps-style thank-you comment"
+                    >
+                      {generatingSuggestion ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" aria-hidden />
+                      )}
+                      Generate with AI
+                    </Button>
+                  ) : (
+                    <span className="h-8 shrink-0" aria-hidden />
+                  )}
+                </div>
                 <Textarea
                   value={reviewText}
                   onChange={(e) => setReviewText(e.target.value)}

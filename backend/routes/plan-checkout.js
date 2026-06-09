@@ -37,18 +37,10 @@ const {
   buildPlanInvoicePDFForTransaction,
 } = require('../lib/send-plan-invoice');
 const { getPlanConfig } = require('../config/plans');
+const { normalizePlanId, tierOf, isValidPlanId } = require('../lib/plan-id');
+const entitlementsCache = require('../lib/entitlements-cache');
 
 const GST_RATE = 0.18;
-
-const PLAN_TIER_ORDER = {
-  starter: 1,
-  professional: 2,
-  enterprise: 3,
-};
-
-function tierOf(planId) {
-  return PLAN_TIER_ORDER[planId] || 0;
-}
 
 async function getMainModels() {
   const mainConnection = await databaseManager.getMainConnection();
@@ -88,13 +80,25 @@ function getPlanPriceRupees(planId, billingPeriod) {
   if (!cfg) return null;
   const raw =
     billingPeriod === 'yearly' ? cfg.yearlyPrice : cfg.monthlyPrice;
-  if (!Number.isFinite(raw) || raw <= 0) return null;
+  if (raw === null || raw === undefined) return null;
+  if (!Number.isFinite(raw)) return null;
   return Number(raw);
 }
 
 function computeBreakdown(planId, billingPeriod) {
   const price = getPlanPriceRupees(planId, billingPeriod);
   if (price === null) return null;
+  if (price === 0) {
+    return {
+      basePaise: 0,
+      gstPaise: 0,
+      totalPaise: 0,
+      baseRupees: 0,
+      gstRupees: 0,
+      totalRupees: 0,
+      gstRate: GST_RATE,
+    };
+  }
   const basePaise = Math.round(price * 100);
   const gstPaise = Math.round(basePaise * GST_RATE);
   const totalPaise = basePaise + gstPaise;
@@ -147,8 +151,9 @@ router.post('/checkout/order', authenticateToken, setupMainDatabase, async (req,
       return res.status(400).json({ success: false, error: 'Business ID not found' });
     }
 
-    const { planId, billingPeriod } = req.body || {};
-    if (!planId || !['starter', 'professional', 'enterprise'].includes(planId)) {
+    const { planId: rawPlanId, billingPeriod } = req.body || {};
+    const planId = normalizePlanId(rawPlanId);
+    if (!rawPlanId || !isValidPlanId(rawPlanId)) {
       return res.status(400).json({ success: false, error: 'Invalid planId' });
     }
     if (!['monthly', 'yearly'].includes(billingPeriod)) {
@@ -156,7 +161,7 @@ router.post('/checkout/order', authenticateToken, setupMainDatabase, async (req,
     }
 
     const { Business, AdminSettings } = await getMainModels();
-    const business = await Business.findById(businessId).lean();
+    const business = await Business.findById(businessId);
     if (!business) {
       return res.status(404).json({ success: false, error: 'Business not found' });
     }
@@ -177,6 +182,38 @@ router.post('/checkout/order', authenticateToken, setupMainDatabase, async (req,
         success: false,
         error:
           'This plan does not have a self-service price. Please contact sales.',
+      });
+    }
+
+    if (breakdown.totalPaise === 0) {
+      if (!business.plan) business.plan = {};
+      const baseForExtension =
+        business.plan.renewalDate && new Date(business.plan.renewalDate) > new Date()
+          ? business.plan.renewalDate
+          : null;
+      business.plan.planId = planId;
+      business.plan.billingPeriod = billingPeriod;
+      business.plan.renewalDate = advanceDate(baseForExtension, billingPeriod);
+      business.plan.isTrial = false;
+      business.plan.trialEndsAt = null;
+      business.plan.pendingPlanId = null;
+      business.plan.pendingBillingPeriod = null;
+      business.plan.pendingEffectiveAt = null;
+      await business.save();
+
+      entitlementsCache.invalidate(business._id);
+
+      return res.json({
+        success: true,
+        data: {
+          freeActivation: true,
+          planId,
+          billingPeriod,
+          baseAmountPaise: 0,
+          gstPaise: 0,
+          totalAmountPaise: 0,
+          gstRate: GST_RATE,
+        },
       });
     }
 
@@ -229,12 +266,14 @@ router.post('/checkout/verify', authenticateToken, setupMainDatabase, async (req
       orderId,
       paymentId,
       signature,
-      planId,
+      planId: rawPlanId,
       billingPeriod,
     } = req.body || {};
 
+    const planId = normalizePlanId(rawPlanId);
+
     if (!provider) return res.status(400).json({ success: false, error: 'Missing provider' });
-    if (!['starter', 'professional', 'enterprise'].includes(planId)) {
+    if (!isValidPlanId(rawPlanId)) {
       return res.status(400).json({ success: false, error: 'Invalid planId' });
     }
     if (!['monthly', 'yearly'].includes(billingPeriod)) {
@@ -357,6 +396,8 @@ router.post('/checkout/verify', authenticateToken, setupMainDatabase, async (req
 
     await business.save();
 
+    entitlementsCache.invalidate(businessId);
+
     const now = new Date();
     const planTxn = await PlanInvoiceTransaction.create({
       businessId,
@@ -478,8 +519,9 @@ router.post(
       if (!businessId) {
         return res.status(400).json({ success: false, error: 'Business ID not found' });
       }
-      const { planId, billingPeriod } = req.body || {};
-      if (!['starter', 'professional', 'enterprise'].includes(planId)) {
+      const { planId: rawPlanId, billingPeriod } = req.body || {};
+      const planId = normalizePlanId(rawPlanId);
+      if (!isValidPlanId(rawPlanId)) {
         return res.status(400).json({ success: false, error: 'Invalid planId' });
       }
       if (!['monthly', 'yearly'].includes(billingPeriod)) {

@@ -504,7 +504,7 @@ export function ExpenseReport() {
               </Select>
             </div>
             <div className="flex items-center gap-3">
-              {canExport ? (
+              {canExport && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -528,15 +528,6 @@ export function ExpenseReport() {
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-              ) : (
-                <Button
-                  className="bg-gray-400 cursor-not-allowed text-white px-6 py-2.5 shadow-md rounded-lg font-medium"
-                  disabled
-                  title="Data export requires Professional or Enterprise plan"
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Export (Upgrade Required)
-                </Button>
               )}
             </div>
           </div>

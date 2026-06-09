@@ -51,7 +51,29 @@ const businessSchema = new mongoose.Schema({
       slotDuration: { type: Number, default: 30 }, // minutes
       advanceBookingDays: { type: Number, default: 30 },
       bufferTime: { type: Number, default: 15 }, // minutes
-      allowOnlineBooking: { type: Boolean, default: false }
+      allowOnlineBooking: { type: Boolean, default: false },
+      allowCrossBranchBooking: { type: Boolean, default: false },
+      cancellationWindowHours: { type: Number, default: 24, min: 0 },
+    },
+
+    /** Monthly revenue target for branch-management overview (INR). */
+    revenueTarget: {
+      monthly: { type: Number, default: 0, min: 0 },
+    },
+
+    /** Org-wide multi-location preferences (kept in sync on all branches for the owner). */
+    multiLocation: {
+      /** When true, client profiles are visible and searchable at every branch. */
+      shareClientsAcrossBranches: { type: Boolean, default: false },
+    },
+
+    /**
+     * HQ service overrides keyed by merge key (SKU or normalized name).
+     * Tenant Service docs are unchanged until booking APIs read overrides.
+     */
+    serviceOverrides: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
     },
     
     /** When true, platform admin has disabled all tenant operational email for this business */
@@ -126,7 +148,9 @@ const businessSchema = new mongoose.Schema({
       receiptNotifications: {
         enabled: { type: Boolean, default: true },
         autoSendToClients: { type: Boolean, default: true },
-        highValueThreshold: { type: Number, default: 0 }
+        highValueThreshold: { type: Number, default: 0 },
+        /** Growth/Pro only: include Share Feedback button on WhatsApp receipts */
+        includeFeedbackLink: { type: Boolean, default: false },
       },
       appointmentNotifications: {
         enabled: { type: Boolean, default: false },
@@ -173,6 +197,8 @@ const businessSchema = new mongoose.Schema({
     enum: ['active', 'inactive', 'suspended', 'deleted'], 
     default: 'active' 
   },
+  /** When status became suspended (billing overdue). */
+  suspendedAt: { type: Date, default: null },
   isOnboarded: { type: Boolean, default: false },
   onboardingStep: { type: Number, default: 0 },
   deletedAt: { type: Date },
@@ -185,8 +211,8 @@ const businessSchema = new mongoose.Schema({
   plan: {
     planId: { 
       type: String, 
-      enum: ['starter', 'professional', 'enterprise'], 
-      default: 'starter' 
+      enum: ['starter', 'growth', 'pro'],
+      default: 'starter'
     },
     billingPeriod: { 
       type: String, 
@@ -204,7 +230,7 @@ const businessSchema = new mongoose.Schema({
     // while a downgrade is queued — in that case we clear the queue).
     pendingPlanId: {
       type: String,
-      enum: ['starter', 'professional', 'enterprise', null],
+      enum: ['starter', 'growth', 'pro', null],
       default: null,
     },
     pendingBillingPeriod: {
@@ -225,7 +251,24 @@ const businessSchema = new mongoose.Schema({
     // (see backend/lib/wallet-deduction.js). Fields are retained only to
     // avoid breaking older documents and any legacy read paths.
     addons: {
+      /**
+       * Legacy MSG91 WhatsApp channel. When ON, message sites route through
+       * the existing MSG91 pipeline. Kept untouched for backwards compat.
+       */
       whatsapp: {
+        enabled: { type: Boolean, default: false },
+        quota: { type: Number, default: 0 },
+        used: { type: Number, default: 0 },
+        lastResetAt: { type: Date },
+      },
+      /**
+       * Native Meta Cloud API integration ("WABA"). When ON, the new
+       * WhatsApp module (templates, campaigns, inbox, webhook-driven status)
+       * takes over routing — `whatsapp-router.route()` returns provider:'meta'
+       * only when this flag is true AND the WABA is connected. When this is
+       * OFF, calls fall back to the legacy MSG91 path (if `whatsapp` is on).
+       */
+      waba: {
         enabled: { type: Boolean, default: false },
         quota: { type: Number, default: 0 },
         used: { type: Number, default: 0 },

@@ -82,12 +82,8 @@ async function getOrAllocatePlanInvoiceNumber(txDoc) {
 }
 
 function planLabel(planId) {
-  const map = {
-    starter: 'Starter',
-    professional: 'Professional',
-    enterprise: 'Enterprise',
-  };
-  return map[planId] || (planId ? String(planId) : 'Subscription');
+  const { planDisplayName } = require('./plan-id');
+  return planDisplayName(planId);
 }
 
 function kindLabel(kind) {

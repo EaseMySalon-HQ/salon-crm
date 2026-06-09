@@ -27,7 +27,8 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
     receiptNotifications: {
       enabled: true,
       autoSendToClients: true,
-      highValueThreshold: 0
+      highValueThreshold: 0,
+      includeFeedbackLink: false,
     },
     appointmentNotifications: {
       enabled: false,

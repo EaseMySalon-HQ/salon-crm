@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useAuth } from "@/lib/auth-context"
 
 interface PlanInfo {
@@ -28,6 +28,7 @@ interface PlanInfo {
   addons: {
     whatsapp?: { enabled: boolean; quota: number; used: number }
     sms?: { enabled: boolean; quota: number; used: number }
+    waba?: { enabled: boolean; quota: number; used: number }
   }
   monthlyPrice?: number | null
   yearlyPrice?: number | null
@@ -51,47 +52,56 @@ interface Entitlements {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
+/**
+ * Stable React Query key for the current business's entitlements. All
+ * `useEntitlements`/`useFeature`/`FeatureGate` consumers share this key so the
+ * plan is fetched ONCE and cached, instead of every gated component issuing its
+ * own `/api/business/plan` request.
+ */
+export const ENTITLEMENTS_QUERY_KEY = (branchId?: string | null) => [
+  'entitlements',
+  branchId || 'none',
+] as const
+
+async function fetchPlanInfo(): Promise<PlanInfo> {
+  const response = await fetch(`${API_URL}/business/plan`, {
+    credentials: 'include',
+  })
+  const data = await response.json().catch(() => null)
+  if (!response.ok || !data?.success) {
+    throw new Error(data?.error || 'Failed to fetch plan info')
+  }
+  return data.data.plan as PlanInfo
+}
+
+/**
+ * Invalidate the shared entitlements cache. Call after any action that can
+ * change the current business's plan/features (checkout, downgrade, etc.) so
+ * every gated component re-resolves access.
+ */
+export function useInvalidateEntitlements() {
+  const queryClient = useQueryClient()
+  return () => queryClient.invalidateQueries({ queryKey: ['entitlements'] })
+}
+
 export function useEntitlements(): Entitlements {
   const { user } = useAuth()
-  const [planInfo, setPlanInfo] = useState<PlanInfo | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const branchId = user?.branchId || null
 
-  useEffect(() => {
-    if (user?.branchId) {
-      fetchPlanInfo()
-    } else {
-      setIsLoading(false)
-    }
-  }, [user?.branchId])
-
-  const fetchPlanInfo = async () => {
-    try {
-      setIsLoading(true)
-      setError(null)
-
-      const response = await fetch(`${API_URL}/business/plan`, {
-        credentials: 'include',
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          setPlanInfo(data.data.plan)
-        } else {
-          setError(data.error || 'Failed to fetch plan info')
-        }
-      } else {
-        const errorData = await response.json()
-        setError(errorData.error || 'Failed to fetch plan info')
-      }
-    } catch (err) {
-      console.error('Error fetching plan info:', err)
-      setError('Failed to fetch plan information')
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  const {
+    data: planInfo = null,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ENTITLEMENTS_QUERY_KEY(branchId),
+    queryFn: fetchPlanInfo,
+    enabled: Boolean(branchId),
+    // Entitlements change rarely; align with auth/me staleness and let explicit
+    // invalidation drive freshness after plan changes.
+    staleTime: 5 * 60_000,
+    gcTime: 10 * 60_000,
+  })
 
   const hasFeature = (featureId: string): boolean => {
     if (!planInfo) return false
@@ -139,8 +149,10 @@ export function useEntitlements(): Entitlements {
     canUseAddon,
     getAddonStatus,
     isLoading,
-    error,
-    refetch: fetchPlanInfo,
+    error: error ? (error instanceof Error ? error.message : String(error)) : null,
+    refetch: async () => {
+      await refetch()
+    },
   }
 }
 

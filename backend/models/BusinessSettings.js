@@ -45,6 +45,21 @@ const businessSettingsSchema = new mongoose.Schema({
   
   // Branding
   logo: { type: String, default: "" },
+
+  /**
+   * Custom receipt template (gated by the `custom_receipt_templates` plan
+   * feature). Controls receipt header/footer copy and which optional sections
+   * appear. Plans without the feature fall back to the default layout.
+   */
+  receiptTemplate: {
+    headerText: { type: String, default: "" },
+    footerText: { type: String, default: "" },
+    showLogo: { type: Boolean, default: true },
+    showGstNumber: { type: Boolean, default: true },
+    showStaffName: { type: Boolean, default: true },
+    showClientInfo: { type: Boolean, default: true },
+    accentColor: { type: String, default: "" },
+  },
   
   // Tax Information
   gstNumber: { type: String, default: "" },

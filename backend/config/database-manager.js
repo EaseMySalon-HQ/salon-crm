@@ -5,6 +5,33 @@ const { registerSlowQueryMonitoring } = require('../utils/mongoose-slow-query');
 class DatabaseManager {
   constructor() {
     this.connections = new Map(); // Store active connections
+    this.inFlight = new Map(); // Dedupe concurrent createConnection for same dbName
+    this.connectionMeta = new Map(); // dbName -> lastUsedAt ms
+    this.mainDbName = 'ease_my_salon_main';
+    this._defaultMainConnection = null;
+    this.maxCachedTenants = parseInt(process.env.MONGO_MAX_CACHED_TENANTS, 10) || 50;
+    this.tenantIdleMs = parseInt(process.env.MONGO_TENANT_IDLE_MS, 10) || 30 * 60 * 1000;
+    const sweepMs = parseInt(process.env.MONGO_CONNECTION_SWEEP_MS, 10) || 10 * 60 * 1000;
+    this._sweepTimer = setInterval(() => {
+      void this._evictStaleConnections();
+    }, sweepMs);
+    if (typeof this._sweepTimer.unref === 'function') this._sweepTimer.unref();
+    this.tenantPoolOptions = {
+      maxPoolSize: parseInt(process.env.MONGO_TENANT_POOL_SIZE, 10) || 10,
+      minPoolSize: parseInt(process.env.MONGO_TENANT_MIN_POOL, 10) || 1,
+      socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 45000,
+      serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_MS, 10) || 10000,
+      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 60000,
+      monitorCommands: true,
+    };
+    this.mainPoolOptions = {
+      maxPoolSize: parseInt(process.env.MONGO_MAIN_POOL_SIZE, 10) || 50,
+      minPoolSize: parseInt(process.env.MONGO_MAIN_MIN_POOL, 10) || 5,
+      socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 45000,
+      serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_MS, 10) || 10000,
+      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 60000,
+      monitorCommands: true,
+    };
 
     const fullUri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
     
@@ -64,6 +91,69 @@ class DatabaseManager {
     return `ease_my_salon_${businessCode}`;
   }
 
+  _touchConnection(dbName) {
+    this.connectionMeta.set(dbName, Date.now());
+  }
+
+  /**
+   * Register mongoose default connection (from connectDB) as the main pool.
+   * Avoids a second createConnection() to ease_my_salon_main.
+   */
+  adoptDefaultMainConnection(conn) {
+    if (!conn || conn.readyState !== 1) return;
+    const dbName = conn.db?.databaseName;
+    if (dbName !== this.mainDbName) return;
+    this.connections.set(this.mainDbName, conn);
+    this._touchConnection(this.mainDbName);
+    this._defaultMainConnection = conn;
+    logger.debug('♻️  Adopted mongoose default connection as main DB pool');
+  }
+
+  getMainPoolOptions() {
+    return { ...this.mainPoolOptions };
+  }
+
+  async _closeOne(dbName) {
+    const conn = this.connections.get(dbName);
+    if (conn && conn !== this._defaultMainConnection) {
+      try {
+        await conn.close();
+      } catch (_) {}
+    }
+    this.connections.delete(dbName);
+    this.connectionMeta.delete(dbName);
+  }
+
+  async _evictStaleConnections() {
+    const now = Date.now();
+    for (const [dbName, conn] of this.connections.entries()) {
+      if (conn.readyState !== 1) {
+        await this._closeOne(dbName);
+      }
+    }
+    for (const dbName of [...this.connections.keys()]) {
+      if (dbName === this.mainDbName) continue;
+      const last = this.connectionMeta.get(dbName) || 0;
+      if (now - last > this.tenantIdleMs) {
+        await this._closeOne(dbName);
+      }
+    }
+    while (this.connections.size > this.maxCachedTenants) {
+      let oldestName = null;
+      let oldestTime = Infinity;
+      for (const dbName of this.connections.keys()) {
+        if (dbName === this.mainDbName) continue;
+        const t = this.connectionMeta.get(dbName) || 0;
+        if (t < oldestTime) {
+          oldestTime = t;
+          oldestName = dbName;
+        }
+      }
+      if (!oldestName) break;
+      await this._closeOne(oldestName);
+    }
+  }
+
   /**
    * Get or create a database connection for a business
    * @param {string} businessIdOrCode - The business code (preferred) or ObjectId
@@ -106,71 +196,71 @@ class DatabaseManager {
     }
 
     const dbName = this.getDatabaseName(businessCode);
-    
-    // Return existing connection if available
-    if (this.connections.has(dbName)) {
+
+    const existing = this.connections.get(dbName);
+    if (existing && existing.readyState === 1) {
+      this._touchConnection(dbName);
       logger.debug(`   ♻️  Reusing existing connection: ${dbName}`);
       logger.debug(`================================================\n`);
-      return this.connections.get(dbName);
+      return existing;
+    }
+    if (existing) {
+      this.connections.delete(dbName);
     }
 
-    // Create new connection
-    logger.debug(`   🔗 Creating new database connection`);
-    logger.debug(`   Database Name: ${dbName}`);
+    if (this.inFlight.has(dbName)) {
+      return this.inFlight.get(dbName);
+    }
 
     const uri = this.baseUri.includes('?')
       ? this.baseUri.replace('?', `/${dbName}?`)
       : `${this.baseUri}/${dbName}`;
-    
+
+    const connectPromise = this._openConnection(dbName, uri, this.tenantPoolOptions);
+    this.inFlight.set(dbName, connectPromise);
+    try {
+      const connection = await connectPromise;
+      this.connections.set(dbName, connection);
+      this._touchConnection(dbName);
+      await this._evictStaleConnections();
+      logger.debug(`✅ Connected to business database: ${dbName}`);
+      logger.debug(`================================================\n`);
+      return connection;
+    } finally {
+      this.inFlight.delete(dbName);
+    }
+  }
+
+  async _openConnection(dbName, uri, poolOptions) {
+    logger.debug(`   🔗 Creating new database connection`);
+    logger.debug(`   Database Name: ${dbName}`);
     logger.debug(`   URI: ${uri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')}`);
 
     let connection;
     try {
-      connection = mongoose.createConnection(uri, {
-        serverSelectionTimeoutMS: 60000, // 60s for Railway cold start
-        monitorCommands: true,
-      });
-      // Properly wait for connection (not just 200ms - connection can take 30s+ on cold start)
+      connection = mongoose.createConnection(uri, poolOptions);
       await connection.asPromise();
       registerSlowQueryMonitoring(connection);
 
-      // Verify connection state
       if (connection.readyState !== 1) {
         throw new Error(`Connection not ready. State: ${connection.readyState}`);
       }
-      
-      // Verify the actual database name
+
       const actualDbName = connection.db.databaseName;
-      logger.debug(`   Actual DB Name: ${actualDbName}`);
-      
       if (actualDbName !== dbName) {
-        logger.error(`   ❌ DATABASE NAME MISMATCH!`);
-        logger.error(`   Expected: ${dbName}`);
-        logger.error(`   Got: ${actualDbName}`);
         await connection.close();
         throw new Error(`Database creation failed: expected ${dbName} but got ${actualDbName}`);
       }
-      
-      logger.debug(`   ✅ Database name verified`);
+      return connection;
     } catch (error) {
       logger.error(`   ❌ Connection failed:`, error.message);
       if (connection) {
         try {
           await connection.close();
-        } catch (closeError) {
-          // Ignore close errors
-        }
+        } catch (_) {}
       }
       throw new Error(`Failed to connect to ${dbName}: ${error.message}`);
     }
-
-    // Store connection
-    this.connections.set(dbName, connection);
-    
-    logger.debug(`✅ Connected to business database: ${dbName}`);
-    logger.debug(`================================================\n`);
-    
-    return connection;
   }
 
   /**
@@ -178,64 +268,45 @@ class DatabaseManager {
    * @returns {Promise<mongoose.Connection>} - Main database connection
    */
   async getMainConnection() {
-    const mainDbName = 'ease_my_salon_main';
-    
-    // Return existing connection if available
-    if (this.connections.has(mainDbName)) {
+    const mainDbName = this.mainDbName;
+
+    if (mongoose.connection.readyState === 1) {
+      const defaultDb = mongoose.connection.db?.databaseName;
+      if (defaultDb === mainDbName) {
+        this.adoptDefaultMainConnection(mongoose.connection);
+        return mongoose.connection;
+      }
+    }
+
+    const existing = this.connections.get(mainDbName);
+    if (existing && existing.readyState === 1) {
+      this._touchConnection(mainDbName);
       logger.debug(`♻️  Reusing existing main database connection`);
-      return this.connections.get(mainDbName);
+      return existing;
+    }
+    if (existing) {
+      this.connections.delete(mainDbName);
+    }
+
+    if (this.inFlight.has(mainDbName)) {
+      return this.inFlight.get(mainDbName);
     }
 
     logger.debug(`\n🔗 Connecting to main database: ${mainDbName}`);
-
     const uri = this.baseUri.includes('?')
       ? this.baseUri.replace('?', `/${mainDbName}?`)
       : `${this.baseUri}/${mainDbName}`;
-    
-    logger.debug(`   URI: ${uri.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')}`);
-    
-    let connection;
+
+    const connectPromise = this._openConnection(mainDbName, uri, this.mainPoolOptions);
+    this.inFlight.set(mainDbName, connectPromise);
     try {
-      connection = mongoose.createConnection(uri, {
-        serverSelectionTimeoutMS: 60000, // 60s for Railway cold start
-        monitorCommands: true,
-      });
-      // Properly wait for connection (not just 200ms - Railway cold start can take 30s+)
-      await connection.asPromise();
-      registerSlowQueryMonitoring(connection);
-
-      // Verify connection state
-      if (connection.readyState !== 1) {
-        throw new Error(`Connection not ready. State: ${connection.readyState}`);
-      }
-      
-      // Verify the database name
-      const actualDbName = connection.db.databaseName;
-      logger.debug(`   Actual DB Name: ${actualDbName}`);
-      
-      if (actualDbName !== mainDbName) {
-        logger.error(`   ❌ MAIN DATABASE NAME MISMATCH!`);
-        logger.error(`   Expected: ${mainDbName}`);
-        logger.error(`   Got: ${actualDbName}`);
-        await connection.close();
-        throw new Error(`Main database connection failed: expected ${mainDbName} but got ${actualDbName}`);
-      }
-
+      const connection = await connectPromise;
       this.connections.set(mainDbName, connection);
-      logger.debug(`✅ Connected to main database: ${actualDbName}\n`);
-      
+      this._touchConnection(mainDbName);
+      logger.debug(`✅ Connected to main database: ${mainDbName}\n`);
       return connection;
-    } catch (error) {
-      logger.error(`   ❌ Main connection failed:`, error.message);
-      logger.error(`   Error stack:`, error.stack);
-      if (connection) {
-        try {
-          await connection.close();
-        } catch (closeError) {
-          // Ignore close errors
-        }
-      }
-      throw new Error(`Failed to connect to main database: ${error.message}`);
+    } finally {
+      this.inFlight.delete(mainDbName);
     }
   }
 
@@ -287,12 +358,16 @@ class DatabaseManager {
    * Close all connections
    */
   async closeAllConnections() {
+    if (this._sweepTimer) {
+      clearInterval(this._sweepTimer);
+      this._sweepTimer = null;
+    }
     logger.debug(`\n🔌 Closing all database connections...`);
-    for (const [dbName, connection] of this.connections) {
-      await connection.close();
+    for (const dbName of [...this.connections.keys()]) {
+      await this._closeOne(dbName);
       logger.debug(`   Closed: ${dbName}`);
     }
-    this.connections.clear();
+    this.inFlight.clear();
     logger.debug(`✅ All connections closed\n`);
   }
 

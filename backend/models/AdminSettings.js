@@ -118,7 +118,8 @@ const adminSettingsSchema = new mongoose.Schema({
       templates: {
         welcomeMessage: { type: String, default: '' }, // Welcome message
         businessAccountCreated: { type: String, default: '' }, // Business account created
-        receipt: { type: String, default: '' }, // Sending bills/receipts
+        receipt: { type: String, default: '' }, // Sending bills/receipts (View Bill only)
+        receiptWithFeedback: { type: String, default: '' }, // Receipt + Share Feedback buttons
         receiptCancellation: { type: String, default: '' }, // Bill cancellation
         appointmentScheduling: { type: String, default: '' }, // Appointment scheduling
         appointmentConfirmation: { type: String, default: '' }, // Appointment confirmation
@@ -324,6 +325,7 @@ adminSettingsSchema.statics.getSettings = async function() {
         welcomeMessage: '',
         businessAccountCreated: '',
         receipt: '',
+        receiptWithFeedback: '',
         receiptCancellation: '',
         appointmentScheduling: '',
         appointmentConfirmation: '',
@@ -395,6 +397,7 @@ adminSettingsSchema.statics.getSettings = async function() {
         welcomeMessage: '',
         businessAccountCreated: '',
         receipt: '',
+        receiptWithFeedback: '',
         receiptCancellation: '',
         appointmentScheduling: '',
         appointmentConfirmation: '',

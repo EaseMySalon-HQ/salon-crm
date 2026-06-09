@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     default: "EaseMySalon - India's #1 Salon Management Software",
     template: "%s | EaseMySalon"
   },
-  description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. India's leading salon POS, CRM, appointments, inventory & analytics platform. 14-day free trial, no credit card required.",
+  description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. India's leading salon POS, CRM, appointments, inventory & analytics platform. 7 Day Trial, no credit card required.",
   keywords: [
     "salon management software",
     "salon POS system",
@@ -102,7 +102,7 @@ export const metadata: Metadata = {
     url: '/',
     siteName: 'EaseMySalon',
     title: "EaseMySalon - India's #1 Salon Management Software",
-    description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics platform. 14-day free trial.",
+    description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics platform. 7 Day Trial.",
     images: [
       {
         url: '/images/dashboard.png',

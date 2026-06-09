@@ -50,14 +50,24 @@ const walletTransactionSchema = new mongoose.Schema({
   },
   messageCategory: {
     type: String,
-    enum: ['promotional', 'transactional', null],
+    // 'promotional'/'transactional' kept for legacy MSG91 rows; new
+    // Meta-priced rows use the per-message Meta categories.
+    enum: ['promotional', 'transactional', 'marketing', 'utility', 'authentication', 'service', null],
     default: null
   },
   provider: {
     type: String,
-    enum: ['razorpay', 'stripe', 'zoho', 'system'],
+    enum: ['razorpay', 'stripe', 'zoho', 'system', 'meta', 'msg91'],
     default: 'system',
     index: true
+  },
+  freeWindow: {
+    type: Boolean,
+    default: false
+  },
+  priceListVersion: {
+    type: String,
+    default: null
   },
   providerOrderId: {
     type: String,

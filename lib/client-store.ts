@@ -2,6 +2,17 @@
 import { clients as initialClients } from "@/lib/data"
 import { ClientsAPI } from "@/lib/api"
 
+export interface ClientWhatsAppConsent {
+  optedIn?: boolean
+  source?: "booking" | "checkout" | "manual" | "import" | "staff" | "inbound_message" | "system" | null
+  optedInAt?: string | null
+  optedOutAt?: string | null
+  optInReason?: string | null
+  optOutReason?: string | null
+  lastInboundAt?: string | null
+  lastOutboundAt?: string | null
+}
+
 export interface Client {
   id: string
   _id?: string
@@ -10,6 +21,12 @@ export interface Client {
   phone: string
   /** Server-managed anonymous checkout profile */
   isWalkIn?: boolean
+  /** Sibling-branch match — not yet imported at this branch until profile is opened. */
+  sharedPreview?: boolean
+  sourceBranchId?: string
+  promotionalWhatsappEnabled?: boolean
+  transactionalWhatsappEnabled?: boolean
+  transactionalSmsEnabled?: boolean
   lastVisit?: string
   status?: "active" | "inactive"
   totalVisits?: number
@@ -22,6 +39,7 @@ export interface Client {
   notes?: string
   gender?: "male" | "female" | "other"
   birthdate?: string
+  whatsappConsent?: ClientWhatsAppConsent
 }
 
 const CACHE_MAX = 30
@@ -184,13 +202,11 @@ class ClientStore {
 
   async updateClient(id: string, client: Client): Promise<boolean> {
     try {
-      // Try API first
       const apiPayload = { ...client, dob: (client as any).birthdate || (client as any).dob }
       const response = await ClientsAPI.update(id, apiPayload)
       if (response.success) {
         const index = this.clients.findIndex(c => c.id === id || c._id === id)
         if (index >= 0) {
-          // Normalize the response data to ensure both id and _id are set
           const clientId = response.data._id || response.data.id || id
           const normalizedClient = {
             ...response.data,
@@ -204,14 +220,31 @@ class ClientStore {
         return true
       }
       return false
-    } catch {
+    } catch (error: any) {
+      /**
+       * Only fall back to localStorage on a true network failure (no HTTP
+       * response). HTTP errors (validation 400, auth 401/403, conflict 409,
+       * server 5xx) MUST propagate so the caller can show the real reason
+       * — otherwise saves silently fail while the UI says "updated".
+       */
+      if (error?.response) {
+        const apiMessage =
+          error.response?.data?.error ||
+          error.response?.data?.message ||
+          (Array.isArray(error.response?.data?.details)
+            ? error.response.data.details.map((d: any) => d?.message || d).join('; ')
+            : null) ||
+          error.message ||
+          'Failed to update client'
+        const wrapped = new Error(apiMessage) as Error & { status?: number }
+        wrapped.status = error.response?.status
+        throw wrapped
+      }
+
       console.warn("API not available, using local storage fallback")
-      
-      // Fallback to local storage
       const index = this.clients.findIndex(c => c.id === id)
       if (index >= 0) {
         this.clients[index] = client
-        // Save to localStorage
         if (typeof window !== "undefined") {
           localStorage.setItem("salon-clients", JSON.stringify(this.clients))
         }
@@ -312,7 +345,13 @@ class ClientStore {
   private normalizeList(data: any[]): Client[] {
     return (data || []).map((c: any) => {
       const clientId = c._id || c.id
-      return { ...c, id: clientId, _id: clientId }
+      return {
+        ...c,
+        id: clientId || c.id,
+        _id: c.sharedPreview ? undefined : clientId,
+        sharedPreview: c.sharedPreview === true,
+        sourceBranchId: c.sourceBranchId,
+      }
     })
   }
 

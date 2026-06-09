@@ -1,14 +1,15 @@
 "use client"
 
+import { useEffect } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 
 import { StaffTable } from "@/components/staff/staff-table"
 import { StaffWorkingHoursContent } from "@/components/staff/staff-working-hours-content"
 import { CommissionProfileList } from "@/components/settings/commission-profile-list"
 import { StaffCommissionAssignments } from "@/components/settings/staff-commission-assignments"
-import { FeatureGate } from "@/components/ui/feature-gate"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Users, Clock, Award } from "lucide-react"
+import { useFeature } from "@/hooks/use-entitlements"
 
 const MAIN_TABS = ["staff-list", "working-hours", "commission"] as const
 type MainTab = (typeof MAIN_TABS)[number]
@@ -27,10 +28,12 @@ function isCommissionPanel(v: string | null): v is CommissionPanel {
 export function StaffDirectory() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { hasAccess: canIncentive, isLoading: entitlementsLoading } = useFeature("incentive_management")
   const tabParam = searchParams.get("tab")
   const panelParam = searchParams.get("panel")
 
-  const activeMainTab: MainTab = isMainTab(tabParam) ? tabParam : "staff-list"
+  const activeMainTab: MainTab =
+    isMainTab(tabParam) && (tabParam !== "commission" || canIncentive) ? tabParam : "staff-list"
   const commissionPanel: CommissionPanel =
     activeMainTab === "commission" && isCommissionPanel(panelParam) ? panelParam : "profiles"
 
@@ -38,6 +41,17 @@ export function StaffDirectory() {
     const q = params.toString()
     router.push(q ? `/staff?${q}` : "/staff")
   }
+
+  useEffect(() => {
+    if (entitlementsLoading || canIncentive) return
+    if (tabParam === "commission") {
+      const params = new URLSearchParams(searchParams.toString())
+      params.delete("tab")
+      params.delete("panel")
+      const q = params.toString()
+      router.replace(q ? `/staff?${q}` : "/staff")
+    }
+  }, [canIncentive, entitlementsLoading, tabParam, searchParams, router])
 
   const onMainTabChange = (value: string) => {
     if (!isMainTab(value)) return
@@ -96,10 +110,12 @@ export function StaffDirectory() {
           <Clock className="h-4 w-4" />
           Working Hours
         </TabsTrigger>
-        <TabsTrigger value="commission" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
-          <Award className="h-4 w-4" />
-          Commission Management
-        </TabsTrigger>
+        {canIncentive && (
+          <TabsTrigger value="commission" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+            <Award className="h-4 w-4" />
+            Incentive Management
+          </TabsTrigger>
+        )}
       </TabsList>
 
       {/* Content card: tab panels only */}
@@ -111,11 +127,8 @@ export function StaffDirectory() {
           <TabsContent value="working-hours" className="mt-0">
             <StaffWorkingHoursContent />
           </TabsContent>
-          <TabsContent value="commission" className="mt-0">
-            <FeatureGate
-              featureId="staff_commissions"
-              upgradeMessage="Staff commission tracking is available in Professional and Enterprise plans. Upgrade to configure commission profiles and track staff commissions."
-            >
+          {canIncentive && (
+            <TabsContent value="commission" className="mt-0">
               <Tabs
                 value={commissionPanel}
                 onValueChange={onCommissionPanelChange}
@@ -132,8 +145,8 @@ export function StaffDirectory() {
                   <StaffCommissionAssignments />
                 </TabsContent>
               </Tabs>
-            </FeatureGate>
-          </TabsContent>
+            </TabsContent>
+          )}
         </div>
       </div>
     </Tabs>

@@ -16,6 +16,90 @@ const {
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/** Group service qty + staff revenue in MongoDB (avoids shipping unwound line items to Node). */
+function monthServiceStaffFacetPipeline(branchId, startDate, endDate) {
+  return [
+    {
+      $match: {
+        branchId,
+        date: { $gte: startDate, $lte: endDate },
+        $nor: [{ status: /cancelled/i }],
+      },
+    },
+    { $unwind: '$items' },
+    { $match: { 'items.type': 'service' } },
+    {
+      $facet: {
+        services: [
+          {
+            $group: {
+              _id: {
+                serviceId: '$items.serviceId',
+                serviceName: { $ifNull: ['$items.name', 'Service'] },
+              },
+              quantity: { $sum: { $ifNull: ['$items.quantity', 1] } },
+            },
+          },
+        ],
+        staff: [
+          {
+            $addFields: {
+              _lineTotal: { $ifNull: ['$items.total', 0] },
+              _contrib: {
+                $cond: [
+                  { $gt: [{ $size: { $ifNull: ['$items.staffContributions', []] } }, 0] },
+                  '$items.staffContributions',
+                  [
+                    {
+                      staffId: { $ifNull: ['$items.staffId', ''] },
+                      staffName: {
+                        $ifNull: ['$items.staffName', { $ifNull: ['$staffName', 'Unassigned'] }],
+                      },
+                      amount: { $ifNull: ['$items.total', 0] },
+                      percentage: null,
+                    },
+                  ],
+                ],
+              },
+            },
+          },
+          { $unwind: '$_contrib' },
+          {
+            $group: {
+              _id: {
+                staffId: { $ifNull: ['$_contrib.staffId', ''] },
+                staffName: { $ifNull: ['$_contrib.staffName', 'Unassigned'] },
+              },
+              amount: {
+                $sum: {
+                  $cond: [
+                    { $gt: [{ $ifNull: ['$_contrib.amount', 0] }, 0] },
+                    { $ifNull: ['$_contrib.amount', 0] },
+                    {
+                      $multiply: [
+                        '$_lineTotal',
+                        { $divide: [{ $ifNull: ['$_contrib.percentage', 0] }, 100] },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+  ];
+}
+
+function facetServiceStaffRows(facetResult) {
+  const bucket = facetResult?.[0] || { services: [], staff: [] };
+  return {
+    services: bucket.services || [],
+    staff: bucket.staff || [],
+  };
+}
+
 /**
  * @param {object} params
  * @param {import('mongoose').Types.ObjectId} params.branchId
@@ -79,6 +163,9 @@ async function buildDashboardInitPayload({
   const metricsStartStr = toDateStringIST(metricsStartProbe);
   const metricsStartDate = getStartOfDayIST(metricsStartStr);
   const metricsEndDate = getEndOfDayIST(metricsEndStr);
+  const retentionStartProbe = parseDateIST(todayStr);
+  retentionStartProbe.setFullYear(retentionStartProbe.getFullYear() - 1);
+  const retentionStartDate = getStartOfDayIST(toDateStringIST(retentionStartProbe));
 
   // --- Parallel independent queries ---
   const [
@@ -98,8 +185,8 @@ async function buildDashboardInitPayload({
     appointmentsByMonth,
     salesRevenueByMonth,
     clientRetentionAgg,
-    currentMonthServiceLines,
-    previousMonthServiceLines,
+    currentMonthServiceStaffAgg,
+    previousMonthServiceStaffAgg,
     todayAppointmentsDocs,
     upcomingCandidates,
   ] = await Promise.all([
@@ -287,6 +374,7 @@ async function buildDashboardInitPayload({
         $match: {
           branchId: bid,
           customerId: { $exists: true, $ne: null },
+          date: { $gte: retentionStartDate, $lte: metricsEndDate },
           $nor: [{ status: /cancelled/i }],
         },
       },
@@ -303,50 +391,8 @@ async function buildDashboardInitPayload({
         },
       },
     ]),
-    Sale.aggregate([
-      {
-        $match: {
-          branchId: bid,
-          date: { $gte: thisMonthStartDate, $lte: thisMonthEndDate },
-          $nor: [{ status: /cancelled/i }],
-        },
-      },
-      { $unwind: '$items' },
-      { $match: { 'items.type': 'service' } },
-      {
-        $project: {
-          serviceId: '$items.serviceId',
-          serviceName: { $ifNull: ['$items.name', 'Service'] },
-          quantity: { $ifNull: ['$items.quantity', 1] },
-          lineTotal: { $ifNull: ['$items.total', 0] },
-          staffContributions: { $ifNull: ['$items.staffContributions', []] },
-          legacyStaffId: { $ifNull: ['$items.staffId', ''] },
-          legacyStaffName: { $ifNull: ['$items.staffName', { $ifNull: ['$staffName', 'Unassigned'] }] },
-        },
-      },
-    ]),
-    Sale.aggregate([
-      {
-        $match: {
-          branchId: bid,
-          date: { $gte: prevMonthStartDate, $lte: prevMonthEndDate },
-          $nor: [{ status: /cancelled/i }],
-        },
-      },
-      { $unwind: '$items' },
-      { $match: { 'items.type': 'service' } },
-      {
-        $project: {
-          serviceId: '$items.serviceId',
-          serviceName: { $ifNull: ['$items.name', 'Service'] },
-          quantity: { $ifNull: ['$items.quantity', 1] },
-          lineTotal: { $ifNull: ['$items.total', 0] },
-          staffContributions: { $ifNull: ['$items.staffContributions', []] },
-          legacyStaffId: { $ifNull: ['$items.staffId', ''] },
-          legacyStaffName: { $ifNull: ['$items.staffName', { $ifNull: ['$staffName', 'Unassigned'] }] },
-        },
-      },
-    ]),
+    Sale.aggregate(monthServiceStaffFacetPipeline(bid, thisMonthStartDate, thisMonthEndDate)),
+    Sale.aggregate(monthServiceStaffFacetPipeline(bid, prevMonthStartDate, prevMonthEndDate)),
     Appointment.find({
       branchId: bid,
       date: todayStr,
@@ -399,10 +445,13 @@ async function buildDashboardInitPayload({
     ? Math.round((retentionReturning / retentionBase) * 1000) / 10
     : 0;
 
+  const currentFacet = facetServiceStaffRows(currentMonthServiceStaffAgg);
+  const previousFacet = facetServiceStaffRows(previousMonthServiceStaffAgg);
+
   const serviceMapCurrent = new Map();
-  for (const row of currentMonthServiceLines || []) {
-    const sid = row?.serviceId ? String(row.serviceId) : '';
-    const rawName = String(row?.serviceName || 'Service').trim();
+  for (const row of currentFacet.services) {
+    const sid = row?._id?.serviceId ? String(row._id.serviceId) : '';
+    const rawName = String(row?._id?.serviceName || 'Service').trim();
     const key = sid || `name:${rawName.toLowerCase()}`;
     const existing = serviceMapCurrent.get(key) || { serviceName: rawName, thisMonth: 0 };
     existing.thisMonth += Math.max(0, Number(row?.quantity) || 0);
@@ -410,9 +459,9 @@ async function buildDashboardInitPayload({
     serviceMapCurrent.set(key, existing);
   }
   const serviceMapPrevious = new Map();
-  for (const row of previousMonthServiceLines || []) {
-    const sid = row?.serviceId ? String(row.serviceId) : '';
-    const rawName = String(row?.serviceName || 'Service').trim();
+  for (const row of previousFacet.services) {
+    const sid = row?._id?.serviceId ? String(row._id.serviceId) : '';
+    const rawName = String(row?._id?.serviceName || 'Service').trim();
     const key = sid || `name:${rawName.toLowerCase()}`;
     serviceMapPrevious.set(key, (serviceMapPrevious.get(key) || 0) + Math.max(0, Number(row?.quantity) || 0));
   }
@@ -426,43 +475,19 @@ async function buildDashboardInitPayload({
     .sort((a, b) => b.thisMonth - a.thisMonth)
     .slice(0, 5);
 
-  function buildStaffRevenueMap(rows) {
+  function staffRevenueMapFromFacet(rows) {
     const map = new Map();
     for (const row of rows || []) {
-      const lineTotal = Math.max(0, Number(row?.lineTotal) || 0);
-      const contributions = Array.isArray(row?.staffContributions) ? row.staffContributions : [];
-      if (contributions.length > 0) {
-        for (const c of contributions) {
-          const sid = String(c?.staffId || '').trim();
-          const sname = String(c?.staffName || 'Unassigned').trim() || 'Unassigned';
-          const key = sid || `name:${sname.toLowerCase()}`;
-          const amountFromContribution = Number(c?.amount);
-          const percentage = Number(c?.percentage);
-          const amount = Number.isFinite(amountFromContribution)
-            ? Math.max(0, amountFromContribution)
-            : Number.isFinite(percentage)
-              ? Math.max(0, (lineTotal * percentage) / 100)
-              : 0;
-          const existing = map.get(key) || { staffName: sname, amount: 0 };
-          existing.amount += amount;
-          if (!existing.staffName || existing.staffName === 'Unassigned') existing.staffName = sname;
-          map.set(key, existing);
-        }
-      } else {
-        const sid = String(row?.legacyStaffId || '').trim();
-        const sname = String(row?.legacyStaffName || 'Unassigned').trim() || 'Unassigned';
-        const key = sid || `name:${sname.toLowerCase()}`;
-        const existing = map.get(key) || { staffName: sname, amount: 0 };
-        existing.amount += lineTotal;
-        if (!existing.staffName || existing.staffName === 'Unassigned') existing.staffName = sname;
-        map.set(key, existing);
-      }
+      const sid = String(row?._id?.staffId || '').trim();
+      const sname = String(row?._id?.staffName || 'Unassigned').trim() || 'Unassigned';
+      const key = sid || `name:${sname.toLowerCase()}`;
+      map.set(key, { staffName: sname, amount: Math.max(0, Number(row?.amount) || 0) });
     }
     return map;
   }
 
-  const staffCurrent = buildStaffRevenueMap(currentMonthServiceLines || []);
-  const staffPrevious = buildStaffRevenueMap(previousMonthServiceLines || []);
+  const staffCurrent = staffRevenueMapFromFacet(currentFacet.staff);
+  const staffPrevious = staffRevenueMapFromFacet(previousFacet.staff);
   const topStaff = [...staffCurrent.entries()]
     .map(([key, v]) => ({
       id: key,

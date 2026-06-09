@@ -1,14 +1,17 @@
 "use client"
 
 import { ReactNode } from "react"
-import { useFeature } from "@/hooks/use-entitlements"
+import { useEntitlements } from "@/hooks/use-entitlements"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Lock, ArrowUpRight } from "lucide-react"
 import Link from "next/link"
 
 interface FeatureGateProps {
-  featureId: string
+  /** Single required feature. */
+  featureId?: string
+  /** Grant access if ANY of these features is present (e.g. shared surfaces). */
+  anyOf?: string[]
   children: ReactNode
   fallback?: ReactNode
   showUpgrade?: boolean
@@ -18,13 +21,16 @@ interface FeatureGateProps {
 
 export function FeatureGate({ 
   featureId, 
+  anyOf,
   children, 
   fallback,
-  showUpgrade = true,
+  showUpgrade = false,
   upgradeMessage,
   compact = false
 }: FeatureGateProps) {
-  const { hasAccess, isLoading } = useFeature(featureId)
+  const { hasFeature, isLoading } = useEntitlements()
+  const required = anyOf && anyOf.length > 0 ? anyOf : featureId ? [featureId] : []
+  const hasAccess = required.length === 0 ? true : required.some((f) => hasFeature(f))
 
   if (isLoading) {
     return (

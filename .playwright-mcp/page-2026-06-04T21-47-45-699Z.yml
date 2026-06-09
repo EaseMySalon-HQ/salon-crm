@@ -1,0 +1,81 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - img [ref=e7]
+        - text: EaseMySalon • Trusted Salon OS
+      - generic [ref=e9]:
+        - heading "Modern control centre for every salon workflow." [level=1] [ref=e10]
+        - paragraph [ref=e11]: Sign in to orchestrate POS, appointments, inventory, commissions and HQ analytics—all crafted for Indian salons demanding speed and clarity.
+      - generic [ref=e12]:
+        - generic [ref=e13]:
+          - img [ref=e14]
+          - generic [ref=e16]:
+            - paragraph [ref=e17]: Secure by default
+            - paragraph [ref=e18]: Role-based access + alerts
+        - generic [ref=e19]:
+          - img [ref=e20]
+          - generic [ref=e22]:
+            - paragraph [ref=e23]: Concierge on standby
+            - paragraph [ref=e24]: WhatsApp help in minutes
+      - generic [ref=e25]:
+        - link "Back to home" [ref=e26] [cursor=pointer]:
+          - /url: /
+        - link "Need help? Contact Support" [ref=e27] [cursor=pointer]:
+          - /url: /contact
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - generic [ref=e33]: Secure login portal
+        - generic [ref=e34]: Access your EaseMySalon HQ
+        - generic [ref=e35]: Choose your role and enter your credentials to continue
+      - generic [ref=e36]:
+        - generic [ref=e37]:
+          - tablist [ref=e38]:
+            - tab "Admin" [selected] [ref=e39] [cursor=pointer]
+            - tab "Staff" [ref=e40] [cursor=pointer]
+          - tabpanel "Admin" [ref=e41]:
+            - generic [ref=e42]:
+              - generic [ref=e43]:
+                - text: Email Address
+                - textbox "Email Address" [ref=e44]:
+                  - /placeholder: Enter your email
+              - generic [ref=e45]:
+                - text: Password
+                - generic [ref=e46]:
+                  - textbox "Enter your password" [ref=e47]
+                  - button [ref=e48] [cursor=pointer]:
+                    - img
+              - button "Sign in as Admin" [ref=e49] [cursor=pointer]
+        - button "Forgot your password?" [ref=e51] [cursor=pointer]
+        - generic [ref=e52]:
+          - generic [ref=e53]:
+            - img [ref=e54]
+            - text: 256-bit encryption + DPDP compliant
+          - button "Need help? Chat with concierge" [ref=e56] [cursor=pointer]:
+            - text: Need help? Chat with concierge
+            - img
+  - region "Notifications (F8)":
+    - list
+  - button "Open Next.js Dev Tools" [ref=e62] [cursor=pointer]:
+    - img [ref=e63]
+  - alert [ref=e66]
+  - generic [ref=e68]:
+    - generic [ref=e70]:
+      - generic [ref=e71]:
+        - img [ref=e73]
+        - generic [ref=e75]:
+          - generic [ref=e76]: Cookie Consent
+          - generic [ref=e77]: We use cookies to enhance your experience and comply with GDPR requirements
+      - button [ref=e78] [cursor=pointer]:
+        - img
+    - paragraph [ref=e80]:
+      - text: We use cookies to improve your browsing experience, analyze site traffic, and personalize content. By clicking "Accept All", you consent to our use of cookies. You can also customize your preferences or learn more in our
+      - link "Privacy Policy" [ref=e81] [cursor=pointer]:
+        - /url: /privacy-policy
+      - text: .
+    - generic [ref=e82]:
+      - button "Customize" [ref=e83] [cursor=pointer]:
+        - img
+        - text: Customize
+      - button "Reject All" [ref=e84] [cursor=pointer]
+      - button "Accept All" [ref=e85] [cursor=pointer]

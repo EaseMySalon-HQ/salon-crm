@@ -10,7 +10,7 @@ import { PublicShell } from "@/components/layout/public-shell"
 
 export const metadata: Metadata = {
   title: "India's #1 Salon Management Software | Reduce No-Shows by 40%",
-  description: "Stop losing money. Start growing your salon business. EaseMySalon reduces no-shows by 40%, cuts billing time by 70%, and increases revenue by 35%. Complete salon POS, CRM, appointments, inventory & analytics platform. 14-day free trial, no credit card required.",
+  description: "Stop losing money. Start growing your salon business. EaseMySalon reduces no-shows by 40%, cuts billing time by 70%, and increases revenue by 35%. Complete salon POS, CRM, appointments, inventory & analytics platform. 7 Day Trial, no credit card required.",
   keywords: [
     "salon management software",
     "salon POS system",
@@ -159,7 +159,7 @@ export default function MarketingHome() {
               <div className="flex flex-wrap items-center justify-center lg:justify-start gap-6 text-sm text-purple-200 pt-2">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-emerald-300" />
-                  <span>14-day free trial</span>
+                  <span>7 Day Trial</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-emerald-300" />

@@ -7,6 +7,12 @@ import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { User, Mail, Phone, Calendar, MapPin, FileText, Users, Loader2 } from "lucide-react"
 import { clientStore, type Client } from "@/lib/client-store"
+import {
+  DEFAULT_CLIENT_COMMUNICATION_CONSENT,
+  communicationConsentPayload,
+  normalizeClientCommunicationConsent,
+} from "@/lib/client-communication-consent"
+import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
 import { Button } from "@/components/ui/button"
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
@@ -66,6 +72,9 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
       required_error: "Please select a gender.",
     }),
     birthdate: z.string().optional(),
+    promotionalWhatsappEnabled: z.boolean(),
+    transactionalWhatsappEnabled: z.boolean(),
+    transactionalSmsEnabled: z.boolean(),
   })
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -79,6 +88,7 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
       notes: "",
       gender: "female" as const,
       birthdate: "",
+      ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
     },
   })
 
@@ -95,6 +105,7 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
         notes: client.notes || "",
         gender: (client.gender as "male" | "female" | "other") || "female",
         birthdate: client.birthdate || "",
+        ...normalizeClientCommunicationConsent(client),
       })
     }
   }, [client, form])
@@ -103,9 +114,15 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
     setIsSubmitting(true)
 
     try {
+      const consent = communicationConsentPayload({
+        promotionalWhatsappEnabled: values.promotionalWhatsappEnabled,
+        transactionalWhatsappEnabled: values.transactionalWhatsappEnabled,
+        transactionalSmsEnabled: values.transactionalSmsEnabled,
+      })
+
       const clientData = {
         id: client?.id || '',
-        name: `${values.firstName} ${values.lastName}`,
+        name: `${values.firstName} ${values.lastName}`.trim(),
         email: values.email,
         phone: values.phone,
         address: values.address,
@@ -116,6 +133,7 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
         totalVisits: client?.totalVisits || 0,
         totalSpent: client?.totalSpent || 0,
         createdAt: client?.createdAt || new Date().toISOString(),
+        ...consent,
       }
 
       let success = false
@@ -150,11 +168,15 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
           variant: "destructive",
         })
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(`Error ${client ? 'updating' : 'creating'} client:`, error)
+      const message =
+        error?.message ||
+        error?.response?.data?.error ||
+        "An unexpected error occurred. Please try again."
       toast({
         title: "Error",
-        description: "An unexpected error occurred. Please try again.",
+        description: message,
         variant: "destructive",
       })
     } finally {
@@ -419,6 +441,28 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
                 )}
               />
             </div>
+
+            {/* Communication preferences */}
+            <ClientCommunicationConsentFields
+              variant="grouped"
+              disabled={isViewMode}
+              value={{
+                promotionalWhatsappEnabled: form.watch("promotionalWhatsappEnabled"),
+                transactionalWhatsappEnabled: form.watch("transactionalWhatsappEnabled"),
+                transactionalSmsEnabled: form.watch("transactionalSmsEnabled"),
+              }}
+              onChange={(next) => {
+                form.setValue("promotionalWhatsappEnabled", next.promotionalWhatsappEnabled, {
+                  shouldDirty: true,
+                })
+                form.setValue("transactionalWhatsappEnabled", next.transactionalWhatsappEnabled, {
+                  shouldDirty: true,
+                })
+                form.setValue("transactionalSmsEnabled", next.transactionalSmsEnabled, {
+                  shouldDirty: true,
+                })
+              }}
+            />
 
             {/* Action buttons: only for "new client" — existing clients use Save/Cancel in ClientDetailsPage toolbar (form id="client-form") */}
             {!isViewMode && !client && (

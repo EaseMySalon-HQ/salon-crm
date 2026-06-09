@@ -21,9 +21,10 @@ interface PlanEditDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess?: () => void
+  onClosed?: () => void
 }
 
-export function PlanEditDialog({ businessId, businessName, open, onOpenChange, onSuccess }: PlanEditDialogProps) {
+export function PlanEditDialog({ businessId, businessName, open, onOpenChange, onSuccess, onClosed }: PlanEditDialogProps) {
   const [loading, setLoading] = useState(false)
   const [plans, setPlans] = useState<any[]>([])
   const [features, setFeatures] = useState<any[]>([])
@@ -47,6 +48,7 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
     },
     addons: {
       whatsapp: { enabled: false, quota: 0 },
+      waba: { enabled: false, quota: 0 },
       sms: { enabled: false, quota: 0 },
     },
   })
@@ -55,6 +57,9 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
     if (open && businessId) {
       fetchConfig()
       fetchBusinessPlan()
+    }
+    if (!open) {
+      setIsHistoryOpen(false)
     }
   }, [open, businessId])
 
@@ -105,6 +110,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
               whatsapp: {
                 enabled: business.plan.addons?.whatsapp?.enabled || false,
                 quota: business.plan.addons?.whatsapp?.quota || 0,
+              },
+              waba: {
+                enabled: business.plan.addons?.waba?.enabled || false,
+                quota: business.plan.addons?.waba?.quota || 0,
               },
               sms: {
                 enabled: business.plan.addons?.sms?.enabled || false,
@@ -214,7 +223,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-4xl max-h-[90vh] overflow-y-auto"
+          onCloseAutoFocus={() => onClosed?.()}
+        >
           <DialogHeader>
             <DialogTitle>Manage Plan: {businessName}</DialogTitle>
             <DialogDescription>
@@ -354,8 +366,11 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                 <div className="space-y-4">
                   <div className="flex items-center justify-between p-4 border rounded">
                     <div>
-                      <Label className="text-base font-semibold">WhatsApp Receipts</Label>
-                      <p className="text-sm text-gray-500">Send receipts via WhatsApp</p>
+                      <Label className="text-base font-semibold">WhatsApp (legacy / MSG91)</Label>
+                      <p className="text-sm text-gray-500">
+                        Routes WhatsApp through the existing MSG91 integration. Used for receipts,
+                        reminders, etc. Leave OFF if the business is on the new WABA module.
+                      </p>
                     </div>
                     <Switch
                       checked={formData.addons.whatsapp.enabled}
@@ -372,6 +387,41 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                     <div className="rounded-md border border-blue-100 bg-blue-50/60 p-3 text-xs text-blue-900">
                       WhatsApp messages are billed per message from the business
                       wallet (₹0.20 transactional, ₹1.20 campaign). No free quota.
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between p-4 border rounded">
+                    <div>
+                      <Label className="text-base font-semibold">WABA Integration (Meta Cloud API)</Label>
+                      <p className="text-sm text-gray-500">
+                        Native Meta WhatsApp pipeline — templates, campaigns, inbox, opt-out,
+                        webhook-driven status. Required to use Settings → WhatsApp Integration
+                        and the new Templates / Campaigns / Inbox screens.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={formData.addons.waba.enabled}
+                      onCheckedChange={(checked) => setFormData({
+                        ...formData,
+                        addons: {
+                          ...formData.addons,
+                          waba: { ...formData.addons.waba, enabled: checked },
+                        },
+                      })}
+                    />
+                  </div>
+                  {formData.addons.waba.enabled && (
+                    <div className="rounded-md border border-emerald-100 bg-emerald-50/70 p-3 text-xs text-emerald-900">
+                      WABA add-on enabled. The new Meta module routes will return
+                      <code className="ml-1 mr-1 px-1 rounded bg-white/60">200</code>
+                      instead of 403, and the router will pick provider:&apos;meta&apos; once
+                      the WABA itself is connected.
+                    </div>
+                  )}
+                  {formData.addons.waba.enabled && formData.addons.whatsapp.enabled && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
+                      Both WABA and legacy WhatsApp add-ons are ON. Router will prefer
+                      Meta when connected and fall back to MSG91 otherwise.
                     </div>
                   )}
 

@@ -162,7 +162,14 @@ class ModelFactory {
       BookingHold: this.getModel('BookingHold', require('./BookingHold').schema, connection),
       StaffAvailability: this.getModel('StaffAvailability', require('./StaffAvailability').schema, connection),
       StaffAvailabilityException: this.getModel('StaffAvailabilityException', require('./StaffAvailabilityException').schema, connection),
-      BranchHoliday: this.getModel('BranchHoliday', require('./BranchHoliday').schema, connection)
+      BranchHoliday: this.getModel('BranchHoliday', require('./BranchHoliday').schema, connection),
+
+      // Per-client WhatsApp / SMS / email consent history (tenant DB)
+      ClientConsentEvent: this.getModel(
+        'ClientConsentEvent',
+        require('./ClientConsentEvent').schema,
+        connection
+      )
     };
   }
 
@@ -182,6 +189,11 @@ class ModelFactory {
       PasswordResetToken: this.getModel('PasswordResetToken', require('./PasswordResetToken').schema, connection),
       PlanChangeLog: this.getModel('PlanChangeLog', require('./PlanChangeLog').schema, connection),
       PlanTemplate: this.getModel('PlanTemplate', require('./PlanTemplate').schema, connection),
+      PublicPricingMatrix: this.getModel(
+        'PublicPricingMatrix',
+        require('./PublicPricingMatrix').schema,
+        connection
+      ),
       RefreshToken: this.getModel('RefreshToken', require('./RefreshToken').schema, connection),
       ActivityLog: this.getModel('ActivityLog', require('./ActivityLog').schema, connection),
       InvoiceCounter: this.getModel('InvoiceCounter', require('./InvoiceCounter').schema, connection),
@@ -194,6 +206,15 @@ class ModelFactory {
         require('./PlatformLeadActivity').schema,
         connection
       ),
+
+      // WhatsApp Business module (Meta Cloud API)
+      WhatsAppAccount: this.getModel('WhatsAppAccount', require('./WhatsAppAccount').schema, connection),
+      WhatsAppMessage: this.getModel('WhatsAppMessage', require('./WhatsAppMessage').schema, connection),
+      WhatsAppConversation: this.getModel('WhatsAppConversation', require('./WhatsAppConversation').schema, connection),
+      WhatsAppAuditLog: this.getModel('WhatsAppAuditLog', require('./WhatsAppAuditLog').schema, connection),
+      WhatsAppTemplate: this.getModel('WhatsAppTemplate', require('./WhatsAppTemplate').schema, connection),
+      WhatsAppCampaign: this.getModel('WhatsAppCampaign', require('./WhatsAppCampaign').schema, connection),
+      WhatsAppMetaConfig: this.getModel('WhatsAppMetaConfig', require('./WhatsAppMetaConfig').schema, connection)
     };
   }
 

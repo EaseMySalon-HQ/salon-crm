@@ -39,6 +39,10 @@ async function ensureWalkInClient(businessModels, branchId) {
     isWalkIn: true,
     totalVisits: 0,
     totalSpent: 0,
+    whatsappConsent: { optedIn: false, source: 'system' },
+    promotionalWhatsappEnabled: false,
+    transactionalWhatsappEnabled: false,
+    transactionalSmsEnabled: false,
   });
 }
 

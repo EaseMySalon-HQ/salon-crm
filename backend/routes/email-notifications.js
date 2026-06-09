@@ -115,7 +115,8 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
       receiptNotifications: {
         enabled: true,
         autoSendToClients: true,
-        highValueThreshold: 0
+        highValueThreshold: 0,
+        includeFeedbackLink: false,
       },
       appointmentNotifications: {
         enabled: false,
@@ -679,7 +680,8 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
             ...(existingSettings.receiptNotifications || {
               enabled: true,
               autoSendToClients: true,
-              highValueThreshold: 0
+              highValueThreshold: 0,
+              includeFeedbackLink: false,
             }),
             // Override with incoming settings
             ...incomingSettings.receiptNotifications,
@@ -687,7 +689,10 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
             // This must come AFTER the spread to ensure false values override defaults
             enabled: incomingSettings.receiptNotifications.hasOwnProperty('enabled')
               ? incomingSettings.receiptNotifications.enabled
-              : (existingSettings.receiptNotifications?.enabled ?? true)
+              : (existingSettings.receiptNotifications?.enabled ?? true),
+            includeFeedbackLink: incomingSettings.receiptNotifications.hasOwnProperty('includeFeedbackLink')
+              ? incomingSettings.receiptNotifications.includeFeedbackLink
+              : (existingSettings.receiptNotifications?.includeFeedbackLink ?? false),
           };
         } else {
           // Ensure receiptNotifications exists with existing values or defaults if not provided
@@ -695,9 +700,17 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
             ...(existingSettings.receiptNotifications || {
               enabled: true,
               autoSendToClients: true,
-              highValueThreshold: 0
+              highValueThreshold: 0,
+              includeFeedbackLink: false,
             })
           };
+        }
+
+        if (business) {
+          const { canUseReceiptFeedbackLink } = require('../lib/feedback-link-helpers');
+          if (!canUseReceiptFeedbackLink(business)) {
+            newWhatsappSettings.receiptNotifications.includeFeedbackLink = false;
+          }
         }
         
         if (incomingSettings.appointmentNotifications) {
@@ -1691,7 +1704,7 @@ router.get('/whatsapp/status', authenticateToken, setupMainDatabase, async (req,
         addonQuota,
         addonUsed,
         addonRemaining,
-        canUse: adminConfigured && addonEnabled && addonRemaining > 0,
+        canUse: adminConfigured && addonEnabled,
         provider: whatsappConfig.provider || 'msg91'
       }
     });

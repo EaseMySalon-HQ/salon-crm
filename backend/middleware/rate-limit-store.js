@@ -6,6 +6,7 @@
 const { MemoryStore } = require('express-rate-limit');
 const { RedisStore } = require('rate-limit-redis');
 const { logger } = require('../utils/logger');
+const { buildIoredisOptions } = require('../lib/redis');
 const metrics = require('./rate-limit-metrics');
 const { emitRateLimitAlert } = require('./rate-limit-alerts');
 
@@ -87,18 +88,18 @@ function createRateLimitStore(prefix, label) {
   try {
     const Redis = require('ioredis');
     const cmdMs = commandTimeoutMs();
-    client = new Redis(url, {
-      maxRetriesPerRequest: 3,
-      enableOfflineQueue: false,
-      connectTimeout: 5000,
-      commandTimeout: cmdMs,
-      retryStrategy(times) {
-        if (times > 8) return null;
-        return Math.min(times * 200, 3000);
-      },
-    });
+    client = new Redis(
+      url,
+      buildIoredisOptions(url, {
+        commandTimeout: cmdMs,
+        enableOfflineQueue: true,
+      })
+    );
     client.on('error', (err) => {
       logger.warn('[rate-limit][%s] redis connection error: %s', label, err.message);
+    });
+    void client.connect().catch((err) => {
+      logger.warn('[rate-limit][%s] redis connect: %s', label, err.message);
     });
   } catch (e) {
     logger.error('[rate-limit][%s] failed to create Redis client; using memory store: %s', label, e.message);
@@ -107,8 +108,10 @@ function createRateLimitStore(prefix, label) {
 
   let redisStore;
   try {
+    // rate-limit-redis v4 loads Lua scripts asynchronously in the constructor;
+    // sendCommand must tolerate a not-yet-ready connection (offline queue + TLS for rediss://).
     redisStore = new RedisStore({
-      sendCommand: (command, ...args) => client.call(command, ...args),
+      sendCommand: async (...args) => client.call(...args),
       prefix: `rl:${prefix}:`,
     });
   } catch (e) {
@@ -121,7 +124,19 @@ function createRateLimitStore(prefix, label) {
 
   logger.info('[rate-limit][%s] using Redis-backed store (prefix rl:%s:)', label, prefix);
 
-  return new FallbackStore(memoryStore, redisStore, client, label, metricsTier);
+  const store = new FallbackStore(memoryStore, redisStore, client, label, metricsTier);
+
+  // Prevent unhandled rejection if script preload fails (e.g. bad URL, TLS, auth).
+  void Promise.all([redisStore.incrementScriptSha, redisStore.getScriptSha]).catch((e) => {
+    logger.error(
+      '[rate-limit][%s] Redis Lua script preload failed; using memory store: %s',
+      label,
+      e.message
+    );
+    store.disableRedisPermanently();
+  });
+
+  return store;
 }
 
 /**

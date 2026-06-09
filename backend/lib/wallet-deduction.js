@@ -17,6 +17,7 @@
 
 const databaseManager = require('../config/database-manager');
 const { logger } = require('../utils/logger');
+const { getAddonStatus } = require('./entitlements');
 
 const SMS_COST_PAISE = 20;
 const WHATSAPP_PROMO_COST_PAISE = 120;
@@ -35,10 +36,25 @@ function whatsAppCategory(messageType) {
 }
 
 function canDeductSms(business) {
+  if (!getAddonStatus(business, 'sms').enabled) return false;
   return getBusinessBalance(business) >= SMS_COST_PAISE;
 }
 
+/**
+ * WhatsApp can be sent via either the legacy MSG91 pipeline (gated on
+ * `whatsapp` add-on) or the new Meta Cloud API pipeline (gated on `waba`
+ * add-on). This helper short-circuits true when ANY of the two channels is
+ * enabled — the router decides which provider actually handles the send.
+ */
+function isWhatsAppChannelEnabled(business) {
+  return (
+    getAddonStatus(business, 'waba').enabled ||
+    getAddonStatus(business, 'whatsapp').enabled
+  );
+}
+
 function canDeductWhatsApp(business, messageType) {
+  if (!isWhatsAppChannelEnabled(business)) return false;
   return getBusinessBalance(business) >= whatsAppCostPaise(messageType);
 }
 
@@ -88,6 +104,11 @@ async function atomicDeduct({ businessId, costPaise, channel, messageCategory, d
 }
 
 async function deductSms(businessId, { description, relatedEntity } = {}) {
+  const { Business } = await getMainModels();
+  const business = await Business.findById(businessId).select('plan.addons wallet.balancePaise').lean();
+  if (!business || !getAddonStatus(business, 'sms').enabled) {
+    return { success: false, error: 'SMS add-on is not enabled for this business' };
+  }
   return atomicDeduct({
     businessId,
     costPaise: SMS_COST_PAISE,
@@ -99,6 +120,11 @@ async function deductSms(businessId, { description, relatedEntity } = {}) {
 }
 
 async function deductWhatsApp(businessId, messageType, { description, relatedEntity } = {}) {
+  const { Business } = await getMainModels();
+  const business = await Business.findById(businessId).select('plan.addons wallet.balancePaise').lean();
+  if (!business || !isWhatsAppChannelEnabled(business)) {
+    return { success: false, error: 'WhatsApp channel is not enabled for this business (enable WhatsApp or WABA add-on)' };
+  }
   const cost = whatsAppCostPaise(messageType);
   return atomicDeduct({
     businessId,
@@ -119,4 +145,5 @@ module.exports = {
   deductSms,
   deductWhatsApp,
   whatsAppCostPaise,
+  isWhatsAppChannelEnabled,
 };
