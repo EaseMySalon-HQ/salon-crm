@@ -21,7 +21,9 @@ class DatabaseManager {
       minPoolSize: parseInt(process.env.MONGO_TENANT_MIN_POOL, 10) || 1,
       socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 45000,
       serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_MS, 10) || 10000,
-      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 60000,
+      // Railway closes idle sockets; keep pool sockets alive longer to avoid MongoNotConnectedError churn.
+      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 120000,
+      heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_MS, 10) || 10000,
       monitorCommands: true,
     };
     this.mainPoolOptions = {
@@ -29,9 +31,12 @@ class DatabaseManager {
       minPoolSize: parseInt(process.env.MONGO_MAIN_MIN_POOL, 10) || 5,
       socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 45000,
       serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_MS, 10) || 10000,
-      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 60000,
+      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 120000,
+      heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_MS, 10) || 10000,
       monitorCommands: true,
     };
+    this.healthPingIntervalMs =
+      parseInt(process.env.MONGO_HEALTH_PING_INTERVAL_MS, 10) || 5000;
 
     const fullUri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
     
@@ -113,6 +118,69 @@ class DatabaseManager {
     return { ...this.mainPoolOptions };
   }
 
+  _clearConnectionArtifacts(connection) {
+    if (!connection) return;
+    delete connection.modelsCache;
+    delete connection.supplierPayableIndexRepairPromise;
+    delete connection.ensureWalkInClientPromise;
+    delete connection._lastHealthPing;
+    delete connection._lastHealthOk;
+  }
+
+  _registerConnectionLifecycle(dbName, connection) {
+    if (!connection || connection._lifecycleRegistered) return;
+    connection._lifecycleRegistered = true;
+
+    const dropFromCache = () => {
+      const cached = this.connections.get(dbName);
+      if (cached !== connection) return;
+      this.connections.delete(dbName);
+      this.connectionMeta.delete(dbName);
+      this._clearConnectionArtifacts(connection);
+      logger.warn('[db] dropped cached connection for %s after disconnect/close', dbName);
+    };
+
+    connection.on('disconnected', dropFromCache);
+    connection.on('close', dropFromCache);
+    connection.on('error', (err) => {
+      logger.warn('[db] connection error for %s: %s', dbName, err.message);
+    });
+  }
+
+  async _pingConnection(connection) {
+    if (!connection || connection.readyState !== 1 || !connection.db) {
+      return false;
+    }
+    try {
+      await connection.db.admin().command({ ping: 1 });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** Cached ping so hot paths do not admin-ping on every request. */
+  async _ensureHealthy(dbName, connection) {
+    if (!connection || connection.readyState !== 1) {
+      return false;
+    }
+    const now = Date.now();
+    if (
+      connection._lastHealthPing &&
+      now - connection._lastHealthPing < this.healthPingIntervalMs &&
+      connection._lastHealthOk
+    ) {
+      return true;
+    }
+    const ok = await this._pingConnection(connection);
+    connection._lastHealthPing = now;
+    connection._lastHealthOk = ok;
+    if (!ok) {
+      logger.warn('[db] health ping failed for %s (readyState=%s)', dbName, connection.readyState);
+    }
+    return ok;
+  }
+
   async _closeOne(dbName) {
     const conn = this.connections.get(dbName);
     if (conn && conn !== this._defaultMainConnection) {
@@ -120,6 +188,7 @@ class DatabaseManager {
         await conn.close();
       } catch (_) {}
     }
+    this._clearConnectionArtifacts(conn);
     this.connections.delete(dbName);
     this.connectionMeta.delete(dbName);
   }
@@ -198,14 +267,15 @@ class DatabaseManager {
     const dbName = this.getDatabaseName(businessCode);
 
     const existing = this.connections.get(dbName);
-    if (existing && existing.readyState === 1) {
-      this._touchConnection(dbName);
-      logger.debug(`   ♻️  Reusing existing connection: ${dbName}`);
-      logger.debug(`================================================\n`);
-      return existing;
-    }
     if (existing) {
-      this.connections.delete(dbName);
+      if (await this._ensureHealthy(dbName, existing)) {
+        this._touchConnection(dbName);
+        logger.debug(`   ♻️  Reusing existing connection: ${dbName}`);
+        logger.debug(`================================================\n`);
+        return existing;
+      }
+      logger.warn(`   ⚠️  Stale connection for ${dbName}; reconnecting`);
+      await this._closeOne(dbName);
     }
 
     if (this.inFlight.has(dbName)) {
@@ -222,7 +292,6 @@ class DatabaseManager {
       const connection = await connectPromise;
       this.connections.set(dbName, connection);
       this._touchConnection(dbName);
-      await this._evictStaleConnections();
       logger.debug(`✅ Connected to business database: ${dbName}`);
       logger.debug(`================================================\n`);
       return connection;
@@ -251,6 +320,7 @@ class DatabaseManager {
         await connection.close();
         throw new Error(`Database creation failed: expected ${dbName} but got ${actualDbName}`);
       }
+      this._registerConnectionLifecycle(dbName, connection);
       return connection;
     } catch (error) {
       logger.error(`   ❌ Connection failed:`, error.message);
@@ -279,13 +349,14 @@ class DatabaseManager {
     }
 
     const existing = this.connections.get(mainDbName);
-    if (existing && existing.readyState === 1) {
-      this._touchConnection(mainDbName);
-      logger.debug(`♻️  Reusing existing main database connection`);
-      return existing;
-    }
     if (existing) {
-      this.connections.delete(mainDbName);
+      if (await this._ensureHealthy(mainDbName, existing)) {
+        this._touchConnection(mainDbName);
+        logger.debug(`♻️  Reusing existing main database connection`);
+        return existing;
+      }
+      logger.warn(`⚠️  Stale main connection; reconnecting`);
+      await this._closeOne(mainDbName);
     }
 
     if (this.inFlight.has(mainDbName)) {
