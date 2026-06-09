@@ -517,6 +517,12 @@ router.get('/business/:businessId', authenticateAdmin, setupMainDatabase, checkA
           status: business.status,
           plan: planInfo,
           features: featuresWithStatus,
+          overrides: business.plan.overrides || {
+            features: [],
+            disabledFeatures: [],
+            expiresAt: null,
+            notes: '',
+          },
           createdAt: business.createdAt,
           owner: business.owner,
         },
@@ -606,6 +612,7 @@ router.put('/business/:businessId', authenticateAdmin, setupMainDatabase, checkA
     if (overrides !== undefined) {
       business.plan.overrides = {
         features: overrides.features || [],
+        disabledFeatures: overrides.disabledFeatures || [],
         expiresAt: overrides.expiresAt ? new Date(overrides.expiresAt) : null,
         notes: overrides.notes || '',
       };

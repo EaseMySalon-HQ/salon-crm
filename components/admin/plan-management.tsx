@@ -17,6 +17,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { planBadgeClass } from "@/lib/plan-ids"
+import {
+  buildPlanFeatureOverridesFromBusiness,
+  isPlanFeatureEnabled,
+  togglePlanFeatureOverride,
+} from "@/lib/admin-plan-feature-overrides"
 
 interface Plan {
   id: string
@@ -98,6 +103,7 @@ export function PlanManagement() {
     trialEndsAt: '',
     overrides: {
       features: [] as string[],
+      disabledFeatures: [] as string[],
       expiresAt: '',
       notes: '',
     },
@@ -166,17 +172,14 @@ export function PlanManagement() {
 
   const handleEditPlan = (business: Business) => {
     setSelectedBusiness(business)
+    const planFeatures = plans.find((p) => p.id === business.plan.planId)?.features || []
     setFormData({
       planId: business.plan.planId,
       billingPeriod: business.plan.billingPeriod,
       renewalDate: business.plan.renewalDate ? new Date(business.plan.renewalDate).toISOString().split('T')[0] : '',
       isTrial: business.plan.isTrial,
       trialEndsAt: business.plan.trialEndsAt ? new Date(business.plan.trialEndsAt).toISOString().split('T')[0] : '',
-      overrides: {
-        features: business.plan.hasOverrides ? business.plan.features.filter(f => !plans.find(p => p.id === business.plan.planId)?.features.includes(f)) : [],
-        expiresAt: business.plan.overridesExpiresAt ? new Date(business.plan.overridesExpiresAt).toISOString().split('T')[0] : '',
-        notes: '',
-      },
+      overrides: buildPlanFeatureOverridesFromBusiness(planFeatures, business.plan.features),
       addons: {
         whatsapp: {
           enabled: business.plan.addons?.whatsapp?.enabled || false,
@@ -262,25 +265,14 @@ export function PlanManagement() {
   }
 
   const toggleFeatureOverride = (featureId: string) => {
-    const currentFeatures = formData.overrides.features
-    if (currentFeatures.includes(featureId)) {
-      setFormData({
-        ...formData,
-        overrides: {
-          ...formData.overrides,
-          features: currentFeatures.filter(f => f !== featureId),
-        },
-      })
-    } else {
-      setFormData({
-        ...formData,
-        overrides: {
-          ...formData.overrides,
-          features: [...currentFeatures, featureId],
-        },
-      })
-    }
+    const planFeatures = plans.find((p) => p.id === formData.planId)?.features || []
+    setFormData({
+      ...formData,
+      overrides: togglePlanFeatureOverride(featureId, planFeatures, formData.overrides),
+    })
   }
+
+  const selectedPlanFeatures = plans.find((p) => p.id === formData.planId)?.features || []
 
   const getPlanBadgeColor = (planId: string) => planBadgeClass(planId).replace(/ border-\S+/g, "")
 
@@ -391,7 +383,7 @@ export function PlanManagement() {
                       <div>{business.plan.features.length} features</div>
                       {business.plan.hasOverrides && (
                         <Badge variant="outline" className="mt-1">
-                          Promo Active
+                          Custom Access
                         </Badge>
                       )}
                     </div>
@@ -467,7 +459,21 @@ export function PlanManagement() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Plan</Label>
-                  <Select value={formData.planId} onValueChange={(value) => setFormData({ ...formData, planId: value })}>
+                  <Select
+                    value={formData.planId}
+                    onValueChange={(value) => {
+                      const newPlanFeatures = plans.find((p) => p.id === value)?.features || []
+                      setFormData({
+                        ...formData,
+                        planId: value,
+                        overrides: {
+                          ...formData.overrides,
+                          features: formData.overrides.features.filter((id) => !newPlanFeatures.includes(id)),
+                          disabledFeatures: formData.overrides.disabledFeatures.filter((id) => newPlanFeatures.includes(id)),
+                        },
+                      })
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -526,26 +532,28 @@ export function PlanManagement() {
 
             <TabsContent value="features" className="space-y-4">
               <div>
-                <Label>Promotional Feature Overrides</Label>
+                <Label>Feature Access</Label>
                 <p className="text-sm text-gray-500 mb-4">
-                  Select additional features to grant beyond the plan defaults
+                  Toggle any feature on or off for this business. Plan defaults are shown as &quot;(in plan)&quot;.
                 </p>
                 <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto border rounded p-4">
                   {features.map((feature) => {
-                    const planFeatures = plans.find(p => p.id === formData.planId)?.features || []
-                    const isInPlan = planFeatures.includes(feature.id)
-                    const isOverride = formData.overrides.features.includes(feature.id)
+                    const isInPlan = selectedPlanFeatures.includes(feature.id)
+                    const isGranted = formData.overrides.features.includes(feature.id)
+                    const isDisabled = formData.overrides.disabledFeatures.includes(feature.id)
+                    const isEnabled = isPlanFeatureEnabled(feature.id, selectedPlanFeatures, formData.overrides)
 
                     return (
                       <div key={feature.id} className="flex items-center space-x-2">
                         <Switch
-                          checked={isOverride}
+                          checked={isEnabled}
                           onCheckedChange={() => toggleFeatureOverride(feature.id)}
-                          disabled={isInPlan}
                         />
                         <Label className="text-sm">
                           {feature.name}
                           {isInPlan && <span className="text-gray-400 ml-1">(in plan)</span>}
+                          {!isInPlan && isGranted && <span className="text-blue-600 ml-1">(granted)</span>}
+                          {isInPlan && isDisabled && <span className="text-red-600 ml-1">(disabled)</span>}
                         </Label>
                       </div>
                     )
