@@ -27,11 +27,12 @@ export interface User {
   isImpersonation?: boolean
   impersonatedBy?: string
   branchId?: string
-  /** True when suspension grace has ended — app and APIs are blocked */
+  /** True when billing is overdue — app and APIs are blocked */
   businessSuspended?: boolean
-  /** Suspended but still within the 3-day extension window */
-  suspensionGraceActive?: boolean
-  suspensionGraceEndsAt?: string | null
+  /** Days until plan renewal (2–7); shown in top nav while account is still active */
+  planRenewalWarningDaysLeft?: number | null
+  /** One IST calendar day before renewal — red “expiring today” banner */
+  planRenewalExpiringToday?: boolean
   nextBillingDate?: string | null
   suspensionSupportEmail?: string
   suspensionSupportPhone?: string

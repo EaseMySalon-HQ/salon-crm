@@ -6,8 +6,13 @@
 
 const mongoose = require('mongoose');
 const { fanOut } = require('./branch-fanout');
-const { extendedMetricsForBranch, getDailyMetricModel } = require('./branch-management-phase2-routes');
-const { ymd, COMPLETED } = require('./branch-management-helpers');
+const { computeBranchCapacityMetrics } = require('./branch-utilization');
+
+function getDailyMetricModel(conn) {
+  if (conn.models.DailyMetric) return conn.models.DailyMetric;
+  return conn.model('DailyMetric', require('../models/DailyMetric').schema);
+}
+const { ymd, pct, COMPLETED } = require('./branch-management-helpers');
 
 function toObjectId(id) {
   try {
@@ -40,7 +45,10 @@ function aggregateDailyRows(rows) {
   let completedAppointments = 0;
   let ratingSum = 0;
   let ratingCount = 0;
-  let utilSum = 0;
+  let bookedMinutes = 0;
+  let availableMinutes = 0;
+  let legacyUtilSum = 0;
+  let legacyUtilDays = 0;
   const seen = new Set();
 
   for (const row of rows || []) {
@@ -53,17 +61,32 @@ function aggregateDailyRows(rows) {
       ratingSum += Number(row.avgRating);
       ratingCount += 1;
     }
-    utilSum += Number(row.capacityUtilizationPct) || 0;
+    if (row.bookedMinutes != null && row.availableMinutes != null) {
+      bookedMinutes += Number(row.bookedMinutes) || 0;
+      availableMinutes += Number(row.availableMinutes) || 0;
+    } else {
+      legacyUtilSum += Number(row.capacityUtilizationPct) || 0;
+      legacyUtilDays += 1;
+    }
   }
 
   const dayCount = seen.size;
+  let capacityUtilizationPct = 0;
+  if (availableMinutes > 0) {
+    capacityUtilizationPct = pct(bookedMinutes, availableMinutes);
+  } else if (legacyUtilDays > 0) {
+    capacityUtilizationPct = Math.round(legacyUtilSum / legacyUtilDays);
+  }
+
   return {
     revenue,
     appointments,
     completedAppointments,
     avgTicketSize: completedAppointments > 0 ? Math.round(revenue / completedAppointments) : 0,
     avgRating: ratingCount > 0 ? Math.round((ratingSum / ratingCount) * 10) / 10 : null,
-    capacityUtilizationPct: dayCount > 0 ? Math.round(utilSum / dayCount) : 0,
+    bookedMinutes,
+    availableMinutes,
+    capacityUtilizationPct,
   };
 }
 
@@ -117,13 +140,15 @@ async function loadCachedDailyMetrics(mainConnection, branchIds, fromYmd, toYmd)
       appointments: doc.appointments ?? 0,
       completedAppointments: doc.completedAppointments ?? 0,
       avgRating: doc.avgRating ?? null,
+      bookedMinutes: doc.bookedMinutes ?? null,
+      availableMinutes: doc.availableMinutes ?? null,
       capacityUtilizationPct: doc.capacityUtilizationPct ?? 0,
     });
   }
   return byBranch;
 }
 
-async function dailyMetricForBranch({ models, branch }, dateStr) {
+async function dailyMetricForBranch({ models, branch, mainConnection }, dateStr) {
   const { Sale, Appointment } = models;
   const branchId = toObjectId(branch.id);
   const dayStart = new Date(`${dateStr}T00:00:00`);
@@ -140,8 +165,8 @@ async function dailyMetricForBranch({ models, branch }, dateStr) {
       status: { $ne: 'cancelled' },
     }),
     Appointment.countDocuments({ branchId, date: dateStr, status: COMPLETED }),
-    extendedMetricsForBranch(
-      { models, branch },
+    computeBranchCapacityMetrics(
+      { models, branch, mainConnection },
       { start: dayStart, end: dayEnd, ymd: (d) => ymd(d) }
     ),
   ]);
@@ -153,16 +178,14 @@ async function dailyMetricForBranch({ models, branch }, dateStr) {
     appointments,
     completedAppointments,
     avgRating: extra.avgRating,
+    bookedMinutes: extra.bookedMinutes,
+    availableMinutes: extra.availableMinutes,
     capacityUtilizationPct: extra.capacityUtilizationPct,
   };
 }
 
 async function dailyMetricsForBranchDates(ctx, dateStrs) {
-  const rows = [];
-  for (const dateStr of dateStrs || []) {
-    rows.push(await dailyMetricForBranch(ctx, dateStr));
-  }
-  return rows;
+  return Promise.all((dateStrs || []).map((dateStr) => dailyMetricForBranch(ctx, dateStr)));
 }
 
 async function upsertDailyMetrics(mainConnection, rows) {
@@ -180,6 +203,8 @@ async function upsertDailyMetrics(mainConnection, rows) {
             appointments: row.appointments ?? 0,
             completedAppointments: row.completedAppointments ?? 0,
             avgRating: row.avgRating ?? null,
+            bookedMinutes: row.bookedMinutes ?? 0,
+            availableMinutes: row.availableMinutes ?? 0,
             capacityUtilizationPct: row.capacityUtilizationPct ?? 0,
           },
         },
@@ -198,6 +223,14 @@ async function pointInTimeCountsForBranch({ models }) {
   return { staff, clients };
 }
 
+const DAILY_ROWS_DEDUP_MS = parseInt(process.env.DAILY_ROWS_DEDUP_MS, 10) || 30_000;
+const dailyRowsDedup = new Map();
+
+function dailyRowsDedupKey(branchList, fromYmd, toYmd) {
+  const ids = branchList.map((b) => b.id).sort().join(',');
+  return `${ids}:${fromYmd}:${toYmd}`;
+}
+
 /**
  * Hybrid cache + live fetch for all branches in a date range.
  * Returns merged daily rows per branch and cache coverage metadata.
@@ -205,6 +238,11 @@ async function pointInTimeCountsForBranch({ models }) {
 async function resolveAllBranchesDailyRows(mainConnection, branchList, range, ymdFn = ymd) {
   const fromYmd = ymdFn(range.start);
   const toYmd = ymdFn(range.end);
+  const dedupKey = dailyRowsDedupKey(branchList, fromYmd, toYmd);
+  const dedupHit = dailyRowsDedup.get(dedupKey);
+  if (dedupHit && dedupHit.expiresAt > Date.now()) {
+    return dedupHit.payload;
+  }
   const todayYmd = ymdFn(new Date());
   const allDates = enumerateYmdDates(range.start, range.end);
   const branchIds = branchList.map((b) => b.id);
@@ -259,7 +297,7 @@ async function resolveAllBranchesDailyRows(mainConnection, branchList, range, ym
   if (cachedBranchDays === 0 && branchesNeedingFetch.length > 0) source = 'live';
   else if (branchesNeedingFetch.length > 0) source = 'hybrid';
 
-  return {
+  const payload = {
     rowsByBranch,
     fetchErrors,
     cacheCoverage: {
@@ -269,6 +307,8 @@ async function resolveAllBranchesDailyRows(mainConnection, branchList, range, ym
       source,
     },
   };
+  dailyRowsDedup.set(dedupKey, { payload, expiresAt: Date.now() + DAILY_ROWS_DEDUP_MS });
+  return payload;
 }
 
 /** Cache-backed series map for revenue or appointments. */

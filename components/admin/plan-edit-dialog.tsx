@@ -21,9 +21,10 @@ interface PlanEditDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess?: () => void
+  onClosed?: () => void
 }
 
-export function PlanEditDialog({ businessId, businessName, open, onOpenChange, onSuccess }: PlanEditDialogProps) {
+export function PlanEditDialog({ businessId, businessName, open, onOpenChange, onSuccess, onClosed }: PlanEditDialogProps) {
   const [loading, setLoading] = useState(false)
   const [plans, setPlans] = useState<any[]>([])
   const [features, setFeatures] = useState<any[]>([])
@@ -56,6 +57,9 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
     if (open && businessId) {
       fetchConfig()
       fetchBusinessPlan()
+    }
+    if (!open) {
+      setIsHistoryOpen(false)
     }
   }, [open, businessId])
 
@@ -219,7 +223,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-4xl max-h-[90vh] overflow-y-auto"
+          onCloseAutoFocus={() => onClosed?.()}
+        >
           <DialogHeader>
             <DialogTitle>Manage Plan: {businessName}</DialogTitle>
             <DialogDescription>

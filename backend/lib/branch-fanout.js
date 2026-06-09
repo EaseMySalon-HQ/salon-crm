@@ -28,7 +28,7 @@ async function fanOut(mainConnection, branchList, queryFn) {
         // Resolve the tenant DB by business code (preferred input to getConnection).
         const conn = await databaseManager.getConnection(branch.code, mainConnection);
         const models = modelFactory.getCachedBusinessModels(conn);
-        const data = await queryFn({ conn, models, branch });
+        const data = await queryFn({ conn, models, branch, mainConnection });
         return { branchId: branch.id, branchName: branch.name, data, error: null };
       } catch (err) {
         logger.error(`branch-fanout failed for ${branch.code}:`, err.message);

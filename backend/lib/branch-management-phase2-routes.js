@@ -14,6 +14,13 @@ const {
   buildStaffRevenueMap,
   COMPLETED,
 } = require('./branch-management-helpers');
+const {
+  toObjectId,
+  normalizeStaffId,
+  loadBranchOwnerStaff,
+  distributeAppointmentBookedMinutes,
+  computeBranchCapacityMetrics,
+} = require('./branch-utilization');
 const { getBusinessModel } = require('./get-all-branches');
 const { executeInventoryTransfer } = require('./execute-inventory-transfer');
 const { getTransferRequestModel } = require('./transfer-request-model');
@@ -31,75 +38,31 @@ function getDailyMetricModel(conn) {
   return conn.model('DailyMetric', require('../models/DailyMetric').schema);
 }
 
-function toObjectId(id) {
-  try {
-    return new mongoose.Types.ObjectId(id);
-  } catch {
-    return id;
-  }
-}
-
 /** Extend base summary with utilization + avg rating (tenant fan-out). */
-async function extendedMetricsForBranch({ models, branch }, range) {
-  const { Appointment, Staff, Feedback } = models;
-  const { start, end } = range;
-  const startStr = range.ymd(start);
-  const endStr = range.ymd(end);
-  const branchId = toObjectId(branch.id);
-
-  const [appts, staffList, ratingAgg] = await Promise.all([
-    Appointment.find({
-      branchId,
-      date: { $gte: startStr, $lte: endStr },
-      status: COMPLETED,
-    })
-      .select('duration staffId staffAssignments')
-      .lean(),
-    Staff.find({ isActive: true }).select('workSchedule').lean(),
-    Feedback
-      ? Feedback.aggregate([
-          {
-            $match: {
-              branchId,
-              submittedAt: { $gte: start, $lte: end },
-              rating: { $gte: 1, $lte: 5 },
-            },
-          },
-          { $group: { _id: null, avg: { $avg: '$rating' }, count: { $sum: 1 } } },
-        ])
-      : Promise.resolve([]),
-  ]);
-
-  let bookedMinutes = 0;
-  for (const a of appts) bookedMinutes += Number(a.duration) || 0;
-
-  let availableMinutes = 0;
-  for (const s of staffList) {
-    availableMinutes += availableMinutesInRange(s.workSchedule, start, end);
-  }
-
-  const avgRating =
-    ratingAgg[0]?.count > 0 ? Math.round(ratingAgg[0].avg * 10) / 10 : null;
-
+async function extendedMetricsForBranch(ctx, range) {
+  const metrics = await computeBranchCapacityMetrics(ctx, range);
   return {
-    capacityUtilizationPct: pct(bookedMinutes, availableMinutes),
-    avgRating,
+    bookedMinutes: metrics.bookedMinutes,
+    availableMinutes: metrics.availableMinutes,
+    capacityUtilizationPct: metrics.capacityUtilizationPct,
+    avgRating: metrics.avgRating,
   };
 }
 
 /**
  * Staff utilization = booked minutes ÷ available minutes in range (workSchedule).
  */
-async function staffWithUtilizationForBranch({ models, branch }, range, includeInactive) {
+async function staffWithUtilizationForBranch({ models, branch, mainConnection }, range, includeInactive) {
   const { Staff, Sale, Appointment } = models;
   const { start, end } = range;
   const startStr = range.ymd(start);
   const endStr = range.ymd(end);
   const branchId = toObjectId(branch.id);
 
-  const staffQuery = includeInactive ? {} : { isActive: true };
-  const [staff, sales, appts] = await Promise.all([
-    Staff.find(staffQuery).select('name role isActive avatar workSchedule').lean(),
+  // Always load all staff for name/role lookup; filter inactive rows at the end.
+  const [staff, ownerStaff, sales, appts] = await Promise.all([
+    Staff.find({}).select('name role isActive avatar workSchedule').lean(),
+    loadBranchOwnerStaff(mainConnection, branch.id),
     Sale.find({ branchId, date: { $gte: start, $lte: end }, status: COMPLETED })
       .select('items')
       .lean(),
@@ -113,27 +76,73 @@ async function staffWithUtilizationForBranch({ models, branch }, range, includeI
   ]);
 
   const byStaff = new Map();
+  /** Unique staff name → id (null when ambiguous). Used when bill staffId is stale/wrong. */
+  const staffIdByUniqueName = new Map();
+
+  const addStaffRecord = (record) => {
+    byStaff.set(record.id, {
+      id: record.id,
+      name: record.name,
+      role: record.role || 'staff',
+      unlinked: false,
+      isOwner: !!record.isOwner,
+      isActive: record.isActive !== false,
+      avatar: record.avatar || '',
+      servicesDone: 0,
+      revenue: 0,
+      bookedMinutes: 0,
+      workSchedule: record.workSchedule || [],
+    });
+    const nameKey = String(record.name || '').trim().toLowerCase();
+    if (nameKey) {
+      if (!staffIdByUniqueName.has(nameKey)) {
+        staffIdByUniqueName.set(nameKey, record.id);
+      } else {
+        staffIdByUniqueName.set(nameKey, null);
+      }
+    }
+  };
+
+  if (ownerStaff) addStaffRecord(ownerStaff);
+
   for (const s of staff) {
-    byStaff.set(String(s._id), {
-      id: String(s._id),
+    const sid = normalizeStaffId(s._id);
+    if (byStaff.has(sid)) continue;
+    addStaffRecord({
+      id: sid,
       name: s.name,
       role: s.role || 'staff',
       isActive: s.isActive !== false,
       avatar: s.avatar || '',
-      servicesDone: 0,
-      revenue: 0,
-      bookedMinutes: 0,
       workSchedule: s.workSchedule,
     });
   }
 
-  const ensure = (id) => {
-    const key = String(id);
-    if (!byStaff.has(key)) {
-      byStaff.set(key, {
-        id: key,
-        name: 'Unknown',
-        role: 'staff',
+  const resolveStaffKey = (id, nameHint) => {
+    const key = normalizeStaffId(id);
+    if (key && byStaff.has(key)) return key;
+    const nameKey = String(nameHint || '').trim().toLowerCase();
+    if (nameKey) {
+      const byName = staffIdByUniqueName.get(nameKey);
+      if (byName) return byName;
+    }
+    return key;
+  };
+
+  const ensure = (id, nameHint) => {
+    const hintedName = String(nameHint || '').trim();
+    const resolvedKey = resolveStaffKey(id, nameHint);
+    if (resolvedKey && byStaff.has(resolvedKey)) {
+      return byStaff.get(resolvedKey);
+    }
+
+    const orphanKey = resolvedKey || `orphan:${hintedName.toLowerCase() || 'unknown'}`;
+    if (!byStaff.has(orphanKey)) {
+      byStaff.set(orphanKey, {
+        id: resolvedKey || orphanKey,
+        name: hintedName || 'Unknown',
+        role: '',
+        unlinked: true,
         isActive: false,
         avatar: '',
         servicesDone: 0,
@@ -142,60 +151,62 @@ async function staffWithUtilizationForBranch({ models, branch }, range, includeI
         workSchedule: [],
       });
     }
-    return byStaff.get(key);
+    return byStaff.get(orphanKey);
   };
 
   for (const sale of sales) {
     for (const item of sale.items || []) {
+      const lineType = String(item.type || '').toLowerCase();
+      const qty = Number(item.quantity) || 1;
+      const isService = lineType === 'service';
+
       if (item.staffContributions?.length) {
+        const n = item.staffContributions.length;
         for (const c of item.staffContributions) {
           if (!c.staffId) continue;
-          ensure(c.staffId).revenue += c.amount || 0;
+          const rec = ensure(c.staffId, c.staffName);
+          rec.revenue += c.amount || 0;
+          if (isService) rec.servicesDone += qty / n;
         }
       } else if (item.staffId) {
-        ensure(item.staffId).revenue += item.total || 0;
+        const rec = ensure(item.staffId, item.staffName);
+        rec.revenue += item.total || 0;
+        if (isService) rec.servicesDone += qty;
       }
     }
   }
 
-  for (const a of appts) {
-    const dur = Number(a.duration) || 0;
-    const ids = new Set();
-    if (a.staffAssignments?.length) {
-      for (const sa of a.staffAssignments) if (sa.staffId) ids.add(String(sa.staffId));
-    } else if (a.staffId) {
-      ids.add(String(a.staffId));
-    }
-    const share = ids.size > 0 ? dur / ids.size : 0;
-    for (const id of ids) {
-      const rec = ensure(id);
-      rec.servicesDone += 1;
-      rec.bookedMinutes += share;
-    }
+  const { bookedByStaff } = distributeAppointmentBookedMinutes(appts);
+  for (const [id, mins] of bookedByStaff) {
+    ensure(id).bookedMinutes += mins;
   }
 
-  return Array.from(byStaff.values()).map((r) => {
-    const available = availableMinutesInRange(r.workSchedule, start, end);
-    return {
-      id: r.id,
-      name: r.name,
-      role: r.role,
-      isActive: r.isActive,
-      avatar: r.avatar,
-      servicesDone: r.servicesDone,
-      revenue: Math.round(r.revenue),
-      utilizationPct: pct(r.bookedMinutes, available),
-    };
-  });
+  return Array.from(byStaff.values())
+    .filter((r) => includeInactive || r.isActive)
+    .map((r) => {
+      const available = availableMinutesInRange(r.workSchedule, start, end);
+      return {
+        id: r.id,
+        name: r.name,
+        role: r.role,
+        unlinked: !!r.unlinked,
+        isOwner: !!r.isOwner,
+        isActive: r.isActive,
+        avatar: r.avatar,
+        servicesDone: Math.round(r.servicesDone * 1000) / 1000,
+        revenue: Math.round(r.revenue),
+        utilizationPct: pct(r.bookedMinutes, available),
+      };
+    });
 }
 
-async function staffCompareForBranch({ models, branch }, range, metric) {
+async function staffCompareForBranch(ctx, range, metric) {
   if (metric === 'utilization') {
     range.ymd = range.ymd || require('./branch-management-helpers').ymd;
-    const extra = await extendedMetricsForBranch({ models, branch }, range);
+    const extra = await extendedMetricsForBranch(ctx, range);
     return extra.capacityUtilizationPct;
   }
-  const staff = await staffWithUtilizationForBranch({ models, branch }, range, true);
+  const staff = await staffWithUtilizationForBranch(ctx, range, true);
   if (metric === 'revenue') {
     return staff.reduce((s, r) => s + r.revenue, 0);
   }

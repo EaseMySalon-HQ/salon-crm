@@ -1,47 +1,63 @@
 /**
- * Billing suspension grace: tenants keep full access for 3 calendar days after
- * status becomes `suspended`, then APIs and UI block until billing is cleared.
+ * Billing suspension + plan renewal warnings.
+ * Suspended tenants are blocked immediately (no post-suspension grace).
+ * Active tenants see renewal warnings from 7 IST calendar days before renewal.
  */
 
-const GRACE_DAYS = 3;
-const GRACE_MS = GRACE_DAYS * 24 * 60 * 60 * 1000;
+const RENEWAL_WARNING_DAYS = 7;
 
-function getSuspendedAt(business) {
-  if (!business || business.status !== 'suspended') return null;
-  if (business.suspendedAt) return new Date(business.suspendedAt);
-  if (business.updatedAt) return new Date(business.updatedAt);
-  return new Date();
+const IST_ZONE = 'Asia/Kolkata';
+
+const istCalendarDayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: IST_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function getNextBillingFromPlan(plan) {
+  if (!plan) return null;
+  return plan.renewalDate || plan.trialEndsAt || null;
 }
 
-function getGraceEndsAt(business) {
-  const at = getSuspendedAt(business);
-  if (!at) return null;
-  return new Date(at.getTime() + GRACE_MS);
+/** Whole IST calendar days from today until renewal date (0 = renewal is today). */
+function daysUntilRenewalInIST(nextBillingDate) {
+  if (!nextBillingDate) return null;
+  const billDay = istCalendarDayFormatter.format(new Date(nextBillingDate));
+  const today = istCalendarDayFormatter.format(new Date());
+  const billMs = Date.parse(`${billDay}T12:00:00Z`);
+  const todayMs = Date.parse(`${today}T12:00:00Z`);
+  if (Number.isNaN(billMs) || Number.isNaN(todayMs)) return null;
+  return Math.round((billMs - todayMs) / (24 * 60 * 60 * 1000));
 }
 
-function isInSuspensionGrace(business) {
-  if (!business || business.status !== 'suspended') return false;
-  const ends = getGraceEndsAt(business);
-  return Boolean(ends && Date.now() < ends.getTime());
+function getPlanRenewalWarning(business) {
+  if (!business || business.status !== 'active') {
+    return { planRenewalWarningDaysLeft: null, planRenewalExpiringToday: false };
+  }
+  const daysLeft = daysUntilRenewalInIST(getNextBillingFromPlan(business.plan));
+  if (daysLeft == null || daysLeft < 1 || daysLeft > RENEWAL_WARNING_DAYS) {
+    return { planRenewalWarningDaysLeft: null, planRenewalExpiringToday: false };
+  }
+  if (daysLeft === 1) {
+    return { planRenewalWarningDaysLeft: null, planRenewalExpiringToday: true };
+  }
+  return { planRenewalWarningDaysLeft: daysLeft, planRenewalExpiringToday: false };
 }
 
-/** True when tenant APIs and app shell should block (past grace or unknown suspendedAt). */
+/** True when tenant APIs and app shell should block. */
 function isAccessBlockedBySuspension(business) {
-  if (!business || business.status !== 'suspended') return false;
-  return !isInSuspensionGrace(business);
+  return business?.status === 'suspended';
 }
 
 function buildSuspensionMeta(business) {
-  const plan = business?.plan;
-  const rawNext = plan?.renewalDate || plan?.trialEndsAt;
-  const graceEnds = getGraceEndsAt(business);
-  const inGrace = isInSuspensionGrace(business);
+  const rawNext = getNextBillingFromPlan(business?.plan);
+  const warning = getPlanRenewalWarning(business);
 
   return {
     businessSuspended: isAccessBlockedBySuspension(business),
-    suspensionGraceActive: inGrace,
-    suspensionGraceEndsAt: graceEnds ? graceEnds.toISOString() : null,
-    suspensionGraceDays: GRACE_DAYS,
+    planRenewalWarningDaysLeft: warning.planRenewalWarningDaysLeft,
+    planRenewalExpiringToday: warning.planRenewalExpiringToday,
     nextBillingDate: rawNext != null ? new Date(rawNext).toISOString() : null,
     suspensionSupportEmail: process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
     suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
@@ -60,11 +76,9 @@ function statusUpdateFields(status) {
 }
 
 module.exports = {
-  GRACE_DAYS,
-  GRACE_MS,
-  getSuspendedAt,
-  getGraceEndsAt,
-  isInSuspensionGrace,
+  RENEWAL_WARNING_DAYS,
+  daysUntilRenewalInIST,
+  getPlanRenewalWarning,
   isAccessBlockedBySuspension,
   buildSuspensionMeta,
   statusUpdateFields,

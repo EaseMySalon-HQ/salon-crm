@@ -45,7 +45,7 @@ import { POSSettings } from "./pos-settings"
 import { PlanBilling } from "./plan-billing"
 import { MembershipPlansTable } from "@/components/membership/membership-plans-table"
 import { ChannelUsageSettings } from "./channel-usage-settings"
-import { WhatsAppBusinessSettings } from "./whatsapp-business-settings"
+import { WhatsAppIntegrationSettings } from "./whatsapp-business-settings"
 import { FeedbackManagementSettings } from "./feedback-management-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
@@ -224,16 +224,16 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
       {
         id: "notifications",
         title: "Notifications",
-        description: "Email, SMS, and reminder preferences for your team and clients.",
+        description: "Email and WhatsApp message preferences — receipts, appointments, and alerts.",
         icon: Bell,
-        searchTerms: ["alerts", "reminders", "email"],
+        searchTerms: ["alerts", "reminders", "email", "whatsapp", "sms"],
       },
       {
         id: "whatsapp-integration",
         title: "WhatsApp Integration",
-        description: "Connect WhatsApp Business, templates, and client message preferences.",
+        description: "Connect your WhatsApp Business number via Meta Cloud API (Embedded Signup).",
         icon: MessageCircle,
-        searchTerms: ["whatsapp", "meta", "business api", "messaging"],
+        searchTerms: ["whatsapp", "meta", "business api", "waba", "embedded signup"],
       },
       {
         id: "channel-usage",
@@ -444,7 +444,7 @@ export function SettingsPage() {
       case "packages":
         return <PackagesSettingsPanel />
       case "whatsapp-integration":
-        return <WhatsAppBusinessSettings />
+        return <WhatsAppIntegrationSettings />
       case "channel-usage":
         return <ChannelUsageSettings />
       case "feedback":

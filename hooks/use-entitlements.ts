@@ -28,6 +28,7 @@ interface PlanInfo {
   addons: {
     whatsapp?: { enabled: boolean; quota: number; used: number }
     sms?: { enabled: boolean; quota: number; used: number }
+    waba?: { enabled: boolean; quota: number; used: number }
   }
   monthlyPrice?: number | null
   yearlyPrice?: number | null

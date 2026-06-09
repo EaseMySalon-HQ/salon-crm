@@ -67,7 +67,7 @@ export function AccountSuspended({
             </CardTitle>
             <CardDescription className="text-amber-900/90 text-base">
               {message ||
-                "Your 3-day extension period has ended. Subscription billing still needs attention — the business owner or billing contact should reach out to restore access."}
+                "Subscription billing needs attention — the business owner or billing contact should renew the plan to restore access."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -87,8 +87,7 @@ export function AccountSuspended({
               <AlertTriangle className="h-4 w-4 text-amber-600" />
               <AlertDescription className="text-slate-700">
                 To lift suspension and use appointments, billing, and reports again, contact EaseMySalon support
-                with your business code or registered email. Future suspensions include a 3-day extension before
-                access is paused.
+                with your business code or registered email.
               </AlertDescription>
             </Alert>
 

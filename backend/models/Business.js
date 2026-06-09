@@ -148,7 +148,9 @@ const businessSchema = new mongoose.Schema({
       receiptNotifications: {
         enabled: { type: Boolean, default: true },
         autoSendToClients: { type: Boolean, default: true },
-        highValueThreshold: { type: Number, default: 0 }
+        highValueThreshold: { type: Number, default: 0 },
+        /** Growth/Pro only: include Share Feedback button on WhatsApp receipts */
+        includeFeedbackLink: { type: Boolean, default: false },
       },
       appointmentNotifications: {
         enabled: { type: Boolean, default: false },
@@ -195,7 +197,7 @@ const businessSchema = new mongoose.Schema({
     enum: ['active', 'inactive', 'suspended', 'deleted'], 
     default: 'active' 
   },
-  /** When status became suspended — starts the 3-day grace period for tenant access */
+  /** When status became suspended (billing overdue). */
   suspendedAt: { type: Date, default: null },
   isOnboarded: { type: Boolean, default: false },
   onboardingStep: { type: Number, default: 0 },

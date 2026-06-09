@@ -22,9 +22,15 @@ type Row = StaffProfile
 
 type SortKey = "name" | "role" | "branchName" | "servicesDone" | "revenue" | "utilizationPct"
 
-function roleLabel(role: string): string {
-  if (!role) return "Staff"
-  return role.charAt(0).toUpperCase() + role.slice(1)
+const STAFF_ROLES: Record<string, string> = {
+  admin: "Admin",
+  manager: "Manager",
+  staff: "Staff",
+}
+
+function roleLabel(role: string, unlinked?: boolean): string {
+  if (unlinked) return "—"
+  return STAFF_ROLES[role] || "Staff"
 }
 
 export function StaffTable({
@@ -57,6 +63,7 @@ export function StaffTable({
           staffId: s.id,
           name: s.name,
           role: s.role,
+          unlinked: s.unlinked,
           isActive: s.isActive,
           avatar: s.avatar,
           servicesDone: s.servicesDone,
@@ -158,7 +165,7 @@ export function StaffTable({
                       <span className="font-medium text-slate-800">{r.name}</span>
                     </span>
                   </TableCell>
-                  <TableCell className="text-slate-600">{roleLabel(r.role)}</TableCell>
+                  <TableCell className="text-slate-600">{roleLabel(r.role, r.unlinked)}</TableCell>
                   <TableCell>
                     {r.isActive ? (
                       <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">

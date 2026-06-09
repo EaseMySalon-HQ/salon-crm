@@ -16,17 +16,13 @@ import { BranchErrorNote } from "@/components/branch-management/branch-error-not
 import { DateRangePicker } from "@/components/branch-management/date-range-picker"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
-import { StaffCompareChart } from "@/components/branch-management/staff-compare-chart"
 import { useBranchDateRange } from "@/hooks/use-branch-date-range"
 import { STALE_TIME } from "@/lib/queries/staleness"
-
-type CompareMetric = "revenue" | "services" | "utilization"
 
 function BranchStaffContent() {
   const searchParams = useSearchParams()
   const [branchFilter, setBranchFilter] = useState<string>("all")
   const [includeInactive, setIncludeInactive] = useState(true)
-  const [compareMetric, setCompareMetric] = useState<CompareMetric>("revenue")
   const dateRange = useBranchDateRange("this_month")
   const { params, label } = dateRange
   const staffParams = params ? { ...params, includeInactive } : undefined
@@ -44,17 +40,6 @@ function BranchStaffContent() {
     queryFn: async () => {
       const res = await BranchManagementAPI.getStaff(staffParams)
       if (!res.success) throw new Error(res.error || "Failed to load staff")
-      return res.data
-    },
-    enabled,
-    staleTime: STALE_TIME.dashboard,
-  })
-
-  const compare = useQuery({
-    queryKey: ["branch-management", "staff-compare", rangeKey, compareMetric],
-    queryFn: async () => {
-      const res = await BranchManagementAPI.getStaffCompare({ ...params, metric: compareMetric })
-      if (!res.success) throw new Error(res.error || "Failed to load comparison")
       return res.data
     },
     enabled,
@@ -110,13 +95,6 @@ function BranchStaffContent() {
         branchFilter={branchFilter}
         rangeLabel={label}
         includeInactive={includeInactive}
-      />
-
-      <StaffCompareChart
-        data={compare.data}
-        isLoading={compare.isLoading && enabled}
-        metric={compareMetric}
-        onMetricChange={setCompareMetric}
       />
     </div>
   )

@@ -42,6 +42,8 @@ describe('daily-metrics-cache', () => {
         appointments: 5,
         completedAppointments: 4,
         avgRating: 4.5,
+        bookedMinutes: 60,
+        availableMinutes: 100,
         capacityUtilizationPct: 60,
       },
       {
@@ -50,6 +52,8 @@ describe('daily-metrics-cache', () => {
         appointments: 3,
         completedAppointments: 2,
         avgRating: 3.5,
+        bookedMinutes: 40,
+        availableMinutes: 100,
         capacityUtilizationPct: 40,
       },
     ];
@@ -59,7 +63,28 @@ describe('daily-metrics-cache', () => {
     expect(agg.completedAppointments).toBe(6);
     expect(agg.avgTicketSize).toBe(500);
     expect(agg.avgRating).toBe(4);
+    expect(agg.bookedMinutes).toBe(100);
+    expect(agg.availableMinutes).toBe(200);
     expect(agg.capacityUtilizationPct).toBe(50);
+  });
+
+  it('weights utilization by total booked and available minutes, not daily averages', () => {
+    const rows = [
+      {
+        date: '2026-06-01',
+        bookedMinutes: 10,
+        availableMinutes: 10,
+        capacityUtilizationPct: 100,
+      },
+      {
+        date: '2026-06-02',
+        bookedMinutes: 0,
+        availableMinutes: 100,
+        capacityUtilizationPct: 0,
+      },
+    ];
+    const agg = aggregateDailyRows(rows);
+    expect(agg.capacityUtilizationPct).toBe(9);
   });
 
   it('merges cached and live rows with live winning on duplicate dates', () => {

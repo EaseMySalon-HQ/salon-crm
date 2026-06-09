@@ -35,7 +35,7 @@ const {
   resolveBranchSeriesFromCache,
   pointInTimeCountsForBranch,
 } = require('../lib/daily-metrics-cache');
-const { catalogKey } = require('../lib/branch-management-helpers');
+const { catalogKey, pct } = require('../lib/branch-management-helpers');
 
 const router = express.Router();
 
@@ -235,9 +235,9 @@ async function appointmentSeriesForBranch({ models, branch }, range, granularity
   return map;
 }
 
-async function staffForBranch({ models, branch }, range, includeInactive = true) {
+async function staffForBranch({ models, branch, mainConnection }, range, includeInactive = true) {
   range.ymd = ymd;
-  return staffWithUtilizationForBranch({ models, branch }, range, includeInactive);
+  return staffWithUtilizationForBranch({ models, branch, mainConnection }, range, includeInactive);
 }
 
 async function inventoryForBranch({ models }) {
@@ -377,6 +377,8 @@ router.get('/summary', guard, validate(rangeSchema, 'query'), async (req, res) =
       avgTicketSize: 0,
       staff: 0,
       clients: 0,
+      bookedMinutes: 0,
+      availableMinutes: 0,
       capacityUtilizationPct: 0,
       avgRating: null,
       revenueTarget: 0,
@@ -411,6 +413,8 @@ router.get('/summary', guard, validate(rangeSchema, 'query'), async (req, res) =
         aggregate.staff += d.staff;
         aggregate.clients += d.clients;
         aggregate.revenueTarget += revenueTarget;
+        aggregate.bookedMinutes += d.bookedMinutes || 0;
+        aggregate.availableMinutes += d.availableMinutes || 0;
         if (d.avgRating != null) {
           ratingSum += d.avgRating;
           ratingCount += 1;
@@ -447,13 +451,10 @@ router.get('/summary', guard, validate(rangeSchema, 'query'), async (req, res) =
     aggregate.avgRating =
       ratingCount > 0 ? Math.round((ratingSum / ratingCount) * 10) / 10 : null;
 
-    const utilBranches = branches.filter((b) => !b.error);
-    if (utilBranches.length) {
-      aggregate.capacityUtilizationPct = Math.round(
-        utilBranches.reduce((s, b) => s + (b.capacityUtilizationPct || 0), 0) /
-          utilBranches.length
-      );
-    }
+    aggregate.capacityUtilizationPct = pct(
+      aggregate.bookedMinutes,
+      aggregate.availableMinutes
+    );
 
     res.json({
       success: true,
@@ -541,7 +542,7 @@ router.get('/staff', guard, validate(rangeSchema, 'query'), async (req, res) => 
     const range = resolveRange(req.query);
     const includeInactive = req.query.includeInactive !== false;
     const results = await fanOut(req.mainConnection, req.branchList, (ctx) =>
-      staffForBranch(ctx, range, includeInactive)
+      staffForBranch({ ...ctx, mainConnection: req.mainConnection }, range, includeInactive)
     );
     const branches = results.map((r) => ({
       branchId: r.branchId,

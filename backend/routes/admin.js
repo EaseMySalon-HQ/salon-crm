@@ -330,7 +330,7 @@ router.post('/businesses/:id/impersonate', setupMainDatabase, authenticateAdmin,
     if (!business.owner) return res.status(400).json({ success: false, error: 'Business has no owner' });
     const { isAccessBlockedBySuspension } = require('../lib/suspension-grace');
     if (isAccessBlockedBySuspension(business)) {
-      return res.status(403).json({ success: false, error: 'Cannot impersonate suspended business (grace period ended)' });
+      return res.status(403).json({ success: false, error: 'Cannot impersonate suspended business' });
     }
 
     const owner = business.owner;
@@ -968,59 +968,81 @@ router.patch('/businesses/:id/status', setupMainDatabase, authenticateAdmin, che
 
 
 // Get Business Statistics
-router.get('/businesses/:id/stats', authenticateAdmin, checkAdminPermission('businesses', 'view'), async (req, res) => {
-  try {
-    const businessId = req.params.id;
-    
-    // Connect to business-specific database
-    const databaseManager = require('../config/database-manager');
-    const dbName = databaseManager.getDatabaseName(businessId);
-    const businessDb = mongoose.connection.useDb(dbName);
-    
-    // Get models for business database
-    const Client = businessDb.model('Client', require('../models/Client').schema);
-    const Appointment = businessDb.model('Appointment', require('../models/Appointment').schema);
-    const Sale = businessDb.model('Sale', require('../models/Sale').schema);
-    
-    // Get user count from main database
-    const totalUsers = await User.countDocuments({ branchId: businessId });
-    const activeUsers = await User.countDocuments({ branchId: businessId, status: 'active' });
-    
-    // Get business-specific stats
-    const [totalClients, totalAppointments, totalSales] = await Promise.all([
-      Client.countDocuments(),
-      Appointment.countDocuments(),
-      Sale.countDocuments()
-    ]);
-    
-    // Calculate monthly revenue (last 30 days)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
-    const monthlySales = await Sale.find({
-      createdAt: { $gte: thirtyDaysAgo }
-    });
-    
-    const monthlyRevenue = monthlySales.reduce((total, sale) => {
-      return total + (sale.grossTotal || 0);
-    }, 0);
+router.get(
+  '/businesses/:id/stats',
+  setupMainDatabase,
+  authenticateAdmin,
+  checkAdminPermission('businesses', 'view'),
+  async (req, res) => {
+    try {
+      const businessId = req.params.id;
+      const { User, Business } = req.mainModels;
 
-    res.json({
-      success: true,
-      data: {
+      const business = await Business.findById(businessId).select('code').lean();
+      if (!business) {
+        return res.status(404).json({ success: false, error: 'Business not found' });
+      }
+
+      const mainConnection = await databaseManager.getMainConnection();
+      const businessDb = await databaseManager.getConnection(business.code || businessId, mainConnection);
+
+      const Client = businessDb.model('Client', require('../models/Client').schema);
+      const Appointment = businessDb.model('Appointment', require('../models/Appointment').schema);
+      const Sale = businessDb.model('Sale', require('../models/Sale').schema);
+      const Staff = businessDb.model('Staff', require('../models/Staff').schema);
+
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      const [
         totalUsers,
         activeUsers,
+        totalStaff,
+        activeStaff,
         totalClients,
         totalAppointments,
         totalSales,
-        monthlyRevenue
-      }
-    });
-  } catch (error) {
-    logger.error('Get business stats error:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+        monthlyRevenueAgg,
+      ] = await Promise.all([
+        User.countDocuments({ branchId: businessId }),
+        User.countDocuments({ branchId: businessId, isActive: true }),
+        Staff.countDocuments({}),
+        Staff.countDocuments({ isActive: true }),
+        Client.countDocuments(),
+        Appointment.countDocuments(),
+        Sale.countDocuments(),
+        Sale.aggregate([
+          {
+            $match: {
+              createdAt: { $gte: thirtyDaysAgo },
+              $nor: [{ status: /cancelled/i }],
+            },
+          },
+          { $group: { _id: null, total: { $sum: { $ifNull: ['$grossTotal', 0] } } } },
+        ]),
+      ]);
+
+      const monthlyRevenue = monthlyRevenueAgg[0]?.total || 0;
+
+      res.json({
+        success: true,
+        data: {
+          totalUsers,
+          activeUsers,
+          totalStaff,
+          activeStaff,
+          totalClients,
+          totalAppointments,
+          totalSales,
+          monthlyRevenue,
+        },
+      });
+    } catch (error) {
+      logger.error('Get business stats error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
   }
-});
+);
 
 
 

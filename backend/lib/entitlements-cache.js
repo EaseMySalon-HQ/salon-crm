@@ -72,6 +72,12 @@ async function resolve(businessId) {
 function invalidate(businessId) {
   if (!businessId) return;
   cache.delete(String(businessId));
+  try {
+    const { cacheDel, businessPlanCacheKey } = require('./cache');
+    void cacheDel(businessPlanCacheKey(String(businessId)));
+  } catch {
+    /* redis cache optional */
+  }
   logger.debug(`🧹 entitlements-cache: invalidated business ${businessId}`);
 }
 

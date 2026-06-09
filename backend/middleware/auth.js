@@ -78,27 +78,41 @@ const authenticateToken = (req, res, next) => {
           }
         }
         
-        // If not found and no branchId in token, check all business databases
+        // Legacy access tokens may omit branchId — resolve tenant from refresh session row.
         if (!staffUser && !businessId) {
-          const Business = mainConnection.model('Business', require('../models/Business').schema);
-          const businesses = await Business.find({}).lean();
-          
-          for (const business of businesses) {
-            try {
-              const businessDb = await databaseManager.getConnection(business.code || business._id, mainConnection);
-              const Staff = businessDb.model('Staff', require('../models/Staff').schema);
-              
-              const staff = await Staff.findById(decoded.id).select('-password');
-              if (staff) {
-                staffUser = staff;
-                businessId = business._id;
-                logger.debug('🔍 Staff user found in business database:', business.name, business._id);
-                break;
-              }
-            } catch (error) {
-              logger.debug('🔍 Error checking business database:', business.name, error.message);
-              // Continue to next business
+          try {
+            const RefreshToken = mainConnection.model(
+              'RefreshToken',
+              require('../models/RefreshToken').schema
+            );
+            const session = await RefreshToken.findOne({
+              subjectType: 'staff',
+              staffId: decoded.id,
+              revoked: { $ne: true },
+              expiresAt: { $gt: new Date() },
+              branchId: { $exists: true, $ne: null },
+            })
+              .sort({ createdAt: -1 })
+              .select('branchId')
+              .lean();
+            if (session?.branchId) {
+              businessId = session.branchId;
             }
+          } catch (error) {
+            logger.debug('🔍 Refresh session branch lookup failed:', error.message);
+          }
+        }
+
+        if (!staffUser && businessId) {
+          try {
+            const businessDb = await databaseManager.getConnection(businessId, mainConnection);
+            const Staff = businessDb.model('Staff', require('../models/Staff').schema);
+            staffUser = await Staff.findById(decoded.id).select('-password');
+            if (staffUser) {
+              logger.debug('🔍 Staff user found via session branchId:', businessId);
+            }
+          } catch (error) {
+            logger.debug('🔍 Error checking business database with session branchId:', error.message);
           }
         }
         
@@ -214,8 +228,8 @@ const authenticateToken = (req, res, next) => {
         } else {
           const suspensionMeta = buildSuspensionMeta(business);
           req.businessSuspended = suspensionMeta.businessSuspended;
-          req.suspensionGraceActive = suspensionMeta.suspensionGraceActive;
-          req.suspensionGraceEndsAt = suspensionMeta.suspensionGraceEndsAt;
+          req.planRenewalWarningDaysLeft = suspensionMeta.planRenewalWarningDaysLeft;
+          req.planRenewalExpiringToday = suspensionMeta.planRenewalExpiringToday;
           req.businessNextBillingDate = suspensionMeta.nextBillingDate;
         }
 

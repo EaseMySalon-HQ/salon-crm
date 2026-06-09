@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { AnalyticsAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { STALE_TIME } from "@/lib/queries/staleness"
 import {
   addCalendarDaysIST,
   getFirstDayOfMonthIST,
@@ -112,6 +113,7 @@ export function useAnalyticsRevenueTab(dateFrom: string, dateTo: string, options
       return res.data as AnalyticsRevenueTabData
     },
     enabled: Boolean(enabled && user && dateFrom && dateTo),
+    staleTime: STALE_TIME.reports,
   })
 }
 
@@ -135,6 +137,7 @@ export function useAnalyticsServicesTab(dateFrom: string, dateTo: string, option
       return res.data as AnalyticsServicesTabData
     },
     enabled: Boolean(enabled && user && dateFrom && dateTo),
+    staleTime: STALE_TIME.reports,
   })
 }
 
@@ -158,6 +161,7 @@ export function useAnalyticsClientsTab(dateFrom: string, dateTo: string, options
       return res.data as AnalyticsClientsTabData
     },
     enabled: Boolean(enabled && user && dateFrom && dateTo),
+    staleTime: STALE_TIME.reports,
   })
 }
 
@@ -181,6 +185,7 @@ export function useAnalyticsProductsTab(dateFrom: string, dateTo: string, option
       return res.data as AnalyticsProductsTabData
     },
     enabled: Boolean(enabled && user && dateFrom && dateTo),
+    staleTime: STALE_TIME.reports,
   })
 }
 
@@ -208,6 +213,7 @@ export function useAnalyticsStaffTab(dateFrom: string, dateTo: string, options?:
       return res.data as AnalyticsStaffTabData
     },
     enabled: Boolean(enabled && user && dateFrom && dateTo),
+    staleTime: STALE_TIME.reports,
   })
 }
 
@@ -241,5 +247,6 @@ export function useStaffAnalyticsDrillDown(
       return res.data as AnalyticsStaffDrillDownData
     },
     enabled: Boolean(enabled && user && dateFrom && dateTo && staffId),
+    staleTime: STALE_TIME.reports,
   })
 }

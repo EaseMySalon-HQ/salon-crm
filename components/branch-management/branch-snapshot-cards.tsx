@@ -38,7 +38,7 @@ export function BranchSnapshotCards({
   isLoading: boolean
   selectedBranchId?: string
   onSelect?: (branchId: string) => void
-  variant?: "grid" | "sidebar"
+  variant?: "grid" | "sidebar" | "row"
 }) {
   const sorted = useMemo(
     () => [...branches].sort((a, b) => b.revenue - a.revenue),
@@ -46,6 +46,15 @@ export function BranchSnapshotCards({
   )
 
   if (isLoading) {
+    if (variant === "row") {
+      return (
+        <div className="flex gap-3">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-28 min-w-[200px] flex-1 rounded-lg" />
+          ))}
+        </div>
+      )
+    }
     if (variant === "sidebar") {
       return (
         <div className="space-y-2">
@@ -64,9 +73,10 @@ export function BranchSnapshotCards({
     )
   }
 
-  if (variant === "sidebar") {
+  if (variant === "row" || variant === "sidebar") {
+    const isRow = variant === "row"
     return (
-      <div className="space-y-2">
+      <div className={isRow ? "flex gap-3 overflow-x-auto pb-1" : "space-y-2"}>
         {sorted.map((b) => {
           const color = getBranchColor(b.branchId)
           const isSelected = selectedBranchId === b.branchId
@@ -76,7 +86,8 @@ export function BranchSnapshotCards({
               type="button"
               onClick={onSelect ? () => onSelect(isSelected ? "all" : b.branchId) : undefined}
               className={cn(
-                "w-full rounded-lg border text-left transition-all",
+                "rounded-lg border text-left transition-all",
+                isRow ? "min-w-[200px] flex-1 shrink-0" : "w-full",
                 isSelected
                   ? "border-indigo-300 bg-indigo-50/60 ring-1 ring-indigo-200"
                   : "border-slate-200/80 bg-white hover:border-slate-300 hover:shadow-sm"

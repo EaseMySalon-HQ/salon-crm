@@ -55,6 +55,18 @@ function normalizeApiErrorMessage(data: unknown): string {
   return ''
 }
 
+/** Plan/addon entitlement denials — not RBAC; callers should handle these locally. */
+function isEntitlementOrAddonDenied(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false
+  const code = (data as { code?: string }).code
+  return (
+    code === 'FEATURE_NOT_AVAILABLE' ||
+    code === 'WABA_ADDON_DISABLED' ||
+    code === 'ADDON_NOT_AVAILABLE' ||
+    code === 'LIMIT_REACHED'
+  )
+}
+
 /**
  * Parses failed API responses thrown as Axios errors (caller usually uses `axios.isAxiosError`).
  * Prefer this over reading `catch (e)` ad hoc across the codebase.
@@ -406,9 +418,9 @@ apiClient.interceptors.response.use(
 
         const isPermissionDenied =
           statusOut === 403 &&
+          !isEntitlementOrAddonDenied(error?.response?.data) &&
           (errorMsgLower.includes('insufficient permissions') ||
-            errorMsgLower.includes('insufficient admin permissions') ||
-            (errorMsgLower.includes('feature') && errorMsgLower.includes('not available')))
+            errorMsgLower.includes('insufficient admin permissions'))
 
         if (isPermissionDenied) {
           if (process.env.NODE_ENV === 'development') {
@@ -646,6 +658,8 @@ export interface BranchStaffRow {
   id: string
   name: string
   role: string
+  /** True when bill staffId could not be matched to the branch staff directory */
+  unlinked?: boolean
   isActive: boolean
   avatar: string
   servicesDone: number

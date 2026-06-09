@@ -16,6 +16,7 @@ export type StaffProfile = {
   staffId: string
   name: string
   role: string
+  unlinked?: boolean
   isActive: boolean
   avatar: string
   branchId: string
@@ -25,9 +26,15 @@ export type StaffProfile = {
   utilizationPct: number
 }
 
-function roleLabel(role: string): string {
-  if (!role) return "Staff"
-  return role.charAt(0).toUpperCase() + role.slice(1)
+const STAFF_ROLES: Record<string, string> = {
+  admin: "Admin",
+  manager: "Manager",
+  staff: "Staff",
+}
+
+function roleLabel(role: string, unlinked?: boolean): string {
+  if (unlinked) return "—"
+  return STAFF_ROLES[role] || "Staff"
 }
 
 export function StaffProfileDrawer({
@@ -60,7 +67,7 @@ export function StaffProfileDrawer({
                 <div className="min-w-0 text-left">
                   <SheetTitle className="truncate">{staff.name}</SheetTitle>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    <span>{roleLabel(staff.role)}</span>
+                    <span>{roleLabel(staff.role, staff.unlinked)}</span>
                     <Badge
                       variant="outline"
                       className={

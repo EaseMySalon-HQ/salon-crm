@@ -158,13 +158,13 @@ export default function BranchDashboardPage() {
             <h2 className="text-sm font-semibold text-slate-800">Branch performance</h2>
             <p className="text-xs text-slate-400">Click a branch to filter the overview</p>
           </div>
-          <div className="max-h-[520px] overflow-y-auto p-3 xl:max-h-none xl:flex-1">
+          <div className="p-3">
             <BranchSnapshotCards
               branches={branches}
               isLoading={summary.isLoading && enabled}
               selectedBranchId={branchFilter}
               onSelect={setBranchFilter}
-              variant="sidebar"
+              variant="row"
             />
             <div className="mt-4 border-t border-slate-100 pt-4">
               <TopPerformersPanel

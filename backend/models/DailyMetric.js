@@ -9,6 +9,8 @@ const dailyMetricSchema = new mongoose.Schema(
     appointments: { type: Number, default: 0 },
     completedAppointments: { type: Number, default: 0 },
     avgRating: { type: Number, default: null },
+    bookedMinutes: { type: Number, default: 0 },
+    availableMinutes: { type: Number, default: 0 },
     capacityUtilizationPct: { type: Number, default: 0 },
   },
   { timestamps: true }

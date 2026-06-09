@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, Fragment } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { addDays, format, subDays } from "date-fns"
@@ -31,6 +32,12 @@ import {
 import { AppointmentsAPI, SalesAPI, StaffDirectoryAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
+import {
+  appointmentsCalendarRangeKey,
+  getAppointmentsCalendarRange,
+  useAppointmentsCalendarRange,
+} from "@/lib/queries/appointments"
+import { invalidateAppointments } from "@/lib/queries/invalidate"
 import { resolveCreatedByDisplay } from "@/lib/utils"
 import {
   getServiceDisplayNames,
@@ -178,11 +185,29 @@ export const AppointmentsCalendar = forwardRef<
   const canQuickSale = hasPermission("sales", "create")
   const router = useRouter()
   const { toast } = useToast()
+  const queryClient = useQueryClient()
   const [currentDate, setCurrentDate] = useState(new Date())
-  const [appointments, setAppointments] = useState<Appointment[]>([])
+  const { data: appointments = [], isLoading: loading } =
+    useAppointmentsCalendarRange(currentDate ?? new Date())
+  const { dateFrom, dateTo } = useMemo(
+    () => getAppointmentsCalendarRange(currentDate ?? new Date()),
+    [currentDate],
+  )
+  const branchKey = user?.branchId ?? user?._id ?? "none"
+  const appointmentsQueryKey = useMemo(
+    () => appointmentsCalendarRangeKey(branchKey, dateFrom, dateTo),
+    [branchKey, dateFrom, dateTo],
+  )
+  const updateAppointmentsCache = useCallback(
+    (updater: (prev: Appointment[]) => Appointment[]) => {
+      queryClient.setQueryData(appointmentsQueryKey, (prev: Appointment[] | undefined) =>
+        updater(prev || []),
+      )
+    },
+    [queryClient, appointmentsQueryKey],
+  )
   const [staffList, setStaffList] = useState<StaffMember[]>([])
   const [staffFilter, setStaffFilter] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null)
   const [showDetails, setShowDetails] = useState(false)
   const [pendingAppointmentId, setPendingAppointmentId] = useState<string | null>(initialAppointmentId ?? null)
@@ -341,34 +366,6 @@ export const AppointmentsCalendar = forwardRef<
     return arr
   }, [])
 
-  // Fetch appointments from API within a bounded window around the current view.
-  // Without this, the route returned the most recent 100 rows by `createdAt`, which
-  // could exclude future appointments and inflated Railway egress for calendar use.
-  const fetchAppointments = async () => {
-    try {
-      setLoading(true)
-      const anchor = currentDate ?? new Date()
-      const dateFrom = format(subDays(anchor, 7), "yyyy-MM-dd")
-      const dateTo = format(addDays(anchor, 30), "yyyy-MM-dd")
-      const response = await AppointmentsAPI.getAll({
-        limit: 1000,
-        dateFrom,
-        dateTo,
-        view: "list",
-      })
-
-      if (response.success) {
-        setAppointments(response.data || [])
-      } else {
-        console.error('Failed to fetch appointments:', response.error)
-      }
-    } catch (error) {
-      console.error('Error fetching appointments:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   const reloadPartialSalesForSelectedDay = useCallback(async () => {
     if (!selectedDate) return
     try {
@@ -387,11 +384,6 @@ export const AppointmentsCalendar = forwardRef<
     }
   }, [selectedDate])
 
-  // Fetch appointments when component mounts or date changes
-  useEffect(() => {
-    fetchAppointments()
-  }, [currentDate])
-
   useEffect(() => {
     void reloadPartialSalesForSelectedDay()
   }, [reloadPartialSalesForSelectedDay])
@@ -405,17 +397,14 @@ export const AppointmentsCalendar = forwardRef<
     return () => { cancelled = true }
   }, [])
 
-  // Refresh when appointment is created/updated from drawer
-  const fetchRef = useRef(fetchAppointments)
-  fetchRef.current = fetchAppointments
   useEffect(() => {
     const handler = () => {
-      fetchRef.current()
+      invalidateAppointments(queryClient)
       void reloadPartialSalesForSelectedDay()
     }
     window.addEventListener("appointments-refresh", handler)
     return () => window.removeEventListener("appointments-refresh", handler)
-  }, [reloadPartialSalesForSelectedDay])
+  }, [queryClient, reloadPartialSalesForSelectedDay])
 
   const getAppointmentsForDate = (date: Date) => {
     const dateString = format(date, "yyyy-MM-dd")
@@ -683,7 +672,7 @@ export const AppointmentsCalendar = forwardRef<
     try {
       const response = await AppointmentsAPI.update(appointmentToCancel, { status: 'cancelled' })
       if (response.success) {
-        await fetchAppointments()
+        invalidateAppointments(queryClient)
         setShowDetails(false)
         setShowCancelConfirm(false)
         setAppointmentToCancel(null)
@@ -709,7 +698,7 @@ export const AppointmentsCalendar = forwardRef<
         if (!res?.success) allSuccess = false
       }
       if (allSuccess) {
-        await fetchAppointments()
+        invalidateAppointments(queryClient)
         setShowDetails(false)
         setShowCancelConfirm(false)
         setAppointmentToCancel(null)
@@ -748,7 +737,7 @@ export const AppointmentsCalendar = forwardRef<
       setShowDetails(false)
       setShowDeleteInvoiceConfirm(false)
       setDeleteInvoiceReason('')
-      await fetchAppointments()
+      invalidateAppointments(queryClient)
       alert(saleRes?.message || 'Invoice and appointment(s) deleted successfully.')
     } catch (e) {
       console.error(e)
@@ -773,7 +762,7 @@ export const AppointmentsCalendar = forwardRef<
           }
           return a
         })
-        setAppointments(list)
+        updateAppointmentsCache(() => list)
         setSelectedAppointment({ ...selectedAppointment, status: newStatus })
       } else {
         alert('Failed to update status. Please try again.')
@@ -797,7 +786,7 @@ export const AppointmentsCalendar = forwardRef<
     try {
       const results = await Promise.all(ids.map((id) => AppointmentsAPI.update(id, { status: newStatus })))
       if (results.every((r) => r?.success)) {
-        setAppointments((prev) =>
+        updateAppointmentsCache((prev) =>
           prev.map((a) =>
             idSet.has(toMongoIdString(a._id) || String(a._id)) ? { ...a, status: newStatus } : a,
           ),
@@ -889,7 +878,7 @@ export const AppointmentsCalendar = forwardRef<
     setTimeout(() => setJustDropped(false), 200)
     try {
       const res = await AppointmentsAPI.update(data.id, { status: targetStatusKey })
-      if (res?.success) await fetchAppointments()
+      if (res?.success) invalidateAppointments(queryClient)
       else alert('Failed to update status. Please try again.')
     } catch (err) {
       console.error(err)

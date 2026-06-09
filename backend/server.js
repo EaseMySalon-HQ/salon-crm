@@ -245,22 +245,40 @@ app.use(cookieParser());
 // /api/v1/* is an alias for /api/* (same handlers; no duplicated route tables)
 app.use(apiV1AliasMiddleware);
 
+async function buildHealthPayload() {
+  const { pingRedis, redisUrl } = require('./lib/redis');
+  const dbState = mongoose.connection.readyState;
+  const redisConfigured = Boolean(redisUrl());
+  const redisOk = redisConfigured ? await pingRedis() : null;
+  const services = {
+    db: dbState === 1 ? 'ok' : 'down',
+    redis: redisConfigured ? (redisOk ? 'ok' : 'degraded') : 'disabled',
+    rateLimit: getRateLimitHealthPayload(),
+    tenantConnections: databaseManager.getActiveConnections().length,
+  };
+  const degraded = services.db !== 'ok';
+  return {
+    success: !degraded,
+    status: degraded ? 'degraded' : 'ok',
+    message: 'EaseMySalon API is running',
+    timestamp: new Date().toISOString(),
+    uptime: `${Math.round(process.uptime())}s`,
+    memory: {
+      usedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      totalMb: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+    },
+    services,
+  };
+}
+
 // Health checks before /api rate limiters (load balancers / k8s probes)
-app.get('/health', (req, res) => {
-  res.json({
-    success: true,
-    message: 'EaseMySalon API is running',
-    timestamp: new Date().toISOString(),
-    ...getRateLimitHealthPayload(),
-  });
+app.get('/health', async (req, res) => {
+  const health = await buildHealthPayload();
+  res.status(health.services.db === 'ok' ? 200 : 503).json(health);
 });
-app.get('/api/health', (req, res) => {
-  res.json({
-    success: true,
-    message: 'EaseMySalon API is running',
-    timestamp: new Date().toISOString(),
-    ...getRateLimitHealthPayload(),
-  });
+app.get('/api/health', async (req, res) => {
+  const health = await buildHealthPayload();
+  res.status(health.services.db === 'ok' ? 200 : 503).json(health);
 });
 
 // Rate limits: global API + stricter auth + heavy exports + reserved AI prefix (see middleware/rate-limit.js)
@@ -993,6 +1011,13 @@ app.get('/api/auth/my-branches', authenticateToken, async (req, res) => {
       return res.json({ success: true, data: { branches: [] } });
     }
 
+    const { cacheGet, cacheSet, myBranchesCacheKey } = require('./lib/cache');
+    const cacheKey = myBranchesCacheKey(req.user._id);
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     const databaseManager = require('./config/database-manager');
     const mainConnection = await databaseManager.getMainConnection();
     const Business = mainConnection.model('Business', require('./models/Business').schema);
@@ -1002,7 +1027,7 @@ app.get('/api/auth/my-branches', authenticateToken, async (req, res) => {
       status: 'active',
     }).select('_id code name address settings.branding.logo');
 
-    return res.json({
+    const responseBody = {
       success: true,
       data: {
         branches: branches.map((b) => ({
@@ -1013,7 +1038,9 @@ app.get('/api/auth/my-branches', authenticateToken, async (req, res) => {
           logo: b.settings?.branding?.logo || '',
         })),
       },
-    });
+    };
+    void cacheSet(cacheKey, responseBody, parseInt(process.env.LIST_REDIS_TTL_SEC, 10) || 120);
+    return res.json(responseBody);
   } catch (error) {
     logger.error('my-branches error:', error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
@@ -1593,8 +1620,8 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           updatedAt: req.user.updatedAt,
           ...(req.user.isImpersonation && { isImpersonation: true, impersonatedBy: req.user.impersonatedBy }),
           businessSuspended: !!req.businessSuspended,
-          suspensionGraceActive: !!req.suspensionGraceActive,
-          suspensionGraceEndsAt: req.suspensionGraceEndsAt ?? null,
+          planRenewalWarningDaysLeft: req.planRenewalWarningDaysLeft ?? null,
+          planRenewalExpiringToday: !!req.planRenewalExpiringToday,
           nextBillingDate: req.businessNextBillingDate ?? null,
           suspensionSupportEmail:
             process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
@@ -1648,6 +1675,13 @@ app.get('/api/business/plan', authenticateToken, async (req, res) => {
       });
     }
 
+    const { cacheGet, cacheSet, businessPlanCacheKey } = require('./lib/cache');
+    const planCacheKey = businessPlanCacheKey(businessId);
+    const cachedPlan = await cacheGet(planCacheKey);
+    if (cachedPlan) {
+      return res.json(cachedPlan);
+    }
+
     const databaseManager = require('./config/database-manager');
     const mainConnection = await databaseManager.getMainConnection();
     const Business = mainConnection.model('Business', require('./models/Business').schema);
@@ -1693,12 +1727,14 @@ app.get('/api/business/plan', authenticateToken, async (req, res) => {
       });
     }
 
-    res.json({
+    const responseBody = {
       success: true,
       data: {
         plan: planInfo
       }
-    });
+    };
+    void cacheSet(planCacheKey, responseBody, parseInt(process.env.PLAN_REDIS_TTL_SEC, 10) || 1800);
+    res.json(responseBody);
   } catch (error) {
     logger.error('Error fetching business plan:', error);
     res.status(500).json({
@@ -4371,11 +4407,18 @@ app.delete('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPerm
 // Services routes
 app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
-    
     const { Service } = req.businessModels;
     const { page = 1, limit = 10, search = '' } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
+
+    const { cacheGet, cacheSet, tenantListCacheKey } = require('./lib/cache');
+    const listQueryKey = `p${pageNum}:l${limitNum}:q${String(search).slice(0, 64)}`;
+    const listCacheKey = tenantListCacheKey('services', req.user.branchId, listQueryKey);
+    const cachedList = await cacheGet(listCacheKey);
+    if (cachedList) {
+      return res.json(cachedList);
+    }
 
     let query = {};
     if (search) {
@@ -4401,7 +4444,7 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
     const data = applyOverridesToServiceDocs(services, serviceOverrides);
 
     logger.debug('Services found: %d', services.length);
-    res.json({
+    const responseBody = {
       success: true,
       data,
       pagination: {
@@ -4410,7 +4453,9 @@ app.get('/api/services', authenticateToken, setupBusinessDatabase, requireStaff,
         total,
         totalPages: Math.ceil(total / limitNum)
       }
-    });
+    };
+    void cacheSet(listCacheKey, responseBody, parseInt(process.env.LIST_REDIS_TTL_SEC, 10) || 120);
+    res.json(responseBody);
   } catch (error) {
     logger.error('Error fetching services:', error);
     res.status(500).json({
@@ -7971,6 +8016,14 @@ app.get('/api/staff', authenticateToken, setupBusinessDatabase, requireManager, 
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
+    const { cacheGet, cacheSet, tenantListCacheKey } = require('./lib/cache');
+    const listQueryKey = `p${pageNum}:l${limitNum}:q${String(search).slice(0, 64)}`;
+    const listCacheKey = tenantListCacheKey('staff', req.user.branchId, listQueryKey);
+    const cachedList = await cacheGet(listCacheKey);
+    if (cachedList) {
+      return res.json(cachedList);
+    }
+
     let query = {};
     if (search) {
       query = {
@@ -7988,7 +8041,7 @@ app.get('/api/staff', authenticateToken, setupBusinessDatabase, requireManager, 
       .limit(limitNum)
       .sort({ createdAt: -1 });
 
-    res.json({
+    const responseBody = {
       success: true,
       data: staff,
       pagination: {
@@ -7997,7 +8050,9 @@ app.get('/api/staff', authenticateToken, setupBusinessDatabase, requireManager, 
         total,
         totalPages: Math.ceil(total / limitNum)
       }
-    });
+    };
+    void cacheSet(listCacheKey, responseBody, parseInt(process.env.LIST_REDIS_TTL_SEC, 10) || 120);
+    res.json(responseBody);
   } catch (error) {
     logger.error('Error fetching staff:', error);
     res.status(500).json({
@@ -9676,13 +9731,30 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
       view,
       fields,
     } = req.query;
+    const hasBoundedWindow = Boolean(date) || Boolean(dateFrom && dateTo);
+    const canCacheList = hasBoundedWindow && !clientId;
+    if (canCacheList && req.user?.branchId) {
+      const {
+        cacheGet,
+        cacheSet,
+        appointmentsListCacheKey,
+        buildAppointmentsListQueryKey,
+      } = require('./lib/cache');
+      const listCacheKey = appointmentsListCacheKey(
+        req.user.branchId,
+        buildAppointmentsListQueryKey(req.query)
+      );
+      const cachedList = await cacheGet(listCacheKey);
+      if (cachedList) {
+        return res.json(cachedList);
+      }
+    }
     const pageNum = parseInt(page);
     /**
      * Calendar/list views frequently need a whole month at once; allow a generous cap when a
      * bounded date window is supplied. Without a window we still cap tightly to prevent
      * accidental "download world" requests from buggy callers.
      */
-    const hasBoundedWindow = Boolean(date) || Boolean(dateFrom && dateTo);
     const requestedLimit = parseInt(limit);
     const limitNum = Math.max(
       1,
@@ -9798,7 +9870,7 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
       }
     });
 
-    res.json({
+    const responseBody = {
       success: true,
       data: appointments,
       pagination: {
@@ -9807,7 +9879,20 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
         total: totalAppointments,
         totalPages: Math.ceil(totalAppointments / limitNum)
       }
-    });
+    };
+    if (canCacheList && req.user?.branchId) {
+      const { cacheSet, appointmentsListCacheKey, buildAppointmentsListQueryKey } = require('./lib/cache');
+      const listCacheKey = appointmentsListCacheKey(
+        req.user.branchId,
+        buildAppointmentsListQueryKey(req.query)
+      );
+      void cacheSet(
+        listCacheKey,
+        responseBody,
+        parseInt(process.env.APPOINTMENTS_REDIS_TTL_SEC, 10) || 45
+      );
+    }
+    res.json(responseBody);
   } catch (error) {
     logger.error('Error fetching appointments:', error);
     res.status(500).json({
@@ -10996,15 +11081,27 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                   if (!useAddon && !useWallet) {
                     logger.info('📱 WhatsApp receipt skipped: quota exhausted, wallet insufficient');
                   } else {
-                  // Get receipt link
                   let receiptLink = null;
+                  let feedbackLink = null;
                   try {
                     const { Sale } = req.businessModels;
+                    const {
+                      buildSaleNotificationLinks,
+                      resolveReceiptFeedbackLinkForSend,
+                    } = require('./lib/feedback-link-helpers');
                     const relatedSale = await Sale.findOne({ billNo: savedReceipt.receiptNumber });
-                    if (relatedSale?.shareToken) {
-                      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-                      receiptLink = `${frontendUrl}/receipt/public/${relatedSale.billNo}/${relatedSale.shareToken}`;
-                    }
+                    const links = await buildSaleNotificationLinks(
+                      Sale,
+                      business._id,
+                      relatedSale,
+                      'whatsapp'
+                    );
+                    receiptLink = links.receiptLink;
+                    feedbackLink = resolveReceiptFeedbackLinkForSend(
+                      freshBusiness,
+                      whatsappSettings,
+                      links.feedbackLink
+                    );
                   } catch (saleLookupError) {
                     logger.warn('⚠️ Error looking up related sale for WhatsApp:', saleLookupError.message);
                   }
@@ -11017,7 +11114,8 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                       businessName: business.name,
                       total: savedReceipt.total
                     },
-                    receiptLink: receiptLink,
+                    receiptLink,
+                    feedbackLink,
                   });
                   
                   // Log to WhatsAppMessageLog
@@ -11109,13 +11207,19 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
             const client = await Client.findById(clientId);
             if (client?.phone) {
               let receiptLink = null;
+              let feedbackLink = null;
               try {
                 const { Sale } = req.businessModels;
+                const { buildSaleNotificationLinks } = require('./lib/feedback-link-helpers');
                 const relatedSale = await Sale.findOne({ billNo: savedReceipt.receiptNumber });
-                if (relatedSale?.shareToken) {
-                  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-                  receiptLink = `${frontendUrl}/receipt/public/${relatedSale.billNo}/${relatedSale.shareToken}`;
-                }
+                const links = await buildSaleNotificationLinks(
+                  Sale,
+                  business._id,
+                  relatedSale,
+                  'sms'
+                );
+                receiptLink = links.receiptLink;
+                feedbackLink = links.feedbackLink;
               } catch (e) {}
               const result = await smsService.sendReceipt({
                 to: client.phone,
@@ -11123,6 +11227,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                 receiptNumber: savedReceipt.receiptNumber,
                 receiptData: { businessName: business.name, total: savedReceipt.total },
                 receiptLink,
+                feedbackLink,
               });
               if (result.success) {
                 if (useWalletForSms) {
@@ -12057,12 +12162,19 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
 // reflected immediately.
 app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
   try {
+    const { cacheGet, cacheSet, dashboardInitCacheKey } = require('./lib/cache');
     const chartRangeRaw = typeof req.query.chartRange === 'string' ? req.query.chartRange.trim() : '';
     const chartRange =
       chartRangeRaw === 'last7days' || chartRangeRaw === 'last30days' ? chartRangeRaw : 'year';
     const metricsRangeRaw = typeof req.query.metricsRange === 'string' ? req.query.metricsRange.trim() : '';
     const metricsRange = metricsRangeRaw === 'last7days' ? 'last7days' : 'today';
     const cacheVariant = `chart:${chartRange}|metrics:${metricsRange}`;
+    const redisKey = dashboardInitCacheKey(req.user.branchId, cacheVariant);
+    const redisCached = await cacheGet(redisKey);
+    if (redisCached) {
+      markCache(res, 'HIT-REDIS');
+      return res.json(redisCached);
+    }
     const cached = getDashboardCache(req.user.branchId, cacheVariant);
     if (cached) {
       markCache(res, 'HIT');
@@ -12076,6 +12188,7 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
       metricsRange,
     });
     setDashboardCache(req.user.branchId, payload, undefined, cacheVariant);
+    void cacheSet(redisKey, payload, parseInt(process.env.DASHBOARD_REDIS_TTL_SEC, 10) || 60);
     markCache(res, 'MISS');
     res.json(payload);
   } catch (error) {
@@ -13214,15 +13327,31 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
                   if (!useAddonWa && !useWalletWa) {
                     logger.info('📱 [WhatsApp] Sale receipt skipped: quota exhausted, wallet insufficient');
                   } else {
-                  // Generate receipt link for WhatsApp (use savedSale which has shareToken)
-                  let whatsappReceiptLink = null;
                   const saleForWhatsapp = savedSale || sale;
-                  if (saleForWhatsapp?.shareToken) {
-                    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-                    whatsappReceiptLink = `${frontendUrl}/receipt/public/${saleForWhatsapp.billNo}/${saleForWhatsapp.shareToken}`;
+                  const { Sale } = req.businessModels;
+                  const {
+                    buildSaleNotificationLinks,
+                    resolveReceiptFeedbackLinkForSend,
+                  } = require('./lib/feedback-link-helpers');
+                  const links = await buildSaleNotificationLinks(
+                    Sale,
+                    business._id,
+                    saleForWhatsapp,
+                    'whatsapp'
+                  );
+                  const whatsappReceiptLink = links.receiptLink;
+                  const whatsappFeedbackLink = resolveReceiptFeedbackLinkForSend(
+                    freshBusinessWa,
+                    whatsappSettings,
+                    links.feedbackLink
+                  );
+                  if (whatsappReceiptLink) {
                     logger.debug(`📱 [WhatsApp] Receipt link generated: ${whatsappReceiptLink}`);
                   } else {
                     logger.warn('⚠️ [WhatsApp] Sale does not have shareToken, receipt link will be null');
+                  }
+                  if (whatsappFeedbackLink) {
+                    logger.debug('📱 [WhatsApp] Feedback link generated for receipt template');
                   }
                   
                   const result = await whatsappService.sendReceipt({
@@ -13234,6 +13363,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
                       total: sale.netTotal || sale.grossTotal || 0
                     },
                     receiptLink: whatsappReceiptLink,
+                    feedbackLink: whatsappFeedbackLink,
                   });
                   
                   // Log to WhatsAppMessageLog
@@ -13376,17 +13506,21 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
             }
             if (customerPhone) {
               const saleForSms = savedSale || sale;
-              let receiptLink = null;
-              if (saleForSms?.shareToken) {
-                const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-                receiptLink = `${frontendUrl}/receipt/public/${saleForSms.billNo}/${saleForSms.shareToken}`;
-              }
+              const { Sale } = req.businessModels;
+              const { buildSaleNotificationLinks } = require('./lib/feedback-link-helpers');
+              const { receiptLink, feedbackLink } = await buildSaleNotificationLinks(
+                Sale,
+                business._id,
+                saleForSms,
+                'sms'
+              );
               const result = await smsService.sendReceipt({
                 to: customerPhone,
                 clientName: sale.customerName || 'Customer',
                 receiptNumber: sale.billNo,
                 receiptData: { businessName: business?.name || 'Business', total: sale.netTotal || sale.grossTotal || 0 },
                 receiptLink,
+                feedbackLink,
               });
               if (result.success) {
                 if (useWalletForSaleSms) {
@@ -14443,8 +14577,8 @@ app.get('/api/public/sales/bill/:billNo/:token', async (req, res) => {
     const Business = mainConnection.model('Business', require('./models/Business').schema);
     const modelFactory = require('./models/model-factory');
     
-    // Get all active businesses
-    const businesses = await Business.find({ status: 'active' });
+    // Include suspended tenants so customer receipt links keep working during billing grace.
+    const businesses = await Business.find({ status: { $in: ['active', 'suspended'] } });
     
     // Search through each business database
     for (const business of businesses) {
@@ -14586,7 +14720,7 @@ app.post(
       const mainConnection = await databaseManager.getMainConnection();
       const Business = mainConnection.model('Business', require('./models/Business').schema);
       const modelFactory = require('./models/model-factory');
-      const businesses = await Business.find({ status: 'active' });
+      const businesses = await Business.find({ status: { $in: ['active', 'suspended'] } });
 
       for (const business of businesses) {
         try {
@@ -14662,7 +14796,7 @@ app.post(
       const mainConnection = await databaseManager.getMainConnection();
       const Business = mainConnection.model('Business', require('./models/Business').schema);
       const modelFactory = require('./models/model-factory');
-      const businesses = await Business.find({ status: 'active' });
+      const businesses = await Business.find({ status: { $in: ['active', 'suspended'] } });
 
       for (const business of businesses) {
         try {
@@ -18435,8 +18569,26 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
 });
 
 const { registerGracefulShutdown } = require('./utils/shutdown');
+const { closeRedis } = require('./lib/redis');
+const { closeCampaignQueue } = require('./lib/whatsapp-campaign-queue');
+const { closeLegacyCampaignQueue } = require('./lib/legacy-campaign-queue');
+if (process.env.WHATSAPP_CAMPAIGN_WORKER_INLINE === '1') {
+  const { startCampaignWorker } = require('./lib/whatsapp-campaign-queue');
+  startCampaignWorker();
+}
+if (process.env.LEGACY_CAMPAIGN_WORKER_INLINE === '1') {
+  const { startLegacyCampaignWorker } = require('./lib/legacy-campaign-queue');
+  startLegacyCampaignWorker();
+}
 registerGracefulShutdown(server, [
   { name: 'rate-limit-redis', close: shutdownRateLimitInfrastructure },
+  { name: 'shared-redis', close: closeRedis },
+  { name: 'whatsapp-campaign-queue', close: closeCampaignQueue },
+  { name: 'legacy-campaign-queue', close: closeLegacyCampaignQueue },
+  {
+    name: 'tenant-database-connections',
+    close: () => databaseManager.closeAllConnections(),
+  },
 ]);
 
 // Setup inactivity checker cron job

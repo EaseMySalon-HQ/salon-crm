@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import {
   Plus,
@@ -155,9 +155,73 @@ export function BusinessManagement() {
     emailSent: boolean
   } | null>(null)
   const [resetPasswordCopyButtonDone, setResetPasswordCopyButtonDone] = useState(false)
+  const [rowMenuOpenId, setRowMenuOpenId] = useState<string | null>(null)
+  const pendingPlanBusinessRef = useRef<Business | null>(null)
   const limit = 20
   const { toast } = useToast()
   const router = useRouter()
+
+  const releaseStuckBodyLock = () => {
+    if (typeof document === "undefined") return
+    const openDialogs = document.querySelectorAll('[role="dialog"][data-state="open"]')
+    if (openDialogs.length > 0) return
+    const html = document.documentElement
+    const body = document.body
+    body.style.pointerEvents = ""
+    body.style.overflow = ""
+    body.style.paddingRight = ""
+    body.removeAttribute("data-scroll-locked")
+    body.removeAttribute("aria-hidden")
+    html.style.pointerEvents = ""
+    html.style.overflow = ""
+    html.style.paddingRight = ""
+    html.removeAttribute("data-scroll-locked")
+    html.removeAttribute("aria-hidden")
+  }
+
+  const handleActionsMenuOpenChange = (businessId: string, open: boolean) => {
+    if (open) {
+      setRowMenuOpenId(businessId)
+      return
+    }
+    setRowMenuOpenId(null)
+    const pending = pendingPlanBusinessRef.current
+    if (pending) {
+      pendingPlanBusinessRef.current = null
+      setSelectedBusinessForPlan(pending)
+      setIsPlanDialogOpen(true)
+    }
+  }
+
+  const queuePlanDialogFromMenu = (b: Business) => {
+    pendingPlanBusinessRef.current = b
+    setRowMenuOpenId(null)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const pending = pendingPlanBusinessRef.current
+        if (!pending || pending._id !== b._id) return
+        pendingPlanBusinessRef.current = null
+        setSelectedBusinessForPlan(pending)
+        setIsPlanDialogOpen(true)
+      })
+    })
+  }
+
+  const handlePlanDialogOpenChange = (open: boolean) => {
+    setIsPlanDialogOpen(open)
+    if (!open) {
+      setSelectedBusinessForPlan(null)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => releaseStuckBodyLock())
+      })
+    }
+  }
+
+  const handlePlanDialogSuccess = () => {
+    void Promise.all([fetchStats(), fetchBusinesses()]).finally(() => {
+      requestAnimationFrame(() => releaseStuckBodyLock())
+    })
+  }
 
   const fetchStats = async () => {
     try {
@@ -738,7 +802,11 @@ export function BusinessManagement() {
                         </TableCell>
                         <TableCell className="text-sm text-slate-500">{formatDate(b.createdAt)}</TableCell>
                         <TableCell className="sticky right-0 bg-white text-right w-[72px] shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.05)]">
-                          <DropdownMenu>
+                          <DropdownMenu
+                            modal={false}
+                            open={rowMenuOpenId === b._id}
+                            onOpenChange={(open) => handleActionsMenuOpenChange(b._id, open)}
+                          >
                             <DropdownMenuTrigger asChild>
                               <Button variant="ghost" size="icon" className="h-8 w-8">
                                 <MoreHorizontal className="h-4 w-4" />
@@ -757,7 +825,12 @@ export function BusinessManagement() {
                                 <Edit className="h-4 w-4 mr-2" />
                                 Edit Business
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => { setSelectedBusinessForPlan(b); setIsPlanDialogOpen(true); }}>
+                              <DropdownMenuItem
+                                onSelect={(e) => {
+                                  e.preventDefault()
+                                  queuePlanDialogFromMenu(b)
+                                }}
+                              >
                                 <CreditCard className="h-4 w-4 mr-2" />
                                 Manage Plan
                               </DropdownMenuItem>
@@ -855,12 +928,9 @@ export function BusinessManagement() {
           businessId={selectedBusinessForPlan._id}
           businessName={selectedBusinessForPlan.name}
           open={isPlanDialogOpen}
-          onOpenChange={setIsPlanDialogOpen}
-          onSuccess={() => {
-            fetchStats()
-            fetchBusinesses()
-            setSelectedBusinessForPlan(null)
-          }}
+          onOpenChange={handlePlanDialogOpenChange}
+          onSuccess={handlePlanDialogSuccess}
+          onClosed={releaseStuckBodyLock}
         />
       )}
 
