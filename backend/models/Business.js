@@ -239,10 +239,11 @@ const businessSchema = new mongoose.Schema({
       default: null,
     },
     pendingEffectiveAt: { type: Date, default: null },
-    // Promotional feature overrides
+    // Feature overrides (admin-managed)
     overrides: {
-      features: [{ type: String }], // Array of feature IDs
-      expiresAt: { type: Date }, // Optional expiry for promo features
+      features: [{ type: String }], // Promotional grants beyond plan defaults
+      disabledFeatures: [{ type: String }], // Plan features revoked by admin
+      expiresAt: { type: Date }, // Optional expiry for promotional grants only
       notes: { type: String }, // Reason for override
     },
     // Add-ons (e.g., WhatsApp, SMS).

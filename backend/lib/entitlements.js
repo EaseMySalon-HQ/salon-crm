@@ -26,20 +26,24 @@ function getEffectiveFeatures(business) {
   // Start with plan features
   const planFeatures = [...planConfig.features];
 
-  // Check if overrides have expired
   const now = new Date();
   const overrides = business.plan.overrides || {};
   let overrideFeatures = [];
 
   if (overrides.features && Array.isArray(overrides.features)) {
-    // Check if overrides have expired
+    // Promotional grants respect optional expiry
     if (!overrides.expiresAt || new Date(overrides.expiresAt) > now) {
       overrideFeatures = overrides.features;
     }
   }
 
-  // Merge plan features with overrides (overrides take precedence)
-  const effectiveFeatures = [...new Set([...planFeatures, ...overrideFeatures])];
+  const disabledFeatures = Array.isArray(overrides.disabledFeatures)
+    ? overrides.disabledFeatures
+    : [];
+
+  // Plan defaults + promotional grants, minus admin-disabled features
+  const effectiveFeatures = [...new Set([...planFeatures, ...overrideFeatures])]
+    .filter((featureId) => !disabledFeatures.includes(featureId));
 
   // Legacy alias: old templates used `staff_commissions` before consolidation.
   if (
@@ -189,7 +193,9 @@ function getPlanInfo(business) {
     features: effectiveFeatures,
     limits: planConfig.limits,
     support: planConfig.support,
-    hasOverrides: overrides.features && overrides.features.length > 0,
+    hasOverrides:
+      (overrides.features && overrides.features.length > 0)
+      || (overrides.disabledFeatures && overrides.disabledFeatures.length > 0),
     overridesExpiresAt: overrides.expiresAt,
     addons: business.plan.addons || {},
     // Queued downgrade (only populated when a self-service downgrade is

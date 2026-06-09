@@ -466,6 +466,7 @@ app.use('/api/packages', require('./routes/packages'));
 app.use('/api/public/feedback', require('./routes/public-feedback'));
 app.use('/api/public/demo-lead', require('./routes/public-demo-lead'));
 app.use('/api/public/pricing-matrix', require('./routes/public-pricing-matrix'));
+app.use('/api/public/plans', require('./routes/public-plans'));
 app.use('/api/feedback', require('./routes/feedback'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 app.use('/api/branch-management', require('./routes/branch-management'));

@@ -1,11 +1,14 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
 import { ArrowUpRight, Check, Lock } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { PlanFeatureItem, PricingPlan } from "@/lib/pricing-matrix"
+
+type BillingCycle = "monthly" | "annual"
 
 function formatInr(n: number) {
   return new Intl.NumberFormat("en-IN", {
@@ -45,8 +48,11 @@ function FeatureRow({ item }: { item: PlanFeatureItem }) {
   )
 }
 
-function TierCard({ plan }: { plan: PricingPlan }) {
+function TierCard({ plan, billingCycle }: { plan: PricingPlan; billingCycle: BillingCycle }) {
   const isPopular = plan.popular === true
+  const isAnnual = billingCycle === "annual"
+  const displayPrice = isAnnual ? Math.round(plan.annualInr / 12) : plan.monthlyInr
+  const savings = plan.annualSavingsInr
 
   return (
     <article
@@ -69,10 +75,17 @@ function TierCard({ plan }: { plan: PricingPlan }) {
         </h3>
         <div className="mt-3 flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
           <span className="text-4xl font-bold tabular-nums tracking-tight text-slate-900 sm:text-[2.5rem]">
-            {formatInr(plan.monthlyInr)}
+            {formatInr(displayPrice)}
           </span>
           <span className="text-base font-medium text-slate-500">/ month + GST</span>
         </div>
+        {isAnnual ? (
+          <p className="mt-1 text-xs font-medium text-emerald-700">
+            {formatInr(plan.annualInr)} billed annually · save {formatInr(savings)}
+          </p>
+        ) : (
+          <p className="mt-1 text-xs text-slate-500">Billed monthly</p>
+        )}
         <p className="mt-4 min-h-[4.5rem] text-sm leading-relaxed text-slate-600">{plan.description}</p>
 
         <Link
@@ -109,12 +122,67 @@ function TierCard({ plan }: { plan: PricingPlan }) {
   )
 }
 
-export function PricingTierCards({ plans }: { plans: PricingPlan[] }) {
+function BillingCycleToggle({
+  value,
+  onChange,
+}: {
+  value: BillingCycle
+  onChange: (next: BillingCycle) => void
+}) {
   return (
-    <div className="grid items-stretch gap-6 lg:grid-cols-3 lg:gap-5">
-      {plans.map((plan) => (
-        <TierCard key={plan.id} plan={plan} />
-      ))}
+    <div className="flex justify-center">
+      <div
+        role="tablist"
+        aria-label="Billing cycle"
+        className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 p-1 shadow-sm"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={value === "monthly"}
+          onClick={() => onChange("monthly")}
+          className={cn(
+            "rounded-full px-5 py-2 text-sm font-semibold transition-colors",
+            value === "monthly"
+              ? "bg-white text-slate-900 shadow-sm"
+              : "text-slate-500 hover:text-slate-700"
+          )}
+        >
+          Monthly
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={value === "annual"}
+          onClick={() => onChange("annual")}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition-colors",
+            value === "annual"
+              ? "bg-white text-slate-900 shadow-sm"
+              : "text-slate-500 hover:text-slate-700"
+          )}
+        >
+          Annually
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+            Save 17%
+          </span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export function PricingTierCards({ plans }: { plans: PricingPlan[] }) {
+  const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly")
+
+  return (
+    <div className="space-y-8">
+      <BillingCycleToggle value={billingCycle} onChange={setBillingCycle} />
+      <div className="grid items-stretch gap-6 lg:grid-cols-3 lg:gap-5">
+        {plans.map((plan) => (
+          <TierCard key={plan.id} plan={plan} billingCycle={billingCycle} />
+        ))}
+      </div>
     </div>
   )
 }

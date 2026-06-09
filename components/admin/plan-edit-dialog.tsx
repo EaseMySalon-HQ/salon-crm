@@ -14,6 +14,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { Badge } from "@/components/ui/badge"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import {
+  buildPlanFeatureOverridesFromBusiness,
+  isPlanFeatureEnabled,
+  togglePlanFeatureOverride,
+} from "@/lib/admin-plan-feature-overrides"
 
 interface PlanEditDialogProps {
   businessId: string
@@ -43,6 +48,7 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
     trialEndsAt: '',
     overrides: {
       features: [] as string[],
+      disabledFeatures: [] as string[],
       expiresAt: '',
       notes: '',
     },
@@ -55,8 +61,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
 
   useEffect(() => {
     if (open && businessId) {
-      fetchConfig()
-      fetchBusinessPlan()
+      void (async () => {
+        const configPlans = await fetchConfig()
+        await fetchBusinessPlan(configPlans)
+      })()
     }
     if (!open) {
       setIsHistoryOpen(false)
@@ -74,14 +82,16 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
         if (data.success) {
           setPlans(data.data.plans)
           setFeatures(data.data.features)
+          return data.data.plans as any[]
         }
       }
     } catch (error) {
       console.error('Error fetching config:', error)
     }
+    return []
   }
 
-  const fetchBusinessPlan = async () => {
+  const fetchBusinessPlan = async (configPlans: any[] = plans) => {
     try {
       setLoading(true)
       const response = await fetch(`${API_URL}/admin/plans/business/${businessId}`, {
@@ -93,19 +103,21 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
         if (data.success) {
           const business = data.data.business
           setPlanInfo(business.plan)
+          const planFeatures = configPlans.find((p: any) => p.id === business.plan.planId)?.features || []
+          const effectiveFeatures = business.features
+            ? business.features.filter((f: any) => f.enabled).map((f: any) => f.id)
+            : business.plan.features || []
           setFormData({
             planId: business.plan.planId,
             billingPeriod: business.plan.billingPeriod,
             renewalDate: business.plan.renewalDate ? new Date(business.plan.renewalDate).toISOString().split('T')[0] : '',
             isTrial: business.plan.isTrial,
             trialEndsAt: business.plan.trialEndsAt ? new Date(business.plan.trialEndsAt).toISOString().split('T')[0] : '',
-            overrides: {
-              features: business.plan.hasOverrides && business.features
-                ? business.features.filter((f: any) => f.enabled && !(plans.find((p: any) => p.id === business.plan.planId)?.features || []).includes(f.id)).map((f: any) => f.id)
-                : [],
-              expiresAt: business.plan.overridesExpiresAt ? new Date(business.plan.overridesExpiresAt).toISOString().split('T')[0] : '',
-              notes: '',
-            },
+            overrides: buildPlanFeatureOverridesFromBusiness(
+              planFeatures,
+              effectiveFeatures,
+              business.overrides,
+            ),
             addons: {
               whatsapp: {
                 enabled: business.plan.addons?.whatsapp?.enabled || false,
@@ -198,24 +210,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
   }
 
   const toggleFeatureOverride = (featureId: string) => {
-    const currentFeatures = formData.overrides.features
-    if (currentFeatures.includes(featureId)) {
-      setFormData({
-        ...formData,
-        overrides: {
-          ...formData.overrides,
-          features: currentFeatures.filter(f => f !== featureId),
-        },
-      })
-    } else {
-      setFormData({
-        ...formData,
-        overrides: {
-          ...formData.overrides,
-          features: [...currentFeatures, featureId],
-        },
-      })
-    }
+    setFormData({
+      ...formData,
+      overrides: togglePlanFeatureOverride(featureId, planFeatures, formData.overrides),
+    })
   }
 
   const planFeatures = plans.find(p => p.id === formData.planId)?.features || []
@@ -250,7 +248,21 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Plan</Label>
-                    <Select value={formData.planId} onValueChange={(value) => setFormData({ ...formData, planId: value })}>
+                    <Select
+                      value={formData.planId}
+                      onValueChange={(value) => {
+                        const newPlanFeatures = plans.find((p) => p.id === value)?.features || []
+                        setFormData({
+                          ...formData,
+                          planId: value,
+                          overrides: {
+                            ...formData.overrides,
+                            features: formData.overrides.features.filter((id) => !newPlanFeatures.includes(id)),
+                            disabledFeatures: formData.overrides.disabledFeatures.filter((id) => newPlanFeatures.includes(id)),
+                          },
+                        })
+                      }}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -309,27 +321,29 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
 
               <TabsContent value="features" className="space-y-4">
                 <div>
-                  <Label>Promotional Feature Overrides</Label>
+                  <Label>Feature Access</Label>
                   <p className="text-sm text-gray-500 mb-4">
-                    Features marked "(in plan)" are already included and enabled. Toggle additional features below to grant promotional access beyond the plan defaults.
+                    Toggle any feature on or off for this business. Plan defaults are shown as &quot;(in plan)&quot;.
+                    Disabled plan features stay off until re-enabled; extra grants can expire below.
                   </p>
                   <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto border rounded p-4">
                     {features.map((feature) => {
                       const isInPlan = planFeatures.includes(feature.id)
-                      const isOverride = formData.overrides.features.includes(feature.id)
-                      const isEnabled = isInPlan || isOverride
+                      const isGranted = formData.overrides.features.includes(feature.id)
+                      const isDisabled = formData.overrides.disabledFeatures.includes(feature.id)
+                      const isEnabled = isPlanFeatureEnabled(feature.id, planFeatures, formData.overrides)
 
                       return (
                         <div key={feature.id} className="flex items-center space-x-2">
                           <Switch
                             checked={isEnabled}
                             onCheckedChange={() => toggleFeatureOverride(feature.id)}
-                            disabled={isInPlan}
                           />
-                          <Label className={`text-sm ${isInPlan ? 'text-gray-600' : ''}`}>
+                          <Label className="text-sm">
                             {feature.name}
                             {isInPlan && <span className="text-gray-400 ml-1">(in plan)</span>}
-                            {!isInPlan && isOverride && <span className="text-blue-600 ml-1">(override)</span>}
+                            {!isInPlan && isGranted && <span className="text-blue-600 ml-1">(granted)</span>}
+                            {isInPlan && isDisabled && <span className="text-red-600 ml-1">(disabled)</span>}
                           </Label>
                         </div>
                       )

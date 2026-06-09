@@ -15,11 +15,21 @@ import {
 import { PublicShell } from "@/components/layout/public-shell"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { PricingAddOnCards } from "@/components/pricing/pricing-addon-cards"
 import { PricingFeatureMatrix } from "@/components/pricing/pricing-feature-matrix"
 import { PricingTierCards } from "@/components/pricing/pricing-tier-cards"
 import { PRICING_FAQ } from "@/lib/pricing-faq"
-import { FEATURE_CATEGORIES, PRICING_PLANS, type FeatureCategory } from "@/lib/pricing-matrix"
-import { fetchPublicPricingMatrix } from "@/lib/public-pricing-api"
+import {
+  FEATURE_CATEGORIES,
+  PRICING_PLANS,
+  type FeatureCategory,
+  type PricingPlan,
+} from "@/lib/pricing-matrix"
+import {
+  fetchPublicPlanPricing,
+  fetchPublicPricingMatrix,
+  type PublicPlanPricing,
+} from "@/lib/public-pricing-api"
 
 const TRUST_ITEMS = [
   { icon: ShieldCheck, label: "99.99% uptime SLA" },
@@ -27,12 +37,37 @@ const TRUST_ITEMS = [
   { icon: Headphones, label: "24/7 support available" },
 ] as const
 
+function applyAdminPricing(
+  plans: PricingPlan[],
+  pricing: PublicPlanPricing[],
+): PricingPlan[] {
+  if (pricing.length === 0) return plans
+  const byId = new Map(pricing.map((p) => [p.id, p]))
+  return plans.map((plan) => {
+    const override = byId.get(plan.id)
+    if (!override) return plan
+    const monthly = override.monthlyPrice ?? plan.monthlyInr
+    const annual = override.yearlyPrice ?? plan.annualInr
+    const savings = Math.max(0, monthly * 12 - annual)
+    return {
+      ...plan,
+      monthlyInr: monthly,
+      annualInr: annual,
+      annualSavingsInr: savings,
+    }
+  })
+}
+
 export default function PricingPage() {
   const [matrixCategories, setMatrixCategories] = useState<FeatureCategory[]>(FEATURE_CATEGORIES)
+  const [plans, setPlans] = useState<PricingPlan[]>(PRICING_PLANS)
 
   useEffect(() => {
     fetchPublicPricingMatrix().then((categories) => {
       if (categories.length > 0) setMatrixCategories(categories)
+    })
+    fetchPublicPlanPricing().then((pricing) => {
+      if (pricing.length > 0) setPlans((current) => applyAdminPricing(current, pricing))
     })
   }, [])
 
@@ -81,7 +116,25 @@ export default function PricingPage() {
           </div>
 
           <div className="mt-12">
-            <PricingTierCards plans={PRICING_PLANS} />
+            <PricingTierCards plans={plans} />
+          </div>
+
+          <div className="mt-20">
+            <div className="mx-auto max-w-2xl text-center">
+              <Badge variant="secondary" className="mb-3 font-normal">
+                Optional add-ons
+              </Badge>
+              <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+                Plug in what you need
+              </h2>
+              <p className="mt-2 text-sm text-slate-600 sm:text-base">
+                Layer integrations on top of any plan. Setup and onboarding handled by our team.
+              </p>
+            </div>
+
+            <div className="mt-10">
+              <PricingAddOnCards />
+            </div>
           </div>
 
           <p className="mt-10 text-center text-xs text-slate-500 sm:text-sm">
@@ -132,7 +185,7 @@ export default function PricingPage() {
               </span>
             </div>
 
-            <PricingFeatureMatrix categories={matrixCategories} plans={PRICING_PLANS} />
+            <PricingFeatureMatrix categories={matrixCategories} plans={plans} />
 
             <p className="mt-6 text-center text-xs text-slate-500">
               For the full printable matrix and the latest line-by-line availability, ask our team or refer to your
