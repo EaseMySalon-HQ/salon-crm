@@ -61,7 +61,7 @@ const DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES = [
         growth: 'yes',
         pro: 'yes',
       },
-      { feature: 'Advanced custom reports', starter: 'no', growth: 'no', pro: 'soon' },
+      { feature: 'Advanced custom reports', starter: 'no', growth: 'no', pro: 'yes' },
     ],
   },
   {
@@ -128,7 +128,7 @@ const DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES = [
       { feature: 'Appointments per month', starter: 'Unlimited', growth: 'Unlimited', pro: 'Unlimited' },
       { feature: 'Client records', starter: 'Unlimited', growth: 'Unlimited', pro: 'Unlimited' },
       { feature: 'Staff accounts', starter: 'Unlimited', growth: 'Unlimited', pro: 'Unlimited' },
-      { feature: 'Multi-branch management', starter: 'no', growth: 'no', pro: 'soon' },
+      { feature: 'Multi-branch management', starter: 'no', growth: 'no', pro: 'yes' },
       { feature: 'Customer support', starter: 'Email', growth: 'Email + chat', pro: 'Priority' },
     ],
   },
