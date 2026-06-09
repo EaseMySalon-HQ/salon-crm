@@ -86,19 +86,14 @@ export default function FAQPage() {
             <Sparkles className="h-12 w-12 mx-auto mb-4 text-white/80" />
             <h2 className="text-3xl sm:text-4xl font-bold mb-4">Still Have Questions?</h2>
             <p className="text-xl text-purple-100 mb-8 max-w-2xl mx-auto">
-              Our team is here to help. Book a personalized demo or chat with us on WhatsApp.
+              Our team is here to help. Book a personalized demo and we&apos;ll walk you through it.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <div className="flex justify-center">
               <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
                 <Link href="/contact">
                   Book a Free Demo
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Link>
-              </Button>
-              <Button size="lg" asChild className="bg-white text-[#25D366] hover:bg-emerald-50 px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
-                <a href="https://wa.me/916360019041" target="_blank" rel="noreferrer">
-                  Chat on WhatsApp
-                </a>
               </Button>
             </div>
           </div>
