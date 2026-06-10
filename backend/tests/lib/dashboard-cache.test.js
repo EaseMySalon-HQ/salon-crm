@@ -1,18 +1,33 @@
 /**
  * Unit coverage for the tenant-scoped dashboard cache helpers.
+ *
+ * Covers the stale-while-revalidate behaviour: after an invalidation the
+ * in-memory payload is kept around for `STALE_WHILE_REVALIDATE_MS` so reads
+ * stay fast while the route runs a background rebuild.
  */
+
+jest.mock('../../lib/cache', () => ({
+  invalidateTenantReadCaches: jest.fn().mockResolvedValue(undefined),
+}));
+
+const { invalidateTenantReadCaches } = require('../../lib/cache');
 
 const {
   getDashboardCache,
+  getDashboardCacheEntry,
   setDashboardCache,
   invalidateDashboardCache,
   clearDashboardCache,
   pathTriggersInvalidate,
   dashboardInvalidateOnMutation,
+  __internal,
 } = require('../../lib/dashboard-cache');
 
 describe('dashboard-cache', () => {
-  beforeEach(() => clearDashboardCache());
+  beforeEach(() => {
+    clearDashboardCache();
+    invalidateTenantReadCaches.mockClear();
+  });
 
   it('stores and reads per-tenant payloads with TTL', () => {
     setDashboardCache('biz-1', { hello: 'world' });
@@ -20,10 +35,37 @@ describe('dashboard-cache', () => {
     expect(getDashboardCache('biz-2')).toBeNull();
   });
 
-  it('returns null after invalidation', () => {
+  it('fresh reads via getDashboardCacheEntry expose state', () => {
+    setDashboardCache('biz-1', { x: 1 });
+    const entry = getDashboardCacheEntry('biz-1');
+    expect(entry).not.toBeNull();
+    expect(entry.state).toBe('fresh');
+    expect(entry.payload).toEqual({ x: 1 });
+  });
+
+  it('returns null from getDashboardCache after invalidation (stale not fresh)', () => {
     setDashboardCache('biz-1', { x: 1 });
     invalidateDashboardCache('biz-1');
     expect(getDashboardCache('biz-1')).toBeNull();
+  });
+
+  it('keeps the payload available as stale after invalidation', () => {
+    setDashboardCache('biz-1', { x: 1 });
+    invalidateDashboardCache('biz-1');
+    const entry = getDashboardCacheEntry('biz-1');
+    expect(entry).not.toBeNull();
+    expect(entry.state).toBe('stale');
+    expect(entry.payload).toEqual({ x: 1 });
+  });
+
+  it('drops the entry once past the stale window', () => {
+    setDashboardCache('biz-1', { x: 1 });
+    const key = __internal.makeKey('biz-1');
+    const stored = __internal.store.get(key);
+    stored.freshUntil = Date.now() - 1000;
+    stored.staleUntil = Date.now() - 1;
+    expect(getDashboardCacheEntry('biz-1')).toBeNull();
+    expect(__internal.store.has(key)).toBe(false);
   });
 
   it('does not leak across tenants on invalidation', () => {
@@ -32,6 +74,22 @@ describe('dashboard-cache', () => {
     invalidateDashboardCache('biz-1');
     expect(getDashboardCache('biz-1')).toBeNull();
     expect(getDashboardCache('biz-2')).toEqual({ b: 2 });
+  });
+
+  it('coalesces repeated invalidations into a single Redis pass', async () => {
+    setDashboardCache('biz-1', { x: 1 });
+    invalidateDashboardCache('biz-1');
+    invalidateDashboardCache('biz-1');
+    invalidateDashboardCache('biz-1');
+    expect(__internal.pendingRedisInvalidations.has('biz-1')).toBe(true);
+    expect(invalidateTenantReadCaches).not.toHaveBeenCalled();
+
+    await new Promise((resolve) =>
+      setTimeout(resolve, __internal.REDIS_INVALIDATE_COALESCE_MS + 50)
+    );
+    expect(invalidateTenantReadCaches).toHaveBeenCalledTimes(1);
+    expect(invalidateTenantReadCaches).toHaveBeenCalledWith('biz-1');
+    expect(__internal.pendingRedisInvalidations.has('biz-1')).toBe(false);
   });
 
   it('flags only mutation-relevant paths', () => {

@@ -4,11 +4,11 @@
  * Smoke (local / CI):
  *   k6 run tests/load-test.js -e BASE_URL=http://localhost:3001 -e SMOKE=1
  *
- * Profile (25 VUs × 2 min — pre-prod gate):
- *   k6 run tests/load-test.js -e PROFILE=1 \
- *     -e BASE_URL=https://salon-crm-backend-staging.up.railway.app \
- *     -e LOAD_TEST_EMAIL=... -e LOAD_TEST_PASSWORD=... \
- *     -e LOAD_TEST_RATE_LIMIT_BYPASS=$RATE_LIMIT_SKIP_SECRET
+ * Production (same-origin app host — API at /api/* via Next rewrite):
+ *   BASE_URL=https://www.easemysalon.in
+ *
+ * Production (direct API host — preferred for load tests; value of Railway API_PROXY_TARGET):
+ *   BASE_URL=https://your-backend-service.up.railway.app
  *
  * Staging note: all VUs share one login → one global rate-limit bucket (default 1200/15m).
  * Without bypass, expect 429s. Set RATE_LIMIT_SKIP_SECRET on Railway and pass it above.
@@ -29,6 +29,8 @@ const authedApiDuration = new Trend('authed_api_duration', true);
 const isSmoke = __ENV.SMOKE === '1';
 const isProfile = __ENV.PROFILE === '1';
 const rateLimitBypass = __ENV.LOAD_TEST_RATE_LIMIT_BYPASS || '';
+const profileVus = parseInt(__ENV.LOAD_TEST_VUS, 10) || 25;
+const profileDuration = __ENV.LOAD_TEST_DURATION || '2m';
 
 const rateLimit429 = new Rate('rate_limit_429');
 
@@ -43,8 +45,8 @@ export const options = isSmoke
     }
   : isProfile
     ? {
-        vus: 25,
-        duration: '2m',
+        vus: profileVus,
+        duration: profileDuration,
         thresholds: {
           http_req_failed: ['rate<0.01'],
           errors: ['rate<0.01'],
@@ -73,6 +75,14 @@ function normalizeBaseUrl(raw) {
 }
 
 const BASE_URL = normalizeBaseUrl(__ENV.BASE_URL);
+
+/** Direct API hosts expose /health; same-origin app hosts only /api/health (Next rewrite). */
+function getHealth() {
+  const opts = { headers: baseHeaders() };
+  const direct = http.get(`${BASE_URL}/health`, opts);
+  if (direct.status === 200 || direct.status === 503) return direct;
+  return http.get(`${BASE_URL}/api/health`, opts);
+}
 
 /** Per-VU session (k6 isolates module scope per VU — login once, reuse cookies). */
 let vuSession = null;
@@ -255,7 +265,7 @@ function buildSalePayload(fixtures, billNo) {
 }
 
 export function setup() {
-  const res = http.get(`${BASE_URL}/health`, { headers: baseHeaders() });
+  const res = getHealth();
   const health = parseJsonSafe(res);
   const probe = http.post(
     `${BASE_URL}/api/auth/login`,
@@ -278,7 +288,7 @@ export function setup() {
 }
 
 export function teardown(data) {
-  const res = http.get(`${BASE_URL}/health`);
+  const res = getHealth();
   return {
     baseline: data?.baselineHealth,
     final: parseJsonSafe(res),
@@ -293,7 +303,7 @@ export function handleSummary(data) {
     '',
     '=== EaseMySalon load test summary ===',
     `Target: ${BASE_URL}`,
-    `Profile: ${isProfile ? '25 VU × 2m' : isSmoke ? 'smoke' : 'full ramp'}`,
+    `Profile: ${isProfile ? `${profileVus} VU × ${profileDuration}` : isSmoke ? 'smoke' : 'full ramp'}`,
     `Rate-limit bypass: ${rateLimitBypass ? 'yes' : 'no (required for multi-VU single-account staging)'}`,
     `HTTP failures: ${((data.metrics.http_req_failed?.values?.rate || 0) * 100).toFixed(2)}%`,
     `429 rate-limit hits: ${((data.metrics.rate_limit_429?.values?.rate || 0) * 100).toFixed(2)}%`,
@@ -328,7 +338,7 @@ function summarizeHealth(baseline, final) {
 }
 
 export default function () {
-  const health = http.get(`${BASE_URL}/health`, { headers: baseHeaders() });
+  const health = getHealth();
   check(health, { 'health ok': (r) => r.status === 200 || r.status === 503 });
 
   const loginStart = Date.now();
