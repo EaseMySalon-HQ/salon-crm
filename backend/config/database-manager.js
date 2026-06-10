@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { logger } = require('../utils/logger');
 const { registerSlowQueryMonitoring } = require('../utils/mongoose-slow-query');
+const modelFactory = require('../models/model-factory');
 
 class DatabaseManager {
   constructor() {
@@ -120,6 +121,7 @@ class DatabaseManager {
 
   _clearConnectionArtifacts(connection) {
     if (!connection) return;
+    modelFactory.clearModelsForConnection(connection);
     delete connection.modelsCache;
     delete connection.supplierPayableIndexRepairPromise;
     delete connection.ensureWalkInClientPromise;

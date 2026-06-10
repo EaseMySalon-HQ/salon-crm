@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Settings,
   Building2,
@@ -54,6 +55,7 @@ import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { PackagesSettingsPanel } from "@/components/packages/packages-settings-panel"
 import { ProductsSettingsTabs } from "@/components/settings/products-settings-tabs"
+import { CategoryManagement } from "@/components/categories/category-management"
 
 import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
 import { useEntitlements } from "@/hooks/use-entitlements"
