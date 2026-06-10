@@ -1,41 +1,85 @@
 /**
- * Tenant-scoped TTL cache for `buildDashboardInitPayload`.
+ * Tenant-scoped TTL cache for `buildDashboardInitPayload`, with stale-while-revalidate.
  *
- * Why: the aggregated dashboard endpoint runs ~15 parallel Mongo queries on every page
- * load. Multiple dashboard cards subscribe to the same React Query key client-side, but
- * a user navigating between dashboard / quick-sale / settings still re-hits the backend
- * every ~60–120 seconds. A small in-memory cache absorbs that traffic.
+ * Why: the aggregated dashboard endpoint runs ~20 parallel Mongo queries on every page
+ * load. Under bursty write traffic (sale → appointment → stock patch in the same
+ * iteration) a naive "delete on mutation" causes every subsequent dashboard read to
+ * pay the full rebuild cost. SWR lets reads stay fast while a background rebuild
+ * refreshes the payload.
+ *
+ * Lifecycle of an entry:
+ * - `now < freshUntil`             → served directly (fresh hit)
+ * - `freshUntil ≤ now < staleUntil` → served immediately + background refresh kicked off
+ *                                     (stampede-protected by `refreshing` flag)
+ * - `now ≥ staleUntil`              → dropped on read; caller does a full rebuild
+ *
+ * `invalidateDashboardCache` does NOT delete the in-memory payload — it just shifts
+ * `freshUntil` to "now" so the next read serves the stale copy and triggers a refresh.
+ * Redis invalidation is coalesced per-tenant to avoid hammering `SCAN`/`UNLINK` when
+ * a single user request mutates multiple resources in quick succession.
  *
  * Safety:
  * - Keyed by tenant `branchId` + IST day bucket. Never crosses tenants.
  * - Stores only the public payload that the route already returns to the same user.
- * - Auto-evicts entries past TTL; a periodic sweep prunes stale entries to bound memory.
- * - Mutation routes call `invalidateDashboardCache(branchId)` to drop entries surgically.
+ * - Auto-evicts entries past `staleUntil`; periodic sweep bounds memory.
  */
 
 const { toDateStringIST } = require('../utils/date-utils');
 
 const DEFAULT_TTL_MS = 90 * 1000;
+const STALE_WHILE_REVALIDATE_MS = 30 * 1000;
+const REDIS_INVALIDATE_COALESCE_MS = 250;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 5000;
 
 const store = new Map();
+/** Per-tenant pending Redis invalidation timers (coalesced). */
+const pendingRedisInvalidations = new Map();
 
 function makeKey(branchId, variant = 'default') {
   const day = toDateStringIST(new Date());
   return `${String(branchId)}::${day}::${String(variant || 'default')}`;
 }
 
-function getDashboardCache(branchId, variant = 'default') {
+/**
+ * Internal: returns the raw entry with its current state, or null if missing/expired.
+ * Callers should prefer {@link getDashboardCache} (fresh only) or {@link getDashboardCacheEntry}
+ * (fresh or stale, with metadata).
+ */
+function readEntry(branchId, variant) {
   if (!branchId) return null;
   const key = makeKey(branchId, variant);
   const entry = store.get(key);
   if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
+  const now = Date.now();
+  if (now >= entry.staleUntil) {
     store.delete(key);
     return null;
   }
-  return entry.payload;
+  return { entry, key, state: now < entry.freshUntil ? 'fresh' : 'stale' };
+}
+
+/**
+ * Fresh-only read. Returns the payload if the entry is still within its fresh window,
+ * otherwise null. Stale entries are reported as null here so existing callers that
+ * cannot do a background refresh fall through to a hard rebuild.
+ */
+function getDashboardCache(branchId, variant = 'default') {
+  const found = readEntry(branchId, variant);
+  if (!found || found.state !== 'fresh') return null;
+  return found.entry.payload;
+}
+
+/**
+ * Returns `{ payload, state, entry }` where `state` is `'fresh'` or `'stale'`, or
+ * null if no usable entry exists. The route uses this to serve stale payloads
+ * immediately and trigger a background refresh (with `entry.refreshing` as a
+ * single-flight latch).
+ */
+function getDashboardCacheEntry(branchId, variant = 'default') {
+  const found = readEntry(branchId, variant);
+  if (!found) return null;
+  return { payload: found.entry.payload, state: found.state, entry: found.entry };
 }
 
 function setDashboardCache(branchId, payload, ttlMs = DEFAULT_TTL_MS, variant = 'default') {
@@ -46,31 +90,65 @@ function setDashboardCache(branchId, payload, ttlMs = DEFAULT_TTL_MS, variant = 
     if (firstKey) store.delete(firstKey);
   }
   const key = makeKey(branchId, variant);
-  store.set(key, { payload, expiresAt: Date.now() + ttlMs });
+  const now = Date.now();
+  store.set(key, {
+    payload,
+    freshUntil: now + ttlMs,
+    staleUntil: now + ttlMs + STALE_WHILE_REVALIDATE_MS,
+    refreshing: false,
+  });
 }
 
 /**
- * Drop the dashboard cache for a single tenant. Called from mutation routes that change
- * any dashboard metric (sale, appointment, client, inventory, payment). Cheap — `O(days)`,
- * usually exactly one entry.
+ * Mark in-memory dashboard entries for a tenant as stale (but keep the payload so
+ * reads stay fast) and schedule a coalesced Redis invalidation.
+ *
+ * Bursty mutations (e.g. POST /api/sales followed by PATCH /api/products/.../stock)
+ * collapse into a single Redis `SCAN`+`UNLINK` cycle.
  */
 function invalidateDashboardCache(branchId) {
   if (!branchId) return;
   const prefix = `${String(branchId)}::`;
-  for (const key of store.keys()) {
-    if (key.startsWith(prefix)) store.delete(key);
+  const now = Date.now();
+  for (const [key, entry] of store) {
+    if (!key.startsWith(prefix)) continue;
+    entry.freshUntil = Math.min(entry.freshUntil, now);
+    const newStaleUntil = now + STALE_WHILE_REVALIDATE_MS;
+    if (entry.staleUntil < newStaleUntil) entry.staleUntil = newStaleUntil;
   }
-  try {
-    const { invalidateTenantReadCaches } = require('./cache');
-    void invalidateTenantReadCaches(branchId);
-  } catch {
-    /* redis cache optional */
-  }
+  scheduleRedisInvalidate(branchId);
+}
+
+/**
+ * Coalesce repeated `invalidateTenantReadCaches(branchId)` calls within
+ * `REDIS_INVALIDATE_COALESCE_MS` into a single Redis SCAN/UNLINK pass.
+ *
+ * Exposed for tests via `__internal`; production callers go through
+ * `invalidateDashboardCache`.
+ */
+function scheduleRedisInvalidate(branchId) {
+  const id = String(branchId);
+  if (pendingRedisInvalidations.has(id)) return;
+  const timer = setTimeout(() => {
+    pendingRedisInvalidations.delete(id);
+    try {
+      const { invalidateTenantReadCaches } = require('./cache');
+      void invalidateTenantReadCaches(id);
+    } catch {
+      /* redis cache optional */
+    }
+  }, REDIS_INVALIDATE_COALESCE_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+  pendingRedisInvalidations.set(id, timer);
 }
 
 /** Clear the whole cache — only useful in tests / debug. */
 function clearDashboardCache() {
   store.clear();
+  for (const timer of pendingRedisInvalidations.values()) {
+    clearTimeout(timer);
+  }
+  pendingRedisInvalidations.clear();
 }
 
 /**
@@ -141,17 +219,26 @@ function dashboardInvalidateOnMutation(req, res, next) {
 const sweepTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of store) {
-    if (entry.expiresAt < now) store.delete(key);
+    if (entry.staleUntil < now) store.delete(key);
   }
 }, SWEEP_INTERVAL_MS);
 if (typeof sweepTimer.unref === 'function') sweepTimer.unref();
 
 module.exports = {
   getDashboardCache,
+  getDashboardCacheEntry,
   setDashboardCache,
   invalidateDashboardCache,
   clearDashboardCache,
   dashboardInvalidateOnMutation,
   pathTriggersInvalidate,
-  __internal: { store, makeKey, MUTATION_PREFIXES },
+  __internal: {
+    store,
+    makeKey,
+    MUTATION_PREFIXES,
+    pendingRedisInvalidations,
+    STALE_WHILE_REVALIDATE_MS,
+    REDIS_INVALIDATE_COALESCE_MS,
+    DEFAULT_TTL_MS,
+  },
 };

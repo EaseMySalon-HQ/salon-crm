@@ -113,9 +113,8 @@ const {
 const { apiV1AliasMiddleware } = require('./middleware/api-v1-alias');
 const { perfLogMiddleware, markCache } = require('./middleware/perf-log');
 const {
-  getDashboardCache,
+  getDashboardCacheEntry,
   setDashboardCache,
-  invalidateDashboardCache,
   dashboardInvalidateOnMutation,
 } = require('./lib/dashboard-cache');
 const { withReportCache, reportCacheMiddleware } = require('./lib/report-cache');
@@ -12171,25 +12170,54 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
     const metricsRange = metricsRangeRaw === 'last7days' ? 'last7days' : 'today';
     const cacheVariant = `chart:${chartRange}|metrics:${metricsRange}`;
     const redisKey = dashboardInitCacheKey(req.user.branchId, cacheVariant);
+    const redisTtlSec = parseInt(process.env.DASHBOARD_REDIS_TTL_SEC, 10) || 60;
+
+    const buildAndPersist = async () => {
+      const fresh = await buildDashboardInitPayload({
+        branchId: req.user.branchId,
+        businessModels: req.businessModels,
+        user: req.user,
+        chartRange,
+        metricsRange,
+      });
+      setDashboardCache(req.user.branchId, fresh, undefined, cacheVariant);
+      void cacheSet(redisKey, fresh, redisTtlSec);
+      return fresh;
+    };
+
     const redisCached = await cacheGet(redisKey);
     if (redisCached) {
       markCache(res, 'HIT-REDIS');
       return res.json(redisCached);
     }
-    const cached = getDashboardCache(req.user.branchId, cacheVariant);
-    if (cached) {
+
+    const cached = getDashboardCacheEntry(req.user.branchId, cacheVariant);
+    if (cached && cached.state === 'fresh') {
       markCache(res, 'HIT');
-      return res.json(cached);
+      return res.json(cached.payload);
     }
-    const payload = await buildDashboardInitPayload({
-      branchId: req.user.branchId,
-      businessModels: req.businessModels,
-      user: req.user,
-      chartRange,
-      metricsRange,
-    });
-    setDashboardCache(req.user.branchId, payload, undefined, cacheVariant);
-    void cacheSet(redisKey, payload, parseInt(process.env.DASHBOARD_REDIS_TTL_SEC, 10) || 60);
+
+    if (cached && cached.state === 'stale') {
+      // Stale-while-revalidate: respond immediately with the last-known payload and
+      // refresh in the background. The `refreshing` flag is a single-flight latch so
+      // concurrent stale hits do not stampede `buildDashboardInitPayload`.
+      markCache(res, 'HIT-STALE');
+      res.json(cached.payload);
+      if (!cached.entry.refreshing) {
+        cached.entry.refreshing = true;
+        setImmediate(async () => {
+          try {
+            await buildAndPersist();
+          } catch (err) {
+            cached.entry.refreshing = false;
+            logger.error('Background dashboard refresh failed:', err);
+          }
+        });
+      }
+      return;
+    }
+
+    const payload = await buildAndPersist();
     markCache(res, 'MISS');
     res.json(payload);
   } catch (error) {
