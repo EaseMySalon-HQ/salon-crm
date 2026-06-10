@@ -1,0 +1,317 @@
+{
+  "metrics": {
+    "http_req_tls_handshaking": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 0.785985602879424,
+        "min": 0,
+        "med": 0,
+        "max": 207.534,
+        "p(90)": 0,
+        "p(95)": 0
+      }
+    },
+    "appointments_duration": {
+      "type": "trend",
+      "contains": "default",
+      "values": {
+        "avg": 403.8417366946779,
+        "min": 349,
+        "med": 384.5,
+        "max": 669,
+        "p(90)": 457,
+        "p(95)": 467
+      }
+    },
+    "login_duration": {
+      "type": "trend",
+      "contains": "default",
+      "values": {
+        "avg": 80.90896358543418,
+        "min": 0,
+        "med": 0,
+        "max": 2530,
+        "p(90)": 0,
+        "p(95)": 0
+      }
+    },
+    "http_req_blocked": {
+      "values": {
+        "med": 0.001,
+        "max": 392.558,
+        "p(90)": 0.002,
+        "p(95)": 0.002,
+        "avg": 1.5099350629875672,
+        "min": 0
+      },
+      "type": "trend",
+      "contains": "time"
+    },
+    "dashboard_duration": {
+      "type": "trend",
+      "contains": "default",
+      "values": {
+        "med": 437,
+        "max": 1980,
+        "p(90)": 524.7,
+        "p(95)": 571.4499999999998,
+        "avg": 472.9313725490196,
+        "min": 352
+      }
+    },
+    "vus": {
+      "type": "gauge",
+      "contains": "default",
+      "values": {
+        "value": 0,
+        "min": 0,
+        "max": 25
+      }
+    },
+    "iterations": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 714,
+        "rate": 5.681319782361848
+      }
+    },
+    "http_req_receiving": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "p(90)": 3.2566,
+        "p(95)": 4.934599999999999,
+        "avg": 1.6082673965206964,
+        "min": 0.012,
+        "med": 0.095,
+        "max": 204.919
+      }
+    },
+    "iteration_duration": {
+      "contains": "time",
+      "values": {
+        "p(90)": 4484.1353126,
+        "p(95)": 4826.885912599999,
+        "avg": 4243.40510077871,
+        "min": 3522.72325,
+        "med": 4062.8116250000003,
+        "max": 9906.449209
+      },
+      "type": "trend"
+    },
+    "data_received": {
+      "type": "counter",
+      "contains": "data",
+      "values": {
+        "count": 29826951,
+        "rate": 237333.9590529937
+      }
+    },
+    "errors": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0,
+        "passes": 0,
+        "fails": 3684
+      },
+      "thresholds": {
+        "rate<0.01": {
+          "ok": true
+        }
+      }
+    },
+    "http_req_sending": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 0.11339877024595096,
+        "min": 0.013,
+        "med": 0.089,
+        "max": 17.917,
+        "p(90)": 0.189,
+        "p(95)": 0.231
+      }
+    },
+    "http_req_waiting": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "p(90)": 468.1263,
+        "p(95)": 489.50939999999997,
+        "avg": 418.7111616676684,
+        "min": 332.522,
+        "med": 398.322,
+        "max": 2514.384
+      }
+    },
+    "checks": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 1,
+        "passes": 7254,
+        "fails": 0
+      }
+    },
+    "http_req_failed": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0.08998200359928014,
+        "passes": 600,
+        "fails": 6068
+      },
+      "thresholds": {
+        "rate<0.01": {
+          "ok": false
+        }
+      }
+    },
+    "http_reqs": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 6668,
+        "rate": 53.057479424073954
+      }
+    },
+    "http_req_connecting": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 0.7168632273545289,
+        "min": 0,
+        "med": 0,
+        "max": 184,
+        "p(90)": 0,
+        "p(95)": 0
+      }
+    },
+    "http_req_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "med": 400.068,
+        "max": 2529.66,
+        "p(90)": 470.59740000000005,
+        "p(95)": 493.83424999999994,
+        "avg": 420.43282783443436,
+        "min": 332.689
+      }
+    },
+    "http_req_duration{expected_response:true}": {
+      "contains": "time",
+      "values": {
+        "avg": 421.99022396176764,
+        "min": 332.689,
+        "med": 401.96799999999996,
+        "max": 2529.66,
+        "p(90)": 472.4927,
+        "p(95)": 496.1296499999999
+      },
+      "type": "trend"
+    },
+    "data_sent": {
+      "values": {
+        "count": 1222709,
+        "rate": 9729.132814806544
+      },
+      "type": "counter",
+      "contains": "data"
+    },
+    "vus_max": {
+      "type": "gauge",
+      "contains": "default",
+      "values": {
+        "value": 25,
+        "min": 25,
+        "max": 25
+      }
+    },
+    "rate_limit_429": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0,
+        "passes": 0,
+        "fails": 5926
+      }
+    },
+    "authed_api_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "p(90)": 473,
+        "p(95)": 495,
+        "avg": 417.86061424232196,
+        "min": 345,
+        "med": 403,
+        "max": 1980
+      },
+      "thresholds": {
+        "p(95)<800": {
+          "ok": true
+        }
+      }
+    }
+  },
+  "health": {
+    "baselineAt": "2026-06-10T20:03:27.317Z",
+    "baselineHealth": {
+      "success": true,
+      "timestamp": "2026-06-10T20:03:26.574Z",
+      "uptime": "3571s",
+      "memory": {
+        "totalMb": 61,
+        "usedMb": 53
+      },
+      "message": "EaseMySalon API is running",
+      "services": {
+        "rateLimit": {
+          "rateLimit": "active",
+          "rateLimitMetrics": {
+            "redisFallbackUses": 0,
+            "tiers": {
+              "auth": {
+                "blocked429": 0,
+                "evaluations": 0,
+                "fallbackRate": null,
+                "redisFallbackUses": 0
+              },
+              "global": {
+                "blocked429": 0,
+                "evaluations": 0,
+                "fallbackRate": null,
+                "redisFallbackUses": 0
+              },
+              "report": {
+                "blocked429": 0,
+                "evaluations": 0,
+                "fallbackRate": null,
+                "redisFallbackUses": 0
+              },
+              "ai": {
+                "blocked429": 0,
+                "evaluations": 0,
+                "fallbackRate": null,
+                "redisFallbackUses": 0
+              }
+            },
+            "blocked429": 0,
+            "evaluations": 0,
+            "fallbackRate": null
+          },
+          "redis": "connected",
+          "status": "ok"
+        },
+        "redis": "ok",
+        "tenantConnections": 1,
+        "db": "ok"
+      },
+      "status": "ok"
+    }
+  }
+}

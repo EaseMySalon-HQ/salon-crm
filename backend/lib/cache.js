@@ -7,6 +7,20 @@ const { logger } = require('../utils/logger');
 
 const KEY_PREFIX = 'ems:cache:';
 
+/** Non-blocking delete; pipeline when removing many keys from one SCAN batch. */
+async function unlinkKeys(redis, keys) {
+  if (!keys.length) return;
+  if (keys.length === 1) {
+    await redis.unlink(keys[0]);
+    return;
+  }
+  const pipeline = redis.pipeline();
+  for (const key of keys) {
+    pipeline.unlink(key);
+  }
+  await pipeline.exec();
+}
+
 async function cacheGet(key) {
   const redis = getRedisClient();
   if (!redis || !key) return null;
@@ -35,7 +49,7 @@ async function cacheDel(keyOrPattern) {
   const fullKey = `${KEY_PREFIX}${keyOrPattern}`;
   try {
     if (!keyOrPattern.includes('*')) {
-      await redis.del(fullKey);
+      await redis.unlink(fullKey);
       return;
     }
     const pattern = fullKey;
@@ -43,7 +57,7 @@ async function cacheDel(keyOrPattern) {
     do {
       const [next, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
       cursor = next;
-      if (keys.length) await redis.del(...keys);
+      if (keys.length) await unlinkKeys(redis, keys);
     } while (cursor !== '0');
   } catch (err) {
     logger.warn('[cache] del failed for %s: %s', keyOrPattern, err.message);
@@ -87,11 +101,13 @@ function myBranchesCacheKey(userId) {
 async function invalidateTenantReadCaches(branchId) {
   if (!branchId) return;
   const id = String(branchId);
-  await cacheDel(`dashboard:init:${id}:*`);
-  await cacheDel(businessPlanCacheKey(id));
-  await cacheDel(`list:services:${id}:*`);
-  await cacheDel(`list:staff:${id}:*`);
-  await cacheDel(`list:appointments:${id}:*`);
+  await Promise.all([
+    cacheDel(`dashboard:init:${id}:*`),
+    cacheDel(businessPlanCacheKey(id)),
+    cacheDel(`list:services:${id}:*`),
+    cacheDel(`list:staff:${id}:*`),
+    cacheDel(`list:appointments:${id}:*`),
+  ]);
 }
 
 async function invalidateMyBranchesCache(userId) {
