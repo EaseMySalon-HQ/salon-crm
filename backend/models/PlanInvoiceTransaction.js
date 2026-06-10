@@ -32,7 +32,7 @@ const planInvoiceTransactionSchema = new mongoose.Schema(
     },
     planId: {
       type: String,
-      enum: ['starter', 'professional', 'enterprise'],
+      enum: ['starter', 'growth', 'pro'],
       required: true,
     },
     billingPeriod: {

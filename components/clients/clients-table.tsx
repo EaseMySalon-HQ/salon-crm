@@ -33,10 +33,12 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { clientStore } from "@/lib/client-store"
 import { SalesAPI, ClientsAPI } from "@/lib/api"
+import { ClientCommunicationIndicators } from "@/components/clients/client-communication-indicators"
 import { isWalkInClient } from "@/lib/walk-in-client"
 import { useAuth } from "@/lib/auth-context"
 import { ClientImportModal } from "./client-import-modal"
 import { ClientDetailsDrawer } from "./client-details-drawer"
+import { ensureLocalSharedClient } from "@/lib/shared-client-import"
 
 interface Client {
   id?: string
@@ -50,6 +52,12 @@ interface Client {
   totalVisits?: number
   totalSpent?: number
   createdAt?: string
+  whatsappConsent?: {
+    optedIn?: boolean
+    source?: string | null
+    optedInAt?: string | null
+    optedOutAt?: string | null
+  }
   // Real-time calculated fields
   realTotalVisits?: number
   realTotalSpent?: number
@@ -114,7 +122,9 @@ export function ClientsTable({ clients }: ClientsTableProps) {
     const start = currentPageIndex * currentPageSize
     const end = Math.min(start + currentPageSize, clients.length)
     const visible = clients.slice(start, end)
-    const clientIds = visible.map(c => c._id || c.id).filter(Boolean) as string[]
+    const clientIds = visible
+      .map((c) => c._id || c.id)
+      .filter((id): id is string => Boolean(id) && !String(id).startsWith("shared-preview:"))
     const requestKey = clientIds.join('|')
     if (!requestKey || requestKey === lastStatsRequestKeyRef.current || requestKey === activeStatsRequestKeyRef.current) {
       return
@@ -157,26 +167,44 @@ export function ClientsTable({ clients }: ClientsTableProps) {
 
   // NOTE: This effect is declared later in the file after pageIndex/pageSize are defined
 
-  const openClientDetailsDrawer = (client: Client) => {
-    const clientId = client._id || client.id
-    if (!clientId) {
-      console.error("Client missing ID:", client)
-      return
+  const openClientDetailsDrawer = async (client: Client) => {
+    try {
+      const resolved = await ensureLocalSharedClient(client)
+      const clientId = resolved._id || resolved.id
+      if (!clientId) {
+        console.error("Client missing ID:", resolved)
+        return
+      }
+      setDetailsDrawerForEdit(false)
+      setDetailsClient(resolved)
+      setDetailsDrawerOpen(true)
+    } catch (err) {
+      toast({
+        title: "Could not open profile",
+        description: err instanceof Error ? err.message : "Failed to import client profile",
+        variant: "destructive",
+      })
     }
-    setDetailsDrawerForEdit(false)
-    setDetailsClient(client)
-    setDetailsDrawerOpen(true)
   }
 
-  const openClientDetailsDrawerForEdit = (client: Client) => {
-    const clientId = client._id || client.id
-    if (!clientId) {
-      console.error("Client missing ID:", client)
-      return
+  const openClientDetailsDrawerForEdit = async (client: Client) => {
+    try {
+      const resolved = await ensureLocalSharedClient(client)
+      const clientId = resolved._id || resolved.id
+      if (!clientId) {
+        console.error("Client missing ID:", resolved)
+        return
+      }
+      setDetailsDrawerForEdit(true)
+      setDetailsClient(resolved)
+      setDetailsDrawerOpen(true)
+    } catch (err) {
+      toast({
+        title: "Could not open profile",
+        description: err instanceof Error ? err.message : "Failed to import client profile",
+        variant: "destructive",
+      })
     }
-    setDetailsDrawerForEdit(true)
-    setDetailsClient(client)
-    setDetailsDrawerOpen(true)
   }
 
   const onDetailsDrawerOpenChange = (open: boolean) => {
@@ -327,13 +355,16 @@ export function ClientsTable({ clients }: ClientsTableProps) {
               <User className="h-5 w-5 text-white" />
             </div>
             <div className="flex flex-col">
-              <button
-                type="button"
-                onClick={() => openClientDetailsDrawer(client)}
-                className="font-semibold text-gray-900 hover:text-indigo-600 transition-colors duration-200 text-left"
-              >
-                {client.name}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openClientDetailsDrawer(client)}
+                  className="font-semibold text-gray-900 hover:text-indigo-600 transition-colors duration-200 text-left"
+                >
+                  {client.name}
+                </button>
+                <ClientCommunicationIndicators client={client} />
+              </div>
               <div className="flex items-center space-x-4 text-xs text-gray-500 mt-1">
                 <span className="flex items-center space-x-1">
                   <Phone className="h-3 w-3" />

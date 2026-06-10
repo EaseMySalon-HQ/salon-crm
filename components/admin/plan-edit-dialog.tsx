@@ -14,6 +14,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { Badge } from "@/components/ui/badge"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import {
+  buildPlanFeatureOverridesFromBusiness,
+  isPlanFeatureEnabled,
+  togglePlanFeatureOverride,
+} from "@/lib/admin-plan-feature-overrides"
 
 interface PlanEditDialogProps {
   businessId: string
@@ -21,9 +26,10 @@ interface PlanEditDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess?: () => void
+  onClosed?: () => void
 }
 
-export function PlanEditDialog({ businessId, businessName, open, onOpenChange, onSuccess }: PlanEditDialogProps) {
+export function PlanEditDialog({ businessId, businessName, open, onOpenChange, onSuccess, onClosed }: PlanEditDialogProps) {
   const [loading, setLoading] = useState(false)
   const [plans, setPlans] = useState<any[]>([])
   const [features, setFeatures] = useState<any[]>([])
@@ -42,19 +48,26 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
     trialEndsAt: '',
     overrides: {
       features: [] as string[],
+      disabledFeatures: [] as string[],
       expiresAt: '',
       notes: '',
     },
     addons: {
       whatsapp: { enabled: false, quota: 0 },
+      waba: { enabled: false, quota: 0 },
       sms: { enabled: false, quota: 0 },
     },
   })
 
   useEffect(() => {
     if (open && businessId) {
-      fetchConfig()
-      fetchBusinessPlan()
+      void (async () => {
+        const configPlans = await fetchConfig()
+        await fetchBusinessPlan(configPlans)
+      })()
+    }
+    if (!open) {
+      setIsHistoryOpen(false)
     }
   }, [open, businessId])
 
@@ -69,14 +82,16 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
         if (data.success) {
           setPlans(data.data.plans)
           setFeatures(data.data.features)
+          return data.data.plans as any[]
         }
       }
     } catch (error) {
       console.error('Error fetching config:', error)
     }
+    return []
   }
 
-  const fetchBusinessPlan = async () => {
+  const fetchBusinessPlan = async (configPlans: any[] = plans) => {
     try {
       setLoading(true)
       const response = await fetch(`${API_URL}/admin/plans/business/${businessId}`, {
@@ -88,23 +103,29 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
         if (data.success) {
           const business = data.data.business
           setPlanInfo(business.plan)
+          const planFeatures = configPlans.find((p: any) => p.id === business.plan.planId)?.features || []
+          const effectiveFeatures = business.features
+            ? business.features.filter((f: any) => f.enabled).map((f: any) => f.id)
+            : business.plan.features || []
           setFormData({
             planId: business.plan.planId,
             billingPeriod: business.plan.billingPeriod,
             renewalDate: business.plan.renewalDate ? new Date(business.plan.renewalDate).toISOString().split('T')[0] : '',
             isTrial: business.plan.isTrial,
             trialEndsAt: business.plan.trialEndsAt ? new Date(business.plan.trialEndsAt).toISOString().split('T')[0] : '',
-            overrides: {
-              features: business.plan.hasOverrides && business.features
-                ? business.features.filter((f: any) => f.enabled && !(plans.find((p: any) => p.id === business.plan.planId)?.features || []).includes(f.id)).map((f: any) => f.id)
-                : [],
-              expiresAt: business.plan.overridesExpiresAt ? new Date(business.plan.overridesExpiresAt).toISOString().split('T')[0] : '',
-              notes: '',
-            },
+            overrides: buildPlanFeatureOverridesFromBusiness(
+              planFeatures,
+              effectiveFeatures,
+              business.overrides,
+            ),
             addons: {
               whatsapp: {
                 enabled: business.plan.addons?.whatsapp?.enabled || false,
                 quota: business.plan.addons?.whatsapp?.quota || 0,
+              },
+              waba: {
+                enabled: business.plan.addons?.waba?.enabled || false,
+                quota: business.plan.addons?.waba?.quota || 0,
               },
               sms: {
                 enabled: business.plan.addons?.sms?.enabled || false,
@@ -189,24 +210,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
   }
 
   const toggleFeatureOverride = (featureId: string) => {
-    const currentFeatures = formData.overrides.features
-    if (currentFeatures.includes(featureId)) {
-      setFormData({
-        ...formData,
-        overrides: {
-          ...formData.overrides,
-          features: currentFeatures.filter(f => f !== featureId),
-        },
-      })
-    } else {
-      setFormData({
-        ...formData,
-        overrides: {
-          ...formData.overrides,
-          features: [...currentFeatures, featureId],
-        },
-      })
-    }
+    setFormData({
+      ...formData,
+      overrides: togglePlanFeatureOverride(featureId, planFeatures, formData.overrides),
+    })
   }
 
   const planFeatures = plans.find(p => p.id === formData.planId)?.features || []
@@ -214,7 +221,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-4xl max-h-[90vh] overflow-y-auto"
+          onCloseAutoFocus={() => onClosed?.()}
+        >
           <DialogHeader>
             <DialogTitle>Manage Plan: {businessName}</DialogTitle>
             <DialogDescription>
@@ -238,7 +248,21 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Plan</Label>
-                    <Select value={formData.planId} onValueChange={(value) => setFormData({ ...formData, planId: value })}>
+                    <Select
+                      value={formData.planId}
+                      onValueChange={(value) => {
+                        const newPlanFeatures = plans.find((p) => p.id === value)?.features || []
+                        setFormData({
+                          ...formData,
+                          planId: value,
+                          overrides: {
+                            ...formData.overrides,
+                            features: formData.overrides.features.filter((id) => !newPlanFeatures.includes(id)),
+                            disabledFeatures: formData.overrides.disabledFeatures.filter((id) => newPlanFeatures.includes(id)),
+                          },
+                        })
+                      }}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -297,27 +321,29 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
 
               <TabsContent value="features" className="space-y-4">
                 <div>
-                  <Label>Promotional Feature Overrides</Label>
+                  <Label>Feature Access</Label>
                   <p className="text-sm text-gray-500 mb-4">
-                    Features marked "(in plan)" are already included and enabled. Toggle additional features below to grant promotional access beyond the plan defaults.
+                    Toggle any feature on or off for this business. Plan defaults are shown as &quot;(in plan)&quot;.
+                    Disabled plan features stay off until re-enabled; extra grants can expire below.
                   </p>
                   <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto border rounded p-4">
                     {features.map((feature) => {
                       const isInPlan = planFeatures.includes(feature.id)
-                      const isOverride = formData.overrides.features.includes(feature.id)
-                      const isEnabled = isInPlan || isOverride
+                      const isGranted = formData.overrides.features.includes(feature.id)
+                      const isDisabled = formData.overrides.disabledFeatures.includes(feature.id)
+                      const isEnabled = isPlanFeatureEnabled(feature.id, planFeatures, formData.overrides)
 
                       return (
                         <div key={feature.id} className="flex items-center space-x-2">
                           <Switch
                             checked={isEnabled}
                             onCheckedChange={() => toggleFeatureOverride(feature.id)}
-                            disabled={isInPlan}
                           />
-                          <Label className={`text-sm ${isInPlan ? 'text-gray-600' : ''}`}>
+                          <Label className="text-sm">
                             {feature.name}
                             {isInPlan && <span className="text-gray-400 ml-1">(in plan)</span>}
-                            {!isInPlan && isOverride && <span className="text-blue-600 ml-1">(override)</span>}
+                            {!isInPlan && isGranted && <span className="text-blue-600 ml-1">(granted)</span>}
+                            {isInPlan && isDisabled && <span className="text-red-600 ml-1">(disabled)</span>}
                           </Label>
                         </div>
                       )
@@ -354,8 +380,11 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                 <div className="space-y-4">
                   <div className="flex items-center justify-between p-4 border rounded">
                     <div>
-                      <Label className="text-base font-semibold">WhatsApp Receipts</Label>
-                      <p className="text-sm text-gray-500">Send receipts via WhatsApp</p>
+                      <Label className="text-base font-semibold">WhatsApp (legacy / MSG91)</Label>
+                      <p className="text-sm text-gray-500">
+                        Routes WhatsApp through the existing MSG91 integration. Used for receipts,
+                        reminders, etc. Leave OFF if the business is on the new WABA module.
+                      </p>
                     </div>
                     <Switch
                       checked={formData.addons.whatsapp.enabled}
@@ -372,6 +401,41 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                     <div className="rounded-md border border-blue-100 bg-blue-50/60 p-3 text-xs text-blue-900">
                       WhatsApp messages are billed per message from the business
                       wallet (₹0.20 transactional, ₹1.20 campaign). No free quota.
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between p-4 border rounded">
+                    <div>
+                      <Label className="text-base font-semibold">WABA Integration (Meta Cloud API)</Label>
+                      <p className="text-sm text-gray-500">
+                        Native Meta WhatsApp pipeline — templates, campaigns, inbox, opt-out,
+                        webhook-driven status. Required to use Settings → WhatsApp Integration
+                        and the new Templates / Campaigns / Inbox screens.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={formData.addons.waba.enabled}
+                      onCheckedChange={(checked) => setFormData({
+                        ...formData,
+                        addons: {
+                          ...formData.addons,
+                          waba: { ...formData.addons.waba, enabled: checked },
+                        },
+                      })}
+                    />
+                  </div>
+                  {formData.addons.waba.enabled && (
+                    <div className="rounded-md border border-emerald-100 bg-emerald-50/70 p-3 text-xs text-emerald-900">
+                      WABA add-on enabled. The new Meta module routes will return
+                      <code className="ml-1 mr-1 px-1 rounded bg-white/60">200</code>
+                      instead of 403, and the router will pick provider:&apos;meta&apos; once
+                      the WABA itself is connected.
+                    </div>
+                  )}
+                  {formData.addons.waba.enabled && formData.addons.whatsapp.enabled && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
+                      Both WABA and legacy WhatsApp add-ons are ON. Router will prefer
+                      Meta when connected and fall back to MSG91 otherwise.
                     </div>
                   )}
 

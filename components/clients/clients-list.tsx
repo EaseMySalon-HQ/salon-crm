@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
-import { PlusCircle, Search, Download, FileText, FileSpreadsheet, ChevronDown, Users } from "lucide-react"
+import { PlusCircle, Search, Download, FileText, FileSpreadsheet, ChevronDown, Users, MessageCircle } from "lucide-react"
+import { normalizeClientCommunicationConsent } from "@/lib/client-communication-consent"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ClientsTable } from "@/components/clients/clients-table"
@@ -26,6 +27,8 @@ export function ClientsListPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [filteredClients, setFilteredClients] = useState<Client[]>([])
   const [statsFilter, setStatsFilter] = useState<"all" | "active" | "inactive">("all")
+  const [whatsappFilter, setWhatsappFilter] = useState<boolean>(false)
+  const [enrichedClientsForStats, setEnrichedClientsForStats] = useState<Client[]>([])
 
   // Subscribe to client store changes and force reload on mount
   useEffect(() => {
@@ -78,6 +81,13 @@ export function ClientsListPage() {
       filtered = clients.filter((client) => !isClientActive(client))
     }
 
+    // Apply WhatsApp opted-in filter
+    if (whatsappFilter) {
+      filtered = filtered.filter(
+        (client) => normalizeClientCommunicationConsent(client).promotionalWhatsappEnabled
+      )
+    }
+
     // Apply search query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase()
@@ -90,7 +100,7 @@ export function ClientsListPage() {
     }
 
     return filtered
-  }, [clients, statsFilter, searchQuery, threeMonthsAgo])
+  }, [clients, enrichedClientsForStats, statsFilter, searchQuery, threeMonthsAgo, whatsappFilter])
 
   // Update filtered clients when displayClients changes
   useEffect(() => {
@@ -187,7 +197,7 @@ export function ClientsListPage() {
                   </div>
                   
                   <div className="flex items-center gap-3">
-                    {canExport ? (
+                    {canExport && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
@@ -212,16 +222,6 @@ export function ClientsListPage() {
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        className="bg-gray-100 cursor-not-allowed text-gray-500 px-6 py-2.5 shadow-md rounded-xl font-medium border-gray-200"
-                        disabled
-                        title="Data export requires Professional or Enterprise plan"
-                      >
-                        <Download className="mr-2 h-5 w-5" />
-                        Export (Upgrade)
-                      </Button>
                     )}
                     
                     {canCreateClient && (
@@ -284,13 +284,26 @@ export function ClientsListPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-3">
+                  <Button
+                    variant={whatsappFilter ? "default" : "outline"}
+                    onClick={() => setWhatsappFilter((v) => !v)}
+                    className={`h-12 px-4 transition-all duration-200 ${
+                      whatsappFilter
+                        ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                        : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                    }`}
+                    title="Show clients who have opted in for WhatsApp marketing"
+                  >
+                    <MessageCircle className="mr-2 h-4 w-4" />
+                    WhatsApp opt-in
+                  </Button>
                   <Button 
                     variant="outline" 
-                    onClick={() => setSearchQuery("")}
+                    onClick={() => { setSearchQuery(""); setWhatsappFilter(false) }}
                     className="h-12 px-6 border-gray-200 hover:border-gray-300 text-gray-700 hover:text-gray-800 hover:bg-gray-50 transition-all duration-200"
-                    disabled={!searchQuery}
+                    disabled={!searchQuery && !whatsappFilter}
                   >
-                    Clear Search
+                    Clear filters
                   </Button>
                   <div className="text-sm text-gray-500">
                     {filteredClients.length} of {clients.length} clients

@@ -3,7 +3,7 @@
  * Purchase invoices live under Suppliers & orders → Purchase Invoices.
  */
 
-export const PRODUCTS_SETTINGS_TABS = ["products", "categories", "suppliers"] as const
+export const PRODUCTS_SETTINGS_TABS = ["products", "categories", "suppliers", "transfers"] as const
 export type ProductsSettingsTab = (typeof PRODUCTS_SETTINGS_TABS)[number]
 
 export const SUPPLIER_ORDERS_TABS = ["suppliers", "orders", "invoices", "payables"] as const

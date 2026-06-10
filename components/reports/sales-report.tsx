@@ -174,6 +174,10 @@ export function SalesReport() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const { hasAccess: canExport } = useFeature("data_export")
+  // Advanced report types (tip payouts, deleted invoices, unpaid/part-paid)
+  // require the `advanced_reports` plan feature; the backend gates the same
+  // endpoints. Basic types stay available to every plan with basic_reports.
+  const { hasAccess: canAdvancedReports } = useFeature("advanced_reports")
   const { hasPermission } = useAuth()
   const canEditSale = hasPermission("sales", "edit")
   const canDeleteSale = hasPermission("sales", "delete")
@@ -185,6 +189,16 @@ export function SalesReport() {
       setReportTypeState(p)
     }
   }, [searchParams])
+
+  // If the plan lacks advanced reports, never leave the UI on an advanced type
+  // (e.g. via a shared/bookmarked URL) — fall back to the basic Sales report.
+  const ADVANCED_REPORT_TYPES = ["staff-tip", "deleted-invoice", "unpaid-part-paid"]
+  useEffect(() => {
+    if (!canAdvancedReports && ADVANCED_REPORT_TYPES.includes(reportType)) {
+      setReportTypeState("sales")
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canAdvancedReports, reportType])
 
   const setReportType = useCallback(
     (value: string) => {
@@ -1692,13 +1706,13 @@ export function SalesReport() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="sales">Sales Report</SelectItem>
-                  <SelectItem value="staff-tip">Staff Tip</SelectItem>
+                  {canAdvancedReports && <SelectItem value="staff-tip">Staff Tip</SelectItem>}
                   <SelectItem value="summary">Summary Reports</SelectItem>
                   <SelectItem value="service-list">Service List</SelectItem>
                   <SelectItem value="product-list">Product List</SelectItem>
                   <SelectItem value="appointment-list">Appointment List</SelectItem>
-                  <SelectItem value="deleted-invoice">Deleted Invoice</SelectItem>
-                  <SelectItem value="unpaid-part-paid">Unpaid/Part-Paid</SelectItem>
+                  {canAdvancedReports && <SelectItem value="deleted-invoice">Deleted Invoice</SelectItem>}
+                  {canAdvancedReports && <SelectItem value="unpaid-part-paid">Unpaid/Part-Paid</SelectItem>}
                   <SelectItem value="cash-movement">Cash Movement</SelectItem>
                   <SelectItem value="gst">GST Report</SelectItem>
                 </SelectContent>
@@ -2517,8 +2531,7 @@ export function SalesReport() {
                   View Unpaid Bills
                 </Button>
               )}
-              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement" || reportType === "gst") && (
-                canExport ? (
+              {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement" || reportType === "gst") && canExport && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
@@ -2649,16 +2662,6 @@ export function SalesReport() {
                       )}
                     </DropdownMenuContent>
                   </DropdownMenu>
-                ) : (
-                  <Button
-                    className="bg-gray-400 cursor-not-allowed text-white px-6 py-2.5 shadow-md rounded-lg font-medium"
-                    disabled
-                    title="Data export requires Professional or Enterprise plan"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Export (Upgrade Required)
-                  </Button>
-                )
               )}
             </div>
           </div>

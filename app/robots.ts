@@ -27,7 +27,6 @@ export default function robots(): MetadataRoute.Robots {
           '/billing/',
           '/receipt/',
           '/analytics/',
-          '/campaigns/',
           '/cash-registry/',
           '/leads/',
           '/quick-sale/',

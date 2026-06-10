@@ -4,83 +4,14 @@ const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/business-db');
-const whatsappService = require('../services/whatsapp-service');
 const databaseManager = require('../config/database-manager');
-
-/**
- * Helper function to get recipients for a campaign
- */
-async function getRecipientsForCampaign(campaign, businessId, businessModels) {
-  const { Client } = businessModels;
-  let recipients = [];
-
-  if (campaign.recipientType === 'all_clients') {
-    // Get all clients with phone numbers
-    const clients = await Client.find({
-      branchId: businessId,
-      phone: { $exists: true, $ne: null, $ne: '' }
-    }).select('name phone email').lean();
-
-    recipients = clients.map(client => ({
-      phone: client.phone,
-      name: client.name || 'Customer',
-      email: client.email || null
-    }));
-  } else if (campaign.recipientType === 'segment') {
-    // Apply segment filters
-    const filters = campaign.recipientFilters || {};
-    const query = { branchId: businessId, phone: { $exists: true, $ne: null, $ne: '' } };
-
-    // Last visit date range
-    if (filters.lastVisitDateFrom || filters.lastVisitDateTo) {
-      query.lastVisitDate = {};
-      if (filters.lastVisitDateFrom) {
-        query.lastVisitDate.$gte = new Date(filters.lastVisitDateFrom);
-      }
-      if (filters.lastVisitDateTo) {
-        query.lastVisitDate.$lte = new Date(filters.lastVisitDateTo);
-      }
-    }
-
-    // Total spent range
-    if (filters.totalSpentMin || filters.totalSpentMax) {
-      query.totalSpent = {};
-      if (filters.totalSpentMin) {
-        query.totalSpent.$gte = parseFloat(filters.totalSpentMin);
-      }
-      if (filters.totalSpentMax) {
-        query.totalSpent.$lte = parseFloat(filters.totalSpentMax);
-      }
-    }
-
-    // Service categories
-    if (filters.serviceCategories && filters.serviceCategories.length > 0) {
-      query['services.category'] = { $in: filters.serviceCategories };
-    }
-
-    // Tags
-    if (filters.tags && filters.tags.length > 0) {
-      query.tags = { $in: filters.tags };
-    }
-
-    const clients = await Client.find(query).select('name phone email').lean();
-    recipients = clients.map(client => ({
-      phone: client.phone,
-      name: client.name || 'Customer',
-      email: client.email || null
-    }));
-  } else if (campaign.recipientType === 'custom') {
-    // Use custom phone list
-    const customList = campaign.recipientFilters?.phoneList || [];
-    recipients = customList.map(item => ({
-      phone: typeof item === 'string' ? item : item.phone,
-      name: typeof item === 'string' ? 'Customer' : (item.name || 'Customer'),
-      email: typeof item === 'object' ? item.email : null
-    }));
-  }
-
-  return recipients;
-}
+const { getAddonStatus } = require('../lib/entitlements');
+const {
+  getRecipientsForCampaign,
+  getMaxRecipients,
+  runLegacyCampaignSend,
+} = require('../lib/legacy-campaign-runner');
+const { enqueueLegacyCampaignRun } = require('../lib/legacy-campaign-queue');
 
 /**
  * POST /api/campaigns
@@ -368,7 +299,6 @@ router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusi
     const mainConnection = await databaseManager.getMainConnection();
     const Campaign = mainConnection.model('Campaign', require('../models/Campaign').schema);
     const BusinessMarketingTemplate = mainConnection.model('BusinessMarketingTemplate', require('../models/BusinessMarketingTemplate').schema);
-    const WhatsAppMessageLog = mainConnection.model('WhatsAppMessageLog', require('../models/WhatsAppMessageLog').schema);
 
     const campaign = await Campaign.findOne({
       _id: campaignId,
@@ -379,6 +309,15 @@ router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusi
       return res.status(404).json({
         success: false,
         error: 'Campaign not found'
+      });
+    }
+
+    const Business = mainConnection.model('Business', require('../models/Business').schema);
+    const businessForAddon = await Business.findById(businessId).select('plan.addons').lean();
+    if (!getAddonStatus(businessForAddon, 'whatsapp').enabled) {
+      return res.status(403).json({
+        success: false,
+        error: 'WhatsApp add-on is not enabled for this business. Enable it in your plan before sending campaigns.',
       });
     }
 
@@ -413,115 +352,42 @@ router.post('/:campaignId/send', authenticateToken, setupMainDatabase, setupBusi
       });
     }
 
-    // Update campaign status
+    const maxRecipients = getMaxRecipients();
+    if (recipients.length > maxRecipients) {
+      return res.status(400).json({
+        success: false,
+        error: `Campaign matches ${recipients.length} recipients; maximum is ${maxRecipients}. Narrow your segment or split into multiple campaigns.`,
+        code: 'CAMPAIGN_RECIPIENT_LIMIT',
+        limit: maxRecipients,
+        count: recipients.length,
+      });
+    }
+
+    recipients = recipients.slice(0, maxRecipients);
+
     campaign.status = 'sending';
     campaign.startedAt = new Date();
     await campaign.save();
 
-    // Respond immediately after status update — message sending runs in background
+    const queued = await enqueueLegacyCampaignRun({ campaignId: campaign._id, businessId });
+
     res.json({
       success: true,
       message: `Campaign is being sent to ${recipients.length} recipients`,
       data: {
         total: recipients.length,
-        status: 'sending'
-      }
+        status: 'sending',
+        queued,
+      },
     });
 
-    // Fire-and-forget: send messages in batches without blocking the response
-    setImmediate(async () => {
-      let sentCount = 0;
-      let failedCount = 0;
-      const batchSize = 10; // Send 10 messages at a time to avoid rate limits
-
-      try {
-        for (let i = 0; i < recipients.length; i += batchSize) {
-          const batch = recipients.slice(i, i + batchSize);
-          
-          await Promise.all(batch.map(async (recipient) => {
-            try {
-              // Map template variables - use recipient data and campaign templateVariables
-              const variables = { ...campaign.templateVariables };
-              
-              // Add recipient-specific variables if needed
-              if (recipient.name) {
-                variables.body_1 = recipient.name;
-              }
-
-              const result = await whatsappService.sendMessage({
-                to: recipient.phone,
-                templateId: template.msg91TemplateId || template.templateName,
-                variables
-              });
-
-              // Log message
-              await WhatsAppMessageLog.create({
-                businessId,
-                recipientPhone: recipient.phone,
-                messageType: 'campaign',
-                status: result.success ? 'sent' : 'failed',
-                msg91Response: result.data || null,
-                relatedEntityId: campaign._id,
-                relatedEntityType: 'Campaign',
-                campaignId: campaign._id,
-                error: result.error || null,
-                timestamp: new Date()
-              });
-
-              if (result.success) {
-                sentCount++;
-              } else {
-                failedCount++;
-              }
-            } catch (error) {
-              logger.error(`Error sending to ${recipient.phone}:`, error);
-              failedCount++;
-              
-              await WhatsAppMessageLog.create({
-                businessId,
-                recipientPhone: recipient.phone,
-                messageType: 'campaign',
-                status: 'failed',
-                relatedEntityId: campaign._id,
-                relatedEntityType: 'Campaign',
-                campaignId: campaign._id,
-                error: error.message,
-                timestamp: new Date()
-              });
-            }
-          }));
-
-          // Small delay between batches to avoid rate limiting
-          if (i + batchSize < recipients.length) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-        }
-
-        // Update campaign stats
-        campaign.sentCount = sentCount;
-        campaign.failedCount = failedCount;
-        campaign.status = 'completed';
-        campaign.completedAt = new Date();
-        await campaign.save();
-
-        // Update template usage
-        template.campaignCount = (template.campaignCount || 0) + sentCount;
-        template.lastUsedAt = new Date();
-        await template.save();
-
-        logger.info(`Campaign ${campaignId} completed: ${sentCount} sent, ${failedCount} failed`);
-      } catch (error) {
-        logger.error('Error sending campaign messages in background:', error);
-
-        // Revert campaign status to draft on unexpected error
-        try {
-          campaign.status = 'draft';
-          await campaign.save();
-        } catch (updateError) {
-          logger.error('Error reverting campaign status:', updateError);
-        }
-      }
-    }); // end setImmediate (fire-and-forget message sending)
+    if (!queued) {
+      setImmediate(() =>
+        runLegacyCampaignSend({ campaign, template, recipients, businessId }).catch((err) => {
+          logger.error('Error sending legacy campaign in-process: %s', err.message);
+        })
+      );
+    }
   } catch (error) {
     logger.error('Error sending campaign:', error);
     

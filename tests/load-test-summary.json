@@ -1,0 +1,317 @@
+{
+  "metrics": {
+    "http_req_receiving": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "min": 0.01,
+        "med": 0.13,
+        "max": 210.524,
+        "p(90)": 4.877900000000001,
+        "p(95)": 7.324299999999999,
+        "avg": 2.3275068771491085
+      }
+    },
+    "data_sent": {
+      "type": "counter",
+      "contains": "data",
+      "values": {
+        "rate": 9497.60980765665,
+        "count": 1200292
+      }
+    },
+    "checks": {
+      "values": {
+        "rate": 1,
+        "passes": 6897,
+        "fails": 0
+      },
+      "type": "rate",
+      "contains": "default"
+    },
+    "vus": {
+      "values": {
+        "min": 0,
+        "max": 25,
+        "value": 0
+      },
+      "type": "gauge",
+      "contains": "default"
+    },
+    "rate_limit_429": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0,
+        "passes": 0,
+        "fails": 5743
+      }
+    },
+    "dashboard_duration": {
+      "type": "trend",
+      "contains": "default",
+      "values": {
+        "avg": 505.4322169059011,
+        "min": 355,
+        "med": 469,
+        "max": 2396,
+        "p(90)": 550.4,
+        "p(95)": 616.4999999999995
+      }
+    },
+    "http_req_tls_handshaking": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 0.7975542356986558,
+        "min": 0,
+        "med": 0,
+        "max": 199.321,
+        "p(90)": 0,
+        "p(95)": 0
+      }
+    },
+    "errors": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 0,
+        "passes": 0,
+        "fails": 3762
+      },
+      "thresholds": {
+        "rate<0.01": {
+          "ok": true
+        }
+      }
+    },
+    "http_req_connecting": {
+      "contains": "time",
+      "values": {
+        "avg": 0.7447888402625822,
+        "min": 0,
+        "med": 0,
+        "max": 191.51,
+        "p(90)": 0,
+        "p(95)": 0
+      },
+      "type": "trend"
+    },
+    "appointments_duration": {
+      "type": "trend",
+      "contains": "default",
+      "values": {
+        "avg": 423.0127591706539,
+        "min": 352,
+        "med": 434,
+        "max": 574,
+        "p(90)": 469.40000000000003,
+        "p(95)": 487
+      }
+    },
+    "iterations": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 627,
+        "rate": 4.961293876324028
+      }
+    },
+    "http_req_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 445.8857308533919,
+        "min": 336.642,
+        "med": 437.6385,
+        "max": 2680.312,
+        "p(90)": 498.158,
+        "p(95)": 525.0631999999999
+      }
+    },
+    "http_req_failed": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "fails": 6398,
+        "rate": 0,
+        "passes": 0
+      },
+      "thresholds": {
+        "rate<0.01": {
+          "ok": true
+        }
+      }
+    },
+    "http_req_duration{expected_response:true}": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "min": 336.642,
+        "med": 437.6385,
+        "max": 2680.312,
+        "p(90)": 498.158,
+        "p(95)": 525.0631999999999,
+        "avg": 445.8857308533919
+      }
+    },
+    "data_received": {
+      "values": {
+        "count": 28567097,
+        "rate": 226044.27976149044
+      },
+      "type": "counter",
+      "contains": "data"
+    },
+    "vus_max": {
+      "type": "gauge",
+      "contains": "default",
+      "values": {
+        "value": 25,
+        "min": 25,
+        "max": 25
+      }
+    },
+    "http_req_waiting": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "p(95)": 517.33895,
+        "avg": 443.438488433884,
+        "min": 336.53,
+        "med": 436.48900000000003,
+        "max": 2671.174,
+        "p(90)": 494.0657
+      }
+    },
+    "iteration_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "med": 4790.452583,
+        "max": 10987.418084,
+        "p(90)": 5058.359058,
+        "p(95)": 5171.4734795,
+        "avg": 4869.323661816579,
+        "min": 4033.698125
+      }
+    },
+    "authed_api_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "p(90)": 501,
+        "p(95)": 526.8999999999997,
+        "avg": 443.7187880898485,
+        "min": 349,
+        "med": 442,
+        "max": 2396
+      },
+      "thresholds": {
+        "p(95)<800": {
+          "ok": true
+        }
+      }
+    },
+    "http_reqs": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 6398,
+        "rate": 50.62577068695555
+      }
+    },
+    "http_req_sending": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 0.11973554235698645,
+        "min": 0.016,
+        "med": 0.102,
+        "max": 5.36,
+        "p(90)": 0.20030000000000014,
+        "p(95)": 0.248
+      }
+    },
+    "login_duration": {
+      "values": {
+        "avg": 90.71610845295056,
+        "min": 0,
+        "med": 0,
+        "max": 2681,
+        "p(90)": 0,
+        "p(95)": 0
+      },
+      "type": "trend",
+      "contains": "default"
+    },
+    "http_req_blocked": {
+      "values": {
+        "med": 0.001,
+        "max": 401.019,
+        "p(90)": 0.002,
+        "p(95)": 0.002,
+        "avg": 1.5504507658644957,
+        "min": 0
+      },
+      "type": "trend",
+      "contains": "time"
+    }
+  },
+  "health": {
+    "baselineAt": "2026-06-10T20:18:40.917Z",
+    "baselineHealth": {
+      "services": {
+        "db": "ok",
+        "rateLimit": {
+          "rateLimit": "active",
+          "rateLimitMetrics": {
+            "blocked429": 0,
+            "evaluations": 4,
+            "fallbackRate": 0,
+            "redisFallbackUses": 0,
+            "tiers": {
+              "auth": {
+                "blocked429": 0,
+                "evaluations": 0,
+                "fallbackRate": null,
+                "redisFallbackUses": 0
+              },
+              "global": {
+                "evaluations": 4,
+                "fallbackRate": 0,
+                "redisFallbackUses": 0,
+                "blocked429": 0
+              },
+              "report": {
+                "blocked429": 0,
+                "evaluations": 0,
+                "fallbackRate": null,
+                "redisFallbackUses": 0
+              },
+              "ai": {
+                "blocked429": 0,
+                "evaluations": 0,
+                "fallbackRate": null,
+                "redisFallbackUses": 0
+              }
+            }
+          },
+          "redis": "connected",
+          "status": "ok"
+        },
+        "redis": "ok",
+        "tenantConnections": 1
+      },
+      "status": "ok",
+      "success": true,
+      "timestamp": "2026-06-10T20:18:40.280Z",
+      "uptime": "154s",
+      "memory": {
+        "totalMb": 59,
+        "usedMb": 54
+      },
+      "message": "EaseMySalon API is running"
+    }
+  }
+}

@@ -154,13 +154,20 @@ async function syncOverdueBillingSuspensions(businesses, BusinessModel) {
     if (!isNextBillingCalendarDayBeforeTodayInIST(next)) continue;
     idsToSuspend.push(b._id);
     b.status = 'suspended';
+    b.suspendedAt = new Date();
   }
   if (idsToSuspend.length === 0) return;
 
+  const now = new Date();
   await BusinessModel.updateMany(
     { _id: { $in: idsToSuspend }, status: 'active' },
-    { $set: { status: 'suspended', updatedAt: new Date() } }
+    { $set: { status: 'suspended', suspendedAt: now, updatedAt: now } }
   ).exec();
+  for (const b of businesses) {
+    if (idsToSuspend.some((id) => String(id) === String(b._id))) {
+      b.suspendedAt = now;
+    }
+  }
 }
 
 async function syncAllOverdueBillingSuspensions(BusinessModel) {

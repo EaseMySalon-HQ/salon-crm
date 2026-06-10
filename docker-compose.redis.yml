@@ -1,0 +1,20 @@
+# Local Redis for API cache, rate limits, and BullMQ workers.
+# Start: docker compose -f docker-compose.redis.yml up -d
+# Stop:  docker compose -f docker-compose.redis.yml down
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - salon_crm_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  salon_crm_redis_data:

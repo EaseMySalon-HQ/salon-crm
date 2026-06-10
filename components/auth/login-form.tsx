@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Eye, EyeOff, MessageCircle, Shield } from "lucide-react"
+import { Eye, EyeOff, Loader2, MessageCircle, Shield } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
@@ -31,6 +31,10 @@ const loginSchema = z.object({
 export function LoginForm() {
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Keeps a full-screen loader up during the gap between a successful login and
+  // the next route taking over (e.g. the branch picker), so the user always sees
+  // that something is happening.
+  const [redirectMessage, setRedirectMessage] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState("admin")
   const { login, staffLogin } = useAuth()
   const router = useRouter()
@@ -62,6 +66,14 @@ export function LoginForm() {
 
   async function onSubmit(values: z.infer<typeof loginSchema>) {
     setIsSubmitting(true)
+    // Track whether we're leaving this page so we keep the loader visible instead
+    // of flashing the button back to its idle label during the route transition.
+    let navigating = false
+    const goTo = (path: string, message: string) => {
+      navigating = true
+      setRedirectMessage(message)
+      router.push(path)
+    }
     try {
       if (activeTab === "staff") {
         if (!values.businessCode?.trim()) {
@@ -79,13 +91,13 @@ export function LoginForm() {
             setRememberedBusinessCode(values.businessCode.trim())
           }
           if (result.businessSuspended) {
-            router.push("/account-suspended")
+            goTo("/account-suspended", "Loading your account…")
           } else {
             toast({
               title: "Login successful",
               description: "Welcome back to EaseMySalon!",
             })
-            router.push(postAuthDestination())
+            goTo(postAuthDestination(), "Loading your dashboard…")
           }
         } else {
           toast({
@@ -97,14 +109,16 @@ export function LoginForm() {
       } else {
         const result = await login(values.email, values.password)
         if (result.success) {
-          if (result.businessSuspended) {
-            router.push("/account-suspended")
+          if (result.requiresBranchSelect) {
+            goTo("/select-branch", "Loading your branches…")
+          } else if (result.businessSuspended) {
+            goTo("/account-suspended", "Loading your account…")
           } else {
             toast({
               title: "Login successful",
               description: "Welcome back to EaseMySalon!",
             })
-            router.push(postAuthDestination())
+            goTo(postAuthDestination(), "Loading your dashboard…")
           }
         } else {
           toast({
@@ -121,12 +135,25 @@ export function LoginForm() {
         variant: "destructive",
       })
     } finally {
-      setIsSubmitting(false)
+      // Keep the loader up while navigating away; only re-enable the form on errors.
+      if (!navigating) setIsSubmitting(false)
     }
   }
 
 
   return (
+    <>
+      {redirectMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-4 bg-gradient-to-br from-[#0F172A] via-[#1E1B4B] to-[#312E81]"
+        >
+          <Loader2 className="h-12 w-12 animate-spin text-white" />
+          <p className="text-base font-medium text-white/90">{redirectMessage}</p>
+          <p className="text-sm text-white/50">Please wait a moment.</p>
+        </div>
+      )}
     <Card className="w-full border border-slate-100 bg-white/90 shadow-xl">
       <CardHeader className="space-y-3 text-center">
         <div className="mx-auto w-fit rounded-2xl bg-gradient-to-r from-purple-50 to-indigo-50 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#7C3AED]">
@@ -336,5 +363,6 @@ export function LoginForm() {
         </div>
           </CardContent>
         </Card>
+    </>
   )
 }

@@ -16,6 +16,12 @@ import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import { planBadgeClass } from "@/lib/plan-ids"
+import {
+  buildPlanFeatureOverridesFromBusiness,
+  isPlanFeatureEnabled,
+  togglePlanFeatureOverride,
+} from "@/lib/admin-plan-feature-overrides"
 
 interface Plan {
   id: string
@@ -60,6 +66,7 @@ interface Business {
     overridesExpiresAt: string | null
     addons: {
       whatsapp?: { enabled: boolean; quota: number; used: number }
+      waba?: { enabled: boolean; quota: number; used: number }
       sms?: { enabled: boolean; quota: number; used: number }
     }
   }
@@ -96,11 +103,13 @@ export function PlanManagement() {
     trialEndsAt: '',
     overrides: {
       features: [] as string[],
+      disabledFeatures: [] as string[],
       expiresAt: '',
       notes: '',
     },
     addons: {
       whatsapp: { enabled: false, quota: 0 },
+      waba: { enabled: false, quota: 0 },
       sms: { enabled: false, quota: 0 },
     },
   })
@@ -163,21 +172,22 @@ export function PlanManagement() {
 
   const handleEditPlan = (business: Business) => {
     setSelectedBusiness(business)
+    const planFeatures = plans.find((p) => p.id === business.plan.planId)?.features || []
     setFormData({
       planId: business.plan.planId,
       billingPeriod: business.plan.billingPeriod,
       renewalDate: business.plan.renewalDate ? new Date(business.plan.renewalDate).toISOString().split('T')[0] : '',
       isTrial: business.plan.isTrial,
       trialEndsAt: business.plan.trialEndsAt ? new Date(business.plan.trialEndsAt).toISOString().split('T')[0] : '',
-      overrides: {
-        features: business.plan.hasOverrides ? business.plan.features.filter(f => !plans.find(p => p.id === business.plan.planId)?.features.includes(f)) : [],
-        expiresAt: business.plan.overridesExpiresAt ? new Date(business.plan.overridesExpiresAt).toISOString().split('T')[0] : '',
-        notes: '',
-      },
+      overrides: buildPlanFeatureOverridesFromBusiness(planFeatures, business.plan.features),
       addons: {
         whatsapp: {
           enabled: business.plan.addons?.whatsapp?.enabled || false,
           quota: business.plan.addons?.whatsapp?.quota || 0,
+        },
+        waba: {
+          enabled: business.plan.addons?.waba?.enabled || false,
+          quota: business.plan.addons?.waba?.quota || 0,
         },
         sms: {
           enabled: business.plan.addons?.sms?.enabled || false,
@@ -255,38 +265,16 @@ export function PlanManagement() {
   }
 
   const toggleFeatureOverride = (featureId: string) => {
-    const currentFeatures = formData.overrides.features
-    if (currentFeatures.includes(featureId)) {
-      setFormData({
-        ...formData,
-        overrides: {
-          ...formData.overrides,
-          features: currentFeatures.filter(f => f !== featureId),
-        },
-      })
-    } else {
-      setFormData({
-        ...formData,
-        overrides: {
-          ...formData.overrides,
-          features: [...currentFeatures, featureId],
-        },
-      })
-    }
+    const planFeatures = plans.find((p) => p.id === formData.planId)?.features || []
+    setFormData({
+      ...formData,
+      overrides: togglePlanFeatureOverride(featureId, planFeatures, formData.overrides),
+    })
   }
 
-  const getPlanBadgeColor = (planId: string) => {
-    switch (planId) {
-      case 'starter':
-        return 'bg-blue-100 text-blue-800'
-      case 'professional':
-        return 'bg-purple-100 text-purple-800'
-      case 'enterprise':
-        return 'bg-amber-100 text-amber-800'
-      default:
-        return 'bg-gray-100 text-gray-800'
-    }
-  }
+  const selectedPlanFeatures = plans.find((p) => p.id === formData.planId)?.features || []
+
+  const getPlanBadgeColor = (planId: string) => planBadgeClass(planId).replace(/ border-\S+/g, "")
 
   if (loading && businesses.length === 0) {
     return (
@@ -395,7 +383,7 @@ export function PlanManagement() {
                       <div>{business.plan.features.length} features</div>
                       {business.plan.hasOverrides && (
                         <Badge variant="outline" className="mt-1">
-                          Promo Active
+                          Custom Access
                         </Badge>
                       )}
                     </div>
@@ -471,7 +459,21 @@ export function PlanManagement() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Plan</Label>
-                  <Select value={formData.planId} onValueChange={(value) => setFormData({ ...formData, planId: value })}>
+                  <Select
+                    value={formData.planId}
+                    onValueChange={(value) => {
+                      const newPlanFeatures = plans.find((p) => p.id === value)?.features || []
+                      setFormData({
+                        ...formData,
+                        planId: value,
+                        overrides: {
+                          ...formData.overrides,
+                          features: formData.overrides.features.filter((id) => !newPlanFeatures.includes(id)),
+                          disabledFeatures: formData.overrides.disabledFeatures.filter((id) => newPlanFeatures.includes(id)),
+                        },
+                      })
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -530,26 +532,28 @@ export function PlanManagement() {
 
             <TabsContent value="features" className="space-y-4">
               <div>
-                <Label>Promotional Feature Overrides</Label>
+                <Label>Feature Access</Label>
                 <p className="text-sm text-gray-500 mb-4">
-                  Select additional features to grant beyond the plan defaults
+                  Toggle any feature on or off for this business. Plan defaults are shown as &quot;(in plan)&quot;.
                 </p>
                 <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto border rounded p-4">
                   {features.map((feature) => {
-                    const planFeatures = plans.find(p => p.id === formData.planId)?.features || []
-                    const isInPlan = planFeatures.includes(feature.id)
-                    const isOverride = formData.overrides.features.includes(feature.id)
+                    const isInPlan = selectedPlanFeatures.includes(feature.id)
+                    const isGranted = formData.overrides.features.includes(feature.id)
+                    const isDisabled = formData.overrides.disabledFeatures.includes(feature.id)
+                    const isEnabled = isPlanFeatureEnabled(feature.id, selectedPlanFeatures, formData.overrides)
 
                     return (
                       <div key={feature.id} className="flex items-center space-x-2">
                         <Switch
-                          checked={isOverride}
+                          checked={isEnabled}
                           onCheckedChange={() => toggleFeatureOverride(feature.id)}
-                          disabled={isInPlan}
                         />
                         <Label className="text-sm">
                           {feature.name}
                           {isInPlan && <span className="text-gray-400 ml-1">(in plan)</span>}
+                          {!isInPlan && isGranted && <span className="text-blue-600 ml-1">(granted)</span>}
+                          {isInPlan && isDisabled && <span className="text-red-600 ml-1">(disabled)</span>}
                         </Label>
                       </div>
                     )
@@ -586,8 +590,11 @@ export function PlanManagement() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between p-4 border rounded">
                   <div>
-                    <Label className="text-base font-semibold">WhatsApp Receipts</Label>
-                    <p className="text-sm text-gray-500">Send receipts via WhatsApp</p>
+                    <Label className="text-base font-semibold">WhatsApp (legacy / MSG91)</Label>
+                    <p className="text-sm text-gray-500">
+                      Routes WhatsApp through the existing MSG91 integration. Used for receipts,
+                      reminders, etc. Leave OFF if the business is on the new WABA module.
+                    </p>
                   </div>
                   <Switch
                     checked={formData.addons.whatsapp.enabled}
@@ -604,6 +611,44 @@ export function PlanManagement() {
                   <div className="rounded-md border border-blue-100 bg-blue-50/60 p-3 text-xs text-blue-900">
                     WhatsApp messages are billed per message from the business
                     wallet (₹0.20 transactional, ₹1.20 campaign). No free quota.
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between p-4 border rounded">
+                  <div>
+                    <Label className="text-base font-semibold">WABA Integration (Meta Cloud API)</Label>
+                    <p className="text-sm text-gray-500">
+                      Native Meta WhatsApp pipeline — templates, campaigns, inbox, opt-out,
+                      webhook-driven status. Required to use Settings → WhatsApp Integration
+                      and the new Templates / Campaigns / Inbox screens.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={formData.addons.waba.enabled}
+                    onCheckedChange={(checked) => setFormData({
+                      ...formData,
+                      addons: {
+                        ...formData.addons,
+                        waba: { ...formData.addons.waba, enabled: checked },
+                      },
+                    })}
+                  />
+                </div>
+                {formData.addons.waba.enabled && (
+                  <div className="rounded-md border border-emerald-100 bg-emerald-50/70 p-3 text-xs text-emerald-900">
+                    WABA add-on enabled. The new Meta module routes will return
+                    <code className="ml-1 mr-1 px-1 rounded bg-white/60">200</code>
+                    instead of 403, and `whatsapp-router` will return provider:'meta'
+                    once the WABA itself is connected. Wallet billing is per-message
+                    (Meta pricing).
+                  </div>
+                )}
+                {formData.addons.waba.enabled && formData.addons.whatsapp.enabled && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
+                    Both WABA and legacy WhatsApp add-ons are ON. The router will
+                    prefer Meta when the WABA is connected and fall back to MSG91
+                    only if Meta is unreachable. To exclusively use Meta, turn off
+                    the legacy WhatsApp toggle.
                   </div>
                 )}
 

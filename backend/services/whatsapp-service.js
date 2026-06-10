@@ -516,6 +516,34 @@ class WhatsAppService {
   }
 
   /**
+   * Resolve template ID for tests — do not fall back to default when a specific type was requested.
+   */
+  getTemplateIdForTest(templateType = 'default') {
+    const templates = this.config?.templates || {};
+    const specific = templates[templateType];
+    if (specific && String(specific).trim()) {
+      return String(specific).trim();
+    }
+    if (templateType === 'default') {
+      return this.getTemplateId('default');
+    }
+    return '';
+  }
+
+  buildReceiptWithFeedbackTestVariables() {
+    const sampleReceipt =
+      'https://www.easemysalon.in/receipt/public/INV-000001/samplesharetoken0123456789abcdef0123456789ab';
+    const sampleFeedback =
+      'https://www.easemysalon.in/feedback/6a24b1a8d7ca686a0bd9ed4c/samplefeedbacktoken0123456789abcdef0123456789ab?s=whatsapp';
+    return {
+      body_1: 'Test Client',
+      body_2: 'Test Business',
+      button_1: this.extractReceiptPath(sampleReceipt),
+      button_2: this.extractFeedbackPath(sampleFeedback),
+    };
+  }
+
+  /**
    * Get variable mapping for a specific template type
    * Returns the mapping of template variables (body_1, body_2, etc.) to data field names
    */
@@ -682,7 +710,20 @@ class WhatsAppService {
     });
   }
 
+  resolveReceiptTemplateType(feedbackLink) {
+    const feedbackTemplateId = this.getTemplateId('receiptWithFeedback');
+    const hasFeedbackTemplate = Boolean(
+      feedbackTemplateId && String(feedbackTemplateId).trim()
+    );
+    if (feedbackLink && hasFeedbackTemplate) {
+      return 'receiptWithFeedback';
+    }
+    return 'receipt';
+  }
+
   async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink, feedbackLink }) {
+    const templateType = this.resolveReceiptTemplateType(feedbackLink);
+
     logger.debug('📱 [sendReceipt] Starting receipt send:', {
       to,
       clientName,
@@ -690,7 +731,8 @@ class WhatsAppService {
       businessName: receiptData?.businessName,
       receiptLink,
       feedbackLink: feedbackLink ? `${String(feedbackLink).substring(0, 48)}…` : '',
-      templateId: this.getTemplateId('receipt'),
+      templateType,
+      templateId: this.getTemplateId(templateType),
       hasConfig: !!this.config
     });
     
@@ -730,25 +772,24 @@ class WhatsAppService {
     
     logger.debug('📱 [sendReceipt] Data object:', data);
     
-    const variables = this.mapDataToTemplateVariables('receipt', data);
+    const variables = this.mapDataToTemplateVariables(templateType, data);
     
     logger.debug('📱 [sendReceipt] Mapped variables:', variables);
-    logger.debug('📱 [sendReceipt] Variable mapping config:', this.getTemplateVariableMapping('receipt'));
+    logger.debug('📱 [sendReceipt] Variable mapping config:', this.getTemplateVariableMapping(templateType));
     
     // If no mapping configured, use default mapping
     if (Object.keys(variables).length === 0) {
       logger.debug('📱 [sendReceipt] No variable mapping found, using defaults');
       variables.body_1 = data.clientName;
       variables.body_2 = data.businessName;
-      variables.body_3 = processedReceiptLinkForBody; // Use extracted path for body
-      // CRITICAL: Use extracted path for button since template includes base URL
-      // Template URL: https://www.easemysalon.in/receipt/public/{{1}}
-      // button_1 value: INV-000056/abc123 (just the path part)
       variables.button_1 = processedReceiptLinkForButton;
+      if (templateType === 'receiptWithFeedback' && processedFeedbackForButton) {
+        variables.button_2 = processedFeedbackForButton;
+      }
     } else {
       // Check if button variables are mapped and add receiptLink
       // CRITICAL: Use full URL for button variables, extracted path for body variables
-      const variableMapping = this.getTemplateVariableMapping('receipt');
+      const variableMapping = this.getTemplateVariableMapping(templateType);
       Object.keys(variableMapping).forEach(varName => {
         if (varName.startsWith('button_') && variableMapping[varName] === 'receiptLink') {
           // Template includes base URL, so send just the path part
@@ -768,11 +809,11 @@ class WhatsAppService {
     }
 
     logger.debug('📱 [sendReceipt] Final variables before send:', variables);
-    logger.debug('📱 [sendReceipt] Template ID:', this.getTemplateId('receipt'));
+    logger.debug('📱 [sendReceipt] Template ID:', this.getTemplateId(templateType));
 
     const result = await this.sendMessage({
       to,
-      templateId: this.getTemplateId('receipt'),
+      templateId: this.getTemplateId(templateType),
       variables
     });
     
@@ -1090,10 +1131,12 @@ class WhatsAppService {
     }
 
     try {
-      // Get template ID for the specified type or use default
-      const templateId = this.getTemplateId(templateType);
+      const templateId = this.getTemplateIdForTest(templateType);
       if (!templateId) {
-        return { success: false, error: `Template not configured for type: ${templateType}. Please configure at least a default template.` };
+        return {
+          success: false,
+          error: `Template not configured for type: ${templateType}. Add the MSG91 template name/ID in Admin Settings for this slot.`,
+        };
       }
 
       // Get variable mapping for this template type
@@ -1130,7 +1173,14 @@ class WhatsAppService {
           } else if (dataField === 'receiptNumber') {
             testValue = 'TEST-001';
           } else if (dataField === 'receiptLink') {
-            testValue = 'https://example.com/receipt/test';
+            const sampleReceipt = 'https://www.easemysalon.in/receipt/public/INV-000001/samplesharetoken0123456789abcdef0123456789ab';
+            testValue = varName.startsWith('button_')
+              ? this.extractReceiptPath(sampleReceipt)
+              : sampleReceipt;
+          } else if (dataField === 'feedbackLink') {
+            const sampleFeedback =
+              'https://www.easemysalon.in/feedback/6a24b1a8d7ca686a0bd9ed4c/samplefeedbacktoken0123456789abcdef0123456789ab?s=whatsapp';
+            testValue = this.extractFeedbackPath(sampleFeedback);
           } else if (dataField === 'googleMapsUrl') {
             const sample = 'https://maps.app.goo.gl/rwY2PmLdcE4TNo8w9';
             const { processedBody, processedButton } = this.prepareGoogleMapsTemplateParts(sample);
@@ -1188,9 +1238,18 @@ class WhatsAppService {
         logger.debug(`[WhatsApp Test] Test Variables:`, testVariables);
         logger.debug(`[WhatsApp Test] Body variables count:`, Object.keys(testVariables).filter(k => k.startsWith('body_')).length);
         logger.debug(`[WhatsApp Test] Button variables count:`, Object.keys(testVariables).filter(k => k.startsWith('button_')).length);
+      } else if (templateType === 'receiptWithFeedback') {
+        Object.assign(testVariables, this.buildReceiptWithFeedbackTestVariables());
+        logger.debug(`[WhatsApp Test] No variable mapping for ${templateType}, using receipt+feedback defaults`);
+      } else if (templateType === 'receipt') {
+        const sampleReceipt =
+          'https://www.easemysalon.in/receipt/public/INV-000001/samplesharetoken0123456789abcdef0123456789ab';
+        testVariables.body_1 = 'Test Client';
+        testVariables.body_2 = 'Test Business';
+        testVariables.button_1 = this.extractReceiptPath(sampleReceipt);
+        logger.debug(`[WhatsApp Test] No variable mapping for ${templateType}, using receipt defaults`);
       } else {
         // Fallback: if no mapping configured, send minimal test with body_1
-        // This handles templates that haven't been configured with JavaScript code yet
         testVariables.body_1 = 'Test Message from EaseMySalon';
         logger.debug(`[WhatsApp Test] No variable mapping found for ${templateType}, using default body_1`);
       }

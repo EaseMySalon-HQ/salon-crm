@@ -11,7 +11,7 @@ import { EmailNotificationsAPI } from "@/lib/api"
 import { Mail, Users, TestTube, CheckCircle2, XCircle, MessageCircle, Lock } from "lucide-react"
 import { StaffEmailPreferencesModal } from "./staff-email-preferences-modal"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { WhatsAppBusinessSettings } from "./whatsapp-business-settings"
+import { WhatsAppNotificationSettings } from "./whatsapp-business-settings"
 
 interface StaffMember {
   _id: string
@@ -342,7 +342,10 @@ export function NotificationSettings() {
               </div>
               <div>
                 <h2 className="text-2xl font-bold text-slate-800">Notification Settings</h2>
-                <p className="text-slate-600">Configure notifications for your business. Only admin/manager can manage these settings.</p>
+                <p className="text-slate-600">
+                  Configure email and WhatsApp notifications for your business. Connect WhatsApp under{" "}
+                  <span className="font-medium text-slate-700">Settings → WhatsApp Integration</span>.
+                </p>
               </div>
             </div>
           </div>
@@ -484,7 +487,7 @@ export function NotificationSettings() {
         </TabsContent>
 
         <TabsContent value="whatsapp" className="mt-6">
-          <WhatsAppBusinessSettings />
+          <WhatsAppNotificationSettings />
         </TabsContent>
       </Tabs>
     </div>

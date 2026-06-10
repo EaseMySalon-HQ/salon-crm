@@ -12,6 +12,7 @@ import type {
   AnalyticsStaffTabData,
 } from "@/lib/types/analytics"
 import type { PaymentConfiguration } from "./payment-redemption-eligibility"
+import type { PlanSubscriptionId } from "@/lib/plan-ids"
 
 // API Base Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
@@ -52,6 +53,18 @@ function normalizeApiErrorMessage(data: unknown): string {
   if (typeof d.error === 'string') return d.error
   if (typeof d.message === 'string') return d.message
   return ''
+}
+
+/** Plan/addon entitlement denials — not RBAC; callers should handle these locally. */
+function isEntitlementOrAddonDenied(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false
+  const code = (data as { code?: string }).code
+  return (
+    code === 'FEATURE_NOT_AVAILABLE' ||
+    code === 'WABA_ADDON_DISABLED' ||
+    code === 'ADDON_NOT_AVAILABLE' ||
+    code === 'LIMIT_REACHED'
+  )
 }
 
 /**
@@ -405,9 +418,9 @@ apiClient.interceptors.response.use(
 
         const isPermissionDenied =
           statusOut === 403 &&
+          !isEntitlementOrAddonDenied(error?.response?.data) &&
           (errorMsgLower.includes('insufficient permissions') ||
-            errorMsgLower.includes('insufficient admin permissions') ||
-            (errorMsgLower.includes('feature') && errorMsgLower.includes('not available')))
+            errorMsgLower.includes('insufficient admin permissions'))
 
         if (isPermissionDenied) {
           if (process.env.NODE_ENV === 'development') {
@@ -458,7 +471,18 @@ export interface PaginatedResponse<T> extends ApiResponse<T[]> {
 
 // API Service Classes
 export class AuthAPI {
-  static async login(email: string, password: string): Promise<ApiResponse<{ user: any; csrfToken?: string }>> {
+  static async login(
+    email: string,
+    password: string
+  ): Promise<
+    ApiResponse<{
+      user?: any
+      csrfToken?: string
+      requiresBranchSelect?: boolean
+      preAuthToken?: string
+      branches?: AuthBranchOption[]
+    }>
+  > {
     const response = await apiClient.post('/auth/login', { email, password })
     return response.data
   }
@@ -503,6 +527,558 @@ export class AuthAPI {
     const response = await apiClient.post('/auth/staff-login', { email, password, businessCode })
     return response.data
   }
+
+  /**
+   * Multi-branch: redeem the short-lived pre-auth token for a full session on the
+   * chosen branch. The pre-auth token is passed as a Bearer header (no session
+   * cookies exist yet); the endpoint is CSRF-exempt for this reason.
+   */
+  static async selectBranch(
+    branchId: string,
+    preAuthToken: string
+  ): Promise<ApiResponse<{ user: any; csrfToken?: string }>> {
+    const response = await apiClient.post(
+      '/auth/select-branch',
+      { branchId },
+      { headers: { Authorization: `Bearer ${preAuthToken}` } }
+    )
+    return response.data
+  }
+
+  /** Multi-branch: switch the active branch mid-session (uses existing session + CSRF). */
+  static async switchBranch(branchId: string): Promise<ApiResponse<{ csrfToken?: string }>> {
+    const response = await apiClient.post('/auth/switch-branch', { branchId })
+    return response.data
+  }
+
+  /** Multi-branch: list active branches owned by the current owner (empty for staff). */
+  static async getMyBranches(): Promise<ApiResponse<{ branches: AuthBranchOption[] }>> {
+    const response = await apiClient.get('/auth/my-branches')
+    return response.data
+  }
+}
+
+/** A branch option surfaced to the SPA for the picker and switcher. */
+export interface AuthBranchOption {
+  id: string
+  code: string
+  name: string
+  city: string
+  logo: string
+}
+
+/* ----------------------------------------------------------------- */
+/* Branch Management (multi-branch admin surface)                    */
+/* ----------------------------------------------------------------- */
+
+export type BranchPeriod = 'daily' | 'weekly' | 'monthly'
+
+/** ISO 'YYYY-MM-DD' date range passed to the cross-branch read endpoints. */
+export interface BranchDateRangeParams {
+  from?: string
+  to?: string
+  includeInactive?: boolean
+}
+
+export interface BranchSummaryRow {
+  branchId: string
+  branchName: string
+  city: string
+  status: string
+  revenue: number
+  appointments: number
+  completedAppointments: number
+  avgTicketSize: number
+  staff: number
+  clients: number
+  capacityUtilizationPct?: number
+  avgRating?: number | null
+  revenueTarget?: number
+  revenueVsTargetPct?: number | null
+  error?: string | null
+}
+
+export interface BranchCacheCoverage {
+  totalBranchDays: number
+  cachedBranchDays: number
+  liveBranchDays: number
+  source: "cache" | "hybrid" | "live"
+}
+
+export interface BranchSummaryResponse {
+  aggregate: {
+    revenue: number
+    appointments: number
+    completedAppointments: number
+    avgTicketSize: number
+    staff: number
+    clients: number
+    capacityUtilizationPct?: number
+    avgRating?: number | null
+    revenueTarget?: number
+    revenueVsTargetPct?: number | null
+  }
+  branches: BranchSummaryRow[]
+  range: { from: string; to: string }
+  cacheCoverage?: BranchCacheCoverage
+}
+
+export interface BranchTimeSeriesResponse {
+  labels: string[]
+  series: BranchSeries[]
+  granularity: BranchPeriod
+  cacheCoverage?: BranchCacheCoverage
+}
+
+export interface TopPerformerService {
+  name: string
+  count: number
+  revenue: number
+}
+
+export interface TopPerformerStaff {
+  name: string
+  revenue: number
+}
+
+export interface TopPerformersResponse {
+  topServices: TopPerformerService[]
+  topStaff: TopPerformerStaff[]
+  range: { from: string; to: string }
+}
+
+export interface BranchSeries {
+  branchId: string
+  branchName: string
+  error?: string | null
+  data: number[]
+}
+
+export interface BranchStaffRow {
+  id: string
+  name: string
+  role: string
+  /** True when bill staffId could not be matched to the branch staff directory */
+  unlinked?: boolean
+  isActive: boolean
+  avatar: string
+  servicesDone: number
+  revenue: number
+  utilizationPct: number
+  /** @deprecated use utilizationPct */
+  attendancePct?: number
+}
+
+export interface StaffCompareResponse {
+  labels: string[]
+  series: { metric: string; data: number[] }[]
+  branches: { branchId: string; branchName: string; error?: string | null }[]
+  range: { from: string; to: string }
+}
+
+export interface BranchStaffGroup {
+  branchId: string
+  branchName: string
+  error?: string | null
+  staff: BranchStaffRow[]
+}
+
+export interface BranchInventoryItem {
+  id: string
+  name: string
+  category: string
+  currentStock: number
+  reorderLevel: number
+  lowStock: boolean
+}
+
+export interface BranchInventoryGroup {
+  branchId: string
+  branchName: string
+  error?: string | null
+  products: BranchInventoryItem[]
+}
+
+export type InventoryStockStatus = 'green' | 'amber' | 'red' | 'zero'
+
+export interface BranchInventoryCell {
+  stock: number
+  reorderLevel: number
+  status: InventoryStockStatus
+  lastRestockedAt?: string | null
+}
+
+export interface InventoryMatrixProduct {
+  key: string
+  name: string
+  sku: string
+  category: string
+  branches: Record<string, BranchInventoryCell>
+}
+
+export interface InventoryMatrixResponse {
+  branches: { branchId: string; branchName: string; error?: string | null }[]
+  products: InventoryMatrixProduct[]
+}
+
+export interface BranchClientMembership {
+  id: string
+  planName: string
+  startDate: string | null
+  expiryDate: string | null
+  remainingSessions: number | null
+}
+
+export interface BranchClientMatch {
+  branchId: string
+  branchName: string
+  error?: string | null
+  found: boolean
+  client: {
+    id: string
+    name: string
+    phone: string
+    email: string
+    lastVisit: string | null
+    totalVisits: number
+    totalSpent: number
+  } | null
+  memberships: BranchClientMembership[]
+}
+
+export interface BranchListItem {
+  id: string
+  code: string
+  name: string
+  city: string
+  logo: string
+  status: string
+  createdAt: string
+  managerName: string
+  isActive: boolean
+  isCurrent: boolean
+}
+
+export interface AddBranchPayload {
+  branchName: string
+  city: string
+  phone: string
+  address: string
+  state?: string
+  zipCode?: string
+  email?: string
+  managerId?: string
+}
+
+export type WeekDay =
+  | 'monday'
+  | 'tuesday'
+  | 'wednesday'
+  | 'thursday'
+  | 'friday'
+  | 'saturday'
+  | 'sunday'
+
+export interface DayHours {
+  open: string
+  close: string
+  closed: boolean
+}
+
+export interface BranchConfig {
+  id: string
+  code: string
+  name: string
+  status: string
+  address: { street: string; city: string; state: string; zipCode: string }
+  phone: string
+  email: string
+  allowOnlineBooking: boolean
+  allowCrossBranchBooking?: boolean
+  cancellationWindowHours?: number
+  revenueTargetMonthly?: number
+  operatingHours: Record<WeekDay, DayHours>
+}
+
+export interface UpdateBranchPayload {
+  name?: string
+  phone?: string
+  email?: string
+  address?: { street?: string; city?: string; state?: string; zipCode?: string }
+  allowOnlineBooking?: boolean
+  allowCrossBranchBooking?: boolean
+  cancellationWindowHours?: number
+  revenueTargetMonthly?: number
+  operatingHours?: Partial<Record<WeekDay, Partial<DayHours>>>
+}
+
+export type ClientSegment = 'new' | 'returning' | 'vip' | 'at_risk'
+
+export interface BranchClientListRow {
+  phone: string
+  name: string
+  email: string
+  totalVisits: number
+  totalSpent: number
+  lastVisit: string | null
+  homeBranchId: string | null
+  segment: ClientSegment
+  allowCrossBranchBooking: boolean
+  branches: {
+    branchId: string
+    branchName: string
+    clientId: string
+    totalVisits: number
+    totalSpent: number
+    lastVisit: string | null
+  }[]
+}
+
+export interface BranchServiceRow {
+  id: string
+  key: string
+  name: string
+  sku: string
+  price: number
+  durationMinutes: number
+  category: string
+  tier: string
+  enabled: boolean
+  hasOverride?: boolean
+}
+
+export interface TransferRequestPermissions {
+  initiatorBranchId: string
+  approverBranchId: string
+  canApprove: boolean
+  canReject: boolean
+  canCancel: boolean
+  isInProcess: boolean
+}
+
+export interface TransferRequestRow {
+  _id: string
+  fromBranchId: string
+  toBranchId: string
+  productKey: string
+  productName: string
+  sku?: string
+  quantity: number
+  status: 'pending' | 'approved' | 'rejected' | 'completed' | 'cancelled'
+  initiatedByBranchId?: string | null
+  permissions?: TransferRequestPermissions
+  notes?: string
+  createdAt: string
+  completedAt?: string | null
+}
+
+export class BranchManagementAPI {
+  static async getSummary(range?: BranchDateRangeParams): Promise<ApiResponse<BranchSummaryResponse>> {
+    const response = await apiClient.get('/branch-management/summary', { params: range })
+    return response.data
+  }
+
+  static async getTopPerformers(
+    range?: BranchDateRangeParams & { limit?: number }
+  ): Promise<ApiResponse<TopPerformersResponse>> {
+    const response = await apiClient.get('/branch-management/overview/top-performers', { params: range })
+    return response.data
+  }
+
+  static async getRevenue(range?: BranchDateRangeParams): Promise<ApiResponse<BranchTimeSeriesResponse>> {
+    const response = await apiClient.get('/branch-management/revenue', { params: range })
+    return response.data
+  }
+
+  static async getAppointments(range?: BranchDateRangeParams): Promise<ApiResponse<BranchTimeSeriesResponse>> {
+    const response = await apiClient.get('/branch-management/appointments', { params: range })
+    return response.data
+  }
+
+  static async getStaff(
+    range?: BranchDateRangeParams
+  ): Promise<ApiResponse<{ branches: BranchStaffGroup[]; range: { from: string; to: string } }>> {
+    const params = range
+      ? {
+          ...range,
+          includeInactive: range.includeInactive !== false ? 'true' : 'false',
+        }
+      : undefined
+    const response = await apiClient.get('/branch-management/staff', { params })
+    return response.data
+  }
+
+  static async getStaffCompare(
+    range?: BranchDateRangeParams & { metric?: 'revenue' | 'services' | 'utilization' }
+  ): Promise<ApiResponse<StaffCompareResponse>> {
+    const response = await apiClient.get('/branch-management/staff/compare', { params: range })
+    return response.data
+  }
+
+  static async getInventory(): Promise<ApiResponse<{ branches: BranchInventoryGroup[] }>> {
+    const response = await apiClient.get('/branch-management/inventory')
+    return response.data
+  }
+
+  static async getInventoryMatrix(): Promise<ApiResponse<InventoryMatrixResponse>> {
+    const response = await apiClient.get('/branch-management/inventory/matrix')
+    return response.data
+  }
+
+  static async updateReorderLevel(payload: {
+    branchId: string
+    productKey: string
+    minimumStock: number
+  }): Promise<ApiResponse<{ branchId: string; productKey: string; minimumStock: number }>> {
+    const response = await apiClient.patch('/branch-management/inventory/reorder', payload)
+    return response.data
+  }
+
+  static async getTransfers(params?: {
+    status?: string
+  }): Promise<ApiResponse<{ transfers: TransferRequestRow[] }>> {
+    const response = await apiClient.get('/branch-management/inventory/transfers', { params })
+    return response.data
+  }
+
+  static async createTransfer(payload: {
+    fromBranchId: string
+    toBranchId: string
+    productKey: string
+    productName: string
+    sku?: string
+    quantity: number
+    notes?: string
+  }): Promise<ApiResponse<{ transfer: TransferRequestRow }>> {
+    const response = await apiClient.post('/branch-management/inventory/transfers', payload)
+    return response.data
+  }
+
+  static async updateTransfer(
+    id: string,
+    payload: { status: 'approved' | 'rejected' | 'cancelled'; notes?: string }
+  ): Promise<ApiResponse<{ transfer: TransferRequestRow; errors?: string[] }>> {
+    const response = await apiClient.patch(`/branch-management/inventory/transfers/${id}`, payload)
+    return response.data
+  }
+
+  static async getClients(params?: {
+    from?: string
+    to?: string
+    branchId?: string
+    segment?: ClientSegment | 'all'
+    search?: string
+    page?: number
+    limit?: number
+  }): Promise<
+    ApiResponse<{
+      clients: BranchClientListRow[]
+      pagination: { page: number; limit: number; total: number; pages: number }
+    }>
+  > {
+    const response = await apiClient.get('/branch-management/clients', { params })
+    return response.data
+  }
+
+  static async searchClient(
+    phone: string
+  ): Promise<ApiResponse<{ query: string; homeBranchId: string | null; branches: BranchClientMatch[] }>> {
+    const response = await apiClient.get('/branch-management/clients/search', { params: { phone } })
+    return response.data
+  }
+
+  static async getBranches(): Promise<ApiResponse<{ branches: BranchListItem[] }>> {
+    const response = await apiClient.get('/branch-management/branches')
+    return response.data
+  }
+
+  static async addBranch(
+    payload: AddBranchPayload
+  ): Promise<ApiResponse<{ branch: { id: string; code: string; name: string; city: string; status: string } }>> {
+    const response = await apiClient.post('/branch-management/branches/add', payload)
+    return response.data
+  }
+
+  static async setBranchStatus(
+    branchId: string,
+    isActive: boolean
+  ): Promise<ApiResponse<{ branch: { id: string; code: string; name: string; status: string; isActive: boolean } }>> {
+    const response = await apiClient.patch(`/branch-management/branches/${branchId}/status`, { isActive })
+    return response.data
+  }
+
+  static async getBranchConfig(branchId: string): Promise<ApiResponse<{ config: BranchConfig }>> {
+    const response = await apiClient.get(`/branch-management/branches/${branchId}/config`)
+    return response.data
+  }
+
+  static async updateBranch(
+    branchId: string,
+    payload: UpdateBranchPayload
+  ): Promise<ApiResponse<{ config: BranchConfig }>> {
+    const response = await apiClient.patch(`/branch-management/branches/${branchId}`, payload)
+    return response.data
+  }
+
+  static async getBranchServices(
+    branchId: string
+  ): Promise<ApiResponse<{ services: BranchServiceRow[] }>> {
+    const response = await apiClient.get(`/branch-management/branches/${branchId}/services`)
+    return response.data
+  }
+
+  static async updateBranchServices(
+    branchId: string,
+    overrides: Record<
+      string,
+      { enabled?: boolean; durationMinutes?: number; price?: number; tier?: 'standard' | 'premium' }
+    >
+  ): Promise<ApiResponse<{ serviceOverrides: Record<string, unknown> }>> {
+    const response = await apiClient.patch(`/branch-management/branches/${branchId}/services`, {
+      overrides,
+    })
+    return response.data
+  }
+
+  static async copyBranchServices(
+    targetBranchId: string,
+    payload: {
+      sourceBranchId: string
+      includeCatalog?: boolean
+      includeOverrides?: boolean
+      onConflict?: 'skip' | 'update'
+    }
+  ): Promise<
+    ApiResponse<{
+      created: number
+      updated: number
+      skipped: number
+      overridesCopied: number
+      warnings: Array<{ name: string; reason: string }>
+    }>
+  > {
+    const response = await apiClient.post(
+      `/branch-management/branches/${targetBranchId}/services/copy`,
+      payload
+    )
+    return response.data
+  }
+
+  static async getOrgSettings(): Promise<
+    ApiResponse<{ shareClientsAcrossBranches: boolean }>
+  > {
+    const response = await apiClient.get('/branch-management/org-settings')
+    return response.data
+  }
+
+  static async updateOrgSettings(payload: {
+    shareClientsAcrossBranches: boolean
+  }): Promise<
+    ApiResponse<{ shareClientsAcrossBranches: boolean; branchesUpdated: number }>
+  > {
+    const response = await apiClient.patch('/branch-management/org-settings', payload)
+    return response.data
+  }
 }
 
 export class ClientsAPI {
@@ -535,6 +1111,11 @@ export class ClientsAPI {
     const params: Record<string, string | number> = { q: query }
     if (opts?.limit) params.limit = opts.limit
     const response = await apiClient.get('/clients/search', { params })
+    return response.data
+  }
+
+  static async ensureShared(phone: string): Promise<ApiResponse<any> & { created?: boolean }> {
+    const response = await apiClient.post('/clients/ensure-shared', { phone })
     return response.data
   }
 
@@ -951,6 +1532,85 @@ export class CategoriesAPI {
   }
 }
 
+export interface TransferEligibilityBranch {
+  id: string
+  name: string
+  city: string
+}
+
+export interface TransferEligibilityResponse {
+  enabled: boolean
+  currentBranchId: string
+  isOrgOwner: boolean
+  branches: TransferEligibilityBranch[]
+}
+
+export interface TransferListParams {
+  page?: number
+  limit?: number
+  status?: string
+  direction?: 'incoming' | 'outgoing' | 'all'
+  search?: string
+}
+
+export interface TransferListResponse {
+  transfers: TransferRequestRow[]
+  pagination: { page: number; limit: number; total: number; pages: number }
+  currentBranchId: string
+  isOrgOwner: boolean
+}
+
+export interface ProductStockByBranch {
+  branchId: string
+  branchName: string
+  stock: number | null
+  found: boolean
+  error?: string
+}
+
+/** Tenant-scoped transfer APIs (Settings → Products tab; staff + owner). */
+export class InventoryTransfersAPI {
+  static async getEligibility(): Promise<ApiResponse<TransferEligibilityResponse>> {
+    const response = await apiClient.get('/inventory/transfers/eligibility')
+    return response.data
+  }
+
+  static async listTransfers(params?: TransferListParams): Promise<ApiResponse<TransferListResponse>> {
+    const response = await apiClient.get('/inventory/transfers', { params })
+    return response.data
+  }
+
+  static async getProductStockAcrossBranches(
+    productKey: string
+  ): Promise<ApiResponse<{ productKey: string; branches: ProductStockByBranch[] }>> {
+    const response = await apiClient.get(
+      `/inventory/transfers/products/${encodeURIComponent(productKey)}/stock`
+    )
+    return response.data
+  }
+
+  static async createTransfer(payload: {
+    fromBranchId: string
+    toBranchId: string
+    productKey: string
+    productName: string
+    sku?: string
+    quantity: number
+    notes?: string
+  }): Promise<ApiResponse<{ transfer: TransferRequestRow }>> {
+    const response = await apiClient.post('/inventory/transfers', payload)
+    return response.data
+  }
+
+  static async updateTransfer(
+    id: string,
+    payload: { status: 'approved' | 'rejected' | 'cancelled'; notes?: string }
+  ): Promise<ApiResponse<{ transfer: TransferRequestRow; errors?: string[] }>> {
+    const response = await apiClient.patch(`/inventory/transfers/${id}`, payload)
+    return response.data
+  }
+}
+
 export class InventoryAPI {
   static async deductProduct(data: { productId: string; quantity: number; transactionType: string; reason?: string; notes?: string }): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/inventory/out', data)
@@ -1033,6 +1693,15 @@ export class AppointmentsAPI {
 
   static async getById(id: string): Promise<ApiResponse<any>> {
     const response = await apiClient.get(`/appointments/${id}`)
+    return response.data
+  }
+
+  static async getByPhone(
+    phone: string,
+    opts?: { limit?: number }
+  ): Promise<ApiResponse<any[]> & { shared?: boolean }> {
+    const encoded = encodeURIComponent(phone || "")
+    const response = await apiClient.get(`/appointments/by-phone/${encoded}`, { params: opts })
     return response.data
   }
 
@@ -1316,6 +1985,26 @@ export class PackagesAPI {
     const response = await apiClient.post(`/packages/client-packages/${clientPackageId}/redeem`, data)
     return response.data
   }
+
+  static async getSalesReport(params?: { from?: string; to?: string; package_id?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/packages/reports/sales', { params })
+    return response.data
+  }
+
+  static async getUtilizationReport(): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/packages/reports/utilization')
+    return response.data
+  }
+
+  static async getExpiringReport(days?: number): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/packages/reports/expiring', { params: { days } })
+    return response.data
+  }
+
+  static async exportReport(data: { format: 'excel' | 'pdf'; reportType?: string; from?: string; to?: string }): Promise<Blob> {
+    const response = await apiClient.post('/packages/reports/export', data, { responseType: 'blob' })
+    return response.data
+  }
 }
 
 export class LeadsAPI {
@@ -1596,7 +2285,7 @@ export class SalesAPI {
     return response.data
   }
 
-  static async getByClient(clientPhone: string): Promise<ApiResponse<any[]>> {
+  static async getByClient(clientPhone: string): Promise<ApiResponse<any[]> & { shared?: boolean }> {
     const encoded = encodeURIComponent(clientPhone || '')
     const response = await apiClient.get(`/sales/by-phone/${encoded}`)
     return response.data
@@ -2190,6 +2879,16 @@ export class SettingsAPI {
     return response.data
   }
 
+  static async getReceiptTemplate(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/settings/receipt-template')
+    return response.data
+  }
+
+  static async updateReceiptTemplate(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put('/settings/receipt-template', data)
+    return response.data
+  }
+
   static async getAppointmentSettings(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/settings/appointments')
     return response.data
@@ -2599,100 +3298,6 @@ export class EmailNotificationsAPI {
   // Manually trigger daily summary
   static async sendDailySummary(): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/email-notifications/send-daily-summary')
-    return response.data
-  }
-}
-
-// Marketing Templates API
-export class MarketingTemplatesAPI {
-  static async getAll(params?: { status?: string; page?: number; limit?: number }): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/whatsapp/marketing-templates', { params })
-    return response.data
-  }
-
-  static async getById(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/whatsapp/marketing-templates/${id}`)
-    return response.data
-  }
-
-  static async create(data: {
-    templateName: string;
-    language?: string;
-    components: any[];
-    description?: string;
-    tags?: string[];
-  }): Promise<ApiResponse<any>> {
-    try {
-      const response = await apiClient.post('/whatsapp/marketing-templates/create', data)
-      return response.data
-    } catch (error: any) {
-      // Return error response in the same format as success
-      if (error.response?.data) {
-        // The backend returns { success: false, error: "...", details: {...} }
-        return error.response.data
-      }
-      // If no response data, create a proper error response
-      return {
-        success: false,
-        error: error.message || 'Failed to create template',
-        data: undefined as any
-      }
-    }
-  }
-
-  static async checkStatus(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.put(`/whatsapp/marketing-templates/${id}/check-status`)
-    return response.data
-  }
-
-  static async delete(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.delete(`/whatsapp/marketing-templates/${id}`)
-    return response.data
-  }
-}
-
-// Campaigns API
-export class CampaignsAPI {
-  static async getAll(params?: { status?: string; page?: number; limit?: number }): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/campaigns', { params })
-    return response.data
-  }
-
-  static async getById(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/campaigns/${id}`)
-    return response.data
-  }
-
-  static async create(data: {
-    name: string;
-    description?: string;
-    templateId: string;
-    recipientType: 'all_clients' | 'segment' | 'custom';
-    recipientFilters?: any;
-    templateVariables?: any;
-    scheduledAt?: string;
-  }): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/campaigns', data)
-    return response.data
-  }
-
-  static async send(campaignId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`/campaigns/${campaignId}/send`)
-    return response.data
-  }
-
-  static async getRecipients(campaignId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/campaigns/${campaignId}/recipients`)
-    return response.data
-  }
-
-  static async getStats(campaignId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.get(`/campaigns/${campaignId}/stats`)
-    return response.data
-  }
-
-  static async cancel(campaignId: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.put(`/campaigns/${campaignId}/cancel`)
     return response.data
   }
 }
@@ -3325,7 +3930,7 @@ export class RewardPointsAPI {
 
 export type PlanCheckoutKind = "renewal" | "upgrade" | "change" | "new"
 export type PlanBillingPeriod = "monthly" | "yearly"
-export type PlanSubscriptionId = "starter" | "professional" | "enterprise"
+export type { PlanSubscriptionId } from "@/lib/plan-ids"
 
 export interface PlanCheckoutOrder {
   provider: WalletProvider
@@ -3563,6 +4168,236 @@ export type PaymentSettingsUpdatePayload = {
   paymentConfiguration?: PaymentConfiguration
   rewardRedemptionThreshold?: RewardRedemptionThreshold
 } & Record<string, unknown>
+
+// =============================================================================
+// WhatsApp Business module (Meta Cloud API)
+// =============================================================================
+
+export class WhatsAppMetaAPI {
+  static async getStatus(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/whatsapp/meta/status')
+    return response.data
+  }
+
+  static async exchangeCode(payload: {
+    code: string
+    wabaId: string
+    phoneNumberId: string
+    phoneE164?: string
+    displayName?: string
+    mode?: 'test' | 'live'
+    redirectUri?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/connect/exchange', payload)
+    return response.data
+  }
+
+  static async disconnect(): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/disconnect')
+    return response.data
+  }
+
+  static async refresh(): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/refresh')
+    return response.data
+  }
+
+  static async setMode(payload: { mode: 'test' | 'live'; testRecipientWhitelist?: string[] }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/mode', payload)
+    return response.data
+  }
+
+  static async sendTest(to: string, templateName = 'hello_world', language = 'en_US'): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/meta/test-message', { to, templateName, language })
+    return response.data
+  }
+
+  static async getCompliance(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/whatsapp/meta/compliance')
+    return response.data
+  }
+}
+
+export class WhatsAppTemplatesAPI {
+  static async list(params?: { status?: string; search?: string; limit?: number; skip?: number }): Promise<ApiResponse<any[]> & { total?: number; limit?: number; skip?: number }> {
+    const response = await apiClient.get('/whatsapp/v2/templates', { params })
+    return response.data
+  }
+
+  static async get(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/whatsapp/v2/templates/${id}`)
+    return response.data
+  }
+
+  static async fromMeta(): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/whatsapp/v2/templates/from-meta')
+    return response.data
+  }
+
+  static async create(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/v2/templates', data)
+    return response.data
+  }
+
+  static async update(id: string, data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/whatsapp/v2/templates/${id}`, data)
+    return response.data
+  }
+
+  static async submit(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/templates/${id}/submit`)
+    return response.data
+  }
+
+  static async sync(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/templates/${id}/sync`)
+    return response.data
+  }
+
+  static async syncAll(): Promise<ApiResponse<{ imported: number; updated: number; total: number }>> {
+    const response = await apiClient.post('/whatsapp/v2/templates/sync-all')
+    return response.data
+  }
+
+  static async remove(id: string, opts?: { force?: boolean }): Promise<ApiResponse> {
+    const response = await apiClient.delete(`/whatsapp/v2/templates/${id}`, {
+      params: opts?.force ? { force: 1 } : undefined,
+    })
+    return response.data
+  }
+}
+
+export class WhatsAppCampaignsAPI {
+  static async list(): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/whatsapp/v2/campaigns')
+    return response.data
+  }
+
+  static async get(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/whatsapp/v2/campaigns/${id}`)
+    return response.data
+  }
+
+  static async create(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/v2/campaigns', data)
+    return response.data
+  }
+
+  static async update(id: string, data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/whatsapp/v2/campaigns/${id}`, data)
+    return response.data
+  }
+
+  static async preview(id: string): Promise<ApiResponse<{ count: number; excludedOptOut?: number; sample: any[] }>> {
+    const response = await apiClient.post(`/whatsapp/v2/campaigns/${id}/recipients/preview`)
+    return response.data
+  }
+
+  static async send(id: string): Promise<ApiResponse<{ recipientCount: number; expectedSpendPaise: number }>> {
+    const response = await apiClient.post(`/whatsapp/v2/campaigns/${id}/send`)
+    return response.data
+  }
+
+  static async schedule(id: string, scheduledAt: string): Promise<ApiResponse<any>> {
+    // Updating `scheduledAt` flips status to `scheduled`; the cron picks it
+    // up at the appropriate time.
+    const response = await apiClient.put(`/whatsapp/v2/campaigns/${id}`, { scheduledAt })
+    return response.data
+  }
+
+  static async cancel(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/campaigns/${id}/cancel`)
+    return response.data
+  }
+
+  static async stats(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/whatsapp/v2/campaigns/${id}/stats`)
+    return response.data
+  }
+}
+
+export class WhatsAppMessagesAPI {
+  static async list(params?: Record<string, any>): Promise<ApiResponse<{ items: any[]; total: number }>> {
+    const response = await apiClient.get('/whatsapp/v2/messages', { params })
+    return response.data
+  }
+
+  static async usage(params?: Record<string, any>): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/whatsapp/v2/messages/usage', { params })
+    return response.data
+  }
+}
+
+export type WhatsAppInboxFilter = 'all' | 'unread' | 'open' | 'resolved' | 'optedout'
+
+export class WhatsAppInboxAPI {
+  static async list(params?: { filter?: WhatsAppInboxFilter; q?: string; limit?: number }): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/whatsapp/v2/inbox', { params })
+    return response.data
+  }
+
+  static async thread(conversationId: string): Promise<ApiResponse<{ conversation: any; messages: any[] }>> {
+    const response = await apiClient.get(`/whatsapp/v2/inbox/${conversationId}`)
+    return response.data
+  }
+
+  static async reply(
+    conversationId: string,
+    payload: {
+      mode?: 'text' | 'template'
+      text?: string
+      templateName?: string
+      language?: string
+      components?: any[]
+      /**
+       * Flat placeholder map keyed by the placeholder index (and "h<N>"
+       * for header placeholders). The backend will fetch the template
+       * and translate this into the Meta-shape `components` array.
+       */
+      variables?: Record<string, string>
+    }
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/inbox/${conversationId}/reply`, payload)
+    return response.data
+  }
+
+  static async resolve(conversationId: string, resolved = true): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/inbox/${conversationId}/resolve`, { resolved })
+    return response.data
+  }
+
+  static async consent(
+    conversationId: string,
+    payload: { optedIn: boolean; reason: string }
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/inbox/${conversationId}/consent`, payload)
+    return response.data
+  }
+
+  /**
+   * Returns the placeholder schema for a template so the inbox composer
+   * can render variable inputs per `{{N}}` it finds in header/body.
+   */
+  static async templateDetail(
+    name: string,
+    language = 'en_US'
+  ): Promise<ApiResponse<{
+    name: string
+    language: string
+    status: string
+    category: string
+    components: any
+    placeholders: {
+      header: { key: string; label: string; sample: string; index: number }[]
+      body: { key: string; label: string; sample: string; index: number }[]
+    }
+  }>> {
+    const response = await apiClient.get(`/whatsapp/v2/inbox/templates/${encodeURIComponent(name)}`, {
+      params: { language },
+    })
+    return response.data
+  }
+}
 
 // Export the main API client for direct use if needed
 export { apiClient }

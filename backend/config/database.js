@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const databaseManager = require('./database-manager');
 const { logger } = require('../utils/logger');
 const { registerSlowQueryMonitoring } = require('../utils/mongoose-slow-query');
 
@@ -41,8 +42,10 @@ const connectDB = async () => {
       const conn = await mongoose.connect(uri, {
         serverSelectionTimeoutMS: serverSelectionTimeoutMs,
         monitorCommands: true,
+        ...databaseManager.getMainPoolOptions(),
       });
       registerSlowQueryMonitoring(mongoose.connection);
+      databaseManager.adoptDefaultMainConnection(conn.connection);
       logger.info(`MongoDB Connected: ${conn.connection.host}`);
       return conn;
     } catch (error) {

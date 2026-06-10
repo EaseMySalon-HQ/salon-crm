@@ -39,6 +39,24 @@ const APPOINTMENT_WHATSAPP_TEMPLATE_TYPES = [
   'appointmentReschedule',
 ] as const
 
+/** Receipt + feedback template: button_1 = View Bill, button_2 = Share Feedback */
+function receiptWithFeedbackButtonDataField(varName: string): string {
+  const idx = parseInt(varName.replace('button_', ''), 10)
+  if (idx === 1) return 'receiptLink'
+  if (idx === 2) return 'feedbackLink'
+  return `button_${varName.replace('button_', '')}`
+}
+
+function mapReceiptTemplateButton(templateType: string, varName: string): string {
+  if (templateType === 'receiptWithFeedback') {
+    return receiptWithFeedbackButtonDataField(varName)
+  }
+  if (templateType === 'receipt') {
+    return 'receiptLink'
+  }
+  return `button_${varName.replace('button_', '')}`
+}
+
 interface WhatsAppAdminSettingsProps {
   settings?: any
   onSettingsChange: (settings: any) => void
@@ -80,6 +98,7 @@ export const EMPTY_WHATSAPP_TEMPLATE_SLOTS: Record<string, string> = {
   welcomeMessage: "",
   businessAccountCreated: "",
   receipt: "",
+  receiptWithFeedback: "",
   receiptCancellation: "",
   appointmentScheduling: "",
   appointmentConfirmation: "",
@@ -89,6 +108,17 @@ export const EMPTY_WHATSAPP_TEMPLATE_SLOTS: Record<string, string> = {
   clientWalletTransaction: "",
   clientWalletExpiryReminder: "",
   default: "",
+}
+
+const WHATSAPP_TEMPLATE_LABELS: Record<string, string> = {
+  receiptWithFeedback: "Receipt with Feedback Link",
+}
+
+function whatsappTemplateLabel(templateType: string): string {
+  if (WHATSAPP_TEMPLATE_LABELS[templateType]) {
+    return WHATSAPP_TEMPLATE_LABELS[templateType]
+  }
+  return templateType.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase())
 }
 
 export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange }: WhatsAppAdminSettingsProps) {
@@ -520,6 +550,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
       welcomeMessage: ['clientName', 'businessName', 'welcomeMessage'],
       businessAccountCreated: ['businessName', 'businessCode', 'adminName', 'loginUrl'],
       receipt: ['clientName', 'businessName', 'receiptLink'],
+      receiptWithFeedback: ['clientName', 'businessName', 'receiptLink', 'feedbackLink'],
       receiptCancellation: ['clientName', 'receiptNumber', 'businessName', 'cancellationReason'],
       appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'googleMapsUrl'],
       appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
@@ -557,8 +588,8 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
           newMapping[varName] = defaultFieldList[bodyIndex] || `variable_${bodyIndex + 1}`;
         } else if (varName.startsWith('button_')) {
           // Map button variables - receipts use receiptLink; appointment templates use salon Google Maps link
-          if (templateType === 'receipt') {
-            newMapping[varName] = 'receiptLink';
+          if (templateType === 'receipt' || templateType === 'receiptWithFeedback') {
+            newMapping[varName] = mapReceiptTemplateButton(templateType, varName);
           } else if ((APPOINTMENT_WHATSAPP_TEMPLATE_TYPES as readonly string[]).includes(templateType)) {
             newMapping[varName] = 'googleMapsUrl';
           } else {
@@ -630,6 +661,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
           welcomeMessage: ['clientName', 'businessName', 'welcomeMessage'],
           businessAccountCreated: ['businessName', 'businessCode', 'adminName', 'loginUrl'],
           receipt: ['clientName', 'businessName', 'receiptLink'],
+          receiptWithFeedback: ['clientName', 'businessName', 'receiptLink', 'feedbackLink'],
           receiptCancellation: ['clientName', 'receiptNumber', 'businessName', 'cancellationReason'],
           appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'googleMapsUrl'],
           appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
@@ -667,8 +699,8 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
               newMapping[varName] = defaultFieldList[bodyIndex] || `variable_${bodyIndex + 1}`;
             } else if (varName.startsWith('button_')) {
               // Map button variables - receipts use receiptLink; appointment templates use Google Maps link
-              if (editingTemplate === 'receipt') {
-                newMapping[varName] = 'receiptLink';
+              if (editingTemplate === 'receipt' || editingTemplate === 'receiptWithFeedback') {
+                newMapping[varName] = mapReceiptTemplateButton(editingTemplate, varName);
               } else if ((APPOINTMENT_WHATSAPP_TEMPLATE_TYPES as readonly string[]).includes(editingTemplate)) {
                 newMapping[varName] = 'googleMapsUrl';
               } else {
@@ -795,6 +827,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
         msg91ApiKey: settings.msg91ApiKey || '',
         msg91SenderId: settings.msg91SenderId || '',
         templates: settings.templates || {},
+        templateVariables: settings.templateVariables || {},
         msg91TemplateId: settings.msg91TemplateId || '' // Legacy support
       }
       
@@ -949,7 +982,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                     </TableHeader>
                     <TableBody>
                       {Object.keys(settings.templates || {}).filter(key => key !== 'default').map((templateType) => {
-                        const templateName = templateType.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+                        const templateName = whatsappTemplateLabel(templateType)
                         const templateId = settings.templates?.[templateType] || ''
                         const javascriptCode = templateJavaScriptCodes[templateType] || ''
                         const isExpanded = expandedJsonCodes[templateType] || false
@@ -1041,7 +1074,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
 
                     <div className="space-y-4">
                       {Object.keys(settings.templates || {}).filter(key => key !== 'default').map((templateType) => {
-                        const templateName = templateType.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+                        const templateName = whatsappTemplateLabel(templateType)
                         const variableMapping = settings.templateVariables?.[templateType] || {};
                         const hasJavaScriptCode = templateJavaScriptCodes[templateType] && templateJavaScriptCodes[templateType].trim().length > 0;
                         
@@ -1090,6 +1123,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                                           <SelectItem value="businessCode">Business Code</SelectItem>
                                           <SelectItem value="receiptNumber">Receipt Number</SelectItem>
                                           <SelectItem value="receiptLink">Receipt Link</SelectItem>
+                                          <SelectItem value="feedbackLink">Feedback Link</SelectItem>
                                           <SelectItem value="googleMapsUrl">Google Maps Link</SelectItem>
                                           <SelectItem value="serviceName">Service Name</SelectItem>
                                           <SelectItem value="date">Date</SelectItem>
@@ -1193,6 +1227,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                       <SelectItem value="welcomeMessage">Welcome Message</SelectItem>
                       <SelectItem value="businessAccountCreated">Business Account Created</SelectItem>
                       <SelectItem value="receipt">Receipt/Bill</SelectItem>
+                      <SelectItem value="receiptWithFeedback">Receipt with Feedback Link</SelectItem>
                       <SelectItem value="receiptCancellation">Bill Cancellation</SelectItem>
                       <SelectItem value="appointmentScheduling">Appointment Scheduling</SelectItem>
                       <SelectItem value="appointmentConfirmation">Appointment Confirmation</SelectItem>
@@ -1479,7 +1514,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
-              Edit {editingTemplate ? editingTemplate.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()) : ''} Template
+              Edit {editingTemplate ? whatsappTemplateLabel(editingTemplate) : ''} Template
             </DialogTitle>
             <DialogDescription>
               Configure the template ID and JavaScript code. The system will automatically extract JSON from JavaScript and parse variables.
@@ -1551,6 +1586,7 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                         welcomeMessage: ['clientName', 'businessName', 'welcomeMessage'],
                         businessAccountCreated: ['businessName', 'businessCode', 'adminName', 'loginUrl'],
                         receipt: ['clientName', 'businessName', 'receiptLink'],
+                        receiptWithFeedback: ['clientName', 'businessName', 'receiptLink', 'feedbackLink'],
                         receiptCancellation: ['clientName', 'receiptNumber', 'businessName', 'cancellationReason'],
                         appointmentScheduling: ['clientName', 'serviceName', 'date', 'time', 'businessName', 'googleMapsUrl'],
                         appointmentConfirmation: ['clientName', 'serviceName', 'date', 'time', 'staffName', 'businessName', 'businessPhone', 'googleMapsUrl'],
@@ -1588,8 +1624,8 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                             newMapping[varName] = defaultFieldList[bodyIndex] || `variable_${bodyIndex + 1}`;
                           } else if (varName.startsWith('button_')) {
                             // Map button variables - receipts use receiptLink; appointment templates use Google Maps link
-                            if (editingTemplate === 'receipt') {
-                              newMapping[varName] = 'receiptLink';
+                            if (editingTemplate === 'receipt' || editingTemplate === 'receiptWithFeedback') {
+                              newMapping[varName] = mapReceiptTemplateButton(editingTemplate, varName);
                             } else if ((APPOINTMENT_WHATSAPP_TEMPLATE_TYPES as readonly string[]).includes(editingTemplate)) {
                               newMapping[varName] = 'googleMapsUrl';
                             } else {

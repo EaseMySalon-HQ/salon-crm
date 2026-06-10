@@ -14,6 +14,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import { formatAdminPlanMonthlyPrice } from "@/lib/admin-plan-price"
 
 // Create schema factory function
 const createBusinessSchema = (isEditMode: boolean) => z.object({
@@ -544,7 +545,10 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                         <SelectContent>
                           {plans.map((plan) => (
                             <SelectItem key={plan.id} value={plan.id}>
-                              {plan.name} {plan.monthlyPrice && `- ₹${plan.monthlyPrice.toLocaleString()}/mo`}
+                              {plan.name}
+                              {plan.monthlyPrice != null
+                                ? ` — ${formatAdminPlanMonthlyPrice(plan.monthlyPrice)}/mo`
+                                : ""}
                             </SelectItem>
                           ))}
                         </SelectContent>

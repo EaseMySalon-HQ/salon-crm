@@ -242,6 +242,12 @@ export function InventoryLogs({ embedded = false }: { embedded?: boolean } = {})
         return <Badge className={`${baseClasses} bg-red-100 text-red-800 border-red-200`}>Theft</Badge>
       case 'sale':
         return <Badge className={`${baseClasses} bg-red-100 text-red-800 border-red-200`}>Sale</Badge>
+      case 'transfer':
+        return (
+          <Badge className={`${baseClasses} bg-indigo-100 text-indigo-800 border-indigo-200`}>
+            Transfer
+          </Badge>
+        )
       default:
         return <Badge className={`${baseClasses} bg-gray-100 text-gray-800 border-gray-200`}>{type}</Badge>
     }
@@ -270,7 +276,7 @@ export function InventoryLogs({ embedded = false }: { embedded?: boolean } = {})
             Inventory transaction logs
           </h2>
           <p className="text-sm text-slate-500">
-            Track all inventory movements including sales, returns, and adjustments
+            Track all inventory movements including sales, returns, transfers, and adjustments
           </p>
         </div>
       ) : (
@@ -280,7 +286,7 @@ export function InventoryLogs({ embedded = false }: { embedded?: boolean } = {})
             Inventory Transaction Logs
           </DialogTitle>
           <DialogDescription>
-            Track all inventory movements including sales, returns, and adjustments
+            Track all inventory movements including sales, returns, transfers, and adjustments
           </DialogDescription>
         </DialogHeader>
       )}
@@ -358,6 +364,7 @@ export function InventoryLogs({ embedded = false }: { embedded?: boolean } = {})
                   <SelectItem value="expiry">Expiry</SelectItem>
                   <SelectItem value="theft">Theft</SelectItem>
                   <SelectItem value="sale">Sale</SelectItem>
+                  <SelectItem value="transfer">Transfer</SelectItem>
                 </SelectContent>
               </Select>
             </div>

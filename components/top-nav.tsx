@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useRouter } from "next/navigation"
-import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet, AlertTriangle, CreditCard } from "lucide-react"
+import { useRouter, usePathname } from "next/navigation"
+import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet, AlertTriangle, CreditCard, MessageCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -22,7 +22,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
-import { SettingsAPI, ClientsAPI, WalletAPI, type NotificationFeedItem } from "@/lib/api"
+import { SettingsAPI, ClientsAPI, WalletAPI, WhatsAppInboxAPI, type NotificationFeedItem } from "@/lib/api"
+import { useAddon, useFeature } from "@/hooks/use-entitlements"
 import { STALE_TIME } from "@/lib/queries/staleness"
 import { useNotificationsFeed } from "@/lib/queries/notifications"
 import { Input } from "@/components/ui/input"
@@ -31,18 +32,23 @@ import { ExpenseForm } from "@/components/expenses/expense-form"
 import { CashRegistryModal } from "@/components/cash-registry/cash-registry-modal"
 import { SessionStatus } from "@/components/auth/session-status"
 import { ClientDetailsDrawer } from "@/components/clients/client-details-drawer"
+import { BranchSwitcher } from "@/components/branch-switcher/branch-switcher"
+import { useToast } from "@/hooks/use-toast"
 import type { Client } from "@/lib/client-store"
+import { ensureLocalSharedClient, isSharedPreviewClient } from "@/lib/shared-client-import"
 
 function searchHitToClient(c: any): Client {
   const id = String(c._id || c.id || "")
   return {
     ...c,
     id,
-    _id: id,
+    _id: c.sharedPreview ? undefined : id,
     name: c.name || "",
     phone: c.phone || "",
     email: c.email,
     birthdate: c.birthdate || c.dob || undefined,
+    sharedPreview: c.sharedPreview === true,
+    sourceBranchId: c.sourceBranchId,
   }
 }
 
@@ -143,9 +149,24 @@ function NotificationAlertMenuRow({
   )
 }
 
+function normalizePathname(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
 export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
-  const { user, logout } = useAuth()
+  const { user, logout, hasPermission } = useAuth()
   const router = useRouter()
+  const pathname = normalizePathname(usePathname())
+  const { hasAccess: hasWhatsAppIntegration, isLoading: whatsAppEntitlementsLoading } =
+    useFeature("whatsapp_integration")
+  const { status: wabaAddon, isLoading: wabaAddonLoading } = useAddon("waba")
+  const canAccessWhatsAppInbox =
+    hasPermission("campaigns", "view") &&
+    !whatsAppEntitlementsLoading &&
+    !wabaAddonLoading &&
+    hasWhatsAppIntegration &&
+    wabaAddon.enabled
+  const isInboxActive = pathname.startsWith("/whatsapp/inbox")
   const [showExpenseDialog, setShowExpenseDialog] = useState(false)
   const [showCashRegistryModal, setShowCashRegistryModal] = useState(false)
   const { amount: todayOnlineSales } = useTodayOnlineSales(showCashRegistryModal)
@@ -219,6 +240,32 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const badgeLabel =
     notifCount > 9 ? "9+" : notifCount > 0 ? String(notifCount) : ""
 
+  const { data: inboxUnreadTotal = 0 } = useQuery({
+    queryKey: ["whatsapp", "inbox", "unread-total"],
+    queryFn: async () => {
+      try {
+        const res = await WhatsAppInboxAPI.list({ filter: "unread", limit: 100 })
+        if (!res.success || !Array.isArray(res.data)) return 0
+        return res.data.reduce((sum, row) => sum + Number(row?.unreadCount || 0), 0)
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number; data?: { code?: string } } })?.response?.status
+        const code = (err as { response?: { data?: { code?: string } } })?.response?.data?.code
+        if (status === 403 && (code === "WABA_ADDON_DISABLED" || code === "FEATURE_NOT_AVAILABLE")) {
+          return 0
+        }
+        throw err
+      }
+    },
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    enabled: !!user && canAccessWhatsAppInbox,
+    retry: false,
+  })
+
+  const inboxBadgeLabel =
+    inboxUnreadTotal > 9 ? "9+" : inboxUnreadTotal > 0 ? String(inboxUnreadTotal) : ""
+
   const { data: businessSettingsData, isLoading: isLoadingBusinessName } = useQuery({
     queryKey: ["settings", "business"],
     queryFn: async () => {
@@ -255,12 +302,17 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
     return `₹${r.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   })()
 
+  const planRenewalWarningDays = user?.planRenewalWarningDaysLeft ?? null
+  const planRenewalExpiringToday = !!user?.planRenewalExpiringToday
+
+  const { toast } = useToast()
   const [clientSearch, setClientSearch] = useState("")
   const [clientResults, setClientResults] = useState<any[]>([])
   const [clientSearchOpen, setClientSearchOpen] = useState(false)
   const clientSearchRef = useRef<HTMLDivElement>(null)
   const [clientDetailsDrawerOpen, setClientDetailsDrawerOpen] = useState(false)
   const [clientDetailsDrawerClient, setClientDetailsDrawerClient] = useState<Client | null>(null)
+  const [clientImporting, setClientImporting] = useState(false)
 
   useEffect(() => {
     const handleBusinessSettingsUpdate = () => {
@@ -327,32 +379,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
       <div className="flex items-center justify-between">
         {/* Left — business name + messaging wallet balance */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
-          <div className="group relative flex items-center gap-3 px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 hover:from-indigo-100 hover:via-purple-100 hover:to-pink-100 border border-indigo-100/50 hover:border-indigo-200/70 transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-indigo-500/20 cursor-pointer overflow-hidden">
-            {/* Animated background overlay */}
-            <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 via-purple-500/5 to-pink-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-            
-            {/* Left dot */}
-            <div className="relative z-10">
-              <div className="w-2.5 h-2.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full shadow-sm"></div>
-            </div>
-            
-            {/* Business name text */}
-            <span className="relative z-10 text-sm font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-700 via-purple-700 to-pink-700 group-hover:from-indigo-800 group-hover:via-purple-800 group-hover:to-pink-800 transition-all duration-300">
-              {isLoadingBusinessName ? (
-                <span className="inline-block w-28 h-4 bg-gradient-to-r from-indigo-200 via-purple-200 to-pink-200 rounded"></span>
-              ) : (
-                businessName
-              )}
-            </span>
-            
-            {/* Right dot */}
-            <div className="relative z-10">
-              <div className="w-1.5 h-1.5 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full opacity-0 group-hover:opacity-100 transition-all duration-300"></div>
-            </div>
-            
-            {/* Hover effect line */}
-            <div className="absolute bottom-0 left-0 w-0 h-0.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 group-hover:w-full transition-all duration-300 ease-out"></div>
-          </div>
+          <BranchSwitcher businessName={businessName} isLoadingName={isLoadingBusinessName} />
 
           <button
             type="button"
@@ -373,6 +400,27 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
               )}
             </span>
           </button>
+
+          {planRenewalExpiringToday ? (
+            <p
+              role="alert"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-red-300/90 bg-red-50/95 px-2.5 py-1.5 text-xs font-semibold text-red-900 sm:text-sm"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-600" aria-hidden />
+              <span>Please Renew. Expiring Today</span>
+            </p>
+          ) : planRenewalWarningDays != null ? (
+            <p
+              role="alert"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-200/90 bg-amber-50/95 px-2.5 py-1.5 text-xs font-medium text-amber-900 sm:text-sm"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+              <span>
+                Please renew the plan. {planRenewalWarningDays}{" "}
+                {planRenewalWarningDays === 1 ? "day" : "days"} left
+              </span>
+            </p>
+          ) : null}
         </div>
 
         {/* Right side - Quick Add, Notifications, and User */}
@@ -410,16 +458,40 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                     <li key={String(id)} role="option">
                       <button
                         type="button"
-                        className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                        disabled={clientImporting}
+                        className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-60"
                         onClick={() => {
-                          setClientDetailsDrawerClient(searchHitToClient(c))
-                          setClientDetailsDrawerOpen(true)
-                          setClientSearch("")
-                          setClientResults([])
-                          setClientSearchOpen(false)
+                          void (async () => {
+                            setClientImporting(true)
+                            try {
+                              const hit = searchHitToClient(c)
+                              const client = await ensureLocalSharedClient(hit)
+                              setClientDetailsDrawerClient(client)
+                              setClientDetailsDrawerOpen(true)
+                              setClientSearch("")
+                              setClientResults([])
+                              setClientSearchOpen(false)
+                            } catch (err) {
+                              toast({
+                                title: "Could not open profile",
+                                description:
+                                  err instanceof Error ? err.message : "Failed to import client profile",
+                                variant: "destructive",
+                              })
+                            } finally {
+                              setClientImporting(false)
+                            }
+                          })()
                         }}
                       >
-                        <span className="font-medium text-slate-800">{c.name || "Client"}</span>
+                        <span className="flex w-full items-center gap-2">
+                          <span className="font-medium text-slate-800">{c.name || "Client"}</span>
+                          {isSharedPreviewClient(c) && (
+                            <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">
+                              Other branch
+                            </Badge>
+                          )}
+                        </span>
                         {c.phone && (
                           <span className="text-xs text-slate-500 tabular-nums">{c.phone}</span>
                         )}
@@ -481,7 +553,36 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
           )}
 
           {rightSlot}
-          
+
+          {canAccessWhatsAppInbox ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="WhatsApp inbox"
+              title="WhatsApp inbox"
+              onClick={() => router.push("/whatsapp/inbox")}
+              className={`relative p-2.5 transition-all duration-300 transform hover:scale-105 hover:shadow-md rounded-lg group ${
+                isInboxActive
+                  ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                  : "hover:bg-gradient-to-r hover:from-emerald-50 hover:to-green-50"
+              }`}
+            >
+              <MessageCircle
+                className={`h-4 w-4 transition-colors duration-300 ${
+                  isInboxActive ? "text-emerald-700" : "text-gray-600 group-hover:text-emerald-600"
+                }`}
+              />
+              {inboxBadgeLabel ? (
+                <Badge
+                  variant="destructive"
+                  className="absolute -top-1 -right-1 min-h-5 min-w-5 px-0 flex items-center justify-center text-[10px] font-bold p-0 shadow-md group-hover:animate-none"
+                >
+                  {inboxBadgeLabel}
+                </Badge>
+              ) : null}
+            </Button>
+          ) : null}
+
           {/* Notifications — server-derived alerts (inventory & expiries) */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

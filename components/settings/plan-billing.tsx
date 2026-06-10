@@ -38,6 +38,7 @@ import {
   type PlanSubscriptionId,
   type PlanTransaction,
 } from "@/lib/api"
+import { planBadgeClass, tierOf } from "@/lib/plan-ids"
 import {
   Table,
   TableBody,
@@ -369,20 +370,10 @@ export function PlanBilling() {
     }
   }
 
-  const getPlanBadgeColor = (planId: string) => {
-    switch (planId) {
-      case 'starter':
-        return 'bg-blue-100 text-blue-800 border-blue-200'
-      case 'professional':
-        return 'bg-purple-100 text-purple-800 border-purple-200'
-      case 'enterprise':
-        return 'bg-amber-100 text-amber-800 border-amber-200'
-      default:
-        return 'bg-gray-100 text-gray-800 border-gray-200'
-    }
-  }
+  const getPlanBadgeColor = (planId: string) => planBadgeClass(planId)
 
   const formatPrice = (price: number | null) => {
+    if (price === 0) return 'Free'
     if (price === null || price === undefined) return 'Custom'
     return `₹${price.toLocaleString()}`
   }
@@ -463,13 +454,6 @@ export function PlanBilling() {
   const postPaymentRenewalDate = calculatePostPaymentRenewalDate(planInfo.renewalDate, selectedBillingPeriod)
   const planStartDate = businessInfo?.createdAt || new Date().toISOString()
   
-  // Define plan tier order (lower number = lower tier)
-  const planTierOrder: Record<string, number> = {
-    'starter': 1,
-    'professional': 2,
-    'enterprise': 3,
-  }
-  
   // Get selected plan details
   const selectedPlan = availablePlans.find(p => p.id === selectedPlanId) || {
     id: planInfo.planId,
@@ -500,8 +484,8 @@ export function PlanBilling() {
   
   // Calculate plan change status based on tier, not price
   const isPlanChange = selectedPlanId !== planInfo.planId
-  const currentTier = planTierOrder[planInfo.planId] || 0
-  const selectedTier = planTierOrder[selectedPlanId] || 0
+  const currentTier = tierOf(planInfo.planId)
+  const selectedTier = tierOf(selectedPlanId)
   
   // Determine upgrade/downgrade based on tier comparison
   const isUpgrade = selectedTier > currentTier
@@ -781,8 +765,8 @@ export function PlanBilling() {
                   {availablePlans.map((plan) => {
                     const isCurrentPlan = plan.id === planInfo.planId
                     const isSelected = plan.id === selectedPlanId
-                    const planTier = planTierOrder[plan.id] || 0
-                    const currentTierForPlan = planTierOrder[planInfo.planId] || 0
+                    const planTier = tierOf(plan.id)
+                    const currentTierForPlan = tierOf(planInfo.planId)
                     const isPlanUpgrade = planTier > currentTierForPlan
                     const isPlanDowngrade = planTier < currentTierForPlan
                     

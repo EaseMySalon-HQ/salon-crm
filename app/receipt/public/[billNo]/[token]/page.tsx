@@ -3,10 +3,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
-import {
-  PublicInvoiceFeedbackSection,
-  type FeedbackEligibility,
-} from "@/components/receipts/public-invoice-feedback"
 import { Button } from "@/components/ui/button"
 import { Download } from "lucide-react"
 import { SalesAPI } from "@/lib/api"
@@ -128,7 +124,6 @@ export default function PublicReceiptPage() {
   const params = useParams()
   const [receipt, setReceipt] = useState<ReceiptData | null>(null)
   const [businessSettings, setBusinessSettings] = useState<any>(null)
-  const [feedbackEligibility, setFeedbackEligibility] = useState<FeedbackEligibility | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -148,28 +143,8 @@ export default function PublicReceiptPage() {
         logo: null,
       })
     }
-    if (response.feedbackEligibility) {
-      setFeedbackEligibility(response.feedbackEligibility as FeedbackEligibility)
-    } else {
-      setFeedbackEligibility(null)
-    }
     return true
   }, [])
-
-  /** Re-fetch receipt + eligibility after feedback submit (no full-page loader). */
-  const refreshPublicReceipt = useCallback(async () => {
-    const billNo = params.billNo as string
-    const token = params.token as string
-    if (!billNo || !token) return
-    try {
-      const response = await SalesAPI.getByBillNoPublic(billNo, token)
-      if (response.success && response.data) {
-        applyPublicReceiptResponse(response)
-      }
-    } catch {
-      /* keep current UI */
-    }
-  }, [params.billNo, params.token, applyPublicReceiptResponse])
 
   // Load receipt data by bill number and token
   useEffect(() => {
@@ -190,12 +165,10 @@ export default function PublicReceiptPage() {
             setError(null)
           } else {
             setError("Receipt not found or invalid link")
-            setFeedbackEligibility(null)
           }
         } catch (apiError: any) {
           console.error("Public receipt API error:", apiError)
           setError(apiError.response?.data?.error || "Failed to load receipt")
-          setFeedbackEligibility(null)
         }
       } catch (err) {
         console.error("Error loading receipt:", err)
@@ -243,39 +216,30 @@ export default function PublicReceiptPage() {
     <div className="min-h-screen bg-gray-50 p-6">
       {/* Receipt Content - Clean view without action buttons */}
       <div className="max-w-4xl mx-auto">
-        <PublicInvoiceFeedbackSection
-          billNo={params.billNo as string}
-          shareToken={params.token as string}
-          eligibility={feedbackEligibility}
-          businessName={businessSettings?.name}
-          onFeedbackSubmitted={refreshPublicReceipt}
-          receipt={
-            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-              <ReceiptPreview
-                receipt={receiptPreviewFromBillPageData({
-                  ...receipt,
-                  payments: receipt.payments.map((payment) => ({
-                    mode: payment.type,
-                    amount: payment.amount,
-                    recordedAt: payment.recordedAt,
-                  })),
-                })}
-                businessSettings={businessSettings}
-              />
-            </div>
-          }
-          trailingActions={
-            <Button
-              type="button"
-              onClick={handleDownloadPDF}
-              variant="outline"
-              className="bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download PDF
-            </Button>
-          }
-        />
+        <div className="mb-4 flex flex-wrap justify-end gap-2 items-start no-print">
+          <Button
+            type="button"
+            onClick={handleDownloadPDF}
+            variant="outline"
+            className="bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Download PDF
+          </Button>
+        </div>
+        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+          <ReceiptPreview
+            receipt={receiptPreviewFromBillPageData({
+              ...receipt,
+              payments: receipt.payments.map((payment) => ({
+                mode: payment.type,
+                amount: payment.amount,
+                recordedAt: payment.recordedAt,
+              })),
+            })}
+            businessSettings={businessSettings}
+          />
+        </div>
       </div>
 
       {/* Print styles - hide button when printing */}

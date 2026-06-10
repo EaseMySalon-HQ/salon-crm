@@ -45,6 +45,7 @@ import { flattenClientWalletLedger, walletActivityStatusDisplay, type ClientWall
 import { billNotesForCustomerDisplay } from "@/lib/quick-sale-helpers"
 import { SettleDuesDrawer } from "@/components/appointments/settle-dues-drawer"
 import { useToast } from "@/hooks/use-toast"
+import { BranchHistoryBadge } from "@/components/branch-management/branch-history-badge"
 
 interface CustomerNote {
   id: string
@@ -54,6 +55,9 @@ interface CustomerNote {
   staffName?: string
   recordId: string
   href: string
+  branchId?: string
+  branchName?: string
+  isCurrentBranch?: boolean
 }
 
 interface ClientDetailPanelProps {
@@ -195,6 +199,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     lifetimeRedeemed: number
     lastBillEarnPoints: number
   } | null>(null)
+  const [crossBranchHistory, setCrossBranchHistory] = useState(false)
 
   const totalPrepaidWalletBalance = useMemo(() => {
     return prepaidWallets.reduce((acc, w) => {
@@ -230,6 +235,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     setPrepaidWallets([])
     setRewardSummary(null)
     setSettleDuesOpen(false)
+    setCrossBranchHistory(false)
   }, [clientId])
 
   const [loadingNotes, setLoadingNotes] = useState(false)
@@ -278,6 +284,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
           setRewardSummary(null)
         }
         const salesList = Array.isArray(salesRes?.data) ? salesRes.data : []
+        setCrossBranchHistory(Boolean((salesRes as { shared?: boolean })?.shared))
         setBills(salesList)
 
         setTotalVisits(salesList.length)
@@ -288,6 +295,7 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         setTotalRevenue(revenueSum)
 
         const duesSum = salesList.reduce((acc: number, s: any) => {
+          if (s.isCurrentBranch === false) return acc
           const remaining = Number(s?.paymentStatus?.remainingAmount) ?? 0
           return remaining > 0 ? acc + remaining : acc
         }, 0)
@@ -298,14 +306,20 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
           const content = billNotesForCustomerDisplay(s.notes)
           if (!content) return
           const billNo = s.billNo || s._id || s.id
+          const canOpen = s.isCurrentBranch !== false
           saleNotes.push({
-            id: `sale-${billNo}`,
+            id: `sale-${billNo}-${s.branchId || "local"}`,
             source: "quicksale",
             content,
             createdAt: s.createdAt || s.date || new Date().toISOString(),
             staffName: s.staffName,
             recordId: billNo,
-            href: `/receipt/${encodeURIComponent(billNo)}?returnTo=${encodeURIComponent(`/clients/${clientId}`)}`,
+            href: canOpen
+              ? `/receipt/${encodeURIComponent(billNo)}?returnTo=${encodeURIComponent(`/clients/${clientId}`)}`
+              : "",
+            branchId: s.branchId,
+            branchName: s.branchName,
+            isCurrentBranch: s.isCurrentBranch,
           })
         })
         saleNotes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -321,19 +335,21 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     return () => {
       cancelled = true
     }
-  }, [clientId, statsVersion])
+  }, [clientId, statsVersion, client.phone])
 
   const fetchAppointmentNotes = useCallback(async () => {
-    if (!clientId || appointmentNotesFetched.current === clientId) return
+    const phone = String(client.phone || "").trim()
+    if (!phone || appointmentNotesFetched.current === clientId) return
     appointmentNotesFetched.current = clientId
     setLoadingNotes(true)
     try {
-      const res = await AppointmentsAPI.getAll({ clientId, limit: 200 })
+      const res = await AppointmentsAPI.getByPhone(phone, { limit: 200 })
       const list = Array.isArray(res?.data) ? res.data : []
+      if (res?.shared) setCrossBranchHistory(true)
       const withNotes = list.filter((apt: any) => (apt.notes || "").trim())
       const byBooking = new Map<string, any>()
       for (const apt of withNotes) {
-        const key = appointmentNotesDedupeKey(apt)
+        const key = `${apt.branchId || "local"}:${appointmentNotesDedupeKey(apt)}`
         if (!byBooking.has(key)) byBooking.set(key, apt)
       }
       const aptNotes: CustomerNote[] = []
@@ -345,14 +361,18 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
           apt.staffAssignments?.[0]?.staffId?.name ||
           apt.staffAssignments?.[0]?.staffId
         const aptId = apt._id || apt.id
+        const canOpen = apt.isCurrentBranch !== false
         aptNotes.push({
-          id: `apt-${aptId}`,
+          id: `apt-${aptId}-${apt.branchId || "local"}`,
           source: "appointment",
           content,
           createdAt: apt.createdAt || apt.date || new Date().toISOString(),
           staffName: typeof staffName === "string" ? staffName : staffName?.name,
           recordId: aptId,
-          href: `/appointments/new?edit=${aptId}`,
+          href: canOpen ? `/appointments/new?edit=${aptId}` : "",
+          branchId: apt.branchId,
+          branchName: apt.branchName,
+          isCurrentBranch: apt.isCurrentBranch,
         })
       }
       setCustomerNotes(prev => {
@@ -365,12 +385,12 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
     } finally {
       setLoadingNotes(false)
     }
-  }, [clientId])
+  }, [clientId, client.phone])
 
   useEffect(() => {
-    if (!clientId || loading) return
+    if (!clientId || loading || !String(client.phone || "").trim()) return
     void fetchAppointmentNotes()
-  }, [clientId, loading, fetchAppointmentNotes])
+  }, [clientId, client.phone, loading, fetchAppointmentNotes])
 
   const displayName = client.name
   const displayPhone = client.phone
@@ -762,6 +782,11 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
         <Separator className="shrink-0" />
 
         <div className="space-y-3 sm:space-y-4 shrink-0">
+          {crossBranchHistory && (
+            <p className="text-xs text-indigo-700 bg-indigo-50/80 border border-indigo-100 rounded-lg px-2.5 py-2">
+              Showing bill and appointment history from all branches.
+            </p>
+          )}
           <div className="flex items-center justify-between text-sm sm:text-base">
             <span className="text-slate-600 flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-indigo-500" />
@@ -893,25 +918,54 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
                 <ul className="space-y-2.5 flex-1 min-h-0 overflow-y-auto pr-0.5 max-h-56 sm:max-h-72">
                   {customerNotes.map((note) => (
                     <li key={note.id}>
-                      <Link
-                        href={note.href}
-                        className="block rounded-lg border border-white/80 bg-white/90 hover:bg-white p-2.5 sm:p-3 transition-colors text-left shadow-sm"
-                      >
-                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                          <span className="text-[10px] sm:text-xs font-medium text-slate-500">
-                            {format(new Date(note.createdAt), "dd MMM yyyy, HH:mm")}
-                          </span>
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
-                            {note.source === "appointment" ? "Appointment" : "Bill / sale"}
-                          </Badge>
-                          {note.staffName && (
-                            <span className="text-[10px] sm:text-xs text-slate-600">• {note.staffName}</span>
-                          )}
+                      {note.href ? (
+                        <Link
+                          href={note.href}
+                          className="block rounded-lg border border-white/80 bg-white/90 hover:bg-white p-2.5 sm:p-3 transition-colors text-left shadow-sm"
+                        >
+                          <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                            <span className="text-[10px] sm:text-xs font-medium text-slate-500">
+                              {format(new Date(note.createdAt), "dd MMM yyyy, HH:mm")}
+                            </span>
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
+                              {note.source === "appointment" ? "Appointment" : "Bill / sale"}
+                            </Badge>
+                            <BranchHistoryBadge
+                              branchId={note.branchId}
+                              branchName={note.branchName}
+                              isCurrentBranch={note.isCurrentBranch}
+                            />
+                            {note.staffName && (
+                              <span className="text-[10px] sm:text-xs text-slate-600">• {note.staffName}</span>
+                            )}
+                          </div>
+                          <p className="text-xs sm:text-sm text-slate-900 whitespace-pre-wrap break-words leading-relaxed">
+                            {note.content}
+                          </p>
+                        </Link>
+                      ) : (
+                        <div className="block rounded-lg border border-white/80 bg-white/90 p-2.5 sm:p-3 text-left shadow-sm">
+                          <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                            <span className="text-[10px] sm:text-xs font-medium text-slate-500">
+                              {format(new Date(note.createdAt), "dd MMM yyyy, HH:mm")}
+                            </span>
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
+                              {note.source === "appointment" ? "Appointment" : "Bill / sale"}
+                            </Badge>
+                            <BranchHistoryBadge
+                              branchId={note.branchId}
+                              branchName={note.branchName}
+                              isCurrentBranch={note.isCurrentBranch}
+                            />
+                            {note.staffName && (
+                              <span className="text-[10px] sm:text-xs text-slate-600">• {note.staffName}</span>
+                            )}
+                          </div>
+                          <p className="text-xs sm:text-sm text-slate-900 whitespace-pre-wrap break-words leading-relaxed">
+                            {note.content}
+                          </p>
                         </div>
-                        <p className="text-xs sm:text-sm text-slate-900 whitespace-pre-wrap break-words leading-relaxed">
-                          {note.content}
-                        </p>
-                      </Link>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -1311,19 +1365,30 @@ export function ClientDetailPanel({ client, onViewProfile }: ClientDetailPanelPr
                   const ptsRedeemed = Math.floor(Number(s?.loyaltyPointsRedeemed) || 0)
                   return (
                     <Collapsible
-                      key={billKey}
+                      key={`${billKey}-${s.branchId || "local"}`}
                       open={isExpanded}
                       onOpenChange={(open) => setExpandedBillId(open ? billKey : null)}
                     >
                       <li className="bg-slate-50 rounded-lg overflow-hidden shrink-0">
-                        <div className="flex items-center justify-between text-left text-xs sm:text-sm px-2.5 py-1.5 sm:px-3 sm:py-2">
-                          <Link
-                            href={`/receipt/${encodeURIComponent(s.billNo || "")}?returnTo=${encodeURIComponent(`/clients/${client?._id || client?.id || ""}`)}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="truncate font-medium text-indigo-600 hover:text-indigo-800 hover:underline focus:outline-none focus:underline"
-                          >
-                            {s.billNo || "—"}
-                          </Link>
+                        <div className="flex items-center justify-between text-left text-xs sm:text-sm px-2.5 py-1.5 sm:px-3 sm:py-2 gap-2">
+                          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            {s.isCurrentBranch !== false && s.billNo ? (
+                              <Link
+                                href={`/receipt/${encodeURIComponent(s.billNo || "")}?returnTo=${encodeURIComponent(`/clients/${client?._id || client?.id || ""}`)}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="truncate font-medium text-indigo-600 hover:text-indigo-800 hover:underline focus:outline-none focus:underline"
+                              >
+                                {s.billNo || "—"}
+                              </Link>
+                            ) : (
+                              <span className="truncate font-medium text-slate-700">{s.billNo || "—"}</span>
+                            )}
+                            <BranchHistoryBadge
+                              branchId={s.branchId}
+                              branchName={s.branchName}
+                              isCurrentBranch={s.isCurrentBranch}
+                            />
+                          </div>
                           <CollapsibleTrigger asChild>
                             <button
                               type="button"

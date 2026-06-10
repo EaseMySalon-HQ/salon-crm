@@ -60,6 +60,12 @@ function invalidateDashboardCache(branchId) {
   for (const key of store.keys()) {
     if (key.startsWith(prefix)) store.delete(key);
   }
+  try {
+    const { invalidateTenantReadCaches } = require('./cache');
+    void invalidateTenantReadCaches(branchId);
+  } catch {
+    /* redis cache optional */
+  }
 }
 
 /** Clear the whole cache — only useful in tests / debug. */
@@ -86,6 +92,10 @@ const MUTATION_PREFIXES = [
   '/api/quick-sale',
   '/api/memberships',
   '/api/membership',
+  '/api/staff',
+  '/api/services',
+  '/api/expenses',
+  '/api/cash-registry',
 ];
 
 function pathTriggersInvalidate(path) {

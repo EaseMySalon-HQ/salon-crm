@@ -79,6 +79,13 @@ import {
   prependWalkInIfMissing,
 } from "@/lib/walk-in-client"
 import { ClientDetailsDrawer } from "@/components/clients/client-details-drawer"
+import { ensureLocalSharedClient } from "@/lib/shared-client-import"
+import {
+  DEFAULT_CLIENT_COMMUNICATION_CONSENT,
+  communicationConsentPayload,
+} from "@/lib/client-communication-consent"
+import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
+import { ClientGenderRadioField, isClientGenderSelected } from "@/components/clients/client-gender-radio-field"
 import { SettleDuesDrawer } from "@/components/appointments/settle-dues-drawer"
 import {
   ClientWalletAPI,
@@ -911,6 +918,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     lastName: "",
     phone: "",
     email: "",
+    gender: "" as "" | "male" | "female",
+    ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
   })
   const clientSearchInputRef = useRef<HTMLInputElement>(null)
   const changeClientSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -3255,6 +3264,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       lastName: "",
       phone: isPhone ? q.slice(0, 10) : "",
       email: "",
+      gender: "",
+      ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
     })
     setShowNewClientDialog(true)
     setInlineClientPickerOpen(false)
@@ -3263,7 +3274,18 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const pickCheckoutClient = useCallback(
     async (c: Client) => {
       if (!onCustomerChange) return
-      const nextId = String(c._id || c.id || "")
+      let resolved = c
+      try {
+        resolved = await ensureLocalSharedClient(c)
+      } catch (err) {
+        toast({
+          title: "Could not load client",
+          description: err instanceof Error ? err.message : "Failed to import client profile",
+          variant: "destructive",
+        })
+        return
+      }
+      const nextId = String(resolved._id || resolved.id || "")
       const curId = String(customer?._id || customer?.id || "")
       if (nextId && curId && nextId === curId) {
         setIsChangingClientProfile(false)
@@ -3272,7 +3294,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       }
       setChangingClient(true)
       try {
-        await onCustomerChange(c)
+        await onCustomerChange(resolved)
         setIsChangingClientProfile(false)
         setInlineClientPickerOpen(false)
         setChangeClientQuery("")
@@ -3281,7 +3303,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         setChangingClient(false)
       }
     },
-    [onCustomerChange, customer]
+    [onCustomerChange, customer, toast]
   )
 
   const handleSaveNewClient = useCallback(async () => {
@@ -3304,6 +3326,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       return
     }
 
+    if (!isClientGenderSelected(newClient.gender)) {
+      toast({
+        title: "Missing information",
+        description: "Please select a gender.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setCreatingClient(true)
     try {
       const name = newClient.lastName.trim()
@@ -3314,7 +3345,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         name,
         phone: phoneNumber,
         email: newClient.email.trim() || undefined,
+        gender: newClient.gender,
         status: "active",
+        ...communicationConsentPayload(newClient),
       })
 
       if (!success) {
@@ -3338,7 +3371,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         await pickCheckoutClient(createdClient)
       }
 
-      setNewClient({ firstName: "", lastName: "", phone: "", email: "" })
+      setNewClient({
+        firstName: "",
+        lastName: "",
+        phone: "",
+        email: "",
+        gender: "",
+        ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
+      })
       setShowNewClientDialog(false)
       toast({
         title: "Client created",
@@ -6300,18 +6340,26 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               />
             </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="checkout-new-client-phone">Phone *</Label>
-            <Input
-              id="checkout-new-client-phone"
-              type="tel"
-              placeholder="10-digit phone number"
-              maxLength={10}
-              value={newClient.phone}
-              onChange={(e) => {
-                const value = e.target.value.replace(/\D/g, "").slice(0, 10)
-                setNewClient({ ...newClient, phone: value })
-              }}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="checkout-new-client-phone">Phone *</Label>
+              <Input
+                id="checkout-new-client-phone"
+                type="tel"
+                placeholder="10-digit phone number"
+                maxLength={10}
+                value={newClient.phone}
+                onChange={(e) => {
+                  const value = e.target.value.replace(/\D/g, "").slice(0, 10)
+                  setNewClient({ ...newClient, phone: value })
+                }}
+                disabled={creatingClient}
+              />
+            </div>
+            <ClientGenderRadioField
+              idPrefix="checkout-new-client"
+              value={newClient.gender}
+              onChange={(gender) => setNewClient({ ...newClient, gender })}
               disabled={creatingClient}
             />
           </div>
@@ -6325,6 +6373,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               disabled={creatingClient}
             />
           </div>
+          <ClientCommunicationConsentFields
+            variant="compact"
+            disabled={creatingClient}
+            value={{
+              promotionalWhatsappEnabled: newClient.promotionalWhatsappEnabled,
+              transactionalWhatsappEnabled: newClient.transactionalWhatsappEnabled,
+              transactionalSmsEnabled: newClient.transactionalSmsEnabled,
+            }}
+            onChange={(next) => setNewClient({ ...newClient, ...next })}
+          />
         </div>
         <DialogFooter>
           <Button

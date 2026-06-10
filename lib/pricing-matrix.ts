@@ -1,56 +1,137 @@
 /**
- * Pricing & feature matrix aligned with EaseMySalon Pricing & Feature Matrix · v2026.04
- * (per-outlet, GST exclusive). Used by the public /pricing page.
+ * Pricing & feature matrix for the public /pricing page.
  */
 
-export type PlanTier = "starter" | "growth" | "professional"
+export type PlanTier = "starter" | "growth" | "pro"
 
-export type FeatureCell = "yes" | "no" | "addon" | "free"
+/** yes | no | addon | soon, or a display string (e.g. "Unlimited", "Email") */
+export type FeatureCell = "yes" | "no" | "addon" | "soon" | string
+
+export type PlanFeatureState = "included" | "locked" | "addon"
+
+export interface PlanFeatureItem {
+  label: string
+  state: PlanFeatureState
+}
+
+export interface PlanFeatureSection {
+  title: string
+  items: PlanFeatureItem[]
+}
 
 export interface PricingPlan {
   id: PlanTier
   name: string
-  tagline: string
+  description: string
   monthlyInr: number
   annualInr: number
   /** Annual vs paying monthly × 12 */
   annualSavingsInr: number
   popular?: boolean
+  ctaLabel: string
+  ctaStyle: "primary-blue" | "neutral"
+  featureSections: PlanFeatureSection[]
 }
 
 export const PRICING_PLANS: PricingPlan[] = [
   {
     id: "starter",
     name: "Starter",
-    tagline: "Essentials for a single outlet",
-    monthlyInr: 899,
-    annualInr: 9588,
-    annualSavingsInr: 1200,
+    description: "Everything you need to run your salon smoothly — no credit card required.",
+    monthlyInr: 199,
+    annualInr: 1990,
+    annualSavingsInr: 398,
+    ctaLabel: "Start 7 Day Trial",
+    ctaStyle: "neutral",
+    featureSections: [
+      {
+        title: "Core operations",
+        items: [
+          { label: "Appointment booking & scheduling", state: "included" },
+          { label: "GST billing & invoicing", state: "included" },
+          { label: "Staff & attendance management", state: "included" },
+          { label: "Basic client records (CRM)", state: "included" },
+          { label: "Inventory tracking", state: "included" },
+          { label: "Walk-in management", state: "included" },
+          { label: "Basic reports & dashboard", state: "included" },
+        ],
+      },
+      {
+        title: "Growth tools",
+        items: [
+          { label: "Feedback management", state: "locked" },
+          { label: "Loyalty & rewards", state: "locked" },
+          { label: "WhatsApp (WABA) integration", state: "locked" },
+          { label: "Incentive management", state: "locked" },
+        ],
+      },
+    ],
   },
   {
     id: "growth",
     name: "Growth",
-    tagline: "For salons scaling operations",
-    monthlyInr: 2099,
-    annualInr: 19788,
-    annualSavingsInr: 5400,
+    description: "Win back clients and build lasting loyalty with automated feedback and rewards.",
+    monthlyInr: 699,
+    annualInr: 6990,
+    annualSavingsInr: 1398,
     popular: true,
+    ctaLabel: "Start 7 Day Trial",
+    ctaStyle: "primary-blue",
+    featureSections: [
+      {
+        title: "Everything in Starter, plus",
+        items: [
+          { label: "Post-visit feedback via SMS/WhatsApp", state: "included" },
+          { label: "Feedback management settings", state: "included" },
+          { label: "Negative review alerts (instant)", state: "included" },
+          { label: "Google review nudge automation", state: "included" },
+          { label: "NPS dashboard & staff scoring", state: "included" },
+          { label: "Points & rewards engine", state: "included" },
+          { label: "Membership Program", state: "included" },
+          { label: "Referral program", state: "included" },
+          { label: "Incentive management (commission profiles)", state: "included" },
+        ],
+      },
+      {
+        title: "Add-on available",
+        items: [{ label: "WhatsApp (WABA) integration", state: "addon" }],
+      },
+    ],
   },
   {
-    id: "professional",
-    name: "Professional",
-    tagline: "Full power for multi-outlet chains",
-    monthlyInr: 3999,
-    annualInr: 35988,
-    annualSavingsInr: 12000,
+    id: "pro",
+    name: "Pro",
+    description: "The full growth stack — loyalty, feedback, and WhatsApp automation in one plan.",
+    monthlyInr: 999,
+    annualInr: 9990,
+    annualSavingsInr: 1998,
+    ctaLabel: "Start 7 Day Trial",
+    ctaStyle: "neutral",
+    featureSections: [
+      {
+        title: "Everything in Growth, plus",
+        items: [
+          { label: "WABA — automated appointment reminders", state: "included" },
+          { label: "Broadcast promotions to client list", state: "included" },
+          { label: "Booking directly via WhatsApp", state: "included" },
+          { label: "Two-way chat from dashboard", state: "included" },
+          { label: "Campaign analytics (open rate, CTR)", state: "included" },
+          { label: "Multi-branch management", state: "included" },
+          { label: "Advanced analytics & custom reports", state: "included" },
+          { label: "Priority customer support", state: "included" },
+          { label: "Custom Integrations", state: "included" },
+        ],
+      },
+    ],
   },
 ]
 
 export interface FeatureRow {
   feature: string
+  hint?: string
   starter: FeatureCell
   growth: FeatureCell
-  professional: FeatureCell
+  pro: FeatureCell
 }
 
 export interface FeatureCategory {
@@ -58,314 +139,152 @@ export interface FeatureCategory {
   rows: FeatureRow[]
 }
 
-/** Legend: yes = in tier, no = not included, addon = paid add-on, free = complimentary */
 export const FEATURE_CATEGORIES: FeatureCategory[] = [
   {
-    title: "Dashboard",
+    title: "Appointments & scheduling",
     rows: [
+      { feature: "Appointment booking", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Calendar management", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Walk-in management", starter: "yes", growth: "yes", pro: "yes" },
       {
-        feature: "Fixed dashboard with essential KPIs",
+        feature: "Booking via WhatsApp",
+        hint: "Clients book directly in chat",
         starter: "yes",
         growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Customizable dashboard (widgets, layout)",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
+        pro: "yes",
       },
     ],
   },
   {
-    title: "Analytics",
+    title: "Billing & payments",
     rows: [
+      { feature: "GST billing & invoicing", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Payment tracking", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Expense management", starter: "yes", growth: "yes", pro: "yes" },
+    ],
+  },
+  {
+    title: "Staff & operations",
+    rows: [
+      { feature: "Staff management", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Attendance & leaves", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Incentive management", starter: "no", growth: "yes", pro: "yes" },
+      { feature: "Inventory management", starter: "yes", growth: "yes", pro: "yes" },
+    ],
+  },
+  {
+    title: "Client management",
+    rows: [
+      { feature: "Client records (CRM)", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Service history per client", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Birthday & anniversary tracking", starter: "yes", growth: "yes", pro: "yes" },
       {
-        feature: "Basic sales & revenue dashboards",
+        feature: "Auto birthday/anniversary offers",
+        hint: "Triggered promotions sent automatically",
         starter: "yes",
         growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Advanced revenue dashboards & comparisons",
-        starter: "no",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Service & product performance trends",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Deep trends, drill-down & decline alerts",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-      {
-        feature: "Staff performance analytics",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-      {
-        feature: "Client retention, LTV & frequency",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
+        pro: "yes",
       },
     ],
   },
   {
-    title: "Appointment management",
+    title: "Reports & analytics",
     rows: [
+      { feature: "Basic dashboard", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Sales & revenue reports", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "Staff performance scoring", starter: "yes", growth: "yes", pro: "yes" },
+      { feature: "NPS & feedback analytics", starter: "no", growth: "yes", pro: "yes" },
       {
-        feature: "Schedule appointments & staff",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Color-coded slots & drag-and-drop",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Day / week views & staff availability",
+        feature: "Campaign analytics",
+        hint: "Open rate, CTR, conversions",
         starter: "no",
         growth: "yes",
-        professional: "yes",
+        pro: "yes",
       },
-      {
-        feature: "Recurring appointments & automated reminders",
-        starter: "no",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "SMS / email notifications for bookings",
-        starter: "no",
-        growth: "yes",
-        professional: "yes",
-      },
+      { feature: "Advanced custom reports", starter: "no", growth: "no", pro: "yes" },
     ],
   },
   {
-    title: "Billing & invoicing",
+    title: "Feedback management",
     rows: [
       {
-        feature: "Unlimited invoices & multiple payment methods",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Partial payments & outstanding balances",
+        feature: "Post-visit feedback collection",
+        hint: "Auto-sent after each appointment",
         starter: "no",
         growth: "yes",
-        professional: "yes",
+        pro: "yes",
       },
+      { feature: "Feedback management settings", starter: "no", growth: "yes", pro: "yes" },
       {
-        feature: "Digital delivery (SMS, email, WhatsApp)",
+        feature: "Negative reviewer alerts",
+        hint: "Instant owner notification",
         starter: "no",
         growth: "yes",
-        professional: "yes",
+        pro: "yes",
       },
       {
-        feature: "Invoice edit restrictions & delete alerts",
+        feature: "Google review nudges",
+        hint: "Auto-prompt happy clients to review",
         starter: "no",
-        growth: "no",
-        professional: "yes",
+        growth: "yes",
+        pro: "yes",
       },
+      { feature: "NPS dashboard", starter: "no", growth: "yes", pro: "yes" },
     ],
   },
   {
-    title: "Client management & marketing",
+    title: "Loyalty management",
     rows: [
+      { feature: "Points & rewards engine", starter: "no", growth: "yes", pro: "yes" },
+      { feature: "Reward points settings", starter: "no", growth: "yes", pro: "yes" },
       {
-        feature: "Client history, preferences & notes",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Targeted offers & discovery tracking",
+        feature: "Tiered memberships",
+        hint: "Silver / Gold / Platinum",
         starter: "no",
         growth: "yes",
-        professional: "yes",
+        pro: "yes",
       },
-      {
-        feature: "Hide client phone numbers (privacy)",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-      {
-        feature: "Promotional campaigns with filters",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
+      { feature: "Referral program", starter: "no", growth: "yes", pro: "yes" },
     ],
   },
   {
-    title: "Memberships, packages & commission",
+    title: "WhatsApp (WABA) integration",
     rows: [
       {
-        feature: "Commission rules (service, product, targets)",
+        feature: "Appointment reminders",
+        hint: "Auto-sent before visits",
         starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-      {
-        feature: "Memberships & packages",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-      {
-        feature: "Multi-session packages & flexible bundles",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-    ],
-  },
-  {
-    title: "Inventory & operations",
-    rows: [
-      {
-        feature: "Retail inventory, barcode & stock history",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Low-stock alerts & inter-outlet transfers",
-        starter: "no",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Product usage in services & auto consumption",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-      {
-        feature: "Expense tracking & petty cash",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Lead management (capture, follow-ups)",
-        starter: "no",
-        growth: "yes",
-        professional: "yes",
-      },
-    ],
-  },
-  {
-    title: "Staff, attendance & incentives",
-    rows: [
-      {
-        feature: "Shifts, leave & recurring work hours",
-        starter: "no",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Target & item-level incentives",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-      {
-        feature: "Staff logins & multi-location access",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-    ],
-  },
-  {
-    title: "Cash register & locations",
-    rows: [
-      {
-        feature: "Daily cash ledger & summaries",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Cash by denomination",
-        starter: "no",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Per-location data & centralized dashboards",
-        starter: "no",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Consolidated reports across outlets",
-        starter: "no",
-        growth: "no",
-        professional: "yes",
-      },
-    ],
-  },
-  {
-    title: "Reports, integrations & platform",
-    rows: [
-      {
-        feature: "Sales, appointments, services & tax reports",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Payment & accounting integrations",
-        starter: "addon",
         growth: "addon",
-        professional: "addon",
+        pro: "yes",
       },
       {
-        feature: "WhatsApp Business (setup + credits)",
-        starter: "addon",
-        growth: "addon",
-        professional: "addon",
-      },
-      {
-        feature: "Third-party SMS gateways",
-        starter: "addon",
-        growth: "addon",
-        professional: "free",
-      },
-      {
-        feature: "99.99% uptime SLA & no data sharing",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Free setup, training & data migration",
-        starter: "yes",
-        growth: "yes",
-        professional: "yes",
-      },
-      {
-        feature: "Premium support & dedicated account manager",
+        feature: "Broadcast promotions",
         starter: "no",
-        growth: "no",
-        professional: "yes",
+        growth: "addon",
+        pro: "yes",
       },
+      {
+        feature: "Two-way chat from dashboard",
+        starter: "no",
+        growth: "addon",
+        pro: "yes",
+      },
+      {
+        feature: "Booking via WhatsApp",
+        starter: "no",
+        growth: "addon",
+        pro: "yes",
+      },
+    ],
+  },
+  {
+    title: "Support & limits",
+    rows: [
+      { feature: "Appointments per month", starter: "Unlimited", growth: "Unlimited", pro: "Unlimited" },
+      { feature: "Client records", starter: "Unlimited", growth: "Unlimited", pro: "Unlimited" },
+      { feature: "Staff accounts", starter: "Unlimited", growth: "Unlimited", pro: "Unlimited" },
+      { feature: "Multi-branch management", starter: "no", growth: "no", pro: "yes" },
+      { feature: "Customer support", starter: "Email", growth: "Email + chat", pro: "Priority" },
     ],
   },
 ]

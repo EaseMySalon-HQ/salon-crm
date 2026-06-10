@@ -15,7 +15,7 @@ export function useDashboardInit(options?: boolean | DashboardInitOptions) {
   const { user } = useAuth()
   const branchKey = user?.branchId ?? user?._id ?? "none"
   const enabled = typeof options === "boolean" ? options : options?.enabled !== false
-  const chartRange = typeof options === "object" && options?.chartRange ? options.chartRange : "year"
+  const chartRange = typeof options === "object" && options?.chartRange ? options.chartRange : "last7days"
   const metricsRange = typeof options === "object" && options?.metricsRange ? options.metricsRange : "today"
 
   return useQuery({

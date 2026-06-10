@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { CreditCard, CheckCircle2, XCircle, Calendar, AlertCircle, ArrowUpRight } from "lucide-react"
 import Link from "next/link"
 import { Skeleton } from "@/components/ui/skeleton"
+import { planBadgeClass, normalizePlanId } from "@/lib/plan-ids"
 
 export function PlanInfo() {
   const { planInfo, isLoading, error } = useEntitlements()
@@ -44,20 +45,10 @@ export function PlanInfo() {
     )
   }
 
-  const getPlanBadgeColor = (planId: string) => {
-    switch (planId) {
-      case 'starter':
-        return 'bg-blue-100 text-blue-800'
-      case 'professional':
-        return 'bg-purple-100 text-purple-800'
-      case 'enterprise':
-        return 'bg-amber-100 text-amber-800'
-      default:
-        return 'bg-gray-100 text-gray-800'
-    }
-  }
+  const getPlanBadgeColor = (planId: string) => planBadgeClass(planId)
 
   const formatPrice = (price: number | null) => {
+    if (price === 0) return 'Free'
     if (price === null || price === undefined) return 'Custom'
     return `₹${price.toLocaleString()}`
   }
@@ -192,7 +183,7 @@ export function PlanInfo() {
         )}
 
         {/* Upgrade CTA */}
-        {planInfo.planId !== 'enterprise' && (
+        {normalizePlanId(planInfo.planId) !== 'pro' && (
           <div className="pt-4 border-t">
             <Button asChild variant="outline" className="w-full">
               <Link href="/pricing">

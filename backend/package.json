@@ -9,7 +9,11 @@
     "create-admin": "node create-admin-user.js",
     "test": "jest --config jest.config.js",
     "delete:appointments": "node scripts/delete-all-appointments.js",
-    "cleanup:scheduling": "node scripts/cleanup-scheduling-stale.js"
+    "cleanup:scheduling": "node scripts/cleanup-scheduling-stale.js",
+    "wa:rotate-tunnel": "node scripts/rotate-meta-webhook-tunnel.js",
+    "worker:whatsapp-campaigns": "node workers/whatsapp-campaign-worker.js",
+    "worker:legacy-campaigns": "node workers/legacy-campaign-worker.js",
+    "verify:redis": "node scripts/verify-redis.js"
   },
   "keywords": [
     "salon",
@@ -24,6 +28,7 @@
     "@sendgrid/mail": "^8.1.6",
     "aws-sdk": "^2.1692.0",
     "bcryptjs": "^2.4.3",
+    "bullmq": "^5.78.0",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
