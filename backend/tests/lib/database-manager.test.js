@@ -1,9 +1,11 @@
 const databaseManager = require('../../config/database-manager');
+const modelFactory = require('../../models/model-factory');
 
 describe('database-manager connection health', () => {
   afterEach(() => {
     databaseManager.connections.clear();
     databaseManager.connectionMeta.clear();
+    modelFactory.models.clear();
   });
 
   it('returns false when connection is not ready', async () => {
@@ -36,7 +38,8 @@ describe('database-manager connection health', () => {
 
   it('removes cached connection on disconnect lifecycle event', () => {
     const dbName = 'ease_my_salon_BIZ0001';
-    const conn = { readyState: 1, on: jest.fn() };
+    const conn = { name: dbName, readyState: 1, on: jest.fn() };
+    modelFactory.models.set(`${dbName}_Client`, { db: conn });
     databaseManager.connections.set(dbName, conn);
     databaseManager.connectionMeta.set(dbName, Date.now());
 
@@ -46,5 +49,35 @@ describe('database-manager connection health', () => {
 
     expect(databaseManager.connections.has(dbName)).toBe(false);
     expect(databaseManager.connectionMeta.has(dbName)).toBe(false);
+    expect(modelFactory.models.has(`${dbName}_Client`)).toBe(false);
+  });
+
+  it('clears model factory cache when connection artifacts are cleared', () => {
+    const conn = { name: 'ease_my_salon_BIZ0001' };
+    modelFactory.models.set('ease_my_salon_BIZ0001_Client', { db: conn });
+    modelFactory.models.set('ease_my_salon_BIZ0001_Staff', { db: conn });
+    modelFactory.models.set('ease_my_salon_BIZ0002_Client', { db: { name: 'ease_my_salon_BIZ0002' } });
+
+    databaseManager._clearConnectionArtifacts(conn);
+
+    expect(modelFactory.models.has('ease_my_salon_BIZ0001_Client')).toBe(false);
+    expect(modelFactory.models.has('ease_my_salon_BIZ0001_Staff')).toBe(false);
+    expect(modelFactory.models.has('ease_my_salon_BIZ0002_Client')).toBe(true);
+  });
+
+  it('clears model factory cache when a stale connection is closed', async () => {
+    const dbName = 'ease_my_salon_BIZ0001';
+    const conn = {
+      name: dbName,
+      readyState: 0,
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+    modelFactory.models.set(`${dbName}_Client`, { db: conn });
+    databaseManager.connections.set(dbName, conn);
+
+    await databaseManager._closeOne(dbName);
+
+    expect(databaseManager.connections.has(dbName)).toBe(false);
+    expect(modelFactory.models.has(`${dbName}_Client`)).toBe(false);
   });
 });
