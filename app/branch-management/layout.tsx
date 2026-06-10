@@ -10,11 +10,28 @@ import { useMyBranches } from "@/hooks/use-my-branches"
 import { useEntitlements } from "@/hooks/use-entitlements"
 import { toast } from "@/components/ui/use-toast"
 
+function branchDenialDescription(
+  isOwner: boolean,
+  hasMultiLocation: boolean,
+  isMultiBranch: boolean,
+): string {
+  if (!isOwner) {
+    return "Only account owners can manage branches."
+  }
+  if (!hasMultiLocation) {
+    return "Upgrade your plan to enable Multi-Location Support."
+  }
+  if (!isMultiBranch) {
+    return "This section requires 2 or more active branches."
+  }
+  return "Branch Management is not available on your account."
+}
+
 function BranchManagementGate({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const { user } = useAuth()
   const { hasFeature, isLoading: entitlementsLoading } = useEntitlements()
-  const { canManageBranches, isFetched } = useMyBranches()
+  const { canManageBranches, isMultiBranch, isFetched } = useMyBranches()
   const isOwner = !!user && user.isOwner === true
   const hasMultiLocation = hasFeature("multi_location")
   const denied =
@@ -24,13 +41,11 @@ function BranchManagementGate({ children }: { children: React.ReactNode }) {
     if (denied) {
       toast({
         title: "Branch Management unavailable",
-        description: !hasMultiLocation
-          ? "Upgrade your plan to enable Multi-Location Support."
-          : "This section requires 2 or more active branches.",
+        description: branchDenialDescription(isOwner, hasMultiLocation, isMultiBranch),
       })
       router.replace("/dashboard")
     }
-  }, [denied, hasMultiLocation, router])
+  }, [denied, isOwner, hasMultiLocation, isMultiBranch, canManageBranches, router])
 
   if (!isFetched || entitlementsLoading) {
     return (
