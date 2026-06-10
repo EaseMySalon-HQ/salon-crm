@@ -30,6 +30,7 @@ import {
   fetchPublicPricingMatrix,
   type PublicPlanPricing,
 } from "@/lib/public-pricing-api"
+import { toast } from "@/components/ui/use-toast"
 
 const TRUST_ITEMS = [
   { icon: ShieldCheck, label: "99.99% uptime SLA" },
@@ -63,12 +64,36 @@ export default function PricingPage() {
   const [plans, setPlans] = useState<PricingPlan[]>(PRICING_PLANS)
 
   useEffect(() => {
-    fetchPublicPricingMatrix().then((categories) => {
+    let cancelled = false
+
+    Promise.all([
+      fetchPublicPricingMatrix().catch((err) => {
+        console.error("Pricing matrix fetch failed:", err)
+        toast({
+          title: "Could not refresh feature matrix",
+          description: "Showing the default pricing matrix.",
+          variant: "destructive",
+        })
+        return [] as FeatureCategory[]
+      }),
+      fetchPublicPlanPricing().catch((err) => {
+        console.error("Plan pricing fetch failed:", err)
+        toast({
+          title: "Could not refresh plan prices",
+          description: "Showing default tier prices.",
+          variant: "destructive",
+        })
+        return [] as PublicPlanPricing[]
+      }),
+    ]).then(([categories, pricing]) => {
+      if (cancelled) return
       if (categories.length > 0) setMatrixCategories(categories)
-    })
-    fetchPublicPlanPricing().then((pricing) => {
       if (pricing.length > 0) setPlans((current) => applyAdminPricing(current, pricing))
     })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   return (
