@@ -7,11 +7,9 @@ import { AuthProvider } from "@/lib/auth-context"
 import { AdminAuthProvider } from "@/lib/admin-auth-context"
 import { QueryProvider } from "@/components/providers/query-provider"
 import { CookieConsentBanner } from "@/components/gdpr/cookie-consent-banner"
-import { OrganizationSchema, SoftwareApplicationSchema } from "@/components/seo/structured-data"
-
 const inter = Inter({ subsets: ["latin"] })
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://easemysalon.com'
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.easemysalon.in"
 
 export const metadata: Metadata = {
   title: {
@@ -164,8 +162,6 @@ export default function RootLayout({
         />
       </head>
       <body className={inter.className}>
-        <OrganizationSchema />
-        <SoftwareApplicationSchema />
         <AuthProvider>
           <QueryProvider>
           <AdminAuthProvider>
