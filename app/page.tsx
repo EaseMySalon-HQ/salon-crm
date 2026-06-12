@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { PublicShell } from "@/components/layout/public-shell"
+import { OrganizationSchema, SoftwareApplicationSchema } from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
-  title: "India's #1 Salon Management Software | Reduce No-Shows by 40%",
-  description: "Stop losing money. Start growing your salon business. EaseMySalon reduces no-shows by 40%, cuts billing time by 70%, and increases revenue by 35%. Complete salon POS, CRM, appointments, inventory & analytics platform. 7 Day Trial, no credit card required.",
+  title: "Salon Management Software in India – Free to Start | EaseMySalon",
+  description: "Salon management software built for India — GST billing, WhatsApp appointments, staff commissions, and multi-branch reporting. Plans from ₹199/month. 7-day free trial, no credit card required.",
   keywords: [
     "salon management software",
     "salon POS system",
@@ -33,20 +34,32 @@ export const metadata: Metadata = {
   },
 }
 
-const coreFeatures = [
+const coreFeatures: Array<{
+  icon: typeof Receipt
+  title: string
+  desc: string
+  benefit: string
+  metric: string
+  href?: string
+  linkLabel?: string
+}> = [
   { 
     icon: Receipt, 
     title: "POS & Billing", 
     desc: "Fast GST-ready billing with split payments and memberships.",
     benefit: "Reduce billing time by 70%",
-    metric: "Average checkout: 30 seconds"
+    metric: "Average checkout: 30 seconds",
+    href: "/features/billing",
+    linkLabel: "salon billing & GST invoice software",
   },
   { 
     icon: Calendar, 
     title: "Appointments", 
     desc: "WhatsApp-native calendar with smart reminders and waitlists.",
     benefit: "Cut no-shows by 40%",
-    metric: "Automated reminders via WhatsApp"
+    metric: "Automated reminders via WhatsApp",
+    href: "/features/appointments",
+    linkLabel: "salon appointment booking software",
   },
   { 
     icon: Users, 
@@ -74,7 +87,18 @@ const coreFeatures = [
     title: "Reports", 
     desc: "50+ live dashboards for revenue, clients, staff and branches.",
     benefit: "Make data-driven decisions",
-    metric: "Real-time insights, anytime, anywhere"
+    metric: "Real-time insights, anytime, anywhere",
+    href: "/features/multi-branch",
+    linkLabel: "multi-branch salon management software",
+  },
+  { 
+    icon: MessageCircle, 
+    title: "WhatsApp Marketing", 
+    desc: "Reminders, campaigns, and two-way client chat via official Business API.",
+    benefit: "Recover revenue from no-shows",
+    metric: "India's #1 salon channel",
+    href: "/features/whatsapp-marketing",
+    linkLabel: "WhatsApp marketing for salons",
   },
 ]
 
@@ -123,6 +147,8 @@ const solutionSegments = [
 export default function MarketingHome() {
   return (
     <PublicShell>
+      <OrganizationSchema />
+      <SoftwareApplicationSchema />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white">
         <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 py-20 lg:py-32">
           <div className="grid gap-12 lg:grid-cols-2 items-center">
@@ -130,10 +156,13 @@ export default function MarketingHome() {
               {/* Main Headline */}
               <div className="space-y-6">
                 <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-bold leading-tight">
-                  Stop Losing Money. Start Growing Your Salon Business.
+                  Salon Management Software Built for India
                 </h1>
                 <p className="text-xl sm:text-2xl text-purple-100 max-w-2xl mx-auto lg:mx-0 leading-relaxed">
-                  India's #1 Salon Management Software. <span className="font-semibold text-white">Reduce no-shows by 40%</span>, <span className="font-semibold text-white">cut billing time by 70%</span>, and <span className="font-semibold text-white">increase revenue by 35%</span> — all in one platform.
+                  GST billing, WhatsApp appointments, staff commissions, and multi-branch reporting — one platform for salons in Mumbai, Delhi, Bangalore, Pune, and across India. <span className="font-semibold text-white">Reduce no-shows by 40%</span>, <span className="font-semibold text-white">cut billing time by 70%</span>, and <span className="font-semibold text-white">increase revenue by 35%</span>.
+                </p>
+                <p className="text-base sm:text-lg text-purple-200/90 max-w-2xl mx-auto lg:mx-0 leading-relaxed">
+                  Plans from ₹199/month per outlet (GST exclusive). Start with a 7-day free trial — no credit card required. Built for how Indian salons run: UPI payments, walk-ins, memberships, packages, and stylist commissions.
                 </p>
               </div>
               
@@ -245,8 +274,8 @@ export default function MarketingHome() {
                 </CardHeader>
                 <CardContent>
                   <Button asChild variant="ghost" className="w-full justify-start text-[#7C3AED] hover:text-[#6D28D9]">
-                    <Link href="/features">
-                      Learn more about salon management features <ArrowRight className="ml-2 h-4 w-4" />
+                    <Link href={feature.href ?? "/features"}>
+                      {feature.linkLabel ?? "Learn more about salon management features"} <ArrowRight className="ml-2 h-4 w-4" />
                     </Link>
                   </Button>
                 </CardContent>

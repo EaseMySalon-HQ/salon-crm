@@ -94,6 +94,30 @@ export default function FeaturesPage() {
         </div>
       </section>
 
+      <section className="border-b border-slate-100 bg-slate-50 py-12">
+        <div className="container mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
+          <h2 className="text-2xl font-bold text-slate-900 text-center mb-8">Explore by feature</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Link href="/features/billing" className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all">
+              <h3 className="font-semibold text-slate-900">Salon billing & GST invoices</h3>
+              <p className="mt-1 text-sm text-slate-600">Fast checkout, split payments, and compliant GST billing.</p>
+            </Link>
+            <Link href="/features/appointments" className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all">
+              <h3 className="font-semibold text-slate-900">Appointment & booking software</h3>
+              <p className="mt-1 text-sm text-slate-600">Calendars, waitlists, and WhatsApp reminders.</p>
+            </Link>
+            <Link href="/features/whatsapp-marketing" className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all">
+              <h3 className="font-semibold text-slate-900">WhatsApp marketing for salons</h3>
+              <p className="mt-1 text-sm text-slate-600">Campaigns, reminders, and two-way client inbox.</p>
+            </Link>
+            <Link href="/features/multi-branch" className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all">
+              <h3 className="font-semibold text-slate-900">Multi-branch management</h3>
+              <p className="mt-1 text-sm text-slate-600">One login for every outlet with branch-level control.</p>
+            </Link>
+          </div>
+        </div>
+      </section>
+
       <section className="border-b border-slate-100 bg-white py-12 sm:py-16 lg:py-20">
         <ProductCapabilitiesExplorer />
       </section>

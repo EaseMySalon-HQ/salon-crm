@@ -1,9 +1,11 @@
 import type { Metadata } from "next"
+import Link from "next/link"
 
 import { PublicShell } from "@/components/layout/public-shell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { BLOG_POSTS } from "@/lib/blog/posts"
 
 export const metadata: Metadata = {
   title: "Salon Management Blog | Tips, Strategies & Best Practices",
@@ -31,24 +33,6 @@ export const metadata: Metadata = {
   },
 }
 
-const articles = [
-  {
-    title: "Why every salon needs an operating system",
-    summary: "How a unified POS + CRM + inventory stack cuts costs and unlocks personalised experiences.",
-    tag: "Playbook",
-  },
-  {
-    title: "Reducing no-shows with WhatsApp automation",
-    summary: "Templates, reminder cadences and offers that recovered ₹2.3M in revenue for leading salons.",
-    tag: "Growth",
-  },
-  {
-    title: "Inventory mistakes salon owners make",
-    summary: "From shrinkage to shelf-life, here’s a proven framework for healthier margins.",
-    tag: "Operations",
-  },
-]
-
 export default function BlogPage() {
   return (
     <PublicShell>
@@ -56,7 +40,7 @@ export default function BlogPage() {
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 space-y-4 text-center max-w-3xl">
           <Badge className="bg-orange-100 text-orange-700">Insights</Badge>
           <h1 className="text-4xl font-semibold text-slate-900">Salon growth playbooks</h1>
-          <p className="text-lg text-slate-600">Actionable tips from the EaseMySalon community. Subscribe to get monthly updates in your inbox.</p>
+          <p className="text-lg text-slate-600">Actionable tips for Indian salon owners — no-shows, GST, commissions, and growth strategies.</p>
           <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9]">
             <a href="mailto:support@easemysalon.in">Subscribe to newsletter</a>
           </Button>
@@ -64,16 +48,23 @@ export default function BlogPage() {
       </section>
 
       <section className="py-16">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {articles.map((article) => (
-            <Card key={article.title} className="border border-slate-100 shadow-sm">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 grid gap-6 md:grid-cols-2">
+          {BLOG_POSTS.map((article) => (
+            <Card key={article.slug} className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
               <CardHeader>
                 <Badge className="bg-slate-100 text-slate-700 w-fit mb-2">{article.tag}</Badge>
-                <CardTitle>{article.title}</CardTitle>
-                <CardDescription>{article.summary}</CardDescription>
+                <CardTitle>
+                  <Link href={`/blog/${article.slug}`} className="hover:text-[#7C3AED] transition-colors">
+                    {article.title}
+                  </Link>
+                </CardTitle>
+                <CardDescription>{article.description}</CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xs text-slate-400">Full article coming soon.</p>
+                <p className="text-xs text-slate-400 mb-3">{article.publishedAt}</p>
+                <Button asChild variant="link" className="p-0 h-auto text-[#7C3AED]">
+                  <Link href={`/blog/${article.slug}`}>Read article →</Link>
+                </Button>
               </CardContent>
             </Card>
           ))}
@@ -82,4 +73,3 @@ export default function BlogPage() {
     </PublicShell>
   )
 }
-

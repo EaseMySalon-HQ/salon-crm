@@ -109,7 +109,7 @@ export default function PricingPage() {
             EaseMySalon · Salon OS for India
           </p>
           <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-            Free to start. Grow when you&apos;re ready.
+            Salon Software Pricing in India
           </h1>
           <p className="mx-auto mt-5 max-w-2xl text-lg text-purple-100 sm:text-xl">
             Run your salon on Free, unlock feedback &amp; loyalty on Growth, or go all-in with Pro — WhatsApp
