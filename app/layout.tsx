@@ -146,7 +146,6 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18203026415" />
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -154,6 +153,12 @@ export default function RootLayout({
               function gtag(){dataLayer.push(arguments);}
               gtag('js', new Date());
               gtag('config', 'AW-18203026415');
+              (function () {
+                var script = document.createElement('script');
+                script.async = true;
+                script.src = 'https://www.googletagmanager.com/gtag/js?id=AW-18203026415';
+                document.head.appendChild(script);
+              })();
             `,
           }}
         />
