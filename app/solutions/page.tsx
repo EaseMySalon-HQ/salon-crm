@@ -1,15 +1,16 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { ArrowRight, CheckCircle2, TrendingUp, Zap, Target, Users } from "lucide-react"
+import { ArrowRight, TrendingUp, Zap, Target } from "lucide-react"
 
 import { PublicShell } from "@/components/layout/public-shell"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { BreadcrumbListSchema } from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
-  title: "Salon Software Solutions | Boutiques, Spas, Barbershops & Multi-Location Chains",
-  description: "Complete salon management software solutions for boutique salons, premium spas, barbershops, and multi-location chains. Custom workflows and proven playbooks for every salon type.",
+  title: "Salon Growth Solutions | EaseMySalon",
+  description:
+    "Discover solutions designed to help salons increase bookings, improve retention, automate operations and grow revenue.",
   keywords: [
     "salon software for boutiques",
     "spa management software",
@@ -27,14 +28,27 @@ export const metadata: Metadata = {
     "salon group software",
     "enterprise salon software",
     "salon software for chains",
-    "salon management for franchises"
+    "salon management for franchises",
   ],
-  openGraph: {
-    title: "Salon Software Solutions for Every Business Type | EaseMySalon",
-    description: "Custom solutions for boutiques, spas, barbershops, and multi-location chains. Built for every salon type.",
-  },
   alternates: {
-    canonical: '/solutions',
+    canonical: "/solutions",
+  },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    url: "/solutions",
+    siteName: "EaseMySalon",
+    title: "Salon Growth Solutions | EaseMySalon",
+    description:
+      "Discover solutions designed to help salons increase bookings, improve retention, automate operations and grow revenue.",
+    images: [{ url: "/images/dashboard.png", width: 1200, height: 630, alt: "EaseMySalon solutions for salons" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Salon Growth Solutions | EaseMySalon",
+    description:
+      "Discover solutions designed to help salons increase bookings, improve retention, automate operations and grow revenue.",
+    images: ["/images/dashboard.png"],
   },
 }
 
@@ -74,6 +88,12 @@ const solutions = [
 export default function SolutionsPage() {
   return (
     <PublicShell>
+      <BreadcrumbListSchema
+        items={[
+          { name: "Home", url: "/" },
+          { name: "Solutions", url: "/solutions" },
+        ]}
+      />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
@@ -81,7 +101,7 @@ export default function SolutionsPage() {
         </div>
         <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6 max-w-4xl">
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight">
-            Built for Every Salon Type, Every Growth Stage
+            Solutions Built for Salon Growth
           </h1>
           <p className="text-xl sm:text-2xl text-purple-100 leading-relaxed">
             From single-chair boutiques to nationwide chains—<span className="font-semibold text-white">EaseMySalon adapts to your business model</span> with purpose-built workflows and proven playbooks.
@@ -107,9 +127,9 @@ export default function SolutionsPage() {
                   </div>
                 </div>
                 <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white shadow-lg">
-                  <Link href="/contact">
-                    See How It Works
-                    <ArrowRight className="ml-2 h-4 w-4" />
+                  <Link href="/contact" aria-label={`Book a demo to see how EaseMySalon works for ${solution.title}`}>
+                    Book a Free Demo
+                    <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
                   </Link>
                 </Button>
               </CardHeader>
@@ -139,9 +159,9 @@ export default function SolutionsPage() {
         <div className="mt-16 container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="rounded-3xl bg-gradient-to-r from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white p-10 lg:p-16 text-center shadow-2xl">
             <Target className="h-12 w-12 mx-auto mb-4 text-white/80" />
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">Ready to Transform Your Salon Operations?</h2>
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4">Book a Free Demo</h2>
             <p className="text-xl text-purple-100 mb-8 max-w-2xl mx-auto">
-              Book a personalized demo and see exactly how EaseMySalon can solve your unique challenges.
+              See how EaseMySalon helps Indian salons increase bookings, improve retention and grow revenue.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button
@@ -149,7 +169,20 @@ export default function SolutionsPage() {
                 asChild
                 className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl"
               >
-                <Link href="/pricing">View Pricing Plans</Link>
+                <Link href="/contact" aria-label="Book a free salon software demo">
+                  Book a Free Demo
+                  <ArrowRight className="ml-2 h-5 w-5" aria-hidden />
+                </Link>
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                asChild
+                className="border-2 border-white/50 bg-white/5 text-white hover:bg-white/10 px-8 py-6 h-auto text-lg font-semibold"
+              >
+                <Link href="/pricing" aria-label="Compare salon software pricing plans">
+                  Compare Pricing Plans
+                </Link>
               </Button>
             </div>
           </div>

@@ -4,10 +4,12 @@ import { CheckCircle2, MessageCircle, Mail, MapPin, Clock, Users } from "lucide-
 import { PublicShell } from "@/components/layout/public-shell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ContactForm } from "@/components/marketing/contact-form"
+import { BreadcrumbListSchema } from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
-  title: "Contact & Book Demo | Salon Software Consultation",
-  description: "Book a free personalized demo of EaseMySalon. Talk to our team, schedule a consultation, or chat on WhatsApp. Get started with India's #1 salon management software.",
+  title: "Contact EaseMySalon | Book a Demo Today",
+  description:
+    "Have questions? Talk to our experts and see how EaseMySalon can help you manage and grow your salon business.",
   keywords: [
     "salon software demo",
     "contact salon software",
@@ -18,14 +20,27 @@ export const metadata: Metadata = {
     "salon management demo",
     "salon POS demo",
     "salon CRM demo",
-    "salon software trial"
+    "salon software trial",
   ],
-  openGraph: {
-    title: "Contact EaseMySalon | Book a Free Demo",
-    description: "Schedule a personalized demo and see how EaseMySalon can transform your salon operations. Free consultation available.",
-  },
   alternates: {
-    canonical: '/contact',
+    canonical: "/contact",
+  },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    url: "/contact",
+    siteName: "EaseMySalon",
+    title: "Contact EaseMySalon | Book a Demo Today",
+    description:
+      "Have questions? Talk to our experts and see how EaseMySalon can help you manage and grow your salon business.",
+    images: [{ url: "/images/dashboard.png", width: 1200, height: 630, alt: "Contact EaseMySalon" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Contact EaseMySalon | Book a Demo Today",
+    description:
+      "Have questions? Talk to our experts and see how EaseMySalon can help you manage and grow your salon business.",
+    images: ["/images/dashboard.png"],
   },
 }
 
@@ -47,6 +62,12 @@ const contactHighlights = [
 export default function ContactPage() {
   return (
     <PublicShell>
+      <BreadcrumbListSchema
+        items={[
+          { name: "Home", url: "/" },
+          { name: "Contact", url: "/contact" },
+        ]}
+      />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
@@ -54,7 +75,7 @@ export default function ContactPage() {
         </div>
         <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 text-center max-w-4xl space-y-6">
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight">
-            Book a Personalized Walkthrough
+            Let&apos;s Talk About Your Salon
           </h1>
           <p className="text-xl sm:text-2xl text-purple-100 leading-relaxed">
             Share your priorities and we'll curate a <span className="font-semibold text-white">live demo</span> with POS, appointments, staff management and analytics tailored to your business.

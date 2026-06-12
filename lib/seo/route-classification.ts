@@ -15,6 +15,15 @@ export const PUBLIC_MARKETING_PREFIXES = [
   "/terms-and-conditions",
   "/refund-policy",
   "/grievance",
+  "/salon-billing-software",
+  "/salon-crm",
+  "/appointment-management",
+  "/inventory-management",
+  "/staff-management",
+  "/payroll-management",
+  "/whatsapp-marketing",
+  "/reports-analytics",
+  "/demo",
 ] as const
 
 /** App / auth routes that must not appear in search results. */

@@ -1,9 +1,9 @@
 import type { Metadata } from "next"
 
 export const metadata: Metadata = {
-  title: "Salon Software Pricing in India – Plans from ₹199 | EaseMySalon",
+  title: "Salon Software Pricing | Affordable Plans for Every Salon",
   description:
-    "EaseMySalon pricing: Starter ₹199/mo, Growth ₹699/mo, Pro ₹999/mo per outlet (GST exclusive). Annual plans save up to 2 months. 7-day free trial, free setup & migration, 99.99% uptime SLA.",
+    "Simple and transparent pricing for salons of all sizes. No hidden fees. Start with the plan that fits your business.",
   keywords: [
     "salon software pricing India",
     "salon management software cost",
@@ -15,13 +15,32 @@ export const metadata: Metadata = {
     "salon software annual plan",
     "salon software free trial",
   ],
-  openGraph: {
-    title: "Salon Software Pricing | Starter, Growth, Professional | EaseMySalon",
-    description:
-      "Three tiers for Indian salons: Starter, Growth, Professional. Per-outlet pricing, GST exclusive. Free setup, migration & training.",
-  },
   alternates: {
     canonical: "/pricing",
+  },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    url: "/pricing",
+    siteName: "EaseMySalon",
+    title: "Salon Software Pricing | Affordable Plans for Every Salon",
+    description:
+      "Simple and transparent pricing for salons of all sizes. No hidden fees. Start with the plan that fits your business.",
+    images: [
+      {
+        url: "/images/dashboard.png",
+        width: 1200,
+        height: 630,
+        alt: "EaseMySalon salon software pricing plans",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Salon Software Pricing | Affordable Plans for Every Salon",
+    description:
+      "Simple and transparent pricing for salons of all sizes. No hidden fees. Start with the plan that fits your business.",
+    images: ["/images/dashboard.png"],
   },
 }
 
