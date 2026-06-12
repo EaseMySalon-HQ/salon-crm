@@ -1,15 +1,17 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import { ArrowRight, CheckCircle2, Heart, Target, Eye, Shield, Sparkles } from "lucide-react"
+import { ArrowRight, Target, Eye, Sparkles } from "lucide-react"
 
 import { PublicShell } from "@/components/layout/public-shell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { BreadcrumbListSchema } from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
-  title: "About Us - Built for Indian Salons | EaseMySalon",
-  description: "Learn why we built EaseMySalon, our mission to digitize every Indian salon, and the team behind the platform. Built by industry leaders from MNCs and SaaS unicorns.",
+  title: "About EaseMySalon | Built for Indian Salons",
+  description:
+    "Learn why we built EaseMySalon, our mission to digitize every Indian salon, and the team behind the platform.",
   keywords: [
     "about salon software",
     "salon management company",
@@ -19,14 +21,27 @@ export const metadata: Metadata = {
     "salon software founders",
     "salon management platform team",
     "salon software mission",
-    "salon software vision"
+    "salon software vision",
   ],
-  openGraph: {
-    title: "About EaseMySalon - Our Mission & Team",
-    description: "Built by product leaders, designers & engineers obsessed with salons. Learn our mission to digitize every Indian salon.",
-  },
   alternates: {
-    canonical: '/about',
+    canonical: "/about",
+  },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    url: "/about",
+    siteName: "EaseMySalon",
+    title: "About EaseMySalon | Built for Indian Salons",
+    description:
+      "Learn why we built EaseMySalon, our mission to digitize every Indian salon, and the team behind the platform.",
+    images: [{ url: "/images/dashboard.png", width: 1200, height: 630, alt: "About EaseMySalon" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "About EaseMySalon | Built for Indian Salons",
+    description:
+      "Learn why we built EaseMySalon, our mission to digitize every Indian salon, and the team behind the platform.",
+    images: ["/images/dashboard.png"],
   },
 }
 
@@ -40,6 +55,12 @@ const values = [
 export default function AboutPage() {
   return (
     <PublicShell>
+      <BreadcrumbListSchema
+        items={[
+          { name: "Home", url: "/" },
+          { name: "About", url: "/about" },
+        ]}
+      />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
@@ -123,9 +144,9 @@ export default function AboutPage() {
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button size="lg" asChild className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
-                <Link href="/contact">
-                  Join Our Journey
-                  <ArrowRight className="ml-2 h-5 w-5" />
+                <Link href="/contact" aria-label="Book a free salon software demo">
+                  Book a Free Demo
+                  <ArrowRight className="ml-2 h-5 w-5" aria-hidden />
                 </Link>
               </Button>
               <Button
@@ -133,7 +154,9 @@ export default function AboutPage() {
                 asChild
                 className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl"
               >
-                <Link href="/features">See What We Built</Link>
+                <Link href="/features" aria-label="Explore EaseMySalon salon software features">
+                  Explore Salon Software Features
+                </Link>
               </Button>
             </div>
           </div>

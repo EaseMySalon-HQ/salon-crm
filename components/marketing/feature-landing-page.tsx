@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ArrowRight } from "lucide-react"
+import { ArrowRight, CheckCircle2 } from "lucide-react"
 
 import { PublicShell } from "@/components/layout/public-shell"
 import { Button } from "@/components/ui/button"
@@ -15,13 +15,30 @@ export interface RelatedFeatureLink {
   label: string
 }
 
+export interface BreadcrumbItem {
+  name: string
+  url: string
+}
+
 export interface FeatureLandingPageProps {
+  /**
+   * Used only as a fallback to auto-generate the last breadcrumb label
+   * when `breadcrumbs` is not provided. Kept for backwards compatibility
+   * with `/features/[slug]` pages.
+   */
   slug: string
   eyebrow: string
   h1: string
   intro: string
   sections: FeatureSection[]
   relatedLinks: RelatedFeatureLink[]
+  benefits?: string[]
+  ctaTitle?: string
+  /**
+   * Optional explicit breadcrumb trail. When omitted, falls back to
+   * Home → Features → {slug}.
+   */
+  breadcrumbs?: BreadcrumbItem[]
 }
 
 export function FeatureLandingPage({
@@ -31,21 +48,27 @@ export function FeatureLandingPage({
   intro,
   sections,
   relatedLinks,
+  benefits,
+  ctaTitle = "Book a Free Demo",
+  breadcrumbs,
 }: FeatureLandingPageProps) {
   const breadcrumbLabel = slug
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ")
 
-  return (
-    <PublicShell>
-      <BreadcrumbListSchema
-        items={[
+  const trail: BreadcrumbItem[] =
+    breadcrumbs && breadcrumbs.length > 0
+      ? breadcrumbs
+      : [
           { name: "Home", url: "/" },
           { name: "Features", url: "/features" },
           { name: breadcrumbLabel, url: `/features/${slug}` },
-        ]}
-      />
+        ]
+
+  return (
+    <PublicShell>
+      <BreadcrumbListSchema items={trail} />
 
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-14 sm:py-16 lg:py-20">
         <div className="container relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
@@ -54,17 +77,38 @@ export function FeatureLandingPage({
           <p className="mx-auto mt-4 max-w-2xl text-base text-purple-100 sm:text-lg">{intro}</p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100">
-              <Link href="/pricing">
-                See plans from ₹199/mo
+              <Link href="/pricing" aria-label="Compare salon software pricing plans">
+                Compare Pricing Plans
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Link>
             </Button>
             <Button size="lg" variant="outline" asChild className="border-white/50 bg-white/5 text-white hover:bg-white/10">
-              <Link href="/contact">Book a demo</Link>
+              <Link href="/contact" aria-label="Book a free salon software demo">
+                Book a Free Demo
+              </Link>
             </Button>
           </div>
         </div>
       </section>
+
+      {benefits && benefits.length > 0 && (
+        <section className="border-b border-slate-100 bg-slate-50 py-12">
+          <div className="container mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
+            <h2 className="text-2xl font-bold text-slate-900 mb-6 text-center">Benefits for Your Business</h2>
+            <ul className="grid gap-4 sm:grid-cols-2">
+              {benefits.map((benefit) => (
+                <li
+                  key={benefit}
+                  className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                >
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600 mt-0.5 flex-shrink-0" aria-hidden />
+                  <span className="text-slate-700 leading-relaxed">{benefit}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
 
       <article className="py-16 bg-white">
         <div className="container mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 prose prose-slate prose-lg">
@@ -84,7 +128,7 @@ export function FeatureLandingPage({
       {relatedLinks.length > 0 && (
         <section className="border-t border-slate-100 bg-slate-50 py-12">
           <div className="container mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
-            <h2 className="text-xl font-bold text-slate-900 mb-4">Explore related features</h2>
+            <h2 className="text-xl font-bold text-slate-900 mb-4">Explore related salon software</h2>
             <ul className="space-y-2">
               {relatedLinks.map((link) => (
                 <li key={link.href}>
@@ -97,6 +141,28 @@ export function FeatureLandingPage({
           </div>
         </section>
       )}
+
+      <section className="bg-white py-12 sm:py-16">
+        <div className="container mx-auto max-w-3xl px-4 text-center sm:px-6 lg:px-8">
+          <h2 className="text-2xl font-bold text-slate-900 sm:text-3xl">{ctaTitle}</h2>
+          <p className="mt-2 text-slate-600">
+            Talk to a salon software specialist and see EaseMySalon live on your own data.
+          </p>
+          <div className="mt-6 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:justify-center">
+            <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9]">
+              <Link href="/contact" aria-label="Book a free salon management software demo">
+                Book a Free Demo
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
+            <Button variant="outline" asChild className="border-[#7C3AED]/30 bg-white text-[#7C3AED] hover:bg-purple-50">
+              <Link href="/pricing" aria-label="Compare EaseMySalon pricing plans">
+                Compare Pricing Plans
+              </Link>
+            </Button>
+          </div>
+        </div>
+      </section>
     </PublicShell>
   )
 }
