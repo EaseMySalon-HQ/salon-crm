@@ -5,11 +5,12 @@ import { ArrowRight, Building2, Headphones, ShieldCheck, Sparkles } from "lucide
 import { PublicShell } from "@/components/layout/public-shell"
 import { Button } from "@/components/ui/button"
 import { ProductCapabilitiesExplorer } from "@/components/features/product-capabilities-explorer"
+import { BreadcrumbListSchema } from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
-  title: "Salon Software Features | Dashboard, POS, CRM & More | EaseMySalon",
+  title: "Salon Software Features | EaseMySalon",
   description:
-    "EaseMySalon — Salon OS for India: dashboards, analytics, appointments, GST billing & invoicing, client CRM, memberships & packages, inventory, staff, cash register, multi-outlet reports, and integrations. Compare tiers on pricing.",
+    "Explore powerful salon software features including billing, CRM, appointments, inventory, staff management and WhatsApp automation.",
   keywords: [
     "salon software features India",
     "salon POS GST",
@@ -22,13 +23,25 @@ export const metadata: Metadata = {
     "EaseMySalon features",
     "salon billing WhatsApp",
   ],
-  openGraph: {
-    title: "Salon OS for India — Product Features | EaseMySalon",
-    description:
-      "Explore dashboards, appointments, billing, CRM, inventory, staff, and chain-ready reporting. Plans: Starter, Growth, Professional.",
-  },
   alternates: {
     canonical: "/features",
+  },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    url: "/features",
+    siteName: "EaseMySalon",
+    title: "Salon Software Features | EaseMySalon",
+    description:
+      "Explore powerful salon software features including billing, CRM, appointments, inventory, staff management and WhatsApp automation.",
+    images: [{ url: "/images/dashboard.png", width: 1200, height: 630, alt: "EaseMySalon salon software features" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Salon Software Features | EaseMySalon",
+    description:
+      "Explore powerful salon software features including billing, CRM, appointments, inventory, staff management and WhatsApp automation.",
+    images: ["/images/dashboard.png"],
   },
 }
 
@@ -41,6 +54,12 @@ const trustStrip = [
 export default function FeaturesPage() {
   return (
     <PublicShell>
+      <BreadcrumbListSchema
+        items={[
+          { name: "Home", url: "/" },
+          { name: "Features", url: "/features" },
+        ]}
+      />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-14 sm:py-16 lg:py-20">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 right-0 h-96 w-96 rounded-full bg-white blur-3xl" />
@@ -51,7 +70,7 @@ export default function FeaturesPage() {
             EaseMySalon · Salon OS for India
           </p>
           <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-            One platform for appointments, billing, stock &amp; staff
+            Everything You Need to Run and Grow Your Salon
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-base text-purple-100 sm:text-lg">
             Replace fragmented tools with a single stack built for Indian salons and spas. Feature depth grows with{" "}
@@ -77,9 +96,9 @@ export default function FeaturesPage() {
               asChild
               className="h-11 bg-white px-7 text-base font-semibold text-[#7C3AED] shadow-xl hover:bg-gray-100 sm:h-12 sm:px-8"
             >
-              <Link href="/contact#get-in-touch">
-                Book a live demo
-                <ArrowRight className="ml-2 h-4 w-4 sm:h-5 sm:w-5" />
+              <Link href="/contact#get-in-touch" aria-label="Book a free salon software demo">
+                Book a Free Demo
+                <ArrowRight className="ml-2 h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
               </Link>
             </Button>
             <Button
@@ -88,30 +107,88 @@ export default function FeaturesPage() {
               asChild
               className="h-11 border-2 border-white/50 bg-white/5 px-7 text-base font-semibold text-white backdrop-blur-sm hover:bg-white/10 sm:h-12 sm:px-8"
             >
-              <Link href="/pricing">See plans &amp; pricing</Link>
+              <Link href="/pricing" aria-label="Compare salon software pricing plans">
+                Compare Pricing Plans
+              </Link>
             </Button>
           </div>
         </div>
       </section>
 
       <section className="border-b border-slate-100 bg-slate-50 py-12">
-        <div className="container mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
-          <h2 className="text-2xl font-bold text-slate-900 text-center mb-8">Explore by feature</h2>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Link href="/features/billing" className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all">
-              <h3 className="font-semibold text-slate-900">Salon billing & GST invoices</h3>
+        <div className="container mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
+          <h2 className="text-2xl font-bold text-slate-900 text-center mb-8">Key Features</h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Link
+              href="/salon-billing-software"
+              aria-label="Explore salon billing and GST invoice software"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">Salon Billing &amp; GST Invoices</h3>
               <p className="mt-1 text-sm text-slate-600">Fast checkout, split payments, and compliant GST billing.</p>
             </Link>
-            <Link href="/features/appointments" className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all">
-              <h3 className="font-semibold text-slate-900">Appointment & booking software</h3>
+            <Link
+              href="/appointment-management"
+              aria-label="Explore salon appointment management software"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">Appointment Management</h3>
               <p className="mt-1 text-sm text-slate-600">Calendars, waitlists, and WhatsApp reminders.</p>
             </Link>
-            <Link href="/features/whatsapp-marketing" className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all">
-              <h3 className="font-semibold text-slate-900">WhatsApp marketing for salons</h3>
-              <p className="mt-1 text-sm text-slate-600">Campaigns, reminders, and two-way client inbox.</p>
+            <Link
+              href="/salon-crm"
+              aria-label="Explore salon CRM software"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">Salon CRM Software</h3>
+              <p className="mt-1 text-sm text-slate-600">Client visits, preferences, packages and loyalty.</p>
             </Link>
-            <Link href="/features/multi-branch" className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all">
-              <h3 className="font-semibold text-slate-900">Multi-branch management</h3>
+            <Link
+              href="/inventory-management"
+              aria-label="Explore salon inventory management software"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">Inventory Management</h3>
+              <p className="mt-1 text-sm text-slate-600">Track stock, expiry alerts, and purchase orders.</p>
+            </Link>
+            <Link
+              href="/staff-management"
+              aria-label="Explore salon staff management software"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">Staff Management</h3>
+              <p className="mt-1 text-sm text-slate-600">Attendance, schedules, commissions and performance.</p>
+            </Link>
+            <Link
+              href="/payroll-management"
+              aria-label="Explore salon payroll management software"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">Payroll Management</h3>
+              <p className="mt-1 text-sm text-slate-600">Automated salary, commissions and incentives.</p>
+            </Link>
+            <Link
+              href="/whatsapp-marketing"
+              aria-label="Explore WhatsApp marketing for salons"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">WhatsApp Marketing</h3>
+              <p className="mt-1 text-sm text-slate-600">Reminders, campaigns, and two-way client chat.</p>
+            </Link>
+            <Link
+              href="/reports-analytics"
+              aria-label="Explore salon reports and analytics software"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">Reports &amp; Analytics</h3>
+              <p className="mt-1 text-sm text-slate-600">Revenue, staff and growth dashboards.</p>
+            </Link>
+            <Link
+              href="/features/multi-branch"
+              aria-label="Explore multi-branch salon management software"
+              className="rounded-xl border border-slate-200 bg-white p-5 hover:border-[#7C3AED]/40 hover:shadow-md transition-all"
+            >
+              <h3 className="font-semibold text-slate-900">Multi-Branch Management</h3>
               <p className="mt-1 text-sm text-slate-600">One login for every outlet with branch-level control.</p>
             </Link>
           </div>
@@ -131,13 +208,15 @@ export default function FeaturesPage() {
           </p>
           <div className="mt-6 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:justify-center">
             <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9]">
-              <Link href="/contact#get-in-touch">
-                Book a personalized demo
-                <ArrowRight className="ml-2 h-4 w-4" />
+              <Link href="/contact#get-in-touch" aria-label="Book a free salon software demo">
+                Book a Free Demo
+                <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
               </Link>
             </Button>
             <Button variant="outline" asChild className="border-[#7C3AED]/30 bg-white text-[#7C3AED] hover:bg-purple-50">
-              <Link href="/pricing">Compare plans &amp; matrix</Link>
+              <Link href="/pricing" aria-label="Compare salon software pricing plans">
+                Compare Pricing Plans
+              </Link>
             </Button>
           </div>
         </div>

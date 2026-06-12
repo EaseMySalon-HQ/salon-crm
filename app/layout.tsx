@@ -13,10 +13,11 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.easemysalon.in"
 
 export const metadata: Metadata = {
   title: {
-    default: "EaseMySalon - India's #1 Salon Management Software",
-    template: "%s | EaseMySalon"
+    default: "Salon Management Software | Grow Your Salon with EaseMySalon",
+    template: "%s",
   },
-  description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. India's leading salon POS, CRM, appointments, inventory & analytics platform. 7 Day Trial, no credit card required.",
+  description:
+    "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
   keywords: [
     "salon management software",
     "salon POS system",
@@ -91,31 +92,29 @@ export const metadata: Metadata = {
     icon: [{ url: "/images/monogram-circle-color-transparent.png", type: "image/png" }],
     apple: "/images/monogram-circle-color-transparent.png",
   },
-  alternates: {
-    canonical: '/',
-  },
   openGraph: {
-    type: 'website',
-    locale: 'en_IN',
-    url: '/',
-    siteName: 'EaseMySalon',
-    title: "EaseMySalon - India's #1 Salon Management Software",
-    description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics platform. 7 Day Trial.",
+    type: "website",
+    locale: "en_IN",
+    siteName: "EaseMySalon",
+    title: "Salon Management Software | Grow Your Salon with EaseMySalon",
+    description:
+      "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
     images: [
       {
-        url: '/images/dashboard.png',
+        url: "/images/dashboard.png",
         width: 1200,
         height: 630,
-        alt: 'EaseMySalon - Salon Management Software Dashboard',
+        alt: "EaseMySalon - Salon Management Software Dashboard",
       },
     ],
   },
   twitter: {
-    card: 'summary_large_image',
-    title: "EaseMySalon - India's #1 Salon Management Software",
-    description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics.",
-    images: ['/images/dashboard.png'],
-    creator: '@easemysalon',
+    card: "summary_large_image",
+    title: "Salon Management Software | Grow Your Salon with EaseMySalon",
+    description:
+      "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
+    images: ["/images/dashboard.png"],
+    creator: "@easemysalon",
   },
   robots: {
     index: true,

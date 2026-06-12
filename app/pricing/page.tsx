@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge"
 import { PricingAddOnCards } from "@/components/pricing/pricing-addon-cards"
 import { PricingFeatureMatrix } from "@/components/pricing/pricing-feature-matrix"
 import { PricingTierCards } from "@/components/pricing/pricing-tier-cards"
+import { BreadcrumbListSchema } from "@/components/seo/structured-data"
 import { PRICING_FAQ } from "@/lib/pricing-faq"
 import {
   FEATURE_CATEGORIES,
@@ -98,6 +99,12 @@ export default function PricingPage() {
 
   return (
     <PublicShell>
+      <BreadcrumbListSchema
+        items={[
+          { name: "Home", url: "/" },
+          { name: "Pricing", url: "/pricing" },
+        ]}
+      />
       {/* Hero */}
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-16 sm:py-20 lg:py-28">
         <div className="absolute inset-0 opacity-10">
@@ -109,7 +116,7 @@ export default function PricingPage() {
             EaseMySalon · Salon OS for India
           </p>
           <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-            Salon Software Pricing in India
+            Simple Pricing for Growing Salons
           </h1>
           <p className="mx-auto mt-5 max-w-2xl text-lg text-purple-100 sm:text-xl">
             Run your salon on Free, unlock feedback &amp; loyalty on Growth, or go all-in with Pro — WhatsApp
@@ -236,9 +243,9 @@ export default function PricingPage() {
             build agreements that match how you operate.
           </p>
           <Button asChild size="lg" variant="secondary" className="mt-2">
-            <Link href="/contact">
-              Talk to sales
-              <ArrowRight className="ml-2 h-4 w-4" />
+            <Link href="/contact" aria-label="Contact EaseMySalon enterprise sales team">
+              Contact Enterprise Sales
+              <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
             </Link>
           </Button>
         </div>
