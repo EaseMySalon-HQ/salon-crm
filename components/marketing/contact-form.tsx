@@ -86,6 +86,10 @@ export function ContactForm() {
         throw new Error(leadPayload?.error || "Could not save your details")
       }
 
+      window.gtag?.("event", "conversion", {
+        send_to: "AW-18203026415/JT4OCOmrwb0cEO_H8OdD",
+      })
+
       setSuccessSummary({
         name: values.name,
         salon: values.salon,
