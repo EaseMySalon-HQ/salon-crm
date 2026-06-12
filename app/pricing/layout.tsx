@@ -1,9 +1,9 @@
 import type { Metadata } from "next"
 
 export const metadata: Metadata = {
-  title: "Salon Software Pricing India | Starter, Growth & Professional | EaseMySalon",
+  title: "Salon Software Pricing in India – Plans from ₹199 | EaseMySalon",
   description:
-    "EaseMySalon pricing April 2026: Starter from ₹899/mo, Growth ₹2,099/mo, Professional ₹3,999/mo per outlet (GST exclusive). Annual plans save up to ₹12,000. 99.99% uptime SLA, free setup & migration, 24/7 support.",
+    "EaseMySalon pricing: Starter ₹199/mo, Growth ₹699/mo, Pro ₹999/mo per outlet (GST exclusive). Annual plans save up to 2 months. 7-day free trial, free setup & migration, 99.99% uptime SLA.",
   keywords: [
     "salon software pricing India",
     "salon management software cost",

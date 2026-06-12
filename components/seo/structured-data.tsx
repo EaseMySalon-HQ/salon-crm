@@ -1,28 +1,37 @@
+import { PRICING_PLANS } from "@/lib/pricing-matrix"
+
+const DEFAULT_SITE_URL = "https://www.easemysalon.in"
+
+function getSiteUrl() {
+  return process.env.NEXT_PUBLIC_SITE_URL || DEFAULT_SITE_URL
+}
+
 export function OrganizationSchema() {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://easemysalon.com'
-  
+  const siteUrl = getSiteUrl()
+
   const schema = {
     "@context": "https://schema.org",
     "@type": "Organization",
-    "name": "EaseMySalon",
-    "url": siteUrl,
-    "logo": `${siteUrl}/images/logo.png`,
-    "description": "India's #1 Salon Management Software - Complete POS, CRM, appointments, inventory & analytics platform for salons and spas. Reduce no-shows by 40%, cut billing time by 70%, increase revenue by 35%.",
-    "address": {
+    name: "EaseMySalon",
+    url: siteUrl,
+    logo: `${siteUrl}/images/logo.png`,
+    description:
+      "India's #1 Salon Management Software - Complete POS, CRM, appointments, inventory & analytics platform for salons and spas.",
+    address: {
       "@type": "PostalAddress",
-      "addressCountry": "IN"
+      addressCountry: "IN",
     },
-    "sameAs": [
+    sameAs: [
       "https://www.linkedin.com/company/easemysalon/",
-      "https://www.instagram.com/easemysalon_official/"
+      "https://www.instagram.com/easemysalon_official/",
     ],
-    "contactPoint": {
+    contactPoint: {
       "@type": "ContactPoint",
-      "telephone": "+91-6360019041",
-      "contactType": "Customer Service",
-      "areaServed": "IN",
-      "availableLanguage": ["en", "hi"]
-    }
+      telephone: "+91-6360019041",
+      contactType: "Customer Service",
+      areaServed: "IN",
+      availableLanguage: ["en", "hi"],
+    },
   }
 
   return (
@@ -34,29 +43,45 @@ export function OrganizationSchema() {
 }
 
 export function SoftwareApplicationSchema() {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://easemysalon.com'
-  
+  const siteUrl = getSiteUrl()
+  const prices = PRICING_PLANS.map((p) => p.monthlyInr)
+  const lowPrice = Math.min(...prices)
+  const highPrice = Math.max(...prices)
+
   const schema = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    "name": "EaseMySalon",
-    "applicationCategory": "BusinessApplication",
-    "operatingSystem": "Web",
-    "offers": {
-      "@type": "Offer",
-      "price": "999",
-      "priceCurrency": "INR",
-      "priceValidUntil": "2025-12-31",
-      "availability": "https://schema.org/InStock",
-      "url": `${siteUrl}/pricing`
+    name: "EaseMySalon",
+    applicationCategory: "BusinessApplication",
+    operatingSystem: "Web, Android, iOS",
+    description:
+      "Salon management software for Indian salons — appointments, billing, WhatsApp marketing, staff and multi-branch management.",
+    url: `${siteUrl}/`,
+    offers: {
+      "@type": "AggregateOffer",
+      priceCurrency: "INR",
+      lowPrice: String(lowPrice),
+      highPrice: String(highPrice),
+      offerCount: String(PRICING_PLANS.length),
+      offers: PRICING_PLANS.map((plan) => ({
+        "@type": "Offer",
+        name: plan.name,
+        price: String(plan.monthlyInr),
+        priceCurrency: "INR",
+        url: `${siteUrl}/pricing`,
+      })),
     },
-    "aggregateRating": {
-      "@type": "AggregateRating",
-      "ratingValue": "4.8",
-      "ratingCount": "350"
+    publisher: {
+      "@type": "Organization",
+      name: "EaseMySalon",
+      url: siteUrl,
+      logo: `${siteUrl}/images/logo.png`,
+      address: {
+        "@type": "PostalAddress",
+        addressCountry: "IN",
+      },
     },
-    "description": "Complete salon management software with POS, CRM, appointment booking, inventory management, staff management, and analytics. Built for Indian salons and spas.",
-    "featureList": [
+    featureList: [
       "Salon POS System with GST",
       "Appointment Booking Software",
       "Salon CRM & Client Management",
@@ -64,8 +89,8 @@ export function SoftwareApplicationSchema() {
       "Staff Management & Commission Tracking",
       "Salon Analytics & Reports",
       "WhatsApp Integration",
-      "Multi-location Support"
-    ]
+      "Multi-location Support",
+    ],
   }
 
   return (
@@ -80,14 +105,63 @@ export function FAQSchema({ faqs }: { faqs: Array<{ question: string; answer: st
   const schema = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
-    "mainEntity": faqs.map(faq => ({
+    mainEntity: faqs.map((faq) => ({
       "@type": "Question",
-      "name": faq.question,
-      "acceptedAnswer": {
+      name: faq.question,
+      acceptedAnswer: {
         "@type": "Answer",
-        "text": faq.answer
-      }
-    }))
+        text: faq.answer,
+      },
+    })),
+  }
+
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
+    />
+  )
+}
+
+export interface BlogPostingSchemaInput {
+  slug: string
+  title: string
+  description: string
+  publishedAtIso: string
+  tag: string
+}
+
+export function BlogPostingSchema({ post }: { post: BlogPostingSchemaInput }) {
+  const siteUrl = getSiteUrl()
+
+  const schema = {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    headline: post.title,
+    description: post.description,
+    datePublished: post.publishedAtIso,
+    dateModified: post.publishedAtIso,
+    author: {
+      "@type": "Organization",
+      name: "EaseMySalon",
+      url: siteUrl,
+    },
+    publisher: {
+      "@type": "Organization",
+      name: "EaseMySalon",
+      url: siteUrl,
+      logo: {
+        "@type": "ImageObject",
+        url: `${siteUrl}/images/logo.png`,
+      },
+    },
+    mainEntityOfPage: {
+      "@type": "WebPage",
+      "@id": `${siteUrl}/blog/${post.slug}`,
+    },
+    image: `${siteUrl}/images/dashboard.png`,
+    articleSection: post.tag,
+    inLanguage: "en-IN",
   }
 
   return (
@@ -99,17 +173,17 @@ export function FAQSchema({ faqs }: { faqs: Array<{ question: string; answer: st
 }
 
 export function BreadcrumbListSchema({ items }: { items: Array<{ name: string; url: string }> }) {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://easemysalon.com'
-  
+  const siteUrl = getSiteUrl()
+
   const schema = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
-    "itemListElement": items.map((item, index) => ({
+    itemListElement: items.map((item, index) => ({
       "@type": "ListItem",
-      "position": index + 1,
-      "name": item.name,
-      "item": `${siteUrl}${item.url}`
-    }))
+      position: index + 1,
+      name: item.name,
+      item: `${siteUrl}${item.url}`,
+    })),
   }
 
   return (
