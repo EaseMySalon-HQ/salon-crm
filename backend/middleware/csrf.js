@@ -48,6 +48,8 @@ const SKIP_PREFIXES = [
    * delivery would 403.
    */
   '/api/webhooks',
+  /** Google OAuth callback — no session CSRF state on redirect from Google. */
+  '/api/gmb/callback',
 ];
 
 function normalizePath(req) {

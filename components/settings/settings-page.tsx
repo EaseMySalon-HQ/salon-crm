@@ -31,6 +31,7 @@ import {
   MessageSquare,
   Bell,
   Boxes,
+  Globe,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -48,6 +49,7 @@ import { MembershipPlansTable } from "@/components/membership/membership-plans-t
 import { ChannelUsageSettings } from "./channel-usage-settings"
 import { WhatsAppIntegrationSettings } from "./whatsapp-business-settings"
 import { FeedbackManagementSettings } from "./feedback-management-settings"
+import { GoogleBusinessSettings } from "./google-business-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { RewardPointsProgramSettings } from "./reward-points-settings"
@@ -76,6 +78,7 @@ const SETTINGS_SECTION_IDS = [
   "products",
   "channel-usage",
   "whatsapp-integration",
+  "google-business",
   "feedback",
   "recharge",
   "prepaid-wallet",
@@ -243,6 +246,13 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         description: "WhatsApp, SMS, and email delivery stats and message logs.",
         icon: BarChart2,
         searchTerms: ["whatsapp", "logs", "delivered"],
+      },
+      {
+        id: "google-business",
+        title: "Google Business Profile",
+        description: "Connect Google, sync reviews, auto-reply, and local SEO tools.",
+        icon: Globe,
+        searchTerms: ["gmb", "google", "reviews", "seo", "maps"],
       },
       {
         id: "feedback",
@@ -447,6 +457,8 @@ export function SettingsPage() {
         return <PackagesSettingsPanel />
       case "whatsapp-integration":
         return <WhatsAppIntegrationSettings />
+      case "google-business":
+        return <GoogleBusinessSettings />
       case "channel-usage":
         return <ChannelUsageSettings />
       case "feedback":
@@ -589,7 +601,14 @@ export function SettingsPage() {
           </button>
           <Card className="w-full max-w-none border-slate-200/90 bg-white shadow-sm">
             <CardContent className="p-4 sm:p-6 lg:p-8">
-              {activeSection && !canAccessSetting(activeSection) ? (
+              {activeSection && (isLoading || entitlementsLoading) ? (
+                <div className="flex items-center justify-center py-12">
+                  <div
+                    className="animate-spin rounded-full h-8 w-8 border-2 border-slate-200 border-t-slate-600"
+                    aria-hidden
+                  />
+                </div>
+              ) : activeSection && !canAccessSetting(activeSection) ? (
                 <p className="text-sm text-slate-600">You don&apos;t have permission to access this setting.</p>
               ) : (
                 renderSettingComponent()

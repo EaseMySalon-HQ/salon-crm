@@ -2912,6 +2912,92 @@ export class SettingsAPI {
   }
 }
 
+export class GmbAPI {
+  static async connect(): Promise<ApiResponse<{ authUrl: string }>> {
+    const response = await apiClient.get('/gmb/connect')
+    return response.data
+  }
+
+  static async disconnect(): Promise<ApiResponse<any>> {
+    const response = await apiClient.delete('/gmb/disconnect')
+    return response.data
+  }
+
+  static async getStatus(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/gmb/status')
+    return response.data
+  }
+
+  static async getAccounts(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/gmb/accounts')
+    return response.data
+  }
+
+  static async mapLocation(data: {
+    accountId: string
+    locationId: string
+    locationName?: string
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.put('/gmb/location', data)
+    return response.data
+  }
+
+  static async getReviews(params?: Record<string, string>): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/gmb/reviews', { params })
+    return response.data
+  }
+
+  static async replyToReview(reviewId: string, replyText: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/gmb/reviews/${encodeURIComponent(reviewId)}/reply`, { replyText })
+    return response.data
+  }
+
+  static async generateAiDraft(reviewId: string): Promise<ApiResponse<{ draft: string }>> {
+    const response = await apiClient.post(`/gmb/reviews/${encodeURIComponent(reviewId)}/ai-draft`)
+    return response.data
+  }
+
+  static async getHealth(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/gmb/health')
+    return response.data
+  }
+
+  static async getInsights(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/gmb/insights')
+    return response.data
+  }
+
+  static async updateSettings(data: Record<string, unknown>): Promise<ApiResponse<any>> {
+    const response = await apiClient.put('/gmb/settings', data)
+    return response.data
+  }
+
+  static async syncServices(): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/gmb/sync/services')
+    return response.data
+  }
+
+  static async syncHours(regularHours: unknown): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/gmb/sync/hours', { regularHours })
+    return response.data
+  }
+
+  static async getConversionReport(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/gmb/conversion-report')
+    return response.data
+  }
+
+  static async getAdTriggers(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/gmb/ad-triggers')
+    return response.data
+  }
+
+  static async approveAdTrigger(id: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/gmb/ad-triggers/${encodeURIComponent(id)}/approve`)
+    return response.data
+  }
+}
+
 export class FeedbackAPI {
   static async getStats(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/feedback/stats/summary')

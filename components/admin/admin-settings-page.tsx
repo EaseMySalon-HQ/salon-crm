@@ -25,6 +25,7 @@ import { DatabaseSettings } from "./admin-settings/database-settings"
 import { NotificationSettings } from "./admin-settings/notification-settings"
 import { APISettings } from "./admin-settings/api-settings"
 import { WhatsAppMetaConfigSettings } from "./admin-settings/whatsapp-meta-config"
+import { GoogleBusinessConfigSettings } from "./admin-settings/google-business-config"
 const settingsCategories = [
   {
     id: "system",
@@ -312,6 +313,7 @@ export function AdminSettingsPage() {
         return (
           <div className="space-y-6">
             <WhatsAppMetaConfigSettings />
+            <GoogleBusinessConfigSettings />
             <APISettings
               settings={categorySettings}
               onSettingsChange={handleCategorySettingsChange}

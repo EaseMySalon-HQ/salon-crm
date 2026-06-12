@@ -155,6 +155,16 @@ const appointmentSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  /** GMB review request WhatsApp sent after appointment completion */
+  gmbReviewRequestSent: {
+    type: Boolean,
+    default: false,
+  },
+  /** UTM attribution for GMB-sourced bookings */
+  utmSource: { type: String, default: null },
+  utmMedium: { type: String, default: null },
+  utmCampaign: { type: String, default: null },
+  estimatedRevenue: { type: Number, default: null, min: 0 },
   /** Dedupes concurrent bookings for same staff + exact window (see pre-save). Omitted when not applicable (do not set null — unique index). */
   slotKey: {
     type: String,

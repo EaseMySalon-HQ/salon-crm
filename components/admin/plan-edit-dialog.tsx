@@ -56,6 +56,7 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
       whatsapp: { enabled: false, quota: 0 },
       waba: { enabled: false, quota: 0 },
       sms: { enabled: false, quota: 0 },
+      googleBusiness: { enabled: false, quota: 0 },
     },
   })
 
@@ -130,6 +131,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
               sms: {
                 enabled: business.plan.addons?.sms?.enabled || false,
                 quota: business.plan.addons?.sms?.quota || 0,
+              },
+              googleBusiness: {
+                enabled: business.plan.addons?.googleBusiness?.enabled || false,
+                quota: business.plan.addons?.googleBusiness?.quota || 0,
               },
             },
           })
@@ -438,6 +443,25 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                       Meta when connected and fall back to MSG91 otherwise.
                     </div>
                   )}
+
+                  <div className="flex items-center justify-between p-4 border rounded">
+                    <div>
+                      <Label className="text-base font-semibold">Google Business Profile Booster</Label>
+                      <p className="text-sm text-gray-500">
+                        AI auto-reply, WhatsApp review requests, auto posts, insights, and ad triggers (₹499/mo)
+                      </p>
+                    </div>
+                    <Switch
+                      checked={formData.addons.googleBusiness.enabled}
+                      onCheckedChange={(checked) => setFormData({
+                        ...formData,
+                        addons: {
+                          ...formData.addons,
+                          googleBusiness: { ...formData.addons.googleBusiness, enabled: checked },
+                        },
+                      })}
+                    />
+                  </div>
 
                   <div className="flex items-center justify-between p-4 border rounded">
                     <div>

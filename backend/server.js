@@ -470,6 +470,8 @@ app.use('/api/feedback', require('./routes/feedback'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 app.use('/api/branch-management', require('./routes/branch-management'));
 app.use('/api/inventory/transfers', require('./routes/inventory-transfers'));
+app.use('/api/gmb', require('./routes/gmb'));
+app.use('/api/admin/gmb-config', require('./routes/admin-gmb-config'));
 
 const {
   signTenantAccess,
@@ -4515,6 +4517,9 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requirePermi
       if (resolved.bundleRetailPrice != null) doc.bundleRetailPrice = resolved.bundleRetailPrice;
       const newService = new Service(doc);
       const savedService = await newService.save();
+      void require('./lib/gmb-sync-hook')
+        .syncServicesIfEnabled(req.user.branchId, req.businessModels)
+        .catch((e) => logger.warn('[gmb] post-bundle-create sync:', e?.message || e));
       return res.status(201).json({ success: true, data: savedService });
     }
 
@@ -4548,6 +4553,10 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requirePermi
     });
 
     const savedService = await newService.save();
+
+    void require('./lib/gmb-sync-hook')
+      .syncServicesIfEnabled(req.user.branchId, req.businessModels)
+      .catch((e) => logger.warn('[gmb] post-service-create sync:', e?.message || e));
 
     res.status(201).json({
       success: true,
@@ -4691,6 +4700,10 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requirePe
         error: 'Service not found'
       });
     }
+
+    void require('./lib/gmb-sync-hook')
+      .syncServicesIfEnabled(req.user.branchId, req.businessModels)
+      .catch((e) => logger.warn('[gmb] post-service-update sync:', e?.message || e));
 
     res.json({
       success: true,
@@ -9905,8 +9918,14 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requirePermission('appointments', 'create'), async (req, res) => {
   try {
     const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel } = req.body;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel, utmSource, utmMedium, utmCampaign, estimatedRevenue } = req.body;
     const schedulingMode = rawSchedulingMode === 'custom' ? 'custom' : 'sequential';
+    const gmbUtmFields = {
+      ...(utmSource ? { utmSource: String(utmSource) } : {}),
+      ...(utmMedium ? { utmMedium: String(utmMedium) } : {}),
+      ...(utmCampaign ? { utmCampaign: String(utmCampaign) } : {}),
+      ...(estimatedRevenue != null ? { estimatedRevenue: Number(estimatedRevenue) } : {}),
+    };
     const allowParallelBooking = rawAllowParallel === true;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
@@ -10082,6 +10101,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           bookingGroupId: bookingGroupIdFor(r.serviceDate),
           schedulingMode: 'custom',
           ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
+          ...gmbUtmFields,
         };
 
         if (r.raw.staffAssignments && Array.isArray(r.raw.staffAssignments)) {
@@ -10207,6 +10227,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           bookingGroupId: bookingGroupIdFor(serviceDate),
           staffLocked: !!service.staffLocked,
           ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
+          ...gmbUtmFields,
         };
 
         if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
@@ -18588,6 +18609,14 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
     logger.debug('⏰ WhatsApp campaign scheduler started');
   } catch (err) {
     logger.warn('⚠️  WhatsApp campaign scheduler could not be started:', err?.message || err);
+  }
+
+  // Google Business Profile integration jobs
+  try {
+    const { setupGmbJobs } = require('./jobs/gmb-jobs-bootstrap');
+    setupGmbJobs();
+  } catch (err) {
+    logger.warn('⚠️  GMB jobs could not be scheduled:', err?.message || err);
   }
   
   // Initialize email service on server start
