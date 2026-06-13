@@ -10,6 +10,7 @@ import { ClientForm } from "@/components/clients/client-form"
 import { toast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
 import { isWalkInClient } from "@/lib/walk-in-client"
+import { FormSkeleton } from "@/components/loading"
 import {
   Dialog,
   DialogContent,
@@ -168,8 +169,8 @@ export function ClientDetailsPage({
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-lg">Loading client details...</div>
+      <div className="space-y-6">
+        <FormSkeleton fields={8} columns={2} />
       </div>
     )
   }

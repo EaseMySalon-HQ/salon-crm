@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { PageSkeleton } from "@/components/loading"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Settings,
@@ -362,17 +363,7 @@ export function SettingsPage() {
 
   // Show loading while checking authentication
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="text-center">
-          <div
-            className="animate-spin rounded-full h-9 w-9 border-2 border-slate-200 border-t-slate-600 mx-auto mb-3"
-            aria-hidden
-          />
-          <p className="text-sm text-slate-600">Loading settings…</p>
-        </div>
-      </div>
-    )
+    return <PageSkeleton variant="form" />
   }
 
   // Don't render if not authenticated

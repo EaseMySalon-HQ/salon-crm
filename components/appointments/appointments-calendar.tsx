@@ -8,7 +8,7 @@ import { addDays, format, subDays } from "date-fns"
 import { Pencil, Eye, Heart, PlusCircle, Receipt } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { AppointmentsViewSettingsPopover } from "@/components/appointments/appointments-view-settings-popover"
+import { ListSkeleton } from "@/components/loading"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   ContextMenu,
@@ -988,6 +988,9 @@ export const AppointmentsCalendar = forwardRef<
         <h2 className="text-lg font-semibold text-slate-700 mb-4">
           Appointments for {selectedDateLabel || 'selected date'}
         </h2>
+        {loading ? (
+          <ListSkeleton rows={8} showAvatar />
+        ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 gap-4">
         {[
           {
@@ -1260,6 +1263,7 @@ export const AppointmentsCalendar = forwardRef<
           </Card>
         ))}
         </div>
+        )}
       </div>
 
       <Dialog open={showDetails} onOpenChange={setShowDetails}>

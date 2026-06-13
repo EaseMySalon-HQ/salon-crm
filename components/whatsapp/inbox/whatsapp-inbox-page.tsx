@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { ListSkeleton } from "@/components/loading"
 import { Separator } from "@/components/ui/separator"
 import {
   Tabs,
@@ -649,8 +650,8 @@ export function WhatsAppInboxPage() {
 
             <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/30">
               {listLoading && conversations.length === 0 ? (
-                <div className="flex items-center gap-2 text-slate-500 p-6">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+                <div className="p-4">
+                  <ListSkeleton rows={8} showAvatar />
                 </div>
               ) : conversations.length === 0 ? (
                 <div className="px-6 py-12 text-center">

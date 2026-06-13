@@ -16,6 +16,7 @@ import { useToast } from "@/hooks/use-toast"
 import { SettingsAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
 import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
+import { isWalkInClient } from "@/lib/walk-in-client"
 
 interface ReceiptDialogProps {
   receipt: Receipt | null
@@ -150,6 +151,12 @@ ${publicUrl}`
   }
 
   const currentReceipt = editedReceipt || receipt
+  const isWalkInReceipt = currentReceipt
+    ? isWalkInClient({
+        name: currentReceipt.clientName,
+        phone: currentReceipt.clientPhone,
+      })
+    : false
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -172,6 +179,8 @@ ${publicUrl}`
                     <Thermometer className="h-4 w-4 mr-2" />
                     Thermal
                   </Button>
+                  {!isWalkInReceipt ? (
+                    <>
                   <Button variant="outline" size="sm" onClick={handleShareWhatsApp} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
                     <MessageCircle className="h-4 w-4 mr-2" />
                     Share via WhatsApp
@@ -184,6 +193,13 @@ ${publicUrl}`
                     <Mail className="h-4 w-4 mr-2" />
                     Email
                   </Button>
+                    </>
+                  ) : (
+                  <Button variant="outline" size="sm" onClick={downloadReceipt}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Download
+                  </Button>
+                  )}
                 </>
               ) : (
                 <>

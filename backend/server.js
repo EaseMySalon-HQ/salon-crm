@@ -2763,20 +2763,6 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
       });
     }
 
-    const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
-    const escaped = String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const qt = String(q).trim();
-    if (
-      walkIn &&
-      !merged.some((c) => String(c._id) === String(walkIn._id)) &&
-      (/^walk/i.test(qt) ||
-        (walkIn.name && new RegExp(`^${escaped}`, 'i').test(walkIn.name)) ||
-        (walkIn.phone && walkIn.phone.startsWith(qt)))
-    ) {
-      merged = [walkIn, ...merged];
-      if (merged.length > limit) merged = merged.slice(0, limit);
-    }
-
     res.json({ success: true, data: merged });
   } catch (error) {
     logger.error('Error searching clients:', error);
@@ -13095,6 +13081,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
 
     // Fire-and-forget: send email/WhatsApp/SMS notifications without blocking the response
     setImmediate(async () => {
+    const isWalkInSale =
+      String(sale?.customerPhone || sale?.customerMobile || '').trim() === WALK_IN_PHONE ||
+      /^walk-?in$/i.test(String(sale?.customerName || '').trim());
+
     logger.debug('📧 Sale customer email check:', {
       customerEmail: sale.customerEmail,
       hasEmail: !!sale.customerEmail,
@@ -13183,6 +13173,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
             customerEmail: sale.customerEmail
           });
           if (sendToClients && sale.customerEmail) {
+            if (isWalkInSale) {
+              emailStatus.error = 'Walk-in customer — receipt email skipped';
+              logger.debug('📧 Skipping receipt email for Walk-in sale');
+            } else {
             emailStatus.attempted = true;
             logger.debug(`📧 Attempting to send receipt email to: ${sale.customerEmail}`);
             try {
@@ -13266,6 +13260,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
               });
               emailStatus.error = clientEmailError.message;
             }
+            }
           } else {
             emailStatus.error = !sendToClients ? 'Send to clients disabled' : 'No customer email';
           }
@@ -13345,7 +13340,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
               
               logger.debug('📱 [WhatsApp] Customer phone from sale:', customerPhone);
               
-              if (customerPhone) {
+              if (isWalkInSale) {
+                logger.debug('📱 [WhatsApp] Skipping sale receipt for Walk-in customer');
+                whatsappStatus.error = 'Walk-in customer — receipt WhatsApp skipped';
+              } else if (customerPhone) {
                 try {
                   const { canUseAddon: canUseAddonWa } = require('./lib/entitlements');
                   const mainConnectionForWaQuota = await databaseManager.getMainConnection();
@@ -13530,10 +13528,12 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
           }
           if (canSendSms) {
             const customerPhone = sale?.customerPhone || sale?.customerMobile;
-            if (!customerPhone) {
+            if (isWalkInSale) {
+              logger.debug('📱 [SMS] Sale receipt skipped: Walk-in customer');
+            } else if (!customerPhone) {
               logger.debug('📱 [SMS] Sale receipt skipped: no customer phone on bill (customerPhone/customerMobile)');
             }
-            if (customerPhone) {
+            if (!isWalkInSale && customerPhone) {
               const saleForSms = savedSale || sale;
               const { Sale } = req.businessModels;
               const { buildSaleNotificationLinks } = require('./lib/feedback-link-helpers');

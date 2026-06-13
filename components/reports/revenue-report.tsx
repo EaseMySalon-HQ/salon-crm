@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useCurrency } from "@/hooks/use-currency"
 import { AlertCircle } from "lucide-react"
+import { ChartSkeleton } from "@/components/loading"
 import type { AnalyticsRevenuePoint } from "@/lib/types/analytics"
 
 type ChartMetric = "revenue" | "expenses" | "net" | "all"
@@ -77,11 +78,11 @@ export function RevenueReport({
     return (
       <div className="space-y-4">
         <div className="flex flex-wrap justify-between gap-4">
-          <div className="h-9 w-56 bg-muted rounded animate-pulse" />
-          <div className="h-10 w-[180px] bg-muted rounded animate-pulse" />
-          <div className="h-10 w-[180px] bg-muted rounded animate-pulse" />
+          <ChartSkeleton height={36} className="max-w-xs" />
+          <ChartSkeleton height={40} className="max-w-[180px]" />
+          <ChartSkeleton height={40} className="max-w-[180px]" />
         </div>
-        <div className="h-[380px] bg-muted/40 rounded-lg animate-pulse" />
+        <ChartSkeleton height={380} />
       </div>
     )
   }

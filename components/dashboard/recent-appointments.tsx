@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Calendar } from "lucide-react"
 import { format, isValid, parse, parseISO } from "date-fns"
+import { ListSkeleton } from "@/components/loading"
 import { useDashboardInit } from "@/lib/queries/dashboard"
 
 interface RecentItem {
@@ -79,9 +80,7 @@ export function RecentAppointments() {
   if (isPending) {
     return (
       <div className={scrollClass}>
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="h-16 rounded-xl bg-slate-100 animate-pulse" />
-        ))}
+        <ListSkeleton rows={4} showAvatar />
       </div>
     )
   }

@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/table"
 import { useCurrency } from "@/hooks/use-currency"
 import { AlertCircle } from "lucide-react"
+import { ChartSkeleton, ListSkeleton } from "@/components/loading"
 import { Button } from "@/components/ui/button"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { AnalyticsTopService } from "@/lib/types/analytics"
@@ -69,12 +70,8 @@ export function ServicePopularity({
     return (
       <div className="space-y-6">
         <div className="grid gap-6 md:grid-cols-2 md:gap-8">
-          <div className="min-h-[260px] h-[260px] sm:h-[280px] bg-muted/40 rounded animate-pulse" />
-          <div className="space-y-4">
-            {[1, 2, 3, 4, 5].map((i) => (
-              <div key={i} className="h-16 bg-muted/40 rounded animate-pulse" />
-            ))}
-          </div>
+          <ChartSkeleton height={280} />
+          <ListSkeleton rows={5} showAvatar={false} />
         </div>
       </div>
     )

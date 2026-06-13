@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { CardSkeletonGrid, ChartSkeleton, TableSkeleton } from "@/components/loading"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
@@ -290,23 +291,9 @@ export function MembershipReport() {
   if (loading) {
     return (
       <div className="space-y-8">
-        <div className="grid gap-4 md:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i}>
-              <CardHeader className="pb-2">
-                <div className="h-4 w-24 bg-slate-200 rounded animate-pulse" />
-              </CardHeader>
-              <CardContent>
-                <div className="h-8 w-20 bg-slate-200 rounded animate-pulse" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="h-64 bg-slate-100 rounded animate-pulse" />
-          </CardContent>
-        </Card>
+        <CardSkeletonGrid count={3} size="md" columns="md:grid-cols-3" />
+        <ChartSkeleton height={256} />
+        <TableSkeleton rows={6} columns={5} />
       </div>
     )
   }

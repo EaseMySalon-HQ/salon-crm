@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { TableSkeleton } from "@/components/loading"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import {
@@ -468,11 +469,8 @@ export function ProductsTable({
             <TableBody>
               {loading ? (
                 <TableRow key="loading">
-                  <TableCell colSpan={canShowProductActions ? 8 : 7} className="text-center py-8">
-                    <div className="flex flex-col items-center space-y-2">
-                      <div className="w-6 h-6 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
-                      <p className="text-gray-600 text-sm">Loading products...</p>
-                    </div>
+                  <TableCell colSpan={canShowProductActions ? 8 : 7} className="p-0">
+                    <TableSkeleton rows={6} columns={canShowProductActions ? 8 : 7} showHeader={false} showToolbar={false} />
                   </TableCell>
                 </TableRow>
               ) : filteredProducts.length === 0 ? (

@@ -8,6 +8,7 @@ import { AppointmentsCalendarGrid } from "@/components/appointments/appointments
 import { AppointmentFormDrawer } from "@/components/appointments/appointment-form-drawer"
 import { ServiceCheckoutDraftFloatChip } from "@/components/appointments/service-checkout-draft-float-chip"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
+import { PageSkeleton } from "@/components/loading"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 
 const VIEW_STORAGE_KEY = "appointments-view"
@@ -178,14 +179,7 @@ export default function AppointmentsPage() {
   return (
     <ProtectedRoute requiredModule="appointments">
       <ProtectedLayout>
-        <Suspense fallback={
-          <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 px-12 py-8 flex items-center justify-center">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-              <p className="text-slate-600">Loading appointments...</p>
-            </div>
-          </div>
-        }>
+        <Suspense fallback={<PageSkeleton variant="calendar" />}>
           <AppointmentsContent />
         </Suspense>
       </ProtectedLayout>
