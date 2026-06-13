@@ -13,7 +13,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { BranchesTable } from "@/components/branch-management/branches-table"
-import { AddBranchDialog } from "@/components/branch-management/add-branch-dialog"
 import { BranchConfigPanel } from "@/components/branch-management/branch-config-panel"
 import { OrgSettingsPanel } from "@/components/branch-management/org-settings-panel"
 import { STALE_TIME } from "@/lib/queries/staleness"
@@ -122,12 +121,9 @@ export default function BranchSettingsPage() {
       </section>
 
       <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-800">All branches</h2>
-            <p className="text-sm text-slate-500">Add, activate or deactivate branches, or switch into one.</p>
-          </div>
-          <AddBranchDialog onCreated={refreshEverything} />
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800">All branches</h2>
+          <p className="text-sm text-slate-500">Activate or deactivate branches, or switch into one.</p>
         </div>
 
         <BranchesTable branches={branches} isLoading={isLoading} onChanged={refreshEverything} />

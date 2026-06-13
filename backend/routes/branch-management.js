@@ -22,6 +22,7 @@ const {
 } = require('../lib/get-all-branches');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
+const { generateNextBusinessCode } = require('../lib/generate-business-code');
 const { logger } = require('../utils/logger');
 const {
   registerPhase2Routes,
@@ -766,18 +767,7 @@ router.post('/branches/add', guard, validate(addBranchSchema), async (req, res) 
     const { branchName, city, phone, address, state, zipCode, email } = req.body;
     const Business = getBusinessModel(req.mainConnection);
 
-    // Generate a unique business code (mirrors routes/admin.js).
-    let businessCode;
-    let isUnique = false;
-    let attempts = 0;
-    while (!isUnique && attempts < 10) {
-      const count = await Business.countDocuments({ status: { $ne: 'deleted' } });
-      businessCode = `BIZ${String(count + 1).padStart(4, '0')}`;
-      const existing = await Business.findOne({ code: businessCode });
-      if (!existing) isUnique = true;
-      else attempts++;
-    }
-    if (!isUnique) businessCode = `BIZ${Date.now().toString().slice(-4)}`;
+    const businessCode = await generateNextBusinessCode(Business);
 
     const { getShareClientsAcrossBranches } = require('../lib/share-clients-across-branches');
     const shareClientsAcrossBranches = await getShareClientsAcrossBranches(
