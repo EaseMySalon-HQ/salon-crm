@@ -22,6 +22,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { CalendarGridSkeleton } from "@/components/loading/calendar-grid-skeleton"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -2372,11 +2373,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <div className="animate-spin rounded-full h-10 w-10 border-2 border-indigo-600 border-t-transparent" />
-      </div>
-    )
+    return <CalendarGridSkeleton />
   }
 
   if (listFetchError) {

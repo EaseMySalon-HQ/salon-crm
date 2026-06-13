@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { StaffTable } from "@/components/branch-management/staff-table"
+import { PageSkeleton } from "@/components/loading"
 import { BranchErrorNote } from "@/components/branch-management/branch-error-note"
 import { DateRangePicker } from "@/components/branch-management/date-range-picker"
 import { Switch } from "@/components/ui/switch"
@@ -102,7 +103,7 @@ function BranchStaffContent() {
 
 export default function BranchStaffPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<PageSkeleton variant="table" />}>
       <BranchStaffContent />
     </Suspense>
   )

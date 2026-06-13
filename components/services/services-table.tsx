@@ -5,6 +5,7 @@ import { Search, Edit, Trash2, Plus, Scissors, Download, FileText, FileSpreadshe
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableSkeleton } from "@/components/loading"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { ServiceForm } from "./service-form"
@@ -300,11 +301,8 @@ export function ServicesTable() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={canShowActions ? 6 : 5} className="text-center py-8">
-                    <div className="flex flex-col items-center space-y-2">
-                      <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-                      <p className="text-gray-600 text-sm">Loading services...</p>
-                    </div>
+                  <TableCell colSpan={canShowActions ? 6 : 5} className="p-0">
+                    <TableSkeleton rows={6} columns={canShowActions ? 6 : 5} showHeader={false} showToolbar={false} />
                   </TableCell>
                 </TableRow>
               ) : filteredServices.length === 0 ? (

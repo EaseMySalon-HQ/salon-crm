@@ -1,6 +1,7 @@
 // Updated client store with API integration and fallback
 import { clients as initialClients } from "@/lib/data"
 import { ClientsAPI } from "@/lib/api"
+import { findWalkInClient, WALK_IN_SYSTEM_PHONE } from "@/lib/walk-in-client"
 
 export interface ClientWhatsAppConsent {
   optedIn?: boolean
@@ -93,6 +94,9 @@ class ClientStore {
   private searchCache = new LRUSearchCache()
   private recentClients: Client[] | null = null
   private recentLoading = false
+  /** Cached system Walk-in profile (not included in paginated getAll). */
+  private walkInClient: Client | null = null
+  private walkInLoadPromise: Promise<Client | null> | null = null
 
   async loadClients() {
     // localStorage + API auth only exist in the browser; skip SSR to avoid 401s
@@ -100,6 +104,7 @@ class ClientStore {
     if (this.isLoading) return
 
     this.isLoading = true
+    this.notifyListeners()
     try {
       // Fetch ALL clients from paginated API
       const pageSize = 1000
@@ -152,11 +157,62 @@ class ClientStore {
       this.clients = []
     } finally {
       this.isLoading = false
+      this.notifyListeners()
     }
+  }
+
+  getIsLoading(): boolean {
+    return this.isLoading
   }
 
   getClients(): Client[] {
     return [...this.clients]
+  }
+
+  getWalkInClient(): Client | null {
+    return this.walkInClient ?? findWalkInClient(this.clients) ?? null
+  }
+
+  /**
+   * Load the system Walk-in profile. Excluded from paginated GET /clients;
+   * returned by GET /clients/search with empty q.
+   */
+  async fetchWalkInClient(): Promise<Client | null> {
+    const cached = this.getWalkInClient()
+    if (cached) return cached
+    if (this.walkInLoadPromise) return this.walkInLoadPromise
+
+    this.walkInLoadPromise = (async () => {
+      try {
+        const response = await ClientsAPI.search("", { limit: 15 })
+        if (response.success && Array.isArray(response.data)) {
+          const normalized = this.normalizeList(response.data)
+          const walkIn = findWalkInClient(normalized)
+          if (walkIn) {
+            this.walkInClient = walkIn
+            return walkIn
+          }
+        }
+        const recent = await this.preloadRecent()
+        const fromRecent = findWalkInClient(recent)
+        if (fromRecent) {
+          this.walkInClient = fromRecent
+          return fromRecent
+        }
+        return null
+      } catch {
+        return null
+      } finally {
+        this.walkInLoadPromise = null
+      }
+    })()
+
+    return this.walkInLoadPromise
+  }
+
+  /** True when a phone value is the reserved Walk-in sentinel (not a real number). */
+  isWalkInPhone(phone: string | undefined | null): boolean {
+    return String(phone || "").trim() === WALK_IN_SYSTEM_PHONE
   }
 
   async addClient(client: Client): Promise<boolean> {

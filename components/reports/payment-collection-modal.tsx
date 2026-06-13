@@ -12,6 +12,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
+import { LoadingButton } from "@/components/loading"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -424,13 +425,15 @@ export function PaymentCollectionModal({
       <Button variant="outline" onClick={onClose} disabled={isLoading || paymentJustSucceeded}>
         Cancel
       </Button>
-      <Button
+      <LoadingButton
         onClick={handleSubmit}
-        disabled={isLoading || !paymentAmount || !paymentMethod || paymentJustSucceeded}
+        loading={isLoading}
+        loadingText="Collecting..."
+        disabled={!paymentAmount || !paymentMethod || paymentJustSucceeded}
         className="bg-blue-600 hover:bg-blue-700"
       >
-        {isLoading ? "Collecting..." : "Collect Payment"}
-      </Button>
+        Collect Payment
+      </LoadingButton>
     </>
   )
 

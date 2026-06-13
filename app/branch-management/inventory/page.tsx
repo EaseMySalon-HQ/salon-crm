@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label"
 import { toast } from "@/components/ui/use-toast"
 import { BranchManagementAPI } from "@/lib/api"
 import { InventoryMatrixTable } from "@/components/branch-management/inventory-matrix-table"
+import { PageSkeleton } from "@/components/loading"
 import { TransferRequestsPanel } from "@/components/branch-management/transfer-requests-panel"
 import { BranchPillFilter } from "@/components/branch-management/branch-pill-filter"
 import { BranchErrorNote } from "@/components/branch-management/branch-error-note"
@@ -181,7 +182,7 @@ function BranchInventoryContent() {
 
 export default function BranchInventoryPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<PageSkeleton variant="table" />}>
       <BranchInventoryContent />
     </Suspense>
   )

@@ -16,7 +16,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
-import { format } from "date-fns"
+import { CardSkeletonGrid, TableSkeleton } from "@/components/loading"
 
 export function ClientsListPage() {
   const { toast } = useToast()
@@ -29,13 +29,15 @@ export function ClientsListPage() {
   const [statsFilter, setStatsFilter] = useState<"all" | "active" | "inactive">("all")
   const [whatsappFilter, setWhatsappFilter] = useState<boolean>(false)
   const [enrichedClientsForStats, setEnrichedClientsForStats] = useState<Client[]>([])
+  const [clientsLoading, setClientsLoading] = useState(() => clientStore.getIsLoading())
 
   // Subscribe to client store changes and force reload on mount
   useEffect(() => {
     // Force reload clients from API
-    clientStore.loadClients()
+    void clientStore.loadClients()
     
     const unsubscribe = clientStore.subscribe(() => {
+      setClientsLoading(clientStore.getIsLoading())
       const updatedClients = clientStore.getClients()
       setClients(updatedClients)
       setFilteredClients(updatedClients)
@@ -256,11 +258,15 @@ export function ClientsListPage() {
             </div>
 
             {/* Stats Cards with Filters */}
+            {clientsLoading && clients.length === 0 ? (
+              <CardSkeletonGrid count={4} size="sm" columns="grid-cols-2 md:grid-cols-4" />
+            ) : (
             <ClientStatsCards 
               clients={clients}
               activeFilter={statsFilter}
               onFilterChange={handleFilterChange}
             />
+            )}
 
             {/* Enhanced Search Section */}
             <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
@@ -311,7 +317,11 @@ export function ClientsListPage() {
                 </div>
               </div>
             </div>
+            {clientsLoading && clients.length === 0 ? (
+              <TableSkeleton rows={10} columns={6} showToolbar={false} />
+            ) : (
             <ClientsTable clients={filteredClients} />
+            )}
     </div>
   )
 }

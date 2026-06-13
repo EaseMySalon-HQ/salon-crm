@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { ArrowLeft, Boxes, Loader2, Plus, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { FormSkeleton, LoadingButton } from "@/components/loading"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -239,11 +240,10 @@ export function PackageNewPage({ packageId }: PackageFormPageProps = {}) {
 
   if (loadingPackage) {
     return (
-      <div className="min-h-screen bg-slate-100/80 px-4 py-6 flex items-center justify-center">
-        <p className="text-sm text-slate-500 flex items-center gap-2">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          Loading package…
-        </p>
+      <div className="min-h-screen bg-slate-100/80 px-4 py-6">
+        <div className="mx-auto max-w-2xl">
+          <FormSkeleton fields={8} columns={1} />
+        </div>
       </div>
     )
   }
@@ -435,18 +435,9 @@ export function PackageNewPage({ packageId }: PackageFormPageProps = {}) {
             <Button type="button" variant="outline" asChild disabled={submitting}>
               <Link href="/settings?section=packages">Cancel</Link>
             </Button>
-            <Button type="submit" className="bg-violet-600 hover:bg-violet-700" disabled={submitting || loadingServices}>
-              {submitting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {isEdit ? "Saving…" : "Creating…"}
-                </>
-              ) : isEdit ? (
-                "Save changes"
-              ) : (
-                "Create package"
-              )}
-            </Button>
+            <LoadingButton type="submit" className="bg-violet-600 hover:bg-violet-700" loading={submitting} loadingText={isEdit ? "Saving…" : "Creating…"} disabled={loadingServices}>
+              {isEdit ? "Save changes" : "Create package"}
+            </LoadingButton>
           </div>
         </form>
       </div>

@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { TableSkeleton } from "@/components/loading"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -287,11 +288,8 @@ export function UsersTable() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-12">
-                  <div className="flex flex-col items-center gap-3">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                    <p className="text-slate-600 font-medium">Loading staff members...</p>
-                  </div>
+                <TableCell colSpan={7} className="p-0">
+                  <TableSkeleton rows={6} columns={6} showHeader={false} showToolbar={false} />
                 </TableCell>
               </TableRow>
             ) : filteredUsers.length === 0 ? (

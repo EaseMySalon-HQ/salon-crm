@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { Search, Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Calendar, Target, Award, BarChart3, ChevronDown, Receipt, FileText, FileSpreadsheet, ArrowUp, ArrowDown, Minus } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { CardSkeletonGrid, TableSkeleton } from "@/components/loading"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
@@ -750,12 +750,9 @@ export function StaffPerformanceReport() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50/30 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-6"></div>
-          <h3 className="text-xl font-semibold text-gray-800 mb-2">Loading Performance Data</h3>
-          <p className="text-gray-600">Fetching staff analytics and commission information...</p>
-        </div>
+      <div className="space-y-8">
+        <CardSkeletonGrid count={4} size="md" columns="md:grid-cols-2 lg:grid-cols-4" />
+        <TableSkeleton rows={8} columns={6} />
       </div>
     )
   }

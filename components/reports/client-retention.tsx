@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, X
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { AlertCircle } from "lucide-react"
+import { CardSkeletonGrid, ChartSkeleton } from "@/components/loading"
 
 type ClientRetentionProps = {
   isPending?: boolean
@@ -33,17 +34,8 @@ export function ClientRetention({
   if (isPending) {
     return (
       <div className="space-y-6">
-        <div className="grid gap-6 md:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i}>
-              <CardContent className="p-6">
-                <div className="h-4 w-24 bg-muted rounded animate-pulse mb-2" />
-                <div className="h-8 w-16 bg-muted rounded animate-pulse" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <div className="h-[400px] bg-muted/40 rounded animate-pulse" />
+        <CardSkeletonGrid count={3} size="md" columns="md:grid-cols-3" />
+        <ChartSkeleton height={400} />
       </div>
     )
   }

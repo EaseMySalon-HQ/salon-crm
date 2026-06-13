@@ -15,6 +15,7 @@ import { WhatsAppMessagesReport } from "@/components/reports/whatsapp-messages-r
 import { BarChart3, TrendingUp, Receipt, Users, CreditCard, Package, MessageCircle } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { useFeature } from "@/hooks/use-entitlements"
+import { PageSkeleton } from "@/components/loading"
 
 function ReportsTabsBody() {
   const { user, hasPermission } = useAuth()
@@ -263,11 +264,7 @@ function ReportsTabsBody() {
 }
 
 function ReportsTabsFallback() {
-  return (
-    <div className="bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 min-h-[320px] flex items-center justify-center rounded-2xl border border-slate-100">
-      <p className="text-slate-500 text-sm">Loading reports…</p>
-    </div>
-  )
+  return <PageSkeleton variant="table" />
 }
 
 export default function ReportsPage() {

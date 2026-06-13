@@ -6,6 +6,7 @@ import { useQueries, useQuery } from "@tanstack/react-query"
 import { BranchManagementAPI } from "@/lib/api"
 import { BranchPillFilter } from "@/components/branch-management/branch-pill-filter"
 import { BranchServicesPanel } from "@/components/branch-management/branch-services-panel"
+import { PageSkeleton } from "@/components/loading"
 import { CopyServicesDialog } from "@/components/branch-management/copy-services-dialog"
 import {
   ServicesMatrixTable,
@@ -154,7 +155,7 @@ function BranchServicesContent() {
 
 export default function BranchServicesPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<PageSkeleton variant="table" />}>
       <BranchServicesContent />
     </Suspense>
   )

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
+import { FormSkeleton, LoadingButton } from "@/components/loading"
 import {
   Check,
   Plus,
@@ -78,7 +79,7 @@ import { PaymentCollectionModal } from "@/components/reports/payment-collection-
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
 import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
 import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
-import { findWalkInClient, formatClientPhoneForDisplay, prependWalkInIfMissing } from "@/lib/walk-in-client"
+import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay, isWalkInClient, WALK_IN_UI_BADGE } from "@/lib/walk-in-client"
 
 /** Convert 24h time (e.g. "09:00") to 12h for API storage ("9:00 AM") for backward compatibility */
 function formatTimeForApi(time: string): string {
@@ -555,18 +556,24 @@ export function AppointmentForm({
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [clients, setClients] = useState<Client[]>([])
   const [searchingClients, setSearchingClients] = useState(false)
+  const [walkInClient, setWalkInClient] = useState<Client | null>(null)
   const clientSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [clientDirEpoch, bumpClientDir] = useReducer((n: number) => n + 1, 0)
   useEffect(() => {
     void clientStore.loadClients().finally(() => bumpClientDir())
+    void clientStore.fetchWalkInClient().then((w) => {
+      if (w) setWalkInClient(w)
+    })
     return clientStore.subscribe(bumpClientDir)
   }, [])
 
-  const walkInClient = useMemo(
-    () => findWalkInClient(clientStore.getClients()) ?? null,
-    [clientDirEpoch],
-  )
+  const ensureWalkInLoaded = useCallback(async () => {
+    if (walkInClient) return walkInClient
+    const w = await clientStore.fetchWalkInClient()
+    if (w) setWalkInClient(w)
+    return w
+  }, [walkInClient])
 
   // Services and staff state
   const [services, setServices] = useState<any[]>([])
@@ -1645,13 +1652,14 @@ export function AppointmentForm({
     }
   }, [customerSearch, selectedCustomer])
 
-  const filteredCustomers = useMemo(() => {
-    const trimmed = customerSearch.trim()
-    if (!trimmed) {
-      return prependWalkInIfMissing(walkInClient ?? undefined, clients)
-    }
-    return clients
-  }, [walkInClient, clients, customerSearch])
+  const filteredCustomers = useMemo(
+    () => customerDropdownList(clients, customerSearch, walkInClient),
+    [walkInClient, clients, customerSearch],
+  )
+
+  const shouldShowCustomerDropdown =
+    showCustomerDropdown &&
+    (customerSearch.trim().length > 0 ? true : !!(walkInClient ?? findWalkInClient(clients)))
 
   // Handle customer selection
   const handleCustomerSelect = (customer: Client) => {
@@ -2612,10 +2620,7 @@ export function AppointmentForm({
   const formContent = (
     <>
         {loadingAppointment ? (
-          <div className={cn("flex flex-col items-center justify-center gap-4", isDrawer ? "py-12" : "py-16")}>
-            <Loader2 className={cn("animate-spin text-indigo-600", isDrawer ? "h-8 w-8" : "h-10 w-10")} />
-            <p className="text-slate-600 text-sm">Loading appointment...</p>
-          </div>
+          <FormSkeleton fields={6} columns={isDrawer ? 1 : 2} />
         ) : (
         <Form {...form}>
           <form id="appointmentForm" onSubmit={form.handleSubmit(onSubmit)} className={cn(isDrawer ? "space-y-6" : "space-y-10")}>
@@ -2667,18 +2672,12 @@ export function AppointmentForm({
                   }}
                   onFocus={() => {
                     setShowCustomerDropdown(true)
-                    if (!customerSearch.trim()) {
-                      clientStore.preloadRecent().then((recent) => {
-                        const w = findWalkInClient(clientStore.getClients())
-                        const merged = prependWalkInIfMissing(w, recent)
-                        if (merged.length) setClients(merged)
-                      })
-                    }
+                    void ensureWalkInLoaded()
                   }}
                   className="pl-12 h-12 border-slate-200 focus:border-indigo-500 focus:ring-indigo-500 rounded-xl"
                 />
 
-                {showCustomerDropdown && (customerSearch.trim() || filteredCustomers.length > 0) && (
+                {shouldShowCustomerDropdown && (
                   <div className="absolute top-full left-0 right-0 z-10 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-auto">
                     {searchingClients ? (
                       <div className="p-4 text-center text-slate-500 flex items-center justify-center gap-2">
@@ -2701,7 +2700,14 @@ export function AppointmentForm({
                               <User className="h-4 w-4 text-indigo-600" />
                             </div>
                             <div>
-                              <div className="font-semibold text-slate-800">{customer.name}</div>
+                              <div className="font-semibold text-slate-800 flex items-center gap-2">
+                                {customer.name}
+                                {isWalkInClient(customer) ? (
+                                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                    {WALK_IN_UI_BADGE}
+                                  </span>
+                                ) : null}
+                              </div>
                               <div className="text-sm text-slate-500 flex items-center gap-1">
                                 <Phone className="h-3 w-3" />
                                 {formatClientPhoneForDisplay(customer)}
@@ -2710,7 +2716,7 @@ export function AppointmentForm({
                           </div>
                         </div>
                       ))
-                    ) : (
+                    ) : customerSearch.trim().length > 0 ? (
                       <div
                         className="p-4 hover:bg-indigo-50 cursor-pointer flex items-center gap-3 transition-colors"
                         onClick={(e) => {
@@ -2724,7 +2730,7 @@ export function AppointmentForm({
                         </div>
                         <span className="font-medium text-slate-700">Create new customer: "{customerSearch}"</span>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -3238,11 +3244,12 @@ export function AppointmentForm({
     )
 
   const scheduleOrUpdateFooterButton = (
-    <Button
+    <LoadingButton
       type="submit"
       form="appointmentForm"
+      loading={isSubmitting}
+      loadingText={isEditMode ? "Updating..." : "Scheduling..."}
       disabled={
-        isSubmitting ||
         loadingAppointment ||
         selectedServices.length === 0 ||
         !selectedCustomer ||
@@ -3253,18 +3260,9 @@ export function AppointmentForm({
         isDrawer ? "rounded-lg bg-violet-600 hover:bg-violet-700 text-white" : "px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl"
       )}
     >
-      {isSubmitting ? (
-        <>
-          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          {isEditMode ? "Updating..." : "Scheduling..."}
-        </>
-      ) : (
-        <>
-          <CalendarDays className="h-4 w-4 mr-2" />
-          {isEditMode ? "Update Appointment" : "Schedule Appointment"}
-        </>
-      )}
-    </Button>
+      <CalendarDays className="h-4 w-4 mr-2" />
+      {isEditMode ? "Update Appointment" : "Schedule Appointment"}
+    </LoadingButton>
   )
 
   const footerButtons = (
