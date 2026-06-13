@@ -27,6 +27,7 @@ import {
 import { format } from "date-fns"
 
 import { Button } from "@/components/ui/button"
+import { LoadingButton } from "@/components/loading"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -74,9 +75,10 @@ import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import { clientStore, type Client } from "@/lib/client-store"
 import {
   customerDropdownList,
-  findWalkInClient,
   formatClientPhoneForDisplay,
-  prependWalkInIfMissing,
+  isWalkInClient,
+  WALK_IN_SYSTEM_PHONE,
+  WALK_IN_UI_BADGE,
 } from "@/lib/walk-in-client"
 import { ClientDetailsDrawer } from "@/components/clients/client-details-drawer"
 import { ensureLocalSharedClient } from "@/lib/shared-client-import"
@@ -911,6 +913,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const [changingClient, setChangingClient] = useState(false)
   const [isChangingClientProfile, setIsChangingClientProfile] = useState(false)
   const [inlineClientPickerOpen, setInlineClientPickerOpen] = useState(false)
+  const [walkInClient, setWalkInClient] = useState<Client | null>(null)
   const [showNewClientDialog, setShowNewClientDialog] = useState(false)
   const [creatingClient, setCreatingClient] = useState(false)
   const [newClient, setNewClient] = useState({
@@ -1155,6 +1158,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   useEffect(() => {
     if (!open || !showClientSearchBox) return
     void clientStore.loadClients().finally(() => bumpClientDir())
+    void clientStore.fetchWalkInClient().then((w) => {
+      if (w) setWalkInClient(w)
+    })
     return clientStore.subscribe(bumpClientDir)
   }, [open, showClientSearchBox])
 
@@ -2917,8 +2923,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       const saleData: Record<string, unknown> = {
         clientId: customer!._id || customer!.id,
         clientName: customer!.name,
-        clientPhone: customer!.phone || "",
-        clientEmail: customer!.email || "",
+        clientPhone: isWalkInClient(customer!) ? WALK_IN_SYSTEM_PHONE : customer!.phone || "",
+        clientEmail: isWalkInClient(customer!) ? "" : customer!.email || "",
         date: appointmentDate ? format(appointmentDate, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
         time: appointmentTime || "",
         /** Quick Sale opens in payment-only mode; cart/discounts/tips are final from checkout. */
@@ -3222,23 +3228,20 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   )
 
   const inlineClientPickerOptions = useMemo(() => {
-    const catalog = clientStore.getClients()
     const q = changeClientQuery.trim()
     if (q.length < 2) {
-      return customerDropdownList(catalog, q)
+      return customerDropdownList(clientStore.getClients(), q, walkInClient)
     }
-    const walkIn = findWalkInClient(catalog)
-    const base = prependWalkInIfMissing(walkIn, changeClientResults)
-    return customerDropdownList(base, q)
-  }, [changeClientQuery, changeClientResults, clientDirEpoch])
+    return customerDropdownList(changeClientResults, q)
+  }, [changeClientQuery, changeClientResults, walkInClient, clientDirEpoch])
 
   const openInlineClientPicker = useCallback(() => {
     setInlineClientPickerOpen(true)
     void clientStore.loadClients().finally(() => bumpClientDir())
-    if (!changeClientQuery.trim()) {
-      void clientStore.preloadRecent().finally(() => bumpClientDir())
-    }
-  }, [changeClientQuery])
+    void clientStore.fetchWalkInClient().then((w) => {
+      if (w) setWalkInClient(w)
+    })
+  }, [])
 
   const beginChangeClientProfile = useCallback(() => {
     setChangeClientQuery("")
@@ -3246,6 +3249,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     setIsChangingClientProfile(true)
     setInlineClientPickerOpen(true)
     void clientStore.loadClients().finally(() => bumpClientDir())
+    void clientStore.fetchWalkInClient().then((w) => {
+      if (w) setWalkInClient(w)
+    })
     requestAnimationFrame(() => clientSearchInputRef.current?.focus())
   }, [])
 
@@ -4984,7 +4990,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                               className="w-full px-3 py-2.5 text-left text-sm transition-colors first:rounded-t-2xl last:rounded-b-2xl hover:bg-violet-50/80 disabled:pointer-events-none disabled:opacity-50"
                               onClick={() => void pickCheckoutClient(c)}
                             >
-                              <span className="block truncate font-medium text-foreground">{c.name || "Client"}</span>
+                              <span className="block truncate font-medium text-foreground flex items-center gap-2">
+                                {c.name || "Client"}
+                                {isWalkInClient(c) ? (
+                                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                    {WALK_IN_UI_BADGE}
+                                  </span>
+                                ) : null}
+                              </span>
                               <span className="block truncate text-xs text-muted-foreground">
                                 {formatClientPhoneForDisplay(c)}
                               </span>
@@ -5015,7 +5028,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                               {customer?.name || "Walk-in"}
                             </p>
                             <p className="text-[11px] text-muted-foreground truncate leading-tight">
-                              {customer?.email || customer?.phone || "—"}
+                              {customer ? formatClientPhoneForDisplay(customer) : "—"}
                             </p>
                           </div>
                           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground opacity-70" aria-hidden />
@@ -5055,7 +5068,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                           {customer?.name || "Walk-in"}
                         </p>
                         <p className="text-[11px] text-muted-foreground truncate leading-tight">
-                          {customer?.email || customer?.phone || "—"}
+                          {customer ? formatClientPhoneForDisplay(customer) : "—"}
                         </p>
                       </div>
                     </div>
@@ -6186,23 +6199,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                     >
                       Cancel
                     </Button>
-                    <Button
+                    <LoadingButton
                       type="button"
                       className="h-11 flex-1 min-w-0 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-semibold"
-                      disabled={navigating || paymentMethodLoading}
+                      loading={navigating}
+                      loadingText="Saving…"
+                      disabled={paymentMethodLoading}
                       onClick={() => void confirmPaymentMethodAndContinue()}
                     >
-                      {navigating ? (
-                        <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" aria-hidden />
-                          Saving…
-                        </>
-                      ) : paymentRemainingDue > 0.01 ? (
-                        "Save Part-Paid"
-                      ) : (
-                        "Complete billing"
-                      )}
-                    </Button>
+                      {paymentRemainingDue > 0.01 ? "Save Part-Paid" : "Complete billing"}
+                    </LoadingButton>
                   </>
                 ) : (
                   <>
@@ -6599,9 +6605,11 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           >
             Cancel
           </Button>
-          <Button
+          <LoadingButton
             type="button"
-            disabled={!checkoutPartialPaymentConfirmAck || navigating || paymentMethodLoading}
+            loading={navigating}
+            loadingText="Collecting..."
+            disabled={!checkoutPartialPaymentConfirmAck || paymentMethodLoading}
             className="bg-orange-600 text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => {
               if (!checkoutPartialPaymentConfirmAck) {
@@ -6618,7 +6626,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
             }}
           >
             Confirm & Collect
-          </Button>
+          </LoadingButton>
         </DialogFooter>
       </DialogContent>
     </Dialog>

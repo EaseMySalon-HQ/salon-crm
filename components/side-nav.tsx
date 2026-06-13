@@ -158,7 +158,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
 
   return (
     <aside className={cn(
-      "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 fixed left-0 z-40 shrink-0",
+      "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 fixed left-0 z-50 shrink-0",
       isImpersonation ? "top-10 h-[calc(100vh-2.5rem)]" : "top-0 h-screen",
       isCollapsed ? "w-24" : "w-56"
     )}>

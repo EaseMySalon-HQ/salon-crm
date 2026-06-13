@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { cn } from "@/lib/utils"
 import { useDashboardInit } from "@/lib/queries/dashboard"
-import { invalidateDashboard } from "@/lib/queries/invalidate"
+import { CardSkeletonGrid } from "@/components/loading"
 
 interface ServiceStats {
   totalServices: number
@@ -58,22 +58,7 @@ export function DashboardStatsCards({ metricsRange = "today" }: { metricsRange?:
     ? stats.totalRevenueFromReceipts / stats.totalReceipts
     : 0
   if (isPending) {
-    return (
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        {[1, 2, 3, 4].map((i) => (
-          <Card key={i}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <div className="h-4 w-20 bg-gray-200 rounded animate-pulse" />
-              <div className="h-4 w-4 bg-gray-200 rounded animate-pulse" />
-            </CardHeader>
-            <CardContent>
-              <div className="h-8 w-16 bg-gray-200 rounded animate-pulse mb-2" />
-              <div className="h-3 w-24 bg-gray-200 rounded animate-pulse" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    )
+    return <CardSkeletonGrid count={4} size="md" columns="md:grid-cols-2 lg:grid-cols-4" />
   }
 
   if (isError) {

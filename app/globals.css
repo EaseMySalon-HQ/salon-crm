@@ -294,12 +294,12 @@
   animation: appointmentCardEnter 0.14s ease-out forwards;
 }
 
-@keyframes toast-progress {
-  from {
-    transform: scaleX(1);
+@keyframes navigation-progress {
+  0% {
+    transform: translateX(-100%);
   }
-  to {
-    transform: scaleX(0);
+  100% {
+    transform: translateX(400%);
   }
 }
 

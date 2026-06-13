@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CommissionProfileList } from "@/components/settings/commission-profile-list"
 import { StaffCommissionAssignments } from "@/components/settings/staff-commission-assignments"
 import { useFeature } from "@/hooks/use-entitlements"
+import { PageSkeleton } from "@/components/loading"
 
 export default function StaffCommissionPage() {
   const router = useRouter()
@@ -19,7 +20,17 @@ export default function StaffCommissionPage() {
     }
   }, [hasAccess, isLoading, router])
 
-  if (isLoading || !hasAccess) {
+  if (isLoading) {
+    return (
+      <ProtectedRoute requiredModule="staff">
+        <ProtectedLayout>
+          <PageSkeleton variant="form" />
+        </ProtectedLayout>
+      </ProtectedRoute>
+    )
+  }
+
+  if (!hasAccess) {
     return null
   }
 

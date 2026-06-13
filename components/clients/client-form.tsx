@@ -13,6 +13,7 @@ import {
   normalizeClientCommunicationConsent,
 } from "@/lib/client-communication-consent"
 import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
+import { LoadingButton } from "@/components/loading"
 import { Button } from "@/components/ui/button"
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
@@ -475,23 +476,15 @@ export function ClientForm({ client, isEditMode = false, onEditComplete }: Clien
                 >
                   Cancel
                 </Button>
-                <Button 
-                  type="submit" 
-                  disabled={isSubmitting}
+                <LoadingButton
+                  type="submit"
+                  loading={isSubmitting}
+                  loadingText="Saving..."
                   className="px-8 py-3 h-12 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 rounded-xl text-white font-medium"
                 >
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <Users className="mr-2 h-4 w-4" />
-                      {client ? "Update Client" : "Save Client"}
-                    </>
-                  )}
-                </Button>
+                  <Users className="mr-2 h-4 w-4" />
+                  {client ? "Update Client" : "Save Client"}
+                </LoadingButton>
               </div>
             )}
           </form>

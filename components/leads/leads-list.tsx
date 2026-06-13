@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { PlusCircle, Search, Filter } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { TableSkeleton } from "@/components/loading"
 import { LeadsTable } from "@/components/leads/leads-table"
 import { LeadForm } from "@/components/leads/lead-form"
 import { ConvertToAppointmentDialog } from "@/components/leads/convert-to-appointment-dialog"
@@ -282,7 +283,7 @@ export function LeadsListPage() {
 
       {/* Leads Table */}
       {loading ? (
-        <div className="text-center py-8">Loading leads...</div>
+        <TableSkeleton rows={8} columns={6} />
       ) : (
         <LeadsTable
           leads={filteredLeads}

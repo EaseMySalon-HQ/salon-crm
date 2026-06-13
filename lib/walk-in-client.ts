@@ -19,34 +19,38 @@ export function formatClientPhoneForDisplay(c: Pick<Client, "phone" | "name"> & 
   return (c.phone || "").trim() || "—"
 }
 
-/** Dropdown options: with empty search, show at least Walk-in; otherwise filter + keep Walk-in when it matches. */
-export function customerDropdownList(allClients: Client[], searchRaw: string): Client[] {
-  const walkIn = findWalkInClient(allClients)
+/**
+ * Dropdown options for client search.
+ * - Empty search: Walk-in only (when available).
+ * - Non-empty search: matching real clients only — Walk-in is never shown while typing.
+ */
+export function customerDropdownList(
+  allClients: Client[],
+  searchRaw: string,
+  walkInOverride?: Client | null,
+): Client[] {
+  const walkIn = walkInOverride ?? findWalkInClient(allClients)
   const trimmed = searchRaw.trim()
   if (!trimmed) {
     return walkIn ? [walkIn] : []
   }
   const q = trimmed.toLowerCase()
-  const filtered = allClients.filter(
+  return allClients.filter(
     (client) =>
-      client.name.toLowerCase().startsWith(q) ||
-      (client.phone && client.phone.startsWith(trimmed)) ||
-      (client.email && client.email.toLowerCase().startsWith(q)),
+      !isWalkInClient(client) &&
+      (client.name.toLowerCase().startsWith(q) ||
+        (client.phone && client.phone.startsWith(trimmed)) ||
+        (client.email && client.email.toLowerCase().startsWith(q))),
   )
-  if (!walkIn) return filtered
-  const wid = String(walkIn._id || walkIn.id)
-  const withoutDup = filtered.filter((c) => String(c._id || c.id) !== wid)
-  const walkInMatches =
-    walkIn.name.toLowerCase().startsWith(q) ||
-    (walkIn.phone && walkIn.phone.startsWith(trimmed)) ||
-    (walkIn.email && walkIn.email.toLowerCase().startsWith(q))
-  if (walkInMatches) return [walkIn, ...withoutDup]
-  return filtered
 }
 
+/** @deprecated Use customerDropdownList with walkInOverride; kept for callers that merge lists manually. */
 export function prependWalkInIfMissing(walkIn: Client | undefined, rowClients: Client[]): Client[] {
   if (!walkIn) return rowClients
   const wid = String(walkIn._id || walkIn.id)
   if (rowClients.some((c) => String(c._id || c.id) === wid)) return rowClients
   return [walkIn, ...rowClients]
 }
+
+/** Label for Walk-in rows in client pickers. */
+export const WALK_IN_UI_BADGE = "System default"

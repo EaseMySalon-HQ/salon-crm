@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { CardSkeletonGrid, TableSkeleton } from "@/components/loading"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { format } from "date-fns"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -419,27 +420,8 @@ export function ExpenseReport() {
   if (loading) {
     return (
       <div className="space-y-8">
-        <div className="grid gap-6 md:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium bg-slate-200 h-4 rounded"></CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold bg-slate-200 h-8 rounded"></div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <div className="text-center py-16">
-          <div className="flex flex-col items-center space-y-4">
-            <div className="w-20 h-20 bg-slate-200 rounded-full animate-pulse"></div>
-            <div className="text-center">
-              <h3 className="text-lg font-medium text-slate-900 mb-2">Loading expenses...</h3>
-              <p className="text-slate-500 text-sm">Please wait while we fetch your data</p>
-            </div>
-          </div>
-        </div>
+        <CardSkeletonGrid count={3} size="md" columns="md:grid-cols-3" />
+        <TableSkeleton rows={8} columns={6} />
       </div>
     )
   }

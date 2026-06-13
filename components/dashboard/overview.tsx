@@ -2,6 +2,7 @@
 
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { useCurrency } from "@/hooks/use-currency"
+import { ChartSkeleton } from "@/components/loading"
 import { useDashboardInit } from "@/lib/queries/dashboard"
 
 interface ChartData {
@@ -26,11 +27,7 @@ export function Overview({ chartRange = "year" }: OverviewProps) {
     })) ?? []
 
   if (isPending) {
-    return (
-      <div className="w-full h-[350px] flex items-center justify-center">
-        <div className="text-muted-foreground">Loading chart data...</div>
-      </div>
-    )
+    return <ChartSkeleton height={350} className="w-full" />
   }
 
   if (isError) {

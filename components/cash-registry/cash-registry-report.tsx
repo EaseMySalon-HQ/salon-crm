@@ -5,6 +5,7 @@ import { Search, Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { CardSkeletonGrid, TableSkeleton } from "@/components/loading"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -1337,22 +1338,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center space-y-6">
-          <div className="relative">
-            <div className="w-16 h-16 border-4 border-slate-200 rounded-full"></div>
-            <div className="absolute top-0 left-0 w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-          </div>
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold text-slate-700">Loading Cash Registry...</h3>
-            <p className="text-slate-500">Fetching your financial data</p>
-          </div>
-          <div className="flex items-center justify-center space-x-1">
-            <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '0ms'}}></div>
-            <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></div>
-            <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '300ms'}}></div>
-          </div>
-        </div>
+      <div className="space-y-6">
+        <CardSkeletonGrid count={4} size="md" columns="md:grid-cols-2 lg:grid-cols-4" />
+        <TableSkeleton rows={8} columns={6} />
       </div>
     )
   }

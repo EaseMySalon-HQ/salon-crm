@@ -20,6 +20,7 @@ import { clientWalletTxnToDebitCredit } from "@/lib/client-wallet-ledger"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
+import { FormSkeleton, ListSkeleton } from "@/components/loading"
 
 const STATUS_COLOR: Record<string, string> = {
   active: "bg-green-100 text-green-800",
@@ -173,7 +174,10 @@ export default function ClientWalletPage() {
   if (loading) {
     return (
       <ProtectedLayout requiredModule="clients">
-        <div className="p-6 text-center text-gray-400">Loading…</div>
+        <div className="p-6 max-w-3xl mx-auto space-y-6">
+          <FormSkeleton fields={3} columns={1} showHeader={false} />
+          <ListSkeleton rows={4} showAvatar={false} />
+        </div>
       </ProtectedLayout>
     )
   }
