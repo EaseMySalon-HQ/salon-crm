@@ -60,6 +60,7 @@ import {
   RaiseSaleConfirmationModal,
   type RaiseSaleConfirmationResult,
 } from "@/components/appointments/raise-sale-confirmation-modal"
+import { AppointmentsViewSettingsPopover } from "@/components/appointments/appointments-view-settings-popover"
 
 interface Appointment {
   _id: string
