@@ -127,7 +127,7 @@ export default function SolutionsPage() {
                   </div>
                 </div>
                 <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white shadow-lg">
-                  <Link href="/contact" aria-label={`Book a demo to see how EaseMySalon works for ${solution.title}`}>
+                  <Link href="/demo" aria-label={`Book a demo to see how EaseMySalon works for ${solution.title}`}>
                     Book a Free Demo
                     <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
                   </Link>
@@ -169,7 +169,7 @@ export default function SolutionsPage() {
                 asChild
                 className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl"
               >
-                <Link href="/contact" aria-label="Book a free salon software demo">
+                <Link href="/demo" aria-label="Book a free salon software demo">
                   Book a Free Demo
                   <ArrowRight className="ml-2 h-5 w-5" aria-hidden />
                 </Link>
